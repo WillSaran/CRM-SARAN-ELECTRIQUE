@@ -124,7 +124,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v2';
+const APP_VERSION = 'v3';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -133,7 +133,32 @@ const CONTACTS_HEADERS = ['id','nom','entreprise','telephone','email','adresse',
 const OPP_HEADERS = ['id','contactId','titre','adresse','typeTravail','etape','montantEstime','dateCreation','dateRelance','dateCloture','notes','punchproJobCree','punchproEventId'];
 const SOUM_HEADERS = ['id','opportuniteId','date','itemsJson','total','statut','courrielEnvoye','dateEnvoi'];
 // Onglet "Projets" du CRM — sera donné à PunchPro plus tard (voir commentaire CONFIG plus haut)
-const PROJETS_HEADERS = ['id','opportuniteId','adresse','contracteur','typeTravail','client','telephone','notes','statut','dateCreation','eventId'];
+const PROJETS_HEADERS = ['id','opportuniteId','adresse','titre','contracteur','phase','typeTravail','client','telephone','notes','statut','dateCreation','eventId'];
+
+// ── Contracteurs (mêmes abréviations que PunchPro) ───────────────────────
+// 'PARTICULIER' = client résidentiel, pas de contracteur associé.
+const JOB_PREFIXES = ['PAY','CRS','ASC','GGP','SAR','BOM','5PIL','RROY','GOU'];
+const CONTRACTEURS = [...JOB_PREFIXES, 'PARTICULIER'];
+const JOB_PHASES = ['ROUGH','FINITION','BORNES','SERV','PISCINE','ENTREE','AUTRE'];
+const JOB_PHASE_LABELS = {ROUGH:'ROUGH',FINITION:'FINITION',BORNES:'BORNES',SERV:'SERV',PISCINE:'PISCINE',ENTREE:'ENTRÉE',AUTRE:'AUTRE'};
+// Même logique que PunchPro pour composer le titre d'une job: PREFIXE + PHASE + NUMÉRO+RUE
+function parseCivicStreet(addr){
+  if(!addr) return '';
+  const first = addr.split(',')[0].trim();
+  const m = first.match(/^(\d+[a-zA-Z]?)\s+(.*)$/);
+  if(!m) return first.toUpperCase().replace(/\s+/g,'');
+  const num = m[1];
+  const street = m[2].replace(/\b(rue|avenue|ave|boulevard|blvd|chemin|ch\.?|route|rte|impasse|place|all[ée]e|mont[ée]e)\b\.?/gi,'').trim();
+  return (num+street).toUpperCase().replace(/\s+/g,'');
+}
+function buildJobTitle(prefixe, phase, adresse){
+  const parts = [];
+  if(prefixe && prefixe!=='PARTICULIER') parts.push(prefixe);
+  if(phase) parts.push(phase);
+  const street = parseCivicStreet(adresse);
+  if(street) parts.push(street);
+  return parts.join(' ');
+}
 
 function genId(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
@@ -357,7 +382,10 @@ function ContactForm({initial, onSave, onClose}){
   return <Modal title={initial?'Modifier le contact':'Nouveau contact'} onClose={onClose}>
     <div className="field"><label>Nom</label><input value={f.nom} onChange={e=>setF({...f,nom:e.target.value})} placeholder="Nom du client"/></div>
     <div className="row2">
-      <div className="field"><label>Entreprise / contracteur</label><input value={f.entreprise} onChange={e=>setF({...f,entreprise:e.target.value})}/></div>
+      <div className="field"><label>Entreprise / contracteur</label>
+        <input list="contracteurs-list" value={f.entreprise} onChange={e=>setF({...f,entreprise:e.target.value})} placeholder="Ex: CRS, ou nom si particulier"/>
+        <datalist id="contracteurs-list">{CONTRACTEURS.map(c=><option key={c} value={c}/>)}</datalist>
+      </div>
       <div className="field"><label>Source</label><input value={f.source} onChange={e=>setF({...f,source:e.target.value})} placeholder="Référence, web, appel..."/></div>
     </div>
     <div className="row2">
@@ -534,11 +562,15 @@ function OppDetail({opp, contact, soums, data, cfg, onClose, toast}){
 // ── UI: Modal création job (écrit l'onglet Projets du CRM + Calendar) ───
 // Note: écrit dans l'onglet "Projets" du Sheet DU CRM (pas celui de PunchPro).
 // PunchPro sera adapté pour lire ce sheet dans une étape séparée, plus tard.
+// Le titre est composé avec la même convention que PunchPro: PREFIXE PHASE NUMÉRO+RUE
 function CreateJobModal({opp, contact, cfg, onClose, onDone, addProjet, toast}){
   const [date,setDate]=useState(todayISO());
   const [heure,setHeure]=useState('08:00');
-  const [contracteur,setContracteur]=useState(contact&&contact.entreprise || '');
+  const entrepriseMatch = contact && CONTRACTEURS.includes((contact.entreprise||'').toUpperCase()) ? (contact.entreprise||'').toUpperCase() : 'PARTICULIER';
+  const [prefixe,setPrefixe]=useState(entrepriseMatch);
+  const [phase,setPhase]=useState('');
   const [busy,setBusy]=useState(false);
+  const titre = buildJobTitle(prefixe, phase, opp.adresse);
 
   async function handleCreate(){
     setBusy(true);
@@ -550,7 +582,7 @@ function CreateJobModal({opp, contact, cfg, onClose, onDone, addProjet, toast}){
       const ev = await window.gapi.client.calendar.events.insert({
         calendarId: calId,
         resource: {
-          summary: (contracteur?contracteur+' — ':'')+opp.adresse,
+          summary: titre || opp.adresse,
           description: 'Type de travail: '+(opp.typeTravail||'')+'\nNotes: '+(opp.notes||'')+'\n(créé depuis SoumissionPro)',
           location: opp.adresse,
           start:{dateTime:start, timeZone:'America/Toronto'},
@@ -560,7 +592,7 @@ function CreateJobModal({opp, contact, cfg, onClose, onDone, addProjet, toast}){
 
       // 2) Écrit une ligne dans l'onglet Projets du CRM
       await addProjet({
-        opportuniteId: opp.id, adresse: opp.adresse, contracteur, typeTravail: opp.typeTravail,
+        opportuniteId: opp.id, adresse: opp.adresse, titre, contracteur: prefixe, phase, typeTravail: opp.typeTravail,
         client: contact?contact.nom:'', telephone: contact?contact.telephone:'',
         notes: opp.notes||'', eventId: ev.result.id
       });
@@ -577,7 +609,20 @@ function CreateJobModal({opp, contact, cfg, onClose, onDone, addProjet, toast}){
       <div className="field"><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
       <div className="field"><label>Heure</label><input type="time" value={heure} onChange={e=>setHeure(e.target.value)}/></div>
     </div>
-    <div className="field"><label>Contracteur</label><input value={contracteur} onChange={e=>setContracteur(e.target.value)}/></div>
+    <div className="row2">
+      <div className="field"><label>Contracteur</label>
+        <select value={prefixe} onChange={e=>setPrefixe(e.target.value)}>
+          {CONTRACTEURS.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div className="field"><label>Phase</label>
+        <select value={phase} onChange={e=>setPhase(e.target.value)}>
+          <option value="">—</option>
+          {JOB_PHASES.map(p=><option key={p} value={p}>{JOB_PHASE_LABELS[p]}</option>)}
+        </select>
+      </div>
+    </div>
+    <div className="field"><label>Titre généré</label><input value={titre} disabled/></div>
     <div className="muted" style={{fontSize:12,marginBottom:10}}>Ceci ajoute une ligne dans l'onglet "Projets" du CRM et crée un événement sur {cfg.calendarIds.split(',')[0]}. (L'onglet Projets de PunchPro n'est pas touché.)</div>
     <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
       <button className="btn btn-s" onClick={onClose}>Annuler</button>
