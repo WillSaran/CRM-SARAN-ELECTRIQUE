@@ -128,7 +128,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v4';
+const APP_VERSION = 'v5';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -259,6 +259,11 @@ function getJobPrefix(title){
   const u=(title||'').toUpperCase();
   for(const p of JOB_PREFIXES) if(u.startsWith(p)) return p;
   return 'PARTICULIER';
+}
+const PREFIX_COLORS = {PAY:'#e5484d',CRS:'#f2994a',ASC:'#f2c94c',GGP:'#27ae60',SAR:'#2f80ed',BOM:'#9b51e0','5PIL':'#56ccf2',RROY:'#eb5757',GOU:'#219653',PARTICULIER:'#7d8590'};
+function prefixColor(titleOrPrefix){
+  const p = JOB_PREFIXES.includes(titleOrPrefix) || titleOrPrefix==='PARTICULIER' ? titleOrPrefix : getJobPrefix(titleOrPrefix);
+  return PREFIX_COLORS[p] || '#2f80ed';
 }
 
 // ── Thème clair/sombre ───────────────────────────────────────────────────
@@ -813,8 +818,63 @@ function RemindersView({data}){
   </div>;
 }
 
+// ── UI: liste des jobs planifiées au calendrier — LECTURE SEULE ──────────
+// (embarqué dans l'onglet Projets — pour Saran, une job au calendrier EST un projet)
+function CalendarJobsList({cfg}){
+  const [loading,setLoading]=useState(true);
+  const [events,setEvents]=useState([]);
+  const [err,setErr]=useState('');
+  const [week,setWeek]=useState(()=>getWeek(new Date()));
+
+  useEffect(()=>{
+    let cancelled=false;
+    setLoading(true); setErr('');
+    const dates = weekDatesArr(week);
+    const timeMin = new Date(dates[0]); timeMin.setHours(0,0,0,0);
+    const timeMax = new Date(dates[6]); timeMax.setHours(23,59,59,999);
+    const calIds = (cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
+    listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
+      .then(evs=>{ if(!cancelled) setEvents(evs); })
+      .catch(e=>{ if(!cancelled) setErr(e.message||'Erreur de chargement du calendrier.'); })
+      .finally(()=>{ if(!cancelled) setLoading(false); });
+    return ()=>{ cancelled=true; };
+  },[week, cfg.calendarIds]);
+
+  const dates = weekDatesArr(week);
+  function prevWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()-7); setWeek(getWeek(d)); }
+  function nextWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()+7); setWeek(getWeek(d)); }
+  const anyThisWeek = dates.some(d=>events.some(e=>String(e.start).slice(0,10)===localDateStr(d)));
+
+  return <div style={{marginTop:26}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:10,marginBottom:10}}>
+      <h3 style={{margin:0,fontSize:15,fontWeight:800}}>Jobs planifiées au calendrier (PunchPro)</h3>
+      <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <button className="btn btn-sm" onClick={prevWeek}>←</button>
+        <div style={{fontSize:12.5,fontWeight:700}}>{weekRangeLabel(week)}</div>
+        <button className="btn btn-sm" onClick={nextWeek}>→</button>
+      </div>
+    </div>
+    {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
+    {loading ? <div className="muted">Chargement...</div> : <>
+      {dates.map((d,i)=>{
+        const dStr = localDateStr(d);
+        const dayEvents = events.filter(e=>String(e.start).slice(0,10)===dStr).sort((a,b)=>String(a.start).localeCompare(String(b.start)));
+        if(dayEvents.length===0) return null;
+        return <div key={i} style={{marginBottom:10}}>
+          <div style={{fontWeight:700,fontSize:12.5,marginBottom:4,textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})}</div>
+          {dayEvents.map(e=><div key={e.id} className="card" style={{padding:'7px 12px',marginBottom:5,borderLeft:'3px solid '+prefixColor(e.title)}}>
+            <div style={{fontWeight:600,fontSize:12.5}}>{e.title}</div>
+            <div className="muted" style={{fontSize:11}}>{e.allDay?'Toute la journée':new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}{e.location?' — '+e.location:''}</div>
+          </div>)}
+        </div>;
+      })}
+      {!anyThisWeek && <div className="muted" style={{fontSize:12}}>Aucune job planifiée cette semaine.</div>}
+    </>}
+  </div>;
+}
+
 // ── UI: Projets (onglet Projets du CRM, propriété du CRM) ─────────────────
-function ProjetsView({data}){
+function ProjetsView({data, cfg}){
   const [filterC,setFilterC]=useState(null);
   const [filterS,setFilterS]=useState(null);
   const projets = data.projets||[];
@@ -851,6 +911,7 @@ function ProjetsView({data}){
         </tbody>
       </table>
     </div>
+    {cfg && cfg.calendarIds && <CalendarJobsList cfg={cfg}/>}
   </div>;
 }
 
@@ -946,7 +1007,7 @@ function HeuresView({cfg}){
   </div>;
 }
 
-// ── UI: Agenda — LECTURE SEULE depuis Google Calendar (jobs PunchPro) ─────
+// ── UI: Agenda — vrai calendrier semaine (grille), LECTURE SEULE ─────────
 function AgendaView({cfg}){
   const [loading,setLoading]=useState(true);
   const [events,setEvents]=useState([]);
@@ -975,9 +1036,17 @@ function AgendaView({cfg}){
   function nextWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()+7); setWeek(getWeek(d)); }
   function thisWeek(){ setWeek(getWeek(new Date())); }
 
+  const HOUR_START=6, HOUR_END=20, PX_H=46;
+  const hours = Array.from({length:HOUR_END-HOUR_START+1},(_,i)=>HOUR_START+i);
+  const joursLabel = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+  const todayStr = localDateStr(new Date());
+
+  function eventsForDay(dStr){ return filtered.filter(e=>String(e.start).slice(0,10)===dStr && !e.allDay); }
+  function allDayForDay(dStr){ return filtered.filter(e=>String(e.start).slice(0,10)===dStr && e.allDay); }
+
   return <div>
-    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Agenda — jobs (PunchPro)</h2>
-    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Lecture seule — événements du calendrier Google utilisé par PunchPro.</div>
+    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Agenda</h2>
+    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Calendrier Google utilisé par PunchPro — lecture seule.</div>
     <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
       <button className="btn btn-sm" onClick={prevWeek}>← Sem. préc.</button>
       <div style={{fontWeight:700}}>{weekRangeLabel(week)}</div>
@@ -986,23 +1055,51 @@ function AgendaView({cfg}){
     </div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
       <button className="btn btn-sm" onClick={()=>setFilterPrefix(null)} style={!filterPrefix?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous</button>
-      {prefixesPresent.map(p=><button key={p} className="btn btn-sm" onClick={()=>setFilterPrefix(p)} style={filterPrefix===p?{background:'var(--accent)',color:'#fff',border:'none'}:null}>{p}</button>)}
+      {prefixesPresent.map(p=><button key={p} className="btn btn-sm" onClick={()=>setFilterPrefix(p)} style={filterPrefix===p?{background:prefixColor(p),color:'#fff',border:'none'}:null}>{p}</button>)}
     </div>
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {loading ? <div className="muted">Chargement...</div> :
-    dates.map((d,i)=>{
-      const dStr = localDateStr(d);
-      const dayEvents = filtered.filter(e=>String(e.start).slice(0,10)===dStr)
-        .sort((a,b)=>String(a.start).localeCompare(String(b.start)));
-      return <div key={i} style={{marginBottom:14}}>
-        <div style={{fontWeight:700,fontSize:13,marginBottom:6,textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})}</div>
-        {dayEvents.length===0 && <div className="muted" style={{fontSize:12,marginLeft:4}}>Rien.</div>}
-        {dayEvents.map(e=><div key={e.id} className="card" style={{padding:'8px 12px',marginBottom:6}}>
-          <div style={{fontWeight:600,fontSize:13}}>{e.title}</div>
-          <div className="muted" style={{fontSize:11.5}}>{e.allDay?'Toute la journée':new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}{e.location?' — '+e.location:''}</div>
+    <div className="card" style={{padding:0,overflowX:'auto'}}>
+      <div style={{display:'grid',gridTemplateColumns:'50px repeat(7,minmax(120px,1fr))',minWidth:900}}>
+        <div></div>
+        {dates.map((d,i)=><div key={i} style={{padding:'8px 6px',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:12,background:localDateStr(d)===todayStr?'rgba(47,128,237,.10)':'transparent'}}>
+          <div style={{textTransform:'capitalize'}}>{joursLabel[i]}</div>
+          <div className="muted" style={{fontWeight:500}}>{d.getDate()}</div>
         </div>)}
-      </div>;
-    })}
+        <div></div>
+        {dates.map((d,i)=>{
+          const dStr = localDateStr(d);
+          const adEvents = allDayForDay(dStr);
+          return <div key={i} style={{borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
+            {adEvents.map(e=><div key={e.id} title={e.title} style={{background:prefixColor(e.title),color:'#fff',fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
+          </div>;
+        })}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'50px repeat(7,minmax(120px,1fr))',minWidth:900}}>
+        <div>
+          {hours.map(h=><div key={h} style={{height:PX_H,fontSize:10.5,color:'var(--muted)',textAlign:'right',paddingRight:6,borderTop:'1px solid var(--border)',boxSizing:'border-box'}}>{h}h</div>)}
+        </div>
+        {dates.map((d,i)=>{
+          const dStr = localDateStr(d);
+          const dayEvents = eventsForDay(dStr);
+          return <div key={i} style={{position:'relative',borderLeft:'1px solid var(--border)'}}>
+            {hours.map(h=><div key={h} style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box'}}></div>)}
+            {dayEvents.map(e=>{
+              const start=new Date(e.start), end=e.end?new Date(e.end):new Date(start.getTime()+3600000);
+              const startH=Math.max(HOUR_START, start.getHours()+start.getMinutes()/60);
+              const endHraw=end.getHours()+end.getMinutes()/60;
+              const endH=Math.min(HOUR_END+1, endHraw>startH?endHraw:startH+1);
+              const top=(startH-HOUR_START)*PX_H;
+              const height=Math.max(18,(endH-startH)*PX_H-2);
+              return <div key={e.id} title={e.title} style={{position:'absolute',top,height,left:2,right:2,background:prefixColor(e.title),color:'#fff',fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,.25)'}}>
+                <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
+                <div style={{opacity:.85}}>{start.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}</div>
+              </div>;
+            })}
+          </div>;
+        })}
+      </div>
+    </div>}
   </div>;
 }
 
@@ -1100,7 +1197,7 @@ function App(){
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='pipeline' && <PipelineView data={data} cfg={cfg} toast={show}/>}
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
-        {nav==='projets' && <ProjetsView data={data}/>}
+        {nav==='projets' && <ProjetsView data={data} cfg={cfg}/>}
         {nav==='contracteurs' && <ContracteursView data={data}/>}
         {nav==='agenda' && <AgendaView cfg={cfg}/>}
         {nav==='heures' && <HeuresView cfg={cfg}/>}
