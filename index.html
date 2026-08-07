@@ -96,23 +96,24 @@ tr:hover td{background:var(--bg3)}
 const {useState,useEffect,useMemo,useCallback,useRef} = React;
 
 // ── CONFIG ────────────────────────────────────────────────────────────────
-// clientId : à créer dans Google Cloud Console (même projet que PunchPro),
+// clientId : créé dans Google Cloud Console (même projet que PunchPro),
 //            type "Application Web", origine JS autorisée = domaine d'hébergement
-//            de CETTE app (ex: https://<user>.github.io ou domaine custom).
-// crmSpreadsheetId : ID du NOUVEAU Google Sheet dédié au CRM (à créer, vide au départ —
-//            utiliser le bouton "Initialiser les onglets" dans Réglages).
-// punchproSpreadsheetId / punchproProjetsSheet : sheet + onglet "Projets" existants de
-//            PunchPro, où une ligne est ajoutée quand une opportunité est marquée "Gagné".
-// projetsColumns : ORDRE EXACT des colonnes de l'onglet Projets de PunchPro.
-//            À VÉRIFIER/AJUSTER dans Réglages avant la première utilisation —
-//            valeur par défaut = meilleure estimation, pas confirmée.
+//            de CETTE app.
+// crmSpreadsheetId : ID du Google Sheet du CRM — contient 3 onglets:
+//            Contacts, Opportunites, Soumissions.
+// projetsSpreadsheetId : ID d'un Google Sheet SÉPARÉ ("PROJETS SARAN ÉLECTRIQUE"),
+//            dédié uniquement à l'onglet "Projets". Quand une opportunité est marquée
+//            "Gagné", une ligne est ajoutée ici + un événement Calendar est créé.
+//            Ce sheet sera "donné" à PunchPro (PunchPro sera adapté pour le lire) dans
+//            une étape séparée, plus tard — l'onglet "Projets" existant DE PunchPro
+//            (dans son propre sheet d'heures) n'est PAS touché par le CRM.
+// calendarIds : calendriers Google sur lesquels créer les événements de job (le premier
+//            de la liste est utilisé).
 const DEFAULT_CFG = {
   apiKey: 'AIzaSyAWO2raCV3cUYpouxyyaPZ9VamrkRXqDKY',
   clientId: '718428072431-tnd2rngvrgg5kbav31le67gmi0m0qr3f.apps.googleusercontent.com',
   crmSpreadsheetId: '1AvjMWcAVPeLJrGUeyjuo0yypZC9hSbaQJGaSW3mP8M0',
-  punchproSpreadsheetId: '1uj7S1uHsE0BZwbNSJdtAEjpy_9YWqfh6mXoJwwLJ9UA',
-  punchproProjetsSheet: 'Projets',
-  projetsColumns: 'Adresse,Contracteur,TypeTravail,Client,Telephone,DateCreation',
+  projetsSpreadsheetId: '1XJldTQODgo207rnwneF1CsHYS7PKwGR80pkXn741Oug',
   calendarIds: 'saranelectrique@gmail.com,info@saranelectrique.com'
 };
 function loadCfg(){
@@ -123,7 +124,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v1';
+const APP_VERSION = 'v2';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -131,6 +132,8 @@ const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission env
 const CONTACTS_HEADERS = ['id','nom','entreprise','telephone','email','adresse','source','notes','dateCreation'];
 const OPP_HEADERS = ['id','contactId','titre','adresse','typeTravail','etape','montantEstime','dateCreation','dateRelance','dateCloture','notes','punchproJobCree','punchproEventId'];
 const SOUM_HEADERS = ['id','opportuniteId','date','itemsJson','total','statut','courrielEnvoye','dateEnvoi'];
+// Onglet "Projets" du CRM — sera donné à PunchPro plus tard (voir commentaire CONFIG plus haut)
+const PROJETS_HEADERS = ['id','opportuniteId','adresse','contracteur','typeTravail','client','telephone','notes','statut','dateCreation','eventId'];
 
 function genId(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
@@ -217,11 +220,12 @@ function rowsToObjects(rows, headers){
 }
 function objectToRow(o, headers){ return headers.map(h=>o[h]!==undefined?o[h]:''); }
 
-// ── Data hook: charge/écrit les 3 onglets CRM ────────────────────────────
+// ── Data hook: charge/écrit les 4 onglets CRM ────────────────────────────
 function useCrmData(cfg, ready){
   const [contacts,setContacts]=useState([]);
   const [opps,setOpps]=useState([]);
   const [soums,setSoums]=useState([]);
+  const [projets,setProjets]=useState([]);
   const [loading,setLoading]=useState(false);
   const [err,setErr]=useState('');
 
@@ -229,17 +233,20 @@ function useCrmData(cfg, ready){
     if(!ready || !cfg.crmSpreadsheetId) return;
     setLoading(true); setErr('');
     try{
-      const [c,o,s] = await Promise.all([
+      const calls = [
         sheetsGetAll(cfg.crmSpreadsheetId,'Contacts'),
         sheetsGetAll(cfg.crmSpreadsheetId,'Opportunites'),
         sheetsGetAll(cfg.crmSpreadsheetId,'Soumissions')
-      ]);
+      ];
+      if(cfg.projetsSpreadsheetId) calls.push(sheetsGetAll(cfg.projetsSpreadsheetId,'Projets'));
+      const [c,o,s,p] = await Promise.all(calls);
       setContacts(rowsToObjects(c, CONTACTS_HEADERS));
       setOpps(rowsToObjects(o, OPP_HEADERS));
       setSoums(rowsToObjects(s, SOUM_HEADERS));
+      setProjets(p? rowsToObjects(p, PROJETS_HEADERS) : []);
     }catch(e){ setErr((e&&e.result&&e.result.error&&e.result.error.message) || 'Erreur de chargement des données.'); }
     setLoading(false);
-  },[cfg.crmSpreadsheetId, ready]);
+  },[cfg.crmSpreadsheetId, cfg.projetsSpreadsheetId, ready]);
 
   useEffect(()=>{ reload(); },[reload]);
 
@@ -273,8 +280,14 @@ function useCrmData(cfg, ready){
     await sheetsUpdateRow(cfg.crmSpreadsheetId,'Soumissions', obj._row, objectToRow(obj, SOUM_HEADERS));
     await reload();
   }
+  async function addProjet(obj){
+    const full = {id:genId(), dateCreation:todayISO(), statut:'Actif', ...obj};
+    await sheetsAppendRow(cfg.projetsSpreadsheetId,'Projets', objectToRow(full, PROJETS_HEADERS));
+    await reload();
+    return full;
+  }
 
-  return {contacts,opps,soums,loading,err,reload,addContact,updateContact,addOpp,updateOpp,addSoumission,updateSoumission};
+  return {contacts,opps,soums,projets,loading,err,reload,addContact,updateContact,addOpp,updateOpp,addSoumission,updateSoumission,addProjet};
 }
 
 // ── Génération du courriel de soumission (mailto + copie) ───────────────
@@ -477,7 +490,7 @@ function OppDetail({opp, contact, soums, data, cfg, onClose, toast}){
       {['info','soumission','planification'].map(tId=>
         <div key={tId} onClick={()=>setTab(tId)} style={{padding:'6px 0',fontWeight:700,fontSize:13,cursor:'pointer',
           color: tab===tId?'var(--accent)':'var(--muted)', borderBottom: tab===tId?'2px solid var(--accent)':'2px solid transparent'}}>
-          {tId==='info'?'Info':tId==='soumission'?'Soumission':'Job PunchPro'}
+          {tId==='info'?'Info':tId==='soumission'?'Soumission':'Job'}
         </div>
       )}
     </div>
@@ -504,12 +517,12 @@ function OppDetail({opp, contact, soums, data, cfg, onClose, toast}){
       }}/>}
 
     {tab==='planification' && <div>
-      {f.etape!=='Gagné' && <div className="muted">L'opportunité doit être marquée "Gagné" pour créer la job dans PunchPro.</div>}
-      {f.etape==='Gagné' && f.punchproJobCree==='Oui' && <div style={{color:'var(--success)',fontWeight:700}}>✓ Job déjà créée dans PunchPro (event {f.punchproEventId}).</div>}
-      {f.etape==='Gagné' && f.punchproJobCree!=='Oui' && <button className="btn btn-p" onClick={()=>setShowJobModal(true)}>Créer la job dans PunchPro</button>}
+      {f.etape!=='Gagné' && <div className="muted">L'opportunité doit être marquée "Gagné" pour créer la job.</div>}
+      {f.etape==='Gagné' && f.punchproJobCree==='Oui' && <div style={{color:'var(--success)',fontWeight:700}}>✓ Job déjà créée (event {f.punchproEventId}).</div>}
+      {f.etape==='Gagné' && f.punchproJobCree!=='Oui' && <button className="btn btn-p" onClick={()=>setShowJobModal(true)}>Créer la job</button>}
     </div>}
 
-    {showJobModal && <CreateJobModal opp={f} contact={contact} cfg={cfg} toast={toast}
+    {showJobModal && <CreateJobModal opp={f} contact={contact} cfg={cfg} toast={toast} addProjet={data.addProjet}
       onClose={()=>setShowJobModal(false)}
       onDone={async(eventId)=>{
         const upd={...f, punchproJobCree:'Oui', punchproEventId:eventId};
@@ -518,8 +531,10 @@ function OppDetail({opp, contact, soums, data, cfg, onClose, toast}){
   </Modal>;
 }
 
-// ── UI: Modal création job PunchPro (écrit Sheet Projets + Calendar) ────
-function CreateJobModal({opp, contact, cfg, onClose, onDone, toast}){
+// ── UI: Modal création job (écrit l'onglet Projets du CRM + Calendar) ───
+// Note: écrit dans l'onglet "Projets" du Sheet DU CRM (pas celui de PunchPro).
+// PunchPro sera adapté pour lire ce sheet dans une étape séparée, plus tard.
+function CreateJobModal({opp, contact, cfg, onClose, onDone, addProjet, toast}){
   const [date,setDate]=useState(todayISO());
   const [heure,setHeure]=useState('08:00');
   const [contracteur,setContracteur]=useState(contact&&contact.entreprise || '');
@@ -528,16 +543,7 @@ function CreateJobModal({opp, contact, cfg, onClose, onDone, toast}){
   async function handleCreate(){
     setBusy(true);
     try{
-      // 1) Écrit une ligne dans l'onglet Projets de PunchPro
-      const colOrder = cfg.projetsColumns.split(',').map(s=>s.trim());
-      const values = {
-        Adresse: opp.adresse, Contracteur: contracteur, TypeTravail: opp.typeTravail,
-        Client: contact?contact.nom:'', Telephone: contact?contact.telephone:'', DateCreation: todayISO()
-      };
-      const row = colOrder.map(c=>values[c]!==undefined?values[c]:'');
-      await sheetsAppendRow(cfg.punchproSpreadsheetId, cfg.punchproProjetsSheet, row);
-
-      // 2) Crée l'événement Google Calendar
+      // 1) Crée l'événement Google Calendar
       const start = date+'T'+heure+':00';
       const end = date+'T'+(String(Math.min(23,parseInt(heure.split(':')[0])+2)).padStart(2,'0'))+':'+heure.split(':')[1]+':00';
       const calId = cfg.calendarIds.split(',')[0].trim();
@@ -551,20 +557,28 @@ function CreateJobModal({opp, contact, cfg, onClose, onDone, toast}){
           end:{dateTime:end, timeZone:'America/Toronto'}
         }
       });
-      toast('Job créée dans PunchPro.','ok');
+
+      // 2) Écrit une ligne dans l'onglet Projets du CRM
+      await addProjet({
+        opportuniteId: opp.id, adresse: opp.adresse, contracteur, typeTravail: opp.typeTravail,
+        client: contact?contact.nom:'', telephone: contact?contact.telephone:'',
+        notes: opp.notes||'', eventId: ev.result.id
+      });
+
+      toast('Job créée.','ok');
       onDone(ev.result.id);
     }catch(e){ toast('Erreur création job: '+(e.message||JSON.stringify(e)),'err'); }
     setBusy(false);
   }
 
-  return <Modal title="Créer la job dans PunchPro" onClose={onClose}>
+  return <Modal title="Créer la job (Projets + Calendar)" onClose={onClose}>
     <div className="field"><label>Adresse</label><input value={opp.adresse} disabled/></div>
     <div className="row2">
       <div className="field"><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
       <div className="field"><label>Heure</label><input type="time" value={heure} onChange={e=>setHeure(e.target.value)}/></div>
     </div>
     <div className="field"><label>Contracteur</label><input value={contracteur} onChange={e=>setContracteur(e.target.value)}/></div>
-    <div className="muted" style={{fontSize:12,marginBottom:10}}>Ceci ajoute une ligne dans l'onglet "{cfg.punchproProjetsSheet}" et crée un événement sur {cfg.calendarIds.split(',')[0]}.</div>
+    <div className="muted" style={{fontSize:12,marginBottom:10}}>Ceci ajoute une ligne dans l'onglet "Projets" du CRM et crée un événement sur {cfg.calendarIds.split(',')[0]}. (L'onglet Projets de PunchPro n'est pas touché.)</div>
     <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
       <button className="btn btn-s" onClick={onClose}>Annuler</button>
       <button className="btn btn-p" onClick={handleCreate} disabled={busy}>{busy?'Création...':'Confirmer'}</button>
@@ -672,6 +686,9 @@ function SettingsView({cfg, setCfg, toast}){
         {name:'Opportunites', headers:OPP_HEADERS},
         {name:'Soumissions', headers:SOUM_HEADERS}
       ]);
+      if(f.projetsSpreadsheetId){
+        await ensureSheetsExist(f.projetsSpreadsheetId, [{name:'Projets', headers:PROJETS_HEADERS}]);
+      }
       toast('Onglets initialisés.','ok');
     }catch(e){ toast('Erreur: '+(e.message||JSON.stringify(e)),'err'); }
     setBusy(false);
@@ -683,12 +700,9 @@ function SettingsView({cfg, setCfg, toast}){
         <select value={theme} onChange={e=>setTheme(e.target.value)}><option value="dark">Sombre</option><option value="light">Clair</option></select>
       </div>
       <div className="field"><label>ID du Google Sheet CRM</label><input value={f.crmSpreadsheetId} onChange={e=>setF({...f,crmSpreadsheetId:e.target.value})} placeholder="Coller l'ID du Sheet ici"/></div>
-      <button className="btn btn-s" onClick={handleInit} disabled={busy}>{busy?'Initialisation...':'Initialiser les onglets (Contacts/Opportunites/Soumissions)'}</button>
+      <div className="field"><label>ID du Google Sheet "PROJETS SARAN ÉLECTRIQUE"</label><input value={f.projetsSpreadsheetId} onChange={e=>setF({...f,projetsSpreadsheetId:e.target.value})} placeholder="Sheet séparé, sera donné à PunchPro plus tard"/></div>
+      <button className="btn btn-s" onClick={handleInit} disabled={busy}>{busy?'Initialisation...':'Initialiser les onglets (Contacts/Opportunites/Soumissions/Projets)'}</button>
       <hr style={{border:'none',borderTop:'1px solid var(--border)'}}/>
-      <div className="muted" style={{fontSize:12}}>Intégration PunchPro — à vérifier avant la première utilisation</div>
-      <div className="field"><label>ID Google Sheet PunchPro</label><input value={f.punchproSpreadsheetId} onChange={e=>setF({...f,punchproSpreadsheetId:e.target.value})}/></div>
-      <div className="field"><label>Nom de l'onglet Projets</label><input value={f.punchproProjetsSheet} onChange={e=>setF({...f,punchproProjetsSheet:e.target.value})}/></div>
-      <div className="field"><label>Ordre des colonnes de l'onglet Projets</label><input value={f.projetsColumns} onChange={e=>setF({...f,projetsColumns:e.target.value})} placeholder="Adresse,Contracteur,TypeTravail,Client,Telephone,DateCreation"/></div>
       <div className="field"><label>Calendriers (séparés par virgule)</label><input value={f.calendarIds} onChange={e=>setF({...f,calendarIds:e.target.value})}/></div>
       <button className="btn btn-p" onClick={()=>{ saveCfg(f); setCfg(f); toast('Réglages enregistrés.','ok'); }}>Enregistrer les réglages</button>
       <div className="muted" style={{fontSize:11.5}}>Version {APP_VERSION}</div>
@@ -720,6 +734,7 @@ function App(){
   if(!ready) return <div className="login-screen"><div className="spin"></div>{initErr && <div className="muted">{initErr}</div>}</div>;
   if(!authed) return <div className="login-screen">
     <div className="logo"><span className="dot"></span>SoumissionPro</div>
+    <div className="muted" style={{fontSize:11.5,marginTop:-12}}>{APP_VERSION}</div>
     <div className="muted">Gestion de contacts, pipeline de vente et soumissions — Saran Électrique</div>
     <button className="btn btn-p" onClick={handleLogin}>Se connecter avec Google</button>
     {!cfg.crmSpreadsheetId && <div className="muted" style={{fontSize:12,maxWidth:320,textAlign:'center'}}>Astuce: connecte-toi puis va dans Réglages pour indiquer l'ID du Google Sheet du CRM et l'initialiser.</div>}
@@ -734,7 +749,7 @@ function App(){
 
   return <div>
     <div className="topbar">
-      <div className="logo"><span className="dot"></span>SoumissionPro</div>
+      <div className="logo"><span className="dot"></span>SoumissionPro <span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div>
       {data.loading && <div className="muted" style={{fontSize:12}}>Chargement...</div>}
     </div>
     <div className="shell">
