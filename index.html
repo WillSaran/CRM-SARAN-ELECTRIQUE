@@ -128,7 +128,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v5';
+const APP_VERSION = 'v6';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -248,7 +248,8 @@ async function listCalendarEventsRange(calendarIds, timeMinISO, timeMaxISO){
           id:e.id, title:e.summary||'Sans titre',
           start:(e.start&&(e.start.dateTime||e.start.date))||'',
           end:(e.end&&(e.end.dateTime||e.end.date))||'',
-          allDay:!(e.start&&e.start.dateTime), location:e.location||'', description:e.description||''
+          allDay:!(e.start&&e.start.dateTime), location:e.location||'', description:e.description||'',
+          colorId:e.colorId||'', calendarId:calId.trim()
         });
       });
     }catch(err){ /* calendrier inaccessible, on ignore et continue */ }
@@ -265,6 +266,14 @@ function prefixColor(titleOrPrefix){
   const p = JOB_PREFIXES.includes(titleOrPrefix) || titleOrPrefix==='PARTICULIER' ? titleOrPrefix : getJobPrefix(titleOrPrefix);
   return PREFIX_COLORS[p] || '#2f80ed';
 }
+// Palette officielle des colorId d'événements Google Calendar (1-11) — ce sont
+// les VRAIES couleurs que Google/PunchPro assigne à chaque événement (souvent
+// une couleur par employé via hexToGcalColorId côté PunchPro).
+const GCAL_COLOR_MAP = {
+  '1':'#a4bdfc','2':'#7ae7bf','3':'#dbadff','4':'#ff887c','5':'#fbd75b',
+  '6':'#ffb878','7':'#46d6db','8':'#e1e1e1','9':'#5484ed','10':'#51b749','11':'#dc2127'
+};
+function eventColor(e){ return (e && e.colorId && GCAL_COLOR_MAP[e.colorId]) || prefixColor(e?e.title:''); }
 
 // ── Thème clair/sombre ───────────────────────────────────────────────────
 function getThemePref(){ return localStorage.getItem('crm_theme')||'dark'; }
@@ -862,7 +871,7 @@ function CalendarJobsList({cfg}){
         if(dayEvents.length===0) return null;
         return <div key={i} style={{marginBottom:10}}>
           <div style={{fontWeight:700,fontSize:12.5,marginBottom:4,textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})}</div>
-          {dayEvents.map(e=><div key={e.id} className="card" style={{padding:'7px 12px',marginBottom:5,borderLeft:'3px solid '+prefixColor(e.title)}}>
+          {dayEvents.map(e=><div key={e.id} className="card" style={{padding:'7px 12px',marginBottom:5,borderLeft:'3px solid '+eventColor(e)}}>
             <div style={{fontWeight:600,fontSize:12.5}}>{e.title}</div>
             <div className="muted" style={{fontSize:11}}>{e.allDay?'Toute la journée':new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}{e.location?' — '+e.location:''}</div>
           </div>)}
@@ -1008,12 +1017,102 @@ function HeuresView({cfg}){
 }
 
 // ── UI: Agenda — vrai calendrier semaine (grille), LECTURE SEULE ─────────
-function AgendaView({cfg}){
+// ── UI: Modal création rapide de job DEPUIS L'AGENDA ──────────────────────
+// Ne dépend pas d'une opportunité — crée directement l'événement Calendar +
+// une ligne dans l'onglet "Projets" du CRM. Même convention de titre que PunchPro.
+function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate}){
+  const [adresse,setAdresse]=useState('');
+  const [client,setClient]=useState('');
+  const [telephone,setTelephone]=useState('');
+  const [date,setDate]=useState(initialDate||todayISO());
+  const [heure,setHeure]=useState('08:00');
+  const [prefixe,setPrefixe]=useState('PARTICULIER');
+  const [phase,setPhase]=useState('');
+  const [notes,setNotes]=useState('');
+  const [busy,setBusy]=useState(false);
+  const addrRef = useRef(null);
+  useEffect(()=>{
+    if(window.google && window.google.maps && addrRef.current){
+      const ac = new google.maps.places.Autocomplete(addrRef.current, {types:['address'],componentRestrictions:{country:'ca'}});
+      ac.addListener('place_changed', ()=>{
+        const place = ac.getPlace();
+        if(place && place.formatted_address) setAdresse(place.formatted_address);
+      });
+    }
+  },[]);
+  const titre = buildJobTitle(prefixe, phase, adresse);
+
+  async function handleCreate(){
+    if(!adresse){ toast('Indique une adresse.','err'); return; }
+    setBusy(true);
+    try{
+      const start = date+'T'+heure+':00';
+      const end = date+'T'+(String(Math.min(23,parseInt(heure.split(':')[0])+2)).padStart(2,'0'))+':'+heure.split(':')[1]+':00';
+      const calId = cfg.calendarIds.split(',')[0].trim();
+      const ev = await window.gapi.client.calendar.events.insert({
+        calendarId: calId,
+        resource: {
+          summary: titre || adresse,
+          description: 'Client: '+(client||'')+'\nTéléphone: '+(telephone||'')+'\nNotes: '+(notes||'')+'\n(créé depuis SoumissionPro — Agenda)',
+          location: adresse,
+          start:{dateTime:start, timeZone:'America/Toronto'},
+          end:{dateTime:end, timeZone:'America/Toronto'}
+        }
+      });
+      await addProjet({
+        opportuniteId:'', adresse, titre, contracteur:prefixe, phase, typeTravail:'',
+        client, telephone, notes, eventId: ev.result.id
+      });
+      toast('Job créée.','ok');
+      onDone && onDone();
+      onClose();
+    }catch(e){ toast('Erreur création job: '+(e.message||JSON.stringify(e)),'err'); }
+    setBusy(false);
+  }
+
+  return <Modal title="Nouvelle job (depuis l'Agenda)" onClose={onClose}>
+    <div className="field"><label>Adresse</label><input ref={addrRef} value={adresse} onChange={e=>setAdresse(e.target.value)} placeholder="Commence à taper une adresse..."/></div>
+    <div className="row2">
+      <div className="field"><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
+      <div className="field"><label>Heure</label><input type="time" value={heure} onChange={e=>setHeure(e.target.value)}/></div>
+    </div>
+    <div className="row2">
+      <div className="field"><label>Contracteur</label>
+        <select value={prefixe} onChange={e=>setPrefixe(e.target.value)}>
+          {CONTRACTEURS.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div className="field"><label>Phase</label>
+        <select value={phase} onChange={e=>setPhase(e.target.value)}>
+          <option value="">—</option>
+          {JOB_PHASES.map(p=><option key={p} value={p}>{JOB_PHASE_LABELS[p]}</option>)}
+        </select>
+      </div>
+    </div>
+    <div className="row2">
+      <div className="field"><label>Client (optionnel)</label><input value={client} onChange={e=>setClient(e.target.value)}/></div>
+      <div className="field"><label>Téléphone</label><input value={telephone} onChange={e=>setTelephone(e.target.value)}/></div>
+    </div>
+    <div className="field tag-input"><label>Notes</label><textarea value={notes} onChange={e=>setNotes(e.target.value)}/></div>
+    <div className="field"><label>Titre généré</label><input value={titre} disabled/></div>
+    <div className="muted" style={{fontSize:12,marginBottom:10}}>Ajoute une ligne dans "Projets" (CRM) + crée l'événement sur {cfg.calendarIds.split(',')[0]}.</div>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+      <button className="btn btn-s" onClick={onClose}>Annuler</button>
+      <button className="btn btn-p" onClick={handleCreate} disabled={busy}>{busy?'Création...':'Créer la job'}</button>
+    </div>
+  </Modal>;
+}
+
+// ── UI: Agenda — vrai calendrier semaine (grille), + création de job ─────
+function AgendaView({cfg, data, toast}){
   const [loading,setLoading]=useState(true);
   const [events,setEvents]=useState([]);
   const [err,setErr]=useState('');
   const [week,setWeek]=useState(()=>getWeek(new Date()));
   const [filterPrefix,setFilterPrefix]=useState(null);
+  const [showJobModal,setShowJobModal]=useState(false);
+  const [jobDate,setJobDate]=useState(null);
+  const [reloadKey,setReloadKey]=useState(0);
 
   useEffect(()=>{
     let cancelled=false;
@@ -1027,7 +1126,7 @@ function AgendaView({cfg}){
       .catch(e=>{ if(!cancelled) setErr(e.message||'Erreur de chargement du calendrier.'); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
-  },[week, cfg.calendarIds]);
+  },[week, cfg.calendarIds, reloadKey]);
 
   const dates = weekDatesArr(week);
   const filtered = filterPrefix ? events.filter(e=>getJobPrefix(e.title)===filterPrefix) : events;
@@ -1035,6 +1134,7 @@ function AgendaView({cfg}){
   function prevWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()-7); setWeek(getWeek(d)); }
   function nextWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()+7); setWeek(getWeek(d)); }
   function thisWeek(){ setWeek(getWeek(new Date())); }
+  function openNewJob(dStr){ setJobDate(dStr||todayISO()); setShowJobModal(true); }
 
   const HOUR_START=6, HOUR_END=20, PX_H=46;
   const hours = Array.from({length:HOUR_END-HOUR_START+1},(_,i)=>HOUR_START+i);
@@ -1045,8 +1145,13 @@ function AgendaView({cfg}){
   function allDayForDay(dStr){ return filtered.filter(e=>String(e.start).slice(0,10)===dStr && e.allDay); }
 
   return <div>
-    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Agenda</h2>
-    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Calendrier Google utilisé par PunchPro — lecture seule.</div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:10}}>
+      <div>
+        <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Agenda</h2>
+        <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Calendrier Google utilisé par PunchPro. Les couleurs sont celles réellement assignées dans Google Calendar.</div>
+      </div>
+      {data && <button className="btn btn-p" onClick={()=>openNewJob(todayISO())}>+ Nouvelle job</button>}
+    </div>
     <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
       <button className="btn btn-sm" onClick={prevWeek}>← Sem. préc.</button>
       <div style={{fontWeight:700}}>{weekRangeLabel(week)}</div>
@@ -1071,7 +1176,7 @@ function AgendaView({cfg}){
           const dStr = localDateStr(d);
           const adEvents = allDayForDay(dStr);
           return <div key={i} style={{borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
-            {adEvents.map(e=><div key={e.id} title={e.title} style={{background:prefixColor(e.title),color:'#fff',fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
+            {adEvents.map(e=><div key={e.id} title={e.title} style={{background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
           </div>;
         })}
       </div>
@@ -1082,7 +1187,8 @@ function AgendaView({cfg}){
         {dates.map((d,i)=>{
           const dStr = localDateStr(d);
           const dayEvents = eventsForDay(dStr);
-          return <div key={i} style={{position:'relative',borderLeft:'1px solid var(--border)'}}>
+          return <div key={i} onClick={(ev)=>{ if(ev.target===ev.currentTarget && data) openNewJob(dStr); }}
+            style={{position:'relative',borderLeft:'1px solid var(--border)',cursor:data?'copy':'default'}} title={data?'Cliquer pour créer une job ce jour-là':''}>
             {hours.map(h=><div key={h} style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box'}}></div>)}
             {dayEvents.map(e=>{
               const start=new Date(e.start), end=e.end?new Date(e.end):new Date(start.getTime()+3600000);
@@ -1091,7 +1197,7 @@ function AgendaView({cfg}){
               const endH=Math.min(HOUR_END+1, endHraw>startH?endHraw:startH+1);
               const top=(startH-HOUR_START)*PX_H;
               const height=Math.max(18,(endH-startH)*PX_H-2);
-              return <div key={e.id} title={e.title} style={{position:'absolute',top,height,left:2,right:2,background:prefixColor(e.title),color:'#fff',fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,.25)'}}>
+              return <div key={e.id} title={e.title} style={{position:'absolute',top,height,left:2,right:2,background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,.25)'}}>
                 <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
                 <div style={{opacity:.85}}>{start.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}</div>
               </div>;
@@ -1100,6 +1206,8 @@ function AgendaView({cfg}){
         })}
       </div>
     </div>}
+    {showJobModal && data && <QuickJobModal cfg={cfg} addProjet={data.addProjet} toast={toast} initialDate={jobDate}
+      onClose={()=>setShowJobModal(false)} onDone={()=>setReloadKey(k=>k+1)}/>}
   </div>;
 }
 
@@ -1199,7 +1307,7 @@ function App(){
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
         {nav==='projets' && <ProjetsView data={data} cfg={cfg}/>}
         {nav==='contracteurs' && <ContracteursView data={data}/>}
-        {nav==='agenda' && <AgendaView cfg={cfg}/>}
+        {nav==='agenda' && <AgendaView cfg={cfg} data={data} toast={show}/>}
         {nav==='heures' && <HeuresView cfg={cfg}/>}
         {nav==='rappels' && <RemindersView data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
