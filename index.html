@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="SoumissionPro">
+<meta name="theme-color" content="#0d1117">
+<title>SoumissionPro — Saran Électrique</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIQBlBnZ_sjsDDu6uJS7jJA6M2zAKSETE&libraries=places" async defer></script>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0d1117;--bg2:#161b22;--bg3:#1c2333;--bg4:#21262d;
+  --border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.13);
+  --text:#e6edf3;--muted:#7d8590;
+  --accent:#ff7a1a;--accent2:#ff4d1a;--accent-rgb:255,122,26;
+  --success:#3fb950;--warning:#d29922;--danger:#f85149;
+  --font-head:'Syne',sans-serif;--font-body:'DM Sans',sans-serif;
+  --topbar-h:54px;
+}
+[data-theme="light"]{
+  --bg:#f4f5f7;--bg2:#ffffff;--bg3:#eceef2;--bg4:#e3e6ec;
+  --border:rgba(0,0,0,0.08);--border2:rgba(0,0,0,0.14);
+  --text:#1a1f26;--muted:#5b6472;
+  --success:#1a7f37;--warning:#9a6700;--danger:#cf222e;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--font-body);height:100%}
+#root{min-height:100vh}
+h1,h2,h3,.fh{font-family:var(--font-head);font-weight:800;letter-spacing:-0.01em}
+a{color:inherit}
+button{font-family:var(--font-body);cursor:pointer;touch-action:manipulation}
+input,select,textarea{font-family:var(--font-body);background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:8px;padding:9px 11px;font-size:14px;width:100%}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+.muted{color:var(--muted)}
+.topbar{position:sticky;top:0;z-index:40;height:var(--topbar-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:var(--bg2);border-bottom:1px solid var(--border)}
+.logo{font-family:var(--font-head);font-weight:800;font-size:17px;display:flex;align-items:center;gap:8px}
+.logo .dot{width:9px;height:9px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2))}
+.btn{border:1px solid var(--border2);background:var(--bg3);color:var(--text);border-radius:9px;padding:9px 14px;font-size:13.5px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+.btn:active{transform:scale(0.97)}
+.btn-p{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;color:#fff}
+.btn-s{background:transparent}
+.btn-danger{border-color:rgba(248,81,73,0.4);color:var(--danger)}
+.btn-sm{padding:6px 10px;font-size:12.5px;border-radius:7px}
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+.shell{display:flex;min-height:calc(100vh - var(--topbar-h))}
+.nav{width:210px;flex-shrink:0;border-right:1px solid var(--border);padding:14px 10px;background:var(--bg2)}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:9px;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;margin-bottom:2px}
+.nav-item.active{background:rgba(var(--accent-rgb),0.13);color:var(--accent)}
+.nav-item:hover{background:var(--bg3)}
+.main{flex:1;padding:20px;max-width:1200px}
+@media(max-width:760px){.nav{position:fixed;bottom:0;left:0;right:0;top:auto;width:100%;display:flex;flex-direction:row;justify-content:space-around;border-right:none;border-top:1px solid var(--border);padding:6px;z-index:39}.nav-item{flex-direction:column;font-size:10.5px;gap:3px;padding:6px}.main{padding-bottom:80px}}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px}
+.grid{display:grid;gap:12px}
+.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:700}
+.pipe{display:flex;gap:12px;overflow-x:auto;padding-bottom:10px}
+.pipe-col{min-width:250px;flex-shrink:0;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:10px}
+.pipe-col-h{display:flex;align-items:center;justify-content:space-between;padding:4px 6px 10px;font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.03em}
+.opp-card{background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:11px;margin-bottom:8px;cursor:pointer}
+.opp-card:hover{border-color:var(--accent)}
+.opp-card .t{font-weight:700;font-size:13.5px;margin-bottom:3px}
+.opp-card .a{font-size:12px;color:var(--muted)}
+.opp-card .m{font-size:13px;font-weight:700;color:var(--accent);margin-top:6px}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;z-index:100;padding:14px}
+.modal{background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:20px;width:100%;max-width:560px;max-height:88vh;overflow-y:auto}
+.modal-title{font-family:var(--font-head);font-weight:800;font-size:18px;margin:0 0 14px}
+.field{margin-bottom:11px}
+.field label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.02em}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;color:var(--muted);font-size:11.5px;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid var(--border)}
+td{padding:8px;border-bottom:1px solid var(--border)}
+tr:hover td{background:var(--bg3)}
+.item-row{display:grid;grid-template-columns:1fr 60px 90px 90px 28px;gap:6px;margin-bottom:6px;align-items:center}
+.total-line{display:flex;justify-content:flex-end;gap:16px;font-size:15px;font-weight:800;padding-top:10px;border-top:1px solid var(--border);margin-top:8px}
+.remind-item{display:flex;justify-content:space-between;align-items:center;padding:11px;border-bottom:1px solid var(--border)}
+.remind-item:last-child{border-bottom:none}
+.remind-item.late{border-left:3px solid var(--danger);padding-left:8px}
+.tag-input textarea{min-height:80px;resize:vertical;font-family:var(--font-body)}
+.login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:18px}
+.spin{width:26px;height:26px;border:3px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:sp 0.8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bg4);border:1px solid var(--border2);padding:11px 18px;border-radius:10px;font-size:13.5px;font-weight:600;z-index:200}
+.toast.err{border-color:rgba(248,81,73,0.5);color:var(--danger)}
+.toast.ok{border-color:rgba(63,185,80,0.5);color:var(--success)}
+.close-x{position:absolute;top:14px;right:16px;background:none;border:none;color:var(--muted);font-size:20px;padding:4px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react,stage-3">
+const {useState,useEffect,useMemo,useCallback,useRef} = React;
+
+// ── CONFIG ────────────────────────────────────────────────────────────────
+// clientId : à créer dans Google Cloud Console (même projet que PunchPro),
+//            type "Application Web", origine JS autorisée = domaine d'hébergement
+//            de CETTE app (ex: https://<user>.github.io ou domaine custom).
+// crmSpreadsheetId : ID du NOUVEAU Google Sheet dédié au CRM (à créer, vide au départ —
+//            utiliser le bouton "Initialiser les onglets" dans Réglages).
+// punchproSpreadsheetId / punchproProjetsSheet : sheet + onglet "Projets" existants de
+//            PunchPro, où une ligne est ajoutée quand une opportunité est marquée "Gagné".
+// projetsColumns : ORDRE EXACT des colonnes de l'onglet Projets de PunchPro.
+//            À VÉRIFIER/AJUSTER dans Réglages avant la première utilisation —
+//            valeur par défaut = meilleure estimation, pas confirmée.
+const DEFAULT_CFG = {
+  apiKey: 'AIzaSyAIQBlBnZ_sjsDDu6uJS7jJA6M2zAKSETE',
+  clientId: '718428072431-tnd2rngvrgg5kbav31le67gmi0m0qr3f.apps.googleusercontent.com',
+  crmSpreadsheetId: '1AvjMWcAVPeLJrGUeyjuo0yypZC9hSbaQJGaSW3mP8M0',
+  punchproSpreadsheetId: '1uj7S1uHsE0BZwbNSJdtAEjpy_9YWqfh6mXoJwwLJ9UA',
+  punchproProjetsSheet: 'Projets',
+  projetsColumns: 'Adresse,Contracteur,TypeTravail,Client,Telephone,DateCreation',
+  calendarIds: 'saranelectrique@gmail.com,info@saranelectrique.com'
+};
+function loadCfg(){
+  try{ const raw=localStorage.getItem('crm_cfg'); return raw?{...DEFAULT_CFG,...JSON.parse(raw)}:{...DEFAULT_CFG}; }
+  catch{ return {...DEFAULT_CFG}; }
+}
+function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
+
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
+const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
+const APP_VERSION = 'v1';
+
+const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
+const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
+
+const CONTACTS_HEADERS = ['id','nom','entreprise','telephone','email','adresse','source','notes','dateCreation'];
+const OPP_HEADERS = ['id','contactId','titre','adresse','typeTravail','etape','montantEstime','dateCreation','dateRelance','dateCloture','notes','punchproJobCree','punchproEventId'];
+const SOUM_HEADERS = ['id','opportuniteId','date','itemsJson','total','statut','courrielEnvoye','dateEnvoi'];
+
+function genId(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function fmtMoney(n){ return (parseFloat(n)||0).toLocaleString('fr-CA',{style:'currency',currency:'CAD'}); }
+function safeFloat(v){ try{ return parseFloat(String(v).replace(',','.'))||0; }catch{ return 0; } }
+
+// ── Thème clair/sombre ───────────────────────────────────────────────────
+function getThemePref(){ return localStorage.getItem('crm_theme')||'dark'; }
+function setThemePref(v){ localStorage.setItem('crm_theme',v); document.documentElement.setAttribute('data-theme',v); window.dispatchEvent(new Event('crm-theme-change')); }
+function useTheme(){
+  const [t,setT]=useState(getThemePref);
+  useEffect(()=>{ document.documentElement.setAttribute('data-theme',t);
+    const onC=()=>setT(getThemePref());
+    window.addEventListener('crm-theme-change',onC);
+    return ()=>window.removeEventListener('crm-theme-change',onC);
+  },[]);
+  return [t,setThemePref];
+}
+
+// ── Google API loading ───────────────────────────────────────────────────
+let tokenClient=null;
+function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
+async function initGoogle(cfg){
+  await loadScript('https://apis.google.com/js/api.js');
+  await new Promise(res=>window.gapi.load('client',res));
+  await window.gapi.client.init({apiKey:cfg.apiKey, discoveryDocs:DISCOVERY});
+  await loadScript('https://accounts.google.com/gsi/client');
+  return new Promise((resolve)=>{
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: cfg.clientId,
+      scope: SCOPES,
+      callback: ()=>{}
+    });
+    resolve();
+  });
+}
+function requestToken(){
+  return new Promise((resolve,reject)=>{
+    tokenClient.callback = (resp)=>{
+      if(resp && resp.access_token){ resolve(resp); } else { reject(resp); }
+    };
+    tokenClient.requestAccessToken({prompt: window.gapi.client.getToken()?'':'consent'});
+  });
+}
+
+// ── Sheets helpers ───────────────────────────────────────────────────────
+async function sheetsGetAll(spreadsheetId, sheetName){
+  const resp = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId, range: sheetName+'!A2:Z'});
+  return resp.result.values || [];
+}
+async function sheetsAppendRow(spreadsheetId, sheetName, rowArray){
+  return window.gapi.client.sheets.spreadsheets.values.append({
+    spreadsheetId, range: sheetName+'!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS',
+    resource:{values:[rowArray]}
+  });
+}
+async function sheetsUpdateRow(spreadsheetId, sheetName, rowIndex1Based, rowArray){
+  const lastCol = String.fromCharCode(65+rowArray.length-1);
+  return window.gapi.client.sheets.spreadsheets.values.update({
+    spreadsheetId, range: sheetName+'!A'+rowIndex1Based+':'+lastCol+rowIndex1Based, valueInputOption:'RAW',
+    resource:{values:[rowArray]}
+  });
+}
+async function ensureSheetsExist(spreadsheetId, sheetsSpec){
+  const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId});
+  const existing = (meta.result.sheets||[]).map(s=>s.properties.title);
+  const requests=[];
+  for(const spec of sheetsSpec){ if(!existing.includes(spec.name)) requests.push({addSheet:{properties:{title:spec.name}}}); }
+  if(requests.length) await window.gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId, resource:{requests}});
+  for(const spec of sheetsSpec){
+    await window.gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId, range: spec.name+'!A1', valueInputOption:'RAW', resource:{values:[spec.headers]}
+    });
+  }
+}
+
+// ── Row <-> object mapping ───────────────────────────────────────────────
+function rowsToObjects(rows, headers){
+  return rows.map((r,i)=>{
+    const o={_row:i+2};
+    headers.forEach((h,idx)=>{ o[h]=r[idx]!==undefined?r[idx]:''; });
+    return o;
+  });
+}
+function objectToRow(o, headers){ return headers.map(h=>o[h]!==undefined?o[h]:''); }
+
+// ── Data hook: charge/écrit les 3 onglets CRM ────────────────────────────
+function useCrmData(cfg, ready){
+  const [contacts,setContacts]=useState([]);
+  const [opps,setOpps]=useState([]);
+  const [soums,setSoums]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState('');
+
+  const reload = useCallback(async ()=>{
+    if(!ready || !cfg.crmSpreadsheetId) return;
+    setLoading(true); setErr('');
+    try{
+      const [c,o,s] = await Promise.all([
+        sheetsGetAll(cfg.crmSpreadsheetId,'Contacts'),
+        sheetsGetAll(cfg.crmSpreadsheetId,'Opportunites'),
+        sheetsGetAll(cfg.crmSpreadsheetId,'Soumissions')
+      ]);
+      setContacts(rowsToObjects(c, CONTACTS_HEADERS));
+      setOpps(rowsToObjects(o, OPP_HEADERS));
+      setSoums(rowsToObjects(s, SOUM_HEADERS));
+    }catch(e){ setErr((e&&e.result&&e.result.error&&e.result.error.message) || 'Erreur de chargement des données.'); }
+    setLoading(false);
+  },[cfg.crmSpreadsheetId, ready]);
+
+  useEffect(()=>{ reload(); },[reload]);
+
+  async function addContact(obj){
+    const full = {id:genId(), dateCreation:todayISO(), ...obj};
+    await sheetsAppendRow(cfg.crmSpreadsheetId,'Contacts', objectToRow(full, CONTACTS_HEADERS));
+    await reload();
+    return full;
+  }
+  async function updateContact(obj){
+    await sheetsUpdateRow(cfg.crmSpreadsheetId,'Contacts', obj._row, objectToRow(obj, CONTACTS_HEADERS));
+    await reload();
+  }
+  async function addOpp(obj){
+    const full = {id:genId(), dateCreation:todayISO(), punchproJobCree:'Non', punchproEventId:'', ...obj};
+    await sheetsAppendRow(cfg.crmSpreadsheetId,'Opportunites', objectToRow(full, OPP_HEADERS));
+    await reload();
+    return full;
+  }
+  async function updateOpp(obj){
+    await sheetsUpdateRow(cfg.crmSpreadsheetId,'Opportunites', obj._row, objectToRow(obj, OPP_HEADERS));
+    await reload();
+  }
+  async function addSoumission(obj){
+    const full = {id:genId(), date:todayISO(), courrielEnvoye:'Non', dateEnvoi:'', ...obj};
+    await sheetsAppendRow(cfg.crmSpreadsheetId,'Soumissions', objectToRow(full, SOUM_HEADERS));
+    await reload();
+    return full;
+  }
+  async function updateSoumission(obj){
+    await sheetsUpdateRow(cfg.crmSpreadsheetId,'Soumissions', obj._row, objectToRow(obj, SOUM_HEADERS));
+    await reload();
+  }
+
+  return {contacts,opps,soums,loading,err,reload,addContact,updateContact,addOpp,updateOpp,addSoumission,updateSoumission};
+}
+
+// ── Génération du courriel de soumission (mailto + copie) ───────────────
+function buildEmailBody(contact, opp, items, total){
+  const lines=[];
+  lines.push('Bonjour '+(contact.nom||'')+',');
+  lines.push('');
+  lines.push('Voici notre soumission pour les travaux au : '+(opp.adresse||''));
+  lines.push('');
+  lines.push('--- DÉTAILS DE LA SOUMISSION ---');
+  items.forEach(it=>{
+    lines.push('- '+it.description+'  |  Qté: '+it.qte+'  |  Prix unit.: '+fmtMoney(it.prix)+'  |  Sous-total: '+fmtMoney(it.qte*it.prix));
+  });
+  lines.push('');
+  lines.push('TOTAL: '+fmtMoney(total));
+  lines.push('');
+  lines.push('--- INFO CLIENT (pour référence comptabilité) ---');
+  lines.push('Client: '+(contact.nom||''));
+  lines.push('Entreprise: '+(contact.entreprise||''));
+  lines.push('Téléphone: '+(contact.telephone||''));
+  lines.push('Courriel: '+(contact.email||''));
+  lines.push('Adresse des travaux: '+(opp.adresse||''));
+  lines.push('Type de travail: '+(opp.typeTravail||''));
+  lines.push('Date: '+todayISO());
+  lines.push('');
+  lines.push('Merci,');
+  lines.push('Saran Électrique');
+  return lines.join('\n');
+}
+function openMailto(to, subject, body){
+  const url = 'mailto:'+encodeURIComponent(to||'')+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+  window.location.href = url;
+}
+
+// ── UI: Toast ─────────────────────────────────────────────────────────────
+function useToast(){
+  const [msg,setMsg]=useState(null);
+  const show=useCallback((text,type)=>{ setMsg({text,type:type||'ok'}); setTimeout(()=>setMsg(null),3200); },[]);
+  const node = msg ? <div className={"toast "+(msg.type==='err'?'err':msg.type==='ok'?'ok':'')}>{msg.text}</div> : null;
+  return [show,node];
+}
+
+// ── UI: Modal wrapper ─────────────────────────────────────────────────────
+function Modal({title,onClose,children,wide}){
+  return <div className="modal-bg" onMouseDown={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+    <div className="modal" style={wide?{maxWidth:'720px'}:null}>
+      <button className="close-x" onClick={onClose}>×</button>
+      <div className="modal-title">{title}</div>
+      {children}
+    </div>
+  </div>;
+}
+
+// ── UI: Formulaire Contact ───────────────────────────────────────────────
+function ContactForm({initial, onSave, onClose}){
+  const [f,setF]=useState(initial || {nom:'',entreprise:'',telephone:'',email:'',adresse:'',source:'',notes:''});
+  const addrRef = useRef(null);
+  useEffect(()=>{
+    if(window.google && window.google.maps && addrRef.current){
+      const ac = new google.maps.places.Autocomplete(addrRef.current, {types:['address'],componentRestrictions:{country:'ca'}});
+      ac.addListener('place_changed', ()=>{
+        const place = ac.getPlace();
+        if(place && place.formatted_address) setF(v=>({...v, adresse: place.formatted_address}));
+      });
+    }
+  },[]);
+  return <Modal title={initial?'Modifier le contact':'Nouveau contact'} onClose={onClose}>
+    <div className="field"><label>Nom</label><input value={f.nom} onChange={e=>setF({...f,nom:e.target.value})} placeholder="Nom du client"/></div>
+    <div className="row2">
+      <div className="field"><label>Entreprise / contracteur</label><input value={f.entreprise} onChange={e=>setF({...f,entreprise:e.target.value})}/></div>
+      <div className="field"><label>Source</label><input value={f.source} onChange={e=>setF({...f,source:e.target.value})} placeholder="Référence, web, appel..."/></div>
+    </div>
+    <div className="row2">
+      <div className="field"><label>Téléphone</label><input value={f.telephone} onChange={e=>setF({...f,telephone:e.target.value})}/></div>
+      <div className="field"><label>Courriel</label><input value={f.email} onChange={e=>setF({...f,email:e.target.value})}/></div>
+    </div>
+    <div className="field"><label>Adresse</label><input ref={addrRef} value={f.adresse} onChange={e=>setF({...f,adresse:e.target.value})}/></div>
+    <div className="field tag-input"><label>Notes</label><textarea value={f.notes} onChange={e=>setF({...f,notes:e.target.value})}/></div>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:14}}>
+      <button className="btn btn-s" onClick={onClose}>Annuler</button>
+      <button className="btn btn-p" onClick={()=>onSave(f)}>Enregistrer</button>
+    </div>
+  </Modal>;
+}
+
+// ── UI: Vue Contacts ──────────────────────────────────────────────────────
+function ContactsView({data, toast}){
+  const [showForm,setShowForm]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [q,setQ]=useState('');
+  const filtered = data.contacts.filter(c=>{
+    const s=(c.nom+' '+c.entreprise+' '+c.adresse).toLowerCase();
+    return s.includes(q.toLowerCase());
+  });
+  return <div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,flexWrap:'wrap',gap:8}}>
+      <h2 className="fh" style={{margin:0,fontSize:20}}>Contacts</h2>
+      <div style={{display:'flex',gap:8}}>
+        <input placeholder="Rechercher..." value={q} onChange={e=>setQ(e.target.value)} style={{width:200}}/>
+        <button className="btn btn-p" onClick={()=>{setEditing(null);setShowForm(true);}}>+ Contact</button>
+      </div>
+    </div>
+    <div className="card" style={{padding:0,overflowX:'auto'}}>
+      <table>
+        <thead><tr><th>Nom</th><th>Entreprise</th><th>Téléphone</th><th>Courriel</th><th>Adresse</th><th></th></tr></thead>
+        <tbody>
+        {filtered.map(c=>
+          <tr key={c.id}>
+            <td>{c.nom}</td><td>{c.entreprise}</td><td>{c.telephone}</td><td>{c.email}</td><td className="muted">{c.adresse}</td>
+            <td><button className="btn btn-sm" onClick={()=>{setEditing(c);setShowForm(true);}}>Modifier</button></td>
+          </tr>
+        )}
+        {filtered.length===0 && <tr><td colSpan="6" className="muted" style={{padding:16}}>Aucun contact.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+    {showForm && <ContactForm initial={editing} onClose={()=>setShowForm(false)} onSave={async(f)=>{
+      try{
+        if(editing) await data.updateContact({...editing,...f}); else await data.addContact(f);
+        setShowForm(false); toast('Contact enregistré.','ok');
+      }catch(e){ toast('Erreur: '+e.message,'err'); }
+    }}/>}
+  </div>;
+}
+
+// ── UI: Constructeur de soumission (items + total + courriel) ───────────
+function SoumissionBuilder({opp, contact, existing, onSaved, toast}){
+  const [items,setItems]=useState(existing? JSON.parse(existing.itemsJson||'[]') : [{description:'',qte:1,prix:0}]);
+  const total = items.reduce((s,it)=>s+(safeFloat(it.qte)*safeFloat(it.prix)),0);
+  function upd(i,k,v){ const n=[...items]; n[i]={...n[i],[k]:v}; setItems(n); }
+  function addRow(){ setItems([...items,{description:'',qte:1,prix:0}]); }
+  function delRow(i){ setItems(items.filter((_,idx)=>idx!==i)); }
+
+  async function handleSave(statut){
+    const payload = {itemsJson: JSON.stringify(items), total: total.toFixed(2), statut};
+    try{
+      if(existing) await onSaved({...existing, ...payload});
+      else await onSaved(payload);
+      toast('Soumission enregistrée.','ok');
+    }catch(e){ toast('Erreur: '+e.message,'err'); }
+  }
+  function handleEmail(){
+    const body = buildEmailBody(contact||{}, opp||{}, items, total);
+    openMailto(contact&&contact.email, 'Soumission — '+(opp&&opp.adresse||'Saran Électrique'), body);
+    handleSave('Envoyée');
+  }
+  function handleCopy(){
+    const body = buildEmailBody(contact||{}, opp||{}, items, total);
+    navigator.clipboard.writeText(body).then(()=>toast('Texte copié.','ok'));
+  }
+
+  return <div>
+    <div style={{marginBottom:8}}>
+      {items.map((it,i)=>
+        <div className="item-row" key={i}>
+          <input placeholder="Description" value={it.description} onChange={e=>upd(i,'description',e.target.value)}/>
+          <input placeholder="Qté" value={it.qte} onChange={e=>upd(i,'qte',e.target.value)}/>
+          <input placeholder="Prix" value={it.prix} onChange={e=>upd(i,'prix',e.target.value)}/>
+          <div className="muted" style={{fontSize:12.5,textAlign:'right'}}>{fmtMoney(safeFloat(it.qte)*safeFloat(it.prix))}</div>
+          <button className="btn btn-sm btn-danger" onClick={()=>delRow(i)}>×</button>
+        </div>
+      )}
+      <button className="btn btn-sm btn-s" onClick={addRow}>+ Item</button>
+    </div>
+    <div className="total-line"><span className="muted">Total</span><span>{fmtMoney(total)}</span></div>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:14,flexWrap:'wrap'}}>
+      <button className="btn btn-s" onClick={()=>handleSave(existing?existing.statut:'Brouillon')}>Enregistrer brouillon</button>
+      <button className="btn btn-s" onClick={handleCopy}>Copier le texte</button>
+      <button className="btn btn-p" onClick={handleEmail}>Générer le courriel</button>
+    </div>
+  </div>;
+}
+
+// ── UI: Détail d'une opportunité (fiche + soumission + intégration PunchPro) ─
+function OppDetail({opp, contact, soums, data, cfg, onClose, toast}){
+  const [tab,setTab]=useState('info');
+  const [f,setF]=useState(opp);
+  const [showJobModal,setShowJobModal]=useState(false);
+  const relatedSoum = soums.filter(s=>s.opportuniteId===opp.id).sort((a,b)=>(b.date||'').localeCompare(a.date||''))[0];
+
+  async function saveInfo(){
+    try{ await data.updateOpp(f); toast('Opportunité mise à jour.','ok'); }
+    catch(e){ toast('Erreur: '+e.message,'err'); }
+  }
+  async function changeEtape(etape){
+    const upd = {...f, etape, dateCloture: (etape==='Gagné'||etape==='Perdu')?todayISO():f.dateCloture};
+    setF(upd);
+    try{ await data.updateOpp(upd); toast('Étape: '+etape,'ok'); }
+    catch(e){ toast('Erreur: '+e.message,'err'); }
+  }
+
+  return <Modal title={f.titre || f.adresse || 'Opportunité'} onClose={onClose} wide>
+    <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+      {ETAPES.map(e=>
+        <button key={e} className="btn btn-sm" onClick={()=>changeEtape(e)}
+          style={f.etape===e?{background:ETAPE_COLORS[e],color:'#fff',border:'none'}:null}>{e}</button>
+      )}
+    </div>
+    <div style={{display:'flex',gap:14,marginBottom:14,borderBottom:'1px solid var(--border)'}}>
+      {['info','soumission','planification'].map(tId=>
+        <div key={tId} onClick={()=>setTab(tId)} style={{padding:'6px 0',fontWeight:700,fontSize:13,cursor:'pointer',
+          color: tab===tId?'var(--accent)':'var(--muted)', borderBottom: tab===tId?'2px solid var(--accent)':'2px solid transparent'}}>
+          {tId==='info'?'Info':tId==='soumission'?'Soumission':'Job PunchPro'}
+        </div>
+      )}
+    </div>
+
+    {tab==='info' && <div>
+      <div className="field"><label>Titre</label><input value={f.titre} onChange={e=>setF({...f,titre:e.target.value})}/></div>
+      <div className="row2">
+        <div className="field"><label>Adresse</label><input value={f.adresse} onChange={e=>setF({...f,adresse:e.target.value})}/></div>
+        <div className="field"><label>Type de travail</label><input value={f.typeTravail} onChange={e=>setF({...f,typeTravail:e.target.value})}/></div>
+      </div>
+      <div className="row2">
+        <div className="field"><label>Montant estimé</label><input value={f.montantEstime} onChange={e=>setF({...f,montantEstime:e.target.value})}/></div>
+        <div className="field"><label>Date de relance</label><input type="date" value={f.dateRelance} onChange={e=>setF({...f,dateRelance:e.target.value})}/></div>
+      </div>
+      <div className="field tag-input"><label>Notes</label><textarea value={f.notes} onChange={e=>setF({...f,notes:e.target.value})}/></div>
+      {contact && <div className="muted" style={{fontSize:12.5,marginBottom:10}}>Contact: {contact.nom} — {contact.telephone} — {contact.email}</div>}
+      <div style={{display:'flex',justifyContent:'flex-end'}}><button className="btn btn-p" onClick={saveInfo}>Enregistrer</button></div>
+    </div>}
+
+    {tab==='soumission' && <SoumissionBuilder opp={f} contact={contact} existing={relatedSoum} toast={toast}
+      onSaved={async(payload)=>{
+        if(payload._row) await data.updateSoumission(payload);
+        else await data.addSoumission({...payload, opportuniteId:f.id});
+      }}/>}
+
+    {tab==='planification' && <div>
+      {f.etape!=='Gagné' && <div className="muted">L'opportunité doit être marquée "Gagné" pour créer la job dans PunchPro.</div>}
+      {f.etape==='Gagné' && f.punchproJobCree==='Oui' && <div style={{color:'var(--success)',fontWeight:700}}>✓ Job déjà créée dans PunchPro (event {f.punchproEventId}).</div>}
+      {f.etape==='Gagné' && f.punchproJobCree!=='Oui' && <button className="btn btn-p" onClick={()=>setShowJobModal(true)}>Créer la job dans PunchPro</button>}
+    </div>}
+
+    {showJobModal && <CreateJobModal opp={f} contact={contact} cfg={cfg} toast={toast}
+      onClose={()=>setShowJobModal(false)}
+      onDone={async(eventId)=>{
+        const upd={...f, punchproJobCree:'Oui', punchproEventId:eventId};
+        setF(upd); await data.updateOpp(upd); setShowJobModal(false);
+      }}/>}
+  </Modal>;
+}
+
+// ── UI: Modal création job PunchPro (écrit Sheet Projets + Calendar) ────
+function CreateJobModal({opp, contact, cfg, onClose, onDone, toast}){
+  const [date,setDate]=useState(todayISO());
+  const [heure,setHeure]=useState('08:00');
+  const [contracteur,setContracteur]=useState(contact&&contact.entreprise || '');
+  const [busy,setBusy]=useState(false);
+
+  async function handleCreate(){
+    setBusy(true);
+    try{
+      // 1) Écrit une ligne dans l'onglet Projets de PunchPro
+      const colOrder = cfg.projetsColumns.split(',').map(s=>s.trim());
+      const values = {
+        Adresse: opp.adresse, Contracteur: contracteur, TypeTravail: opp.typeTravail,
+        Client: contact?contact.nom:'', Telephone: contact?contact.telephone:'', DateCreation: todayISO()
+      };
+      const row = colOrder.map(c=>values[c]!==undefined?values[c]:'');
+      await sheetsAppendRow(cfg.punchproSpreadsheetId, cfg.punchproProjetsSheet, row);
+
+      // 2) Crée l'événement Google Calendar
+      const start = date+'T'+heure+':00';
+      const end = date+'T'+(String(Math.min(23,parseInt(heure.split(':')[0])+2)).padStart(2,'0'))+':'+heure.split(':')[1]+':00';
+      const calId = cfg.calendarIds.split(',')[0].trim();
+      const ev = await window.gapi.client.calendar.events.insert({
+        calendarId: calId,
+        resource: {
+          summary: (contracteur?contracteur+' — ':'')+opp.adresse,
+          description: 'Type de travail: '+(opp.typeTravail||'')+'\nNotes: '+(opp.notes||'')+'\n(créé depuis SoumissionPro)',
+          location: opp.adresse,
+          start:{dateTime:start, timeZone:'America/Toronto'},
+          end:{dateTime:end, timeZone:'America/Toronto'}
+        }
+      });
+      toast('Job créée dans PunchPro.','ok');
+      onDone(ev.result.id);
+    }catch(e){ toast('Erreur création job: '+(e.message||JSON.stringify(e)),'err'); }
+    setBusy(false);
+  }
+
+  return <Modal title="Créer la job dans PunchPro" onClose={onClose}>
+    <div className="field"><label>Adresse</label><input value={opp.adresse} disabled/></div>
+    <div className="row2">
+      <div className="field"><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
+      <div className="field"><label>Heure</label><input type="time" value={heure} onChange={e=>setHeure(e.target.value)}/></div>
+    </div>
+    <div className="field"><label>Contracteur</label><input value={contracteur} onChange={e=>setContracteur(e.target.value)}/></div>
+    <div className="muted" style={{fontSize:12,marginBottom:10}}>Ceci ajoute une ligne dans l'onglet "{cfg.punchproProjetsSheet}" et crée un événement sur {cfg.calendarIds.split(',')[0]}.</div>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+      <button className="btn btn-s" onClick={onClose}>Annuler</button>
+      <button className="btn btn-p" onClick={handleCreate} disabled={busy}>{busy?'Création...':'Confirmer'}</button>
+    </div>
+  </Modal>;
+}
+
+// ── UI: Formulaire nouvelle opportunité ──────────────────────────────────
+function OppForm({contacts, onSave, onClose}){
+  const [f,setF]=useState({contactId:'', titre:'', adresse:'', typeTravail:'', etape:'Prospect', montantEstime:'', dateRelance:'', notes:''});
+  return <Modal title="Nouvelle opportunité" onClose={onClose}>
+    <div className="field"><label>Contact</label>
+      <select value={f.contactId} onChange={e=>setF({...f,contactId:e.target.value})}>
+        <option value="">— Sélectionner —</option>
+        {contacts.map(c=><option key={c.id} value={c.id}>{c.nom}{c.entreprise?' ('+c.entreprise+')':''}</option>)}
+      </select>
+    </div>
+    <div className="field"><label>Titre</label><input value={f.titre} onChange={e=>setF({...f,titre:e.target.value})} placeholder="Ex: Rénovation électrique - 92 rue Edison"/></div>
+    <div className="row2">
+      <div className="field"><label>Adresse</label><input value={f.adresse} onChange={e=>setF({...f,adresse:e.target.value})}/></div>
+      <div className="field"><label>Type de travail</label><input value={f.typeTravail} onChange={e=>setF({...f,typeTravail:e.target.value})}/></div>
+    </div>
+    <div className="row2">
+      <div className="field"><label>Montant estimé</label><input value={f.montantEstime} onChange={e=>setF({...f,montantEstime:e.target.value})}/></div>
+      <div className="field"><label>Date de relance</label><input type="date" value={f.dateRelance} onChange={e=>setF({...f,dateRelance:e.target.value})}/></div>
+    </div>
+    <div className="field tag-input"><label>Notes</label><textarea value={f.notes} onChange={e=>setF({...f,notes:e.target.value})}/></div>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:14}}>
+      <button className="btn btn-s" onClick={onClose}>Annuler</button>
+      <button className="btn btn-p" onClick={()=>onSave(f)}>Créer</button>
+    </div>
+  </Modal>;
+}
+
+// ── UI: Pipeline (kanban) ────────────────────────────────────────────────
+function PipelineView({data, cfg, toast}){
+  const [showForm,setShowForm]=useState(false);
+  const [openOpp,setOpenOpp]=useState(null);
+  const contactById = useMemo(()=>Object.fromEntries(data.contacts.map(c=>[c.id,c])),[data.contacts]);
+
+  return <div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+      <h2 className="fh" style={{margin:0,fontSize:20}}>Pipeline</h2>
+      <button className="btn btn-p" onClick={()=>setShowForm(true)}>+ Opportunité</button>
+    </div>
+    <div className="pipe">
+      {ETAPES.map(etape=>{
+        const list = data.opps.filter(o=>o.etape===etape);
+        return <div className="pipe-col" key={etape}>
+          <div className="pipe-col-h"><span style={{color:ETAPE_COLORS[etape]}}>{etape}</span><span className="muted">{list.length}</span></div>
+          {list.map(o=>
+            <div className="opp-card" key={o.id} onClick={()=>setOpenOpp(o)}>
+              <div className="t">{o.titre || o.adresse}</div>
+              <div className="a">{contactById[o.contactId]?contactById[o.contactId].nom:''}</div>
+              {o.montantEstime && <div className="m">{fmtMoney(o.montantEstime)}</div>}
+            </div>
+          )}
+          {list.length===0 && <div className="muted" style={{fontSize:12,padding:'8px 4px'}}>Vide</div>}
+        </div>;
+      })}
+    </div>
+    {showForm && <OppForm contacts={data.contacts} onClose={()=>setShowForm(false)} onSave={async(f)=>{
+      try{ await data.addOpp(f); setShowForm(false); toast('Opportunité créée.','ok'); }
+      catch(e){ toast('Erreur: '+e.message,'err'); }
+    }}/>}
+    {openOpp && <OppDetail opp={data.opps.find(o=>o.id===openOpp.id) || openOpp} contact={contactById[openOpp.contactId]} soums={data.soums} data={data} cfg={cfg}
+      onClose={()=>setOpenOpp(null)} toast={toast}/>}
+  </div>;
+}
+
+// ── UI: Rappels / suivis ─────────────────────────────────────────────────
+function RemindersView({data}){
+  const today = todayISO();
+  const soon = new Date(); soon.setDate(soon.getDate()+7);
+  const soonISO = soon.toISOString().slice(0,10);
+  const contactById = Object.fromEntries(data.contacts.map(c=>[c.id,c]));
+  const items = data.opps.filter(o=>o.dateRelance && o.etape!=='Gagné' && o.etape!=='Perdu' && o.dateRelance<=soonISO)
+    .sort((a,b)=>(a.dateRelance||'').localeCompare(b.dateRelance||''));
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 14px',fontSize:20}}>Rappels & suivis</h2>
+    <div className="card" style={{padding:0}}>
+      {items.map(o=>
+        <div className={"remind-item"+(o.dateRelance<today?' late':'')} key={o.id}>
+          <div><div style={{fontWeight:700,fontSize:13.5}}>{o.titre||o.adresse}</div>
+          <div className="muted" style={{fontSize:12}}>{contactById[o.contactId]?contactById[o.contactId].nom:''} — {o.etape}</div></div>
+          <div style={{fontWeight:700,color:o.dateRelance<today?'var(--danger)':'var(--text)'}}>{o.dateRelance}</div>
+        </div>
+      )}
+      {items.length===0 && <div className="muted" style={{padding:16}}>Aucun suivi en attente.</div>}
+    </div>
+  </div>;
+}
+
+// ── UI: Réglages ──────────────────────────────────────────────────────────
+function SettingsView({cfg, setCfg, toast}){
+  const [f,setF]=useState(cfg);
+  const [theme,setTheme]=useTheme();
+  const [busy,setBusy]=useState(false);
+  async function handleInit(){
+    if(!f.crmSpreadsheetId){ toast('Indique d\'abord l\'ID du Google Sheet du CRM.','err'); return; }
+    setBusy(true);
+    try{
+      await ensureSheetsExist(f.crmSpreadsheetId, [
+        {name:'Contacts', headers:CONTACTS_HEADERS},
+        {name:'Opportunites', headers:OPP_HEADERS},
+        {name:'Soumissions', headers:SOUM_HEADERS}
+      ]);
+      toast('Onglets initialisés.','ok');
+    }catch(e){ toast('Erreur: '+(e.message||JSON.stringify(e)),'err'); }
+    setBusy(false);
+  }
+  return <div style={{maxWidth:520}}>
+    <h2 className="fh" style={{margin:'0 0 14px',fontSize:20}}>Réglages</h2>
+    <div className="card grid" style={{gap:12}}>
+      <div className="field"><label>Thème</label>
+        <select value={theme} onChange={e=>setTheme(e.target.value)}><option value="dark">Sombre</option><option value="light">Clair</option></select>
+      </div>
+      <div className="field"><label>ID du Google Sheet CRM</label><input value={f.crmSpreadsheetId} onChange={e=>setF({...f,crmSpreadsheetId:e.target.value})} placeholder="Coller l'ID du Sheet ici"/></div>
+      <button className="btn btn-s" onClick={handleInit} disabled={busy}>{busy?'Initialisation...':'Initialiser les onglets (Contacts/Opportunites/Soumissions)'}</button>
+      <hr style={{border:'none',borderTop:'1px solid var(--border)'}}/>
+      <div className="muted" style={{fontSize:12}}>Intégration PunchPro — à vérifier avant la première utilisation</div>
+      <div className="field"><label>ID Google Sheet PunchPro</label><input value={f.punchproSpreadsheetId} onChange={e=>setF({...f,punchproSpreadsheetId:e.target.value})}/></div>
+      <div className="field"><label>Nom de l'onglet Projets</label><input value={f.punchproProjetsSheet} onChange={e=>setF({...f,punchproProjetsSheet:e.target.value})}/></div>
+      <div className="field"><label>Ordre des colonnes de l'onglet Projets</label><input value={f.projetsColumns} onChange={e=>setF({...f,projetsColumns:e.target.value})} placeholder="Adresse,Contracteur,TypeTravail,Client,Telephone,DateCreation"/></div>
+      <div className="field"><label>Calendriers (séparés par virgule)</label><input value={f.calendarIds} onChange={e=>setF({...f,calendarIds:e.target.value})}/></div>
+      <button className="btn btn-p" onClick={()=>{ saveCfg(f); setCfg(f); toast('Réglages enregistrés.','ok'); }}>Enregistrer les réglages</button>
+      <div className="muted" style={{fontSize:11.5}}>Version {APP_VERSION}</div>
+    </div>
+  </div>;
+}
+
+// ── App root ──────────────────────────────────────────────────────────────
+function App(){
+  const [cfg,setCfg]=useState(loadCfg);
+  const [ready,setReady]=useState(false);
+  const [authed,setAuthed]=useState(false);
+  const [nav,setNav]=useState('pipeline');
+  const [initErr,setInitErr]=useState('');
+  const [show,toastNode]=useToast();
+  useTheme();
+
+  useEffect(()=>{
+    initGoogle(cfg).then(()=>setReady(true)).catch(e=>setInitErr('Erreur d\'initialisation Google: '+e.message));
+  },[]);
+
+  const data = useCrmData(cfg, ready && authed);
+
+  async function handleLogin(){
+    try{ await requestToken(); setAuthed(true); }
+    catch(e){ show('Connexion refusée ou annulée.','err'); }
+  }
+
+  if(!ready) return <div className="login-screen"><div className="spin"></div>{initErr && <div className="muted">{initErr}</div>}</div>;
+  if(!authed) return <div className="login-screen">
+    <div className="logo"><span className="dot"></span>SoumissionPro</div>
+    <div className="muted">Gestion de contacts, pipeline de vente et soumissions — Saran Électrique</div>
+    <button className="btn btn-p" onClick={handleLogin}>Se connecter avec Google</button>
+    {!cfg.crmSpreadsheetId && <div className="muted" style={{fontSize:12,maxWidth:320,textAlign:'center'}}>Astuce: connecte-toi puis va dans Réglages pour indiquer l'ID du Google Sheet du CRM et l'initialiser.</div>}
+  </div>;
+
+  const navItems = [
+    {id:'pipeline',label:'Pipeline'},
+    {id:'contacts',label:'Contacts'},
+    {id:'rappels',label:'Rappels'},
+    {id:'reglages',label:'Réglages'}
+  ];
+
+  return <div>
+    <div className="topbar">
+      <div className="logo"><span className="dot"></span>SoumissionPro</div>
+      {data.loading && <div className="muted" style={{fontSize:12}}>Chargement...</div>}
+    </div>
+    <div className="shell">
+      <div className="nav">
+        {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id?' active':'')} onClick={()=>setNav(n.id)}>{n.label}</div>)}
+      </div>
+      <div className="main">
+        {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
+        {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
+        {nav==='pipeline' && <PipelineView data={data} cfg={cfg} toast={show}/>}
+        {nav==='contacts' && <ContactsView data={data} toast={show}/>}
+        {nav==='rappels' && <RemindersView data={data}/>}
+        {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
+      </div>
+    </div>
+    {toastNode}
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
