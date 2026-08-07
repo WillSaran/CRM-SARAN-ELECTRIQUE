@@ -112,12 +112,17 @@ const {useState,useEffect,useMemo,useCallback,useRef} = React;
 // punchproSpreadsheetId : Sheet "HEURES & EMPLOYÉS APP SARAN ÉLECTRIQUE" — LECTURE SEULE.
 //            Le CRM y lit les onglets Employés/Pointages pour afficher les heures des
 //            employés et n'y écrit JAMAIS rien.
+// suiviTravauxSpreadsheetId : Sheet "SUIVI TRAVAUX SARAN ÉLECTRIQUE" — LECTURE SEULE.
+//            Un onglet par contracteur (Particuliers/ASC/CRS/PAY/SAR/GGP/BOM/RROY/5PIL),
+//            utilisé pour détecter les appels de service sans facture ("factures
+//            manquantes"). Le CRM lit les en-têtes dynamiquement (pas d'écriture).
 const DEFAULT_CFG = {
   apiKey: 'AIzaSyAWO2raCV3cUYpouxyyaPZ9VamrkRXqDKY',
   clientId: '718428072431-tnd2rngvrgg5kbav31le67gmi0m0qr3f.apps.googleusercontent.com',
   crmSpreadsheetId: '1AvjMWcAVPeLJrGUeyjuo0yypZC9hSbaQJGaSW3mP8M0',
   projetsSpreadsheetId: '1XJldTQODgo207rnwneF1CsHYS7PKwGR80pkXn741Oug',
   punchproSpreadsheetId: '1uj7S1uHsE0BZwbNSJdtAEjpy_9YWqfh6mXoJwwLJ9UA',
+  suiviTravauxSpreadsheetId: '1uHgs4eiD0t25hYHp69q27tESsuVB4HraCud3c04vLwY',
   calendarIds: 'saranelectrique@gmail.com,info@saranelectrique.com'
 };
 function loadCfg(){
@@ -128,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v7';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -274,6 +279,56 @@ const GCAL_COLOR_MAP = {
   '6':'#ffb878','7':'#46d6db','8':'#e1e1e1','9':'#5484ed','10':'#51b749','11':'#dc2127'
 };
 function eventColor(e){ return (e && e.colorId && GCAL_COLOR_MAP[e.colorId]) || prefixColor(e?e.title:''); }
+
+// ── Lecture SEULE du Sheet "SUIVI TRAVAUX" (appels de service / factures) ─
+// Un onglet par contracteur, en-têtes légèrement variables selon l'onglet —
+// on lit donc la ligne d'en-tête dynamiquement plutôt que de fixer des colonnes.
+const SUIVI_TAB_NAMES = {PAY:'PAY',CRS:'CRS',ASC:'ASC',GGP:'GGP',SAR:'SAR',BOM:'BOM','5PIL':'5PIL',RROY:'RROY',GOU:'GOU',PARTICULIER:'Particuliers'};
+async function sheetsGetHeaderRow(spreadsheetId, sheetName){
+  const resp = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId, range: sheetName+'!A1:Z1'});
+  return (resp.result.values && resp.result.values[0]) || [];
+}
+function findColIdx(headers, regex){ return headers.findIndex(h=>regex.test(String(h||''))); }
+// Retourne les lignes d'un onglet contracteur, mappées de façon souple selon les
+// en-têtes réels trouvés (Date / Projet / Adresse / Appel de service / Ordre de
+// travail / Factures / ID événement Calendar). Ignore les lignes vides ou orphelines.
+async function getSuiviTravauxRows(spreadsheetId, contracteurKey){
+  const tabName = SUIVI_TAB_NAMES[contracteurKey];
+  if(!tabName) return [];
+  let headers, rows;
+  try{
+    headers = await sheetsGetHeaderRow(spreadsheetId, tabName);
+    rows = await sheetsGetAll(spreadsheetId, tabName);
+  }catch(e){ return []; } // onglet absent ou inaccessible — on l'ignore simplement
+  const idxDate = findColIdx(headers, /date/i);
+  const idxProjet = findColIdx(headers, /projet/i);
+  const idxAdresse = findColIdx(headers, /adresse/i);
+  const idxAppel = findColIdx(headers, /appel/i);
+  const idxOrdre = findColIdx(headers, /ordre/i);
+  const idxFacture = findColIdx(headers, /facture/i);
+  const idxEvent = findColIdx(headers, /calendar/i);
+  const out = [];
+  rows.forEach(r=>{
+    const date=(idxDate>=0?r[idxDate]:'')||'';
+    const projet=(idxProjet>=0?r[idxProjet]:'')||'';
+    const adresse=(idxAdresse>=0?r[idxAdresse]:'')||'';
+    const appelService=(idxAppel>=0?r[idxAppel]:'')||'';
+    const ordreTravail=(idxOrdre>=0?r[idxOrdre]:'')||'';
+    const facture=(idxFacture>=0?r[idxFacture]:'')||'';
+    const eventId=(idxEvent>=0?r[idxEvent]:'')||'';
+    // ligne "réelle": au moins une date ou un projet/adresse — filtre les lignes
+    // orphelines (ex: bloc d'IDs Calendar collé en fin d'onglet) et les diviseurs de mois.
+    if(!date && !projet && !adresse && !appelService) return;
+    out.push({contracteur:contracteurKey, date, projet, adresse, appelService, ordreTravail, facture, eventId,
+      factureManquante: !!((appelService||ordreTravail) && !facture)});
+  });
+  return out;
+}
+async function getAllSuiviTravaux(spreadsheetId){
+  const keys = Object.keys(SUIVI_TAB_NAMES);
+  const results = await Promise.all(keys.map(k=>getSuiviTravauxRows(spreadsheetId, k)));
+  return results.flat();
+}
 
 // ── Thème clair/sombre ───────────────────────────────────────────────────
 function getThemePref(){ return localStorage.getItem('crm_theme')||'dark'; }
@@ -1211,6 +1266,73 @@ function AgendaView({cfg, data, toast}){
   </div>;
 }
 
+// ── UI: Factures — LECTURE SEULE depuis "SUIVI TRAVAUX SARAN ÉLECTRIQUE" ──
+// Un appel de service sans facture associée = "facture manquante".
+function FacturesView({cfg}){
+  const [loading,setLoading]=useState(true);
+  const [rows,setRows]=useState([]);
+  const [err,setErr]=useState('');
+  const [onlyMissing,setOnlyMissing]=useState(true);
+  const [filterC,setFilterC]=useState(null);
+
+  useEffect(()=>{
+    if(!cfg.suiviTravauxSpreadsheetId){ setLoading(false); return; }
+    let cancelled=false;
+    setLoading(true); setErr('');
+    getAllSuiviTravaux(cfg.suiviTravauxSpreadsheetId)
+      .then(r=>{ if(!cancelled) setRows(r); })
+      .catch(e=>{ if(!cancelled) setErr((e&&e.result&&e.result.error&&e.result.error.message)||'Erreur de chargement.'); })
+      .finally(()=>{ if(!cancelled) setLoading(false); });
+    return ()=>{ cancelled=true; };
+  },[cfg.suiviTravauxSpreadsheetId]);
+
+  const contracteursPresent = [...new Set(rows.map(r=>r.contracteur))];
+  let list = rows;
+  if(onlyMissing) list = list.filter(r=>r.factureManquante);
+  if(filterC) list = list.filter(r=>r.contracteur===filterC);
+  list = [...list].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const missingCount = rows.filter(r=>r.factureManquante).length;
+
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Factures</h2>
+    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Lecture seule — Sheet "SUIVI TRAVAUX SARAN ÉLECTRIQUE". Une "facture manquante" = un appel de service ou ordre de travail sans numéro de facture associé.</div>
+    {!cfg.suiviTravauxSpreadsheetId && <div className="card">Configure l'ID du Sheet "SUIVI TRAVAUX" dans Réglages.</div>}
+    {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
+    {cfg.suiviTravauxSpreadsheetId && <>
+      {!loading && <div className="card" style={{marginBottom:14,display:'flex',alignItems:'center',gap:10}}>
+        <div style={{fontSize:28,fontWeight:800,color:missingCount>0?'var(--danger)':'var(--success)'}}>{missingCount}</div>
+        <div className="muted" style={{fontSize:12.5}}>facture{missingCount!==1?'s':''} manquante{missingCount!==1?'s':''} sur {rows.length} lignes lues, tous contracteurs confondus.</div>
+      </div>}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+        <button className="btn btn-sm" onClick={()=>setOnlyMissing(true)} style={onlyMissing?{background:'var(--danger)',color:'#fff',border:'none'}:null}>Manquantes seulement</button>
+        <button className="btn btn-sm" onClick={()=>setOnlyMissing(false)} style={!onlyMissing?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Toutes les lignes</button>
+      </div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
+        <button className="btn btn-sm" onClick={()=>setFilterC(null)} style={!filterC?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous contracteurs</button>
+        {contracteursPresent.map(c=><button key={c} className="btn btn-sm" onClick={()=>setFilterC(c)} style={filterC===c?{background:prefixColor(c),color:'#fff',border:'none'}:null}>{c==='PARTICULIER'?'Particuliers':c}</button>)}
+      </div>
+      {loading ? <div className="muted">Chargement...</div> :
+      <div className="card" style={{padding:0,overflowX:'auto'}}>
+        <table>
+          <thead><tr><th>Contracteur</th><th>Date</th><th>Projet</th><th>Adresse</th><th>Appel de service</th><th>Ordre de travail</th><th>Facture</th></tr></thead>
+          <tbody>
+            {list.map((r,i)=><tr key={i} style={r.factureManquante?{background:'rgba(248,81,73,.08)'}:null}>
+              <td>{r.contracteur==='PARTICULIER'?'Particuliers':r.contracteur}</td>
+              <td className="muted">{r.date}</td>
+              <td style={{fontWeight:600}}>{r.projet}</td>
+              <td className="muted">{r.adresse}</td>
+              <td>{r.appelService}</td>
+              <td>{r.ordreTravail}</td>
+              <td>{r.facture ? r.facture : <span style={{color:'var(--danger)',fontWeight:700}}>manquante</span>}</td>
+            </tr>)}
+            {list.length===0 && <tr><td colSpan="7" className="muted" style={{padding:16}}>{onlyMissing?'Aucune facture manquante 🎉':'Aucune ligne trouvée.'}</td></tr>}
+          </tbody>
+        </table>
+      </div>}
+    </>}
+  </div>;
+}
+
 // ── UI: Réglages ──────────────────────────────────────────────────────────
 function SettingsView({cfg, setCfg, toast}){
   const [f,setF]=useState(cfg);
@@ -1243,6 +1365,7 @@ function SettingsView({cfg, setCfg, toast}){
       <button className="btn btn-s" onClick={handleInit} disabled={busy}>{busy?'Initialisation...':'Initialiser les onglets (Contacts/Opportunites/Soumissions/Projets)'}</button>
       <hr style={{border:'none',borderTop:'1px solid var(--border)'}}/>
       <div className="field"><label>ID du Sheet PunchPro (Heures &amp; Employés) — lecture seule</label><input value={f.punchproSpreadsheetId} onChange={e=>setF({...f,punchproSpreadsheetId:e.target.value})} placeholder="Sheet de pointage PunchPro, jamais modifié par le CRM"/></div>
+      <div className="field"><label>ID du Sheet "SUIVI TRAVAUX" (Factures) — lecture seule</label><input value={f.suiviTravauxSpreadsheetId} onChange={e=>setF({...f,suiviTravauxSpreadsheetId:e.target.value})} placeholder="Sheet des appels de service / factures, jamais modifié par le CRM"/></div>
       <div className="field"><label>Calendriers (séparés par virgule)</label><input value={f.calendarIds} onChange={e=>setF({...f,calendarIds:e.target.value})}/></div>
       <button className="btn btn-p" onClick={()=>{ saveCfg(f); setCfg(f); toast('Réglages enregistrés.','ok'); }}>Enregistrer les réglages</button>
       <div className="muted" style={{fontSize:11.5}}>Version {APP_VERSION}</div>
@@ -1287,6 +1410,7 @@ function App(){
     {id:'contracteurs',label:'Contracteurs'},
     {id:'agenda',label:'Agenda'},
     {id:'heures',label:'Heures'},
+    {id:'factures',label:'Factures'},
     {id:'rappels',label:'Rappels'},
     {id:'reglages',label:'Réglages'}
   ];
@@ -1309,6 +1433,7 @@ function App(){
         {nav==='contracteurs' && <ContracteursView data={data}/>}
         {nav==='agenda' && <AgendaView cfg={cfg} data={data} toast={show}/>}
         {nav==='heures' && <HeuresView cfg={cfg}/>}
+        {nav==='factures' && <FacturesView cfg={cfg}/>}
         {nav==='rappels' && <RemindersView data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
       </div>
