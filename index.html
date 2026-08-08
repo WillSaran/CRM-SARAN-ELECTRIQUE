@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v7';
+const APP_VERSION = 'v8';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -244,22 +244,64 @@ async function listCalendarEventsRange(calendarIds, timeMinISO, timeMaxISO){
   const all=[];
   for(const calId of calendarIds){
     try{
-      const resp = await window.gapi.client.calendar.events.list({
-        calendarId:calId.trim(), timeMin:timeMinISO, timeMax:timeMaxISO,
-        singleEvents:true, orderBy:'startTime', maxResults:250
-      });
-      (resp.result.items||[]).forEach(e=>{
-        all.push({
-          id:e.id, title:e.summary||'Sans titre',
-          start:(e.start&&(e.start.dateTime||e.start.date))||'',
-          end:(e.end&&(e.end.dateTime||e.end.date))||'',
-          allDay:!(e.start&&e.start.dateTime), location:e.location||'', description:e.description||'',
-          colorId:e.colorId||'', calendarId:calId.trim()
+      let pageToken=undefined;
+      do{
+        const resp = await window.gapi.client.calendar.events.list({
+          calendarId:calId.trim(), timeMin:timeMinISO, timeMax:timeMaxISO,
+          singleEvents:true, orderBy:'startTime', maxResults:250, pageToken
         });
-      });
+        (resp.result.items||[]).forEach(e=>{
+          all.push({
+            id:e.id, title:e.summary||'Sans titre',
+            start:(e.start&&(e.start.dateTime||e.start.date))||'',
+            end:(e.end&&(e.end.dateTime||e.end.date))||'',
+            allDay:!(e.start&&e.start.dateTime), location:e.location||'', description:e.description||'',
+            colorId:e.colorId||'', calendarId:calId.trim()
+          });
+        });
+        pageToken = resp.result.nextPageToken;
+      }while(pageToken);
     }catch(err){ /* calendrier inaccessible, on ignore et continue */ }
   }
   return all.sort((a,b)=>String(a.start).localeCompare(String(b.start)));
+}
+// Regroupe une liste d'événements Calendar par adresse (location de l'événement,
+// ou à défaut le "numéro+rue" extrait du titre) — pour retrouver "le projet"
+// derrière plusieurs jobs planifiées au même endroit, comme dans PunchPro.
+function groupEventsByAddress(events){
+  const map = {};
+  events.forEach(e=>{
+    const key = (e.location && e.location.trim()) || parseCivicStreet(e.title) || e.title;
+    if(!key) return;
+    if(!map[key]) map[key] = [];
+    map[key].push(e);
+  });
+  return Object.entries(map).map(([adresse,evs])=>{
+    const sorted = [...evs].sort((a,b)=>String(b.start).localeCompare(String(a.start)));
+    const prefixCounts = {};
+    evs.forEach(e=>{ const p=getJobPrefix(e.title); prefixCounts[p]=(prefixCounts[p]||0)+1; });
+    const contracteur = Object.entries(prefixCounts).sort((a,b)=>b[1]-a[1])[0][0];
+    return {adresse, contracteur, count:evs.length, dernier:sorted[0], evenements:sorted};
+  }).sort((a,b)=>String(b.dernier.start).localeCompare(String(a.dernier.start)));
+}
+// Préférences retenues pour préremplir la prochaine création de job (contracteur/phase).
+function getLastJobDefaults(){
+  try{ return {prefixe:localStorage.getItem('crm_last_prefixe')||'PARTICULIER', phase:localStorage.getItem('crm_last_phase')||''}; }
+  catch(e){ return {prefixe:'PARTICULIER', phase:''}; }
+}
+function saveLastJobDefaults(prefixe, phase){
+  try{ localStorage.setItem('crm_last_prefixe', prefixe||'PARTICULIER'); localStorage.setItem('crm_last_phase', phase||''); }catch(e){}
+}
+// Jours à afficher dans l'Agenda selon le mode (jour/semaine/mois).
+function getRangeDays(viewMode, anchor){
+  if(viewMode==='jour'){ const d=new Date(anchor); d.setHours(0,0,0,0); return [d]; }
+  if(viewMode==='mois'){
+    const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+    const startDow = (first.getDay()+6)%7;
+    const gridStart = new Date(first); gridStart.setDate(first.getDate()-startDow);
+    return Array.from({length:42},(_,i)=>{ const d=new Date(gridStart); d.setDate(gridStart.getDate()+i); return d; });
+  }
+  return weekDatesArr(getWeek(anchor));
 }
 function getJobPrefix(title){
   const u=(title||'').toUpperCase();
@@ -289,9 +331,14 @@ async function sheetsGetHeaderRow(spreadsheetId, sheetName){
   return (resp.result.values && resp.result.values[0]) || [];
 }
 function findColIdx(headers, regex){ return headers.findIndex(h=>regex.test(String(h||''))); }
-// Retourne les lignes d'un onglet contracteur, mappées de façon souple selon les
-// en-têtes réels trouvés (Date / Projet / Adresse / Appel de service / Ordre de
-// travail / Factures / ID événement Calendar). Ignore les lignes vides ou orphelines.
+// Retourne les lignes d'un onglet contracteur. Date/Projet/Adresse sont détectées
+// par en-tête (peu de risque de variation). Appel de service / Ordre de travail /
+// Factures sont en revanche des colonnes FIXES — K, L, M — car ces en-têtes sont
+// fusionnés sur 2 lignes dans le Sheet et la détection par texte ramenait le mauvais
+// texte ("Services et travail"). ID événement Calendar reste détecté par en-tête.
+const SUIVI_COL_APPEL = 10;  // colonne K (0-indexé: A=0 ... K=10)
+const SUIVI_COL_ORDRE = 11;  // colonne L
+const SUIVI_COL_FACTURE = 12; // colonne M
 async function getSuiviTravauxRows(spreadsheetId, contracteurKey){
   const tabName = SUIVI_TAB_NAMES[contracteurKey];
   if(!tabName) return [];
@@ -303,24 +350,27 @@ async function getSuiviTravauxRows(spreadsheetId, contracteurKey){
   const idxDate = findColIdx(headers, /date/i);
   const idxProjet = findColIdx(headers, /projet/i);
   const idxAdresse = findColIdx(headers, /adresse/i);
-  const idxAppel = findColIdx(headers, /appel/i);
-  const idxOrdre = findColIdx(headers, /ordre/i);
-  const idxFacture = findColIdx(headers, /facture/i);
   const idxEvent = findColIdx(headers, /calendar/i);
   const out = [];
   rows.forEach(r=>{
     const date=(idxDate>=0?r[idxDate]:'')||'';
     const projet=(idxProjet>=0?r[idxProjet]:'')||'';
     const adresse=(idxAdresse>=0?r[idxAdresse]:'')||'';
-    const appelService=(idxAppel>=0?r[idxAppel]:'')||'';
-    const ordreTravail=(idxOrdre>=0?r[idxOrdre]:'')||'';
-    const facture=(idxFacture>=0?r[idxFacture]:'')||'';
+    const appelService=r[SUIVI_COL_APPEL]||'';
+    const ordreTravail=r[SUIVI_COL_ORDRE]||'';
+    const facture=r[SUIVI_COL_FACTURE]||'';
     const eventId=(idxEvent>=0?r[idxEvent]:'')||'';
     // ligne "réelle": au moins une date ou un projet/adresse — filtre les lignes
     // orphelines (ex: bloc d'IDs Calendar collé en fin d'onglet) et les diviseurs de mois.
     if(!date && !projet && !adresse && !appelService) return;
+    // Statut: 'manquant' = pas d'appel de service du tout (K vide) — à créer.
+    // 'en_traitement' = appel de service (K) présent mais pas encore de facture (M).
+    // 'complet' = facture (M) présente.
+    let statutFacture = 'complet';
+    if(!appelService) statutFacture = 'manquant';
+    else if(!facture) statutFacture = 'en_traitement';
     out.push({contracteur:contracteurKey, date, projet, adresse, appelService, ordreTravail, facture, eventId,
-      factureManquante: !!((appelService||ordreTravail) && !facture)});
+      statutFacture, factureManquante: statutFacture!=='complet'});
   });
   return out;
 }
@@ -884,80 +934,85 @@ function RemindersView({data}){
 
 // ── UI: liste des jobs planifiées au calendrier — LECTURE SEULE ──────────
 // (embarqué dans l'onglet Projets — pour Saran, une job au calendrier EST un projet)
-function CalendarJobsList({cfg}){
+// ── UI: Projets par adresse (calendrier, ±6 mois) — LECTURE SEULE ────────
+// Regroupe les jobs du calendrier par adresse, comme dans PunchPro, pour
+// retrouver "le projet" derrière plusieurs événements planifiés au même endroit.
+function ProjectsFromCalendar({cfg, filterC}){
   const [loading,setLoading]=useState(true);
   const [events,setEvents]=useState([]);
   const [err,setErr]=useState('');
-  const [week,setWeek]=useState(()=>getWeek(new Date()));
+  const [expanded,setExpanded]=useState(null);
 
   useEffect(()=>{
     let cancelled=false;
     setLoading(true); setErr('');
-    const dates = weekDatesArr(week);
-    const timeMin = new Date(dates[0]); timeMin.setHours(0,0,0,0);
-    const timeMax = new Date(dates[6]); timeMax.setHours(23,59,59,999);
-    const calIds = (cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const now=new Date();
+    const timeMin=new Date(now); timeMin.setDate(timeMin.getDate()-180);
+    const timeMax=new Date(now); timeMax.setDate(timeMax.getDate()+180);
+    const calIds=(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
     listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
       .then(evs=>{ if(!cancelled) setEvents(evs); })
       .catch(e=>{ if(!cancelled) setErr(e.message||'Erreur de chargement du calendrier.'); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
-  },[week, cfg.calendarIds]);
+  },[cfg.calendarIds]);
 
-  const dates = weekDatesArr(week);
-  function prevWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()-7); setWeek(getWeek(d)); }
-  function nextWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()+7); setWeek(getWeek(d)); }
-  const anyThisWeek = dates.some(d=>events.some(e=>String(e.start).slice(0,10)===localDateStr(d)));
+  const groups = useMemo(()=>groupEventsByAddress(events), [events]);
+  const filtered = filterC ? groups.filter(g=>g.contracteur===filterC) : groups;
 
   return <div style={{marginTop:26}}>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:10,marginBottom:10}}>
-      <h3 style={{margin:0,fontSize:15,fontWeight:800}}>Jobs planifiées au calendrier (PunchPro)</h3>
-      <div style={{display:'flex',alignItems:'center',gap:8}}>
-        <button className="btn btn-sm" onClick={prevWeek}>←</button>
-        <div style={{fontSize:12.5,fontWeight:700}}>{weekRangeLabel(week)}</div>
-        <button className="btn btn-sm" onClick={nextWeek}>→</button>
-      </div>
-    </div>
+    <h3 style={{margin:'0 0 4px',fontSize:15,fontWeight:800}}>Projets par adresse (calendrier, ±6 mois)</h3>
+    <div className="muted" style={{fontSize:11.5,marginBottom:10}}>Lecture seule — regroupé par adresse d'événement, comme dans PunchPro.</div>
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
-    {loading ? <div className="muted">Chargement...</div> : <>
-      {dates.map((d,i)=>{
-        const dStr = localDateStr(d);
-        const dayEvents = events.filter(e=>String(e.start).slice(0,10)===dStr).sort((a,b)=>String(a.start).localeCompare(String(b.start)));
-        if(dayEvents.length===0) return null;
-        return <div key={i} style={{marginBottom:10}}>
-          <div style={{fontWeight:700,fontSize:12.5,marginBottom:4,textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})}</div>
-          {dayEvents.map(e=><div key={e.id} className="card" style={{padding:'7px 12px',marginBottom:5,borderLeft:'3px solid '+eventColor(e)}}>
-            <div style={{fontWeight:600,fontSize:12.5}}>{e.title}</div>
-            <div className="muted" style={{fontSize:11}}>{e.allDay?'Toute la journée':new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}{e.location?' — '+e.location:''}</div>
-          </div>)}
-        </div>;
-      })}
-      {!anyThisWeek && <div className="muted" style={{fontSize:12}}>Aucune job planifiée cette semaine.</div>}
-    </>}
+    {loading ? <div className="muted">Chargement...</div> :
+    <div className="card" style={{padding:0,overflowX:'auto'}}>
+      <table>
+        <thead><tr><th>Adresse</th><th>Contracteur</th><th>Jobs</th><th>Dernière activité</th><th></th></tr></thead>
+        <tbody>
+          {filtered.map(g=><React.Fragment key={g.adresse}>
+            <tr>
+              <td style={{fontWeight:600}}>{g.adresse}</td>
+              <td><span className="badge" style={{background:prefixColor(g.contracteur),color:'#fff'}}>{g.contracteur==='PARTICULIER'?'Particuliers':g.contracteur}</span></td>
+              <td>{g.count}</td>
+              <td className="muted">{String(g.dernier.start).slice(0,10)}</td>
+              <td><button className="btn btn-sm" onClick={()=>setExpanded(expanded===g.adresse?null:g.adresse)}>{expanded===g.adresse?'Cacher':'Détails'}</button></td>
+            </tr>
+            {expanded===g.adresse && g.evenements.map(e=><tr key={e.id} style={{background:'var(--bg2)'}}>
+              <td colSpan="5" style={{fontSize:12,paddingLeft:20}}>
+                <span style={{display:'inline-block',width:8,height:8,borderRadius:2,background:eventColor(e),marginRight:6}}></span>
+                {String(e.start).slice(0,10)} — {e.title}
+              </td>
+            </tr>)}
+          </React.Fragment>)}
+          {filtered.length===0 && <tr><td colSpan="5" className="muted" style={{padding:16}}>Aucun projet trouvé sur cette période.</td></tr>}
+        </tbody>
+      </table>
+    </div>}
   </div>;
 }
 
-// ── UI: Projets (onglet Projets du CRM, propriété du CRM) ─────────────────
+// ── UI: Projets — vue centrale, tous contracteurs, regroupés par adresse ──
 function ProjetsView({data, cfg}){
   const [filterC,setFilterC]=useState(null);
   const [filterS,setFilterS]=useState(null);
   const projets = data.projets||[];
-  const contracteurs = [...new Set(projets.map(p=>p.contracteur).filter(Boolean))];
   const statuts = [...new Set(projets.map(p=>p.statut).filter(Boolean))];
   let list = projets;
   if(filterC) list = list.filter(p=>p.contracteur===filterC);
   if(filterS) list = list.filter(p=>p.statut===filterS);
   list = [...list].sort((a,b)=>(b.dateCreation||'').localeCompare(a.dateCreation||''));
   return <div>
-    <h2 className="fh" style={{margin:'0 0 14px',fontSize:20}}>Projets</h2>
+    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Projets</h2>
+    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Tous les contracteurs, tous les projets — regroupés par adresse.</div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
       <button className="btn btn-sm" onClick={()=>setFilterC(null)} style={!filterC?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous contracteurs</button>
-      {contracteurs.map(c=><button key={c} className="btn btn-sm" onClick={()=>setFilterC(c)} style={filterC===c?{background:'var(--accent)',color:'#fff',border:'none'}:null}>{c}</button>)}
+      {CONTRACTEURS.map(c=><button key={c} className="btn btn-sm" onClick={()=>setFilterC(c)} style={filterC===c?{background:prefixColor(c),color:'#fff',border:'none'}:null}>{c==='PARTICULIER'?'Particuliers':c}</button>)}
     </div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
-      <button className="btn btn-sm" onClick={()=>setFilterS(null)} style={!filterS?{background:'var(--accent2, var(--accent))',color:'#fff',border:'none'}:null}>Tous statuts</button>
-      {statuts.map(s=><button key={s} className="btn btn-sm" onClick={()=>setFilterS(s)} style={filterS===s?{background:'var(--accent2, var(--accent))',color:'#fff',border:'none'}:null}>{s}</button>)}
+      <button className="btn btn-sm" onClick={()=>setFilterS(null)} style={!filterS?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous statuts</button>
+      {statuts.map(s=><button key={s} className="btn btn-sm" onClick={()=>setFilterS(s)} style={filterS===s?{background:'var(--accent)',color:'#fff',border:'none'}:null}>{s}</button>)}
     </div>
+    <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Projets créés dans le CRM</h3>
     <div className="card" style={{padding:0,overflowX:'auto'}}>
       <table>
         <thead><tr><th>Titre</th><th>Adresse</th><th>Contracteur</th><th>Phase</th><th>Client</th><th>Statut</th><th>Créé</th></tr></thead>
@@ -971,35 +1026,11 @@ function ProjetsView({data, cfg}){
             <td><span className="badge" style={{background:'var(--bg3)'}}>{p.statut}</span></td>
             <td className="muted">{p.dateCreation}</td>
           </tr>)}
-          {list.length===0 && <tr><td colSpan="7" className="muted" style={{padding:16}}>Aucun projet enregistré. Les projets sont créés depuis une opportunité "Gagné" (bouton "Créer la job").</td></tr>}
+          {list.length===0 && <tr><td colSpan="7" className="muted" style={{padding:16}}>Aucun projet créé dans le CRM. (Section ci-dessous: projets vus par le calendrier.)</td></tr>}
         </tbody>
       </table>
     </div>
-    {cfg && cfg.calendarIds && <CalendarJobsList cfg={cfg}/>}
-  </div>;
-}
-
-// ── UI: Contracteurs (statistiques dérivées des Projets) ──────────────────
-function ContracteursView({data}){
-  const projets = data.projets||[];
-  const stats = {};
-  CONTRACTEURS.forEach(c=>{ stats[c] = {actifs:0,total:0}; });
-  projets.forEach(p=>{
-    const c = p.contracteur || 'PARTICULIER';
-    if(!stats[c]) stats[c] = {actifs:0,total:0};
-    stats[c].total++;
-    if(p.statut==='Actif') stats[c].actifs++;
-  });
-  const rows = Object.entries(stats).filter(([,v])=>v.total>0).sort((a,b)=>b[1].total-a[1].total);
-  return <div>
-    <h2 className="fh" style={{margin:'0 0 14px',fontSize:20}}>Contracteurs</h2>
-    <div className="grid" style={{gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:12}}>
-      {rows.map(([c,v])=><div key={c} className="card">
-        <div style={{fontWeight:800,fontSize:15,marginBottom:6}}>{c}</div>
-        <div className="muted" style={{fontSize:12}}>{v.actifs} actif{v.actifs!==1?'s':''} / {v.total} projet{v.total!==1?'s':''}</div>
-      </div>)}
-      {rows.length===0 && <div className="muted">Aucun projet enregistré encore — les contracteurs apparaîtront ici une fois des jobs créées.</div>}
-    </div>
+    {cfg && cfg.calendarIds && <ProjectsFromCalendar cfg={cfg} filterC={filterC}/>}
   </div>;
 }
 
@@ -1075,14 +1106,15 @@ function HeuresView({cfg}){
 // ── UI: Modal création rapide de job DEPUIS L'AGENDA ──────────────────────
 // Ne dépend pas d'une opportunité — crée directement l'événement Calendar +
 // une ligne dans l'onglet "Projets" du CRM. Même convention de titre que PunchPro.
-function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate}){
+function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate, initialHeure}){
+  const defaults = useMemo(()=>getLastJobDefaults(),[]);
   const [adresse,setAdresse]=useState('');
   const [client,setClient]=useState('');
   const [telephone,setTelephone]=useState('');
   const [date,setDate]=useState(initialDate||todayISO());
-  const [heure,setHeure]=useState('08:00');
-  const [prefixe,setPrefixe]=useState('PARTICULIER');
-  const [phase,setPhase]=useState('');
+  const [heure,setHeure]=useState(initialHeure||'08:00');
+  const [prefixe,setPrefixe]=useState(defaults.prefixe);
+  const [phase,setPhase]=useState(defaults.phase);
   const [notes,setNotes]=useState('');
   const [busy,setBusy]=useState(false);
   const addrRef = useRef(null);
@@ -1118,6 +1150,7 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate}){
         opportuniteId:'', adresse, titre, contracteur:prefixe, phase, typeTravail:'',
         client, telephone, notes, eventId: ev.result.id
       });
+      saveLastJobDefaults(prefixe, phase);
       toast('Job créée.','ok');
       onDone && onDone();
       onClose();
@@ -1158,46 +1191,50 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate}){
   </Modal>;
 }
 
-// ── UI: Agenda — vrai calendrier semaine (grille), + création de job ─────
+// ── UI: Agenda — Jour / Semaine / Mois (grille), + création de job ───────
 function AgendaView({cfg, data, toast}){
+  const [viewMode,setViewMode]=useState('semaine'); // 'jour'|'semaine'|'mois'
+  const [anchor,setAnchor]=useState(()=>new Date());
   const [loading,setLoading]=useState(true);
   const [events,setEvents]=useState([]);
   const [err,setErr]=useState('');
-  const [week,setWeek]=useState(()=>getWeek(new Date()));
-  const [filterPrefix,setFilterPrefix]=useState(null);
   const [showJobModal,setShowJobModal]=useState(false);
   const [jobDate,setJobDate]=useState(null);
+  const [jobHeure,setJobHeure]=useState(null);
   const [reloadKey,setReloadKey]=useState(0);
+
+  const days = useMemo(()=>getRangeDays(viewMode, anchor), [viewMode, anchor.getTime()]);
 
   useEffect(()=>{
     let cancelled=false;
     setLoading(true); setErr('');
-    const dates = weekDatesArr(week);
-    const timeMin = new Date(dates[0]); timeMin.setHours(0,0,0,0);
-    const timeMax = new Date(dates[6]); timeMax.setHours(23,59,59,999);
+    const timeMin = new Date(days[0]); timeMin.setHours(0,0,0,0);
+    const timeMax = new Date(days[days.length-1]); timeMax.setHours(23,59,59,999);
     const calIds = (cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
     listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
       .then(evs=>{ if(!cancelled) setEvents(evs); })
       .catch(e=>{ if(!cancelled) setErr(e.message||'Erreur de chargement du calendrier.'); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
-  },[week, cfg.calendarIds, reloadKey]);
+  },[viewMode, anchor.getTime(), cfg.calendarIds, reloadKey]);
 
-  const dates = weekDatesArr(week);
-  const filtered = filterPrefix ? events.filter(e=>getJobPrefix(e.title)===filterPrefix) : events;
-  const prefixesPresent = [...new Set(events.map(e=>getJobPrefix(e.title)))];
-  function prevWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()-7); setWeek(getWeek(d)); }
-  function nextWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()+7); setWeek(getWeek(d)); }
-  function thisWeek(){ setWeek(getWeek(new Date())); }
-  function openNewJob(dStr){ setJobDate(dStr||todayISO()); setShowJobModal(true); }
+  function goPrev(){ const d=new Date(anchor); if(viewMode==='jour') d.setDate(d.getDate()-1); else if(viewMode==='mois') d.setMonth(d.getMonth()-1); else d.setDate(d.getDate()-7); setAnchor(d); }
+  function goNext(){ const d=new Date(anchor); if(viewMode==='jour') d.setDate(d.getDate()+1); else if(viewMode==='mois') d.setMonth(d.getMonth()+1); else d.setDate(d.getDate()+7); setAnchor(d); }
+  function goToday(){ setAnchor(new Date()); }
+  function openNewJob(dStr, heureStr){ setJobDate(dStr||todayISO()); setJobHeure(heureStr||null); setShowJobModal(true); }
+  function rangeLabel(){
+    if(viewMode==='jour') return anchor.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+    if(viewMode==='mois') return anchor.toLocaleDateString('fr-CA',{month:'long',year:'numeric'});
+    return weekRangeLabel(getWeek(anchor));
+  }
 
   const HOUR_START=6, HOUR_END=20, PX_H=46;
   const hours = Array.from({length:HOUR_END-HOUR_START+1},(_,i)=>HOUR_START+i);
-  const joursLabel = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
   const todayStr = localDateStr(new Date());
+  const gridCols = 'repeat('+days.length+',minmax(120px,1fr))';
 
-  function eventsForDay(dStr){ return filtered.filter(e=>String(e.start).slice(0,10)===dStr && !e.allDay); }
-  function allDayForDay(dStr){ return filtered.filter(e=>String(e.start).slice(0,10)===dStr && e.allDay); }
+  function eventsForDay(dStr){ return events.filter(e=>String(e.start).slice(0,10)===dStr && !e.allDay); }
+  function allDayForDay(dStr){ return events.filter(e=>String(e.start).slice(0,10)===dStr && e.allDay); }
 
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:10}}>
@@ -1208,26 +1245,48 @@ function AgendaView({cfg, data, toast}){
       {data && <button className="btn btn-p" onClick={()=>openNewJob(todayISO())}>+ Nouvelle job</button>}
     </div>
     <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
-      <button className="btn btn-sm" onClick={prevWeek}>← Sem. préc.</button>
-      <div style={{fontWeight:700}}>{weekRangeLabel(week)}</div>
-      <button className="btn btn-sm" onClick={nextWeek}>Sem. suiv. →</button>
-      <button className="btn btn-sm" onClick={thisWeek}>Cette semaine</button>
-    </div>
-    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
-      <button className="btn btn-sm" onClick={()=>setFilterPrefix(null)} style={!filterPrefix?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous</button>
-      {prefixesPresent.map(p=><button key={p} className="btn btn-sm" onClick={()=>setFilterPrefix(p)} style={filterPrefix===p?{background:prefixColor(p),color:'#fff',border:'none'}:null}>{p}</button>)}
+      <button className="btn btn-sm" onClick={goPrev}>←</button>
+      <div style={{fontWeight:700,textTransform:'capitalize',minWidth:160}}>{rangeLabel()}</div>
+      <button className="btn btn-sm" onClick={goNext}>→</button>
+      <button className="btn btn-sm" onClick={goToday}>Aujourd'hui</button>
+      <div style={{display:'flex',gap:4,marginLeft:'auto'}}>
+        {[['jour','Jour'],['semaine','Semaine'],['mois','Mois']].map(([id,label])=>
+          <button key={id} className="btn btn-sm" onClick={()=>setViewMode(id)} style={viewMode===id?{background:'var(--accent)',color:'#fff',border:'none'}:null}>{label}</button>
+        )}
+      </div>
     </div>
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {loading ? <div className="muted">Chargement...</div> :
+
+    viewMode==='mois' ?
+    <div className="card" style={{padding:8}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:4,marginBottom:4}}>
+        {['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map(j=><div key={j} className="muted" style={{textAlign:'center',fontSize:11,fontWeight:700}}>{j}</div>)}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:4}}>
+        {days.map((d,i)=>{
+          const dStr = localDateStr(d);
+          const inMonth = d.getMonth()===anchor.getMonth();
+          const dayEvents = [...eventsForDay(dStr), ...allDayForDay(dStr)].sort((a,b)=>String(a.start).localeCompare(String(b.start)));
+          return <div key={i} onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }}
+            style={{minHeight:80,border:'1px solid var(--border)',borderRadius:6,padding:4,cursor:'pointer',opacity:inMonth?1:.4,background:dStr===todayStr?'rgba(47,128,237,.08)':'transparent'}}>
+            <div style={{fontSize:11,fontWeight:700,marginBottom:3}}>{d.getDate()}</div>
+            {dayEvents.slice(0,3).map(e=><div key={e.id} title={e.title} style={{background:eventColor(e),color:'#1d1d1d',fontSize:9.5,padding:'1px 4px',borderRadius:3,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
+            {dayEvents.length>3 && <div className="muted" style={{fontSize:9.5}}>+{dayEvents.length-3} de plus</div>}
+          </div>;
+        })}
+      </div>
+    </div>
+    :
     <div className="card" style={{padding:0,overflowX:'auto'}}>
-      <div style={{display:'grid',gridTemplateColumns:'50px repeat(7,minmax(120px,1fr))',minWidth:900}}>
+      <div style={{display:'grid',gridTemplateColumns:'50px '+gridCols,minWidth:days.length>1?900:460}}>
         <div></div>
-        {dates.map((d,i)=><div key={i} style={{padding:'8px 6px',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:12,background:localDateStr(d)===todayStr?'rgba(47,128,237,.10)':'transparent'}}>
-          <div style={{textTransform:'capitalize'}}>{joursLabel[i]}</div>
+        {days.map((d,i)=><div key={i} style={{padding:'8px 6px',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:12,background:localDateStr(d)===todayStr?'rgba(47,128,237,.10)':'transparent'}}>
+          <div style={{textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'short'})}</div>
           <div className="muted" style={{fontWeight:500}}>{d.getDate()}</div>
         </div>)}
         <div></div>
-        {dates.map((d,i)=>{
+        {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const adEvents = allDayForDay(dStr);
           return <div key={i} style={{borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
@@ -1235,16 +1294,17 @@ function AgendaView({cfg, data, toast}){
           </div>;
         })}
       </div>
-      <div style={{display:'grid',gridTemplateColumns:'50px repeat(7,minmax(120px,1fr))',minWidth:900}}>
+      <div style={{display:'grid',gridTemplateColumns:'50px '+gridCols,minWidth:days.length>1?900:460}}>
         <div>
           {hours.map(h=><div key={h} style={{height:PX_H,fontSize:10.5,color:'var(--muted)',textAlign:'right',paddingRight:6,borderTop:'1px solid var(--border)',boxSizing:'border-box'}}>{h}h</div>)}
         </div>
-        {dates.map((d,i)=>{
+        {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const dayEvents = eventsForDay(dStr);
-          return <div key={i} onClick={(ev)=>{ if(ev.target===ev.currentTarget && data) openNewJob(dStr); }}
-            style={{position:'relative',borderLeft:'1px solid var(--border)',cursor:data?'copy':'default'}} title={data?'Cliquer pour créer une job ce jour-là':''}>
-            {hours.map(h=><div key={h} style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box'}}></div>)}
+          return <div key={i} style={{position:'relative',borderLeft:'1px solid var(--border)'}}>
+            {hours.map(h=><div key={h} onClick={()=>{ if(data) openNewJob(dStr, String(h).padStart(2,'0')+':00'); }}
+              style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box',cursor:data?'copy':'default'}}
+              title={data?'Cliquer pour créer une job à '+h+'h':''}></div>)}
             {dayEvents.map(e=>{
               const start=new Date(e.start), end=e.end?new Date(e.end):new Date(start.getTime()+3600000);
               const startH=Math.max(HOUR_START, start.getHours()+start.getMinutes()/60);
@@ -1252,7 +1312,7 @@ function AgendaView({cfg, data, toast}){
               const endH=Math.min(HOUR_END+1, endHraw>startH?endHraw:startH+1);
               const top=(startH-HOUR_START)*PX_H;
               const height=Math.max(18,(endH-startH)*PX_H-2);
-              return <div key={e.id} title={e.title} style={{position:'absolute',top,height,left:2,right:2,background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,.25)'}}>
+              return <div key={e.id} title={e.title} style={{position:'absolute',top,height,left:2,right:2,background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,.25)',pointerEvents:'none'}}>
                 <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
                 <div style={{opacity:.85}}>{start.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}</div>
               </div>;
@@ -1261,7 +1321,7 @@ function AgendaView({cfg, data, toast}){
         })}
       </div>
     </div>}
-    {showJobModal && data && <QuickJobModal cfg={cfg} addProjet={data.addProjet} toast={toast} initialDate={jobDate}
+    {showJobModal && data && <QuickJobModal cfg={cfg} addProjet={data.addProjet} toast={toast} initialDate={jobDate} initialHeure={jobHeure}
       onClose={()=>setShowJobModal(false)} onDone={()=>setReloadKey(k=>k+1)}/>}
   </div>;
 }
@@ -1295,7 +1355,7 @@ function FacturesView({cfg}){
 
   return <div>
     <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Factures</h2>
-    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Lecture seule — Sheet "SUIVI TRAVAUX SARAN ÉLECTRIQUE". Une "facture manquante" = un appel de service ou ordre de travail sans numéro de facture associé.</div>
+    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Lecture seule — Sheet "SUIVI TRAVAUX SARAN ÉLECTRIQUE" (colonnes K/L/M). "Manquant" = pas d'appel de service (K vide). "En traitement" = appel de service fait mais pas encore de facture (M vide).</div>
     {!cfg.suiviTravauxSpreadsheetId && <div className="card">Configure l'ID du Sheet "SUIVI TRAVAUX" dans Réglages.</div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {cfg.suiviTravauxSpreadsheetId && <>
@@ -1321,9 +1381,13 @@ function FacturesView({cfg}){
               <td className="muted">{r.date}</td>
               <td style={{fontWeight:600}}>{r.projet}</td>
               <td className="muted">{r.adresse}</td>
-              <td>{r.appelService}</td>
-              <td>{r.ordreTravail}</td>
-              <td>{r.facture ? r.facture : <span style={{color:'var(--danger)',fontWeight:700}}>manquante</span>}</td>
+              <td>{r.appelService||'—'}</td>
+              <td>{r.ordreTravail||'—'}</td>
+              <td>
+                {r.statutFacture==='complet' && r.facture}
+                {r.statutFacture==='en_traitement' && <span style={{color:'#d29922',fontWeight:700}}>En traitement</span>}
+                {r.statutFacture==='manquant' && <span style={{color:'var(--danger)',fontWeight:700}}>Manquant</span>}
+              </td>
             </tr>)}
             {list.length===0 && <tr><td colSpan="7" className="muted" style={{padding:16}}>{onlyMissing?'Aucune facture manquante 🎉':'Aucune ligne trouvée.'}</td></tr>}
           </tbody>
@@ -1407,7 +1471,6 @@ function App(){
     {id:'pipeline',label:'Pipeline'},
     {id:'contacts',label:'Contacts'},
     {id:'projets',label:'Projets'},
-    {id:'contracteurs',label:'Contracteurs'},
     {id:'agenda',label:'Agenda'},
     {id:'heures',label:'Heures'},
     {id:'factures',label:'Factures'},
@@ -1430,7 +1493,6 @@ function App(){
         {nav==='pipeline' && <PipelineView data={data} cfg={cfg} toast={show}/>}
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
         {nav==='projets' && <ProjetsView data={data} cfg={cfg}/>}
-        {nav==='contracteurs' && <ContracteursView data={data}/>}
         {nav==='agenda' && <AgendaView cfg={cfg} data={data} toast={show}/>}
         {nav==='heures' && <HeuresView cfg={cfg}/>}
         {nav==='factures' && <FacturesView cfg={cfg}/>}
