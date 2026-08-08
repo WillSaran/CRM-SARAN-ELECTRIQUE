@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v9';
+const APP_VERSION = 'v10';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -291,6 +291,36 @@ function getLastJobDefaults(){
 }
 function saveLastJobDefaults(prefixe, phase){
   try{ localStorage.setItem('crm_last_prefixe', prefixe||'PARTICULIER'); localStorage.setItem('crm_last_phase', phase||''); }catch(e){}
+}
+// Modifie l'heure de début/fin d'un événement Calendar existant (drag ou modale).
+async function patchEventTimes(calendarId, eventId, startISO, endISO){
+  return window.gapi.client.calendar.events.patch({
+    calendarId, eventId,
+    resource:{ start:{dateTime:startISO, timeZone:'America/Toronto'}, end:{dateTime:endISO, timeZone:'America/Toronto'} }
+  });
+}
+// Calcule une disposition côte-à-côte pour les événements d'une journée qui se
+// chevauchent dans le temps (sinon ils s'empilent exactement l'un sur l'autre
+// et "les carrés ne fittent pas ensemble").
+function layoutDayEvents(dayEvents){
+  const sorted = [...dayEvents].sort((a,b)=>new Date(a.start)-new Date(b.start));
+  const columns = [];
+  const placed = [];
+  sorted.forEach(e=>{
+    const startMs = new Date(e.start).getTime();
+    const end = e.end ? new Date(e.end) : new Date(startMs+3600000);
+    const endMs = Math.max(end.getTime(), startMs+15*60000);
+    let col = columns.findIndex(c=>c.endMs<=startMs);
+    if(col===-1){ col = columns.length; columns.push({endMs}); }
+    else columns[col].endMs = endMs;
+    placed.push({event:e, col, startMs, endMs});
+  });
+  placed.forEach(p=>{
+    let maxCol = p.col;
+    placed.forEach(q=>{ if(q.startMs<p.endMs && q.endMs>p.startMs) maxCol=Math.max(maxCol,q.col); });
+    p.totalCols = maxCol+1;
+  });
+  return placed;
 }
 // Jours à afficher dans l'Agenda selon le mode (jour/semaine/mois).
 function getRangeDays(viewMode, anchor){
@@ -1204,14 +1234,7 @@ function EditEventModal({event, onClose, onSaved, toast}){
   async function handleSave(){
     setBusy(true);
     try{
-      await window.gapi.client.calendar.events.patch({
-        calendarId: event.calendarId,
-        eventId: event.id,
-        resource:{
-          start:{dateTime: date+'T'+heureDebut+':00', timeZone:'America/Toronto'},
-          end:{dateTime: date+'T'+heureFin+':00', timeZone:'America/Toronto'}
-        }
-      });
+      await patchEventTimes(event.calendarId, event.id, date+'T'+heureDebut+':00', date+'T'+heureFin+':00');
       toast('Heure mise à jour.','ok');
       onSaved(); onClose();
     }catch(e){ toast('Erreur: '+(e.message||JSON.stringify(e)),'err'); }
@@ -1248,6 +1271,9 @@ function AgendaView({cfg, data, toast}){
   const [jobHeure,setJobHeure]=useState(null);
   const [editEvent,setEditEvent]=useState(null);
   const [reloadKey,setReloadKey]=useState(0);
+  const dayColRefs = useRef([]);
+  const dragInfoRef = useRef(null);
+  const draggedElRef = useRef(null);
 
   const days = useMemo(()=>getRangeDays(viewMode, anchor), [viewMode, anchor.getTime()]);
 
@@ -1281,6 +1307,58 @@ function AgendaView({cfg, data, toast}){
 
   function eventsForDay(dStr){ return events.filter(e=>String(e.start).slice(0,10)===dStr && !e.allDay); }
   function allDayForDay(dStr){ return events.filter(e=>String(e.start).slice(0,10)===dStr && e.allDay); }
+
+  // ── Glisser un événement pour changer son heure/jour directement dans la grille ──
+  function handleEventPointerDown(e, ev){
+    if(e.button!==undefined && e.button!==0) return;
+    const el = e.currentTarget;
+    try{ el.setPointerCapture(e.pointerId); }catch(err){}
+    const startMs = new Date(ev.start).getTime();
+    const endMs = ev.end ? new Date(ev.end).getTime() : startMs+3600000;
+    dragInfoRef.current = {pointerId:e.pointerId, startX:e.clientX, startY:e.clientY, moved:false, ev, origStartMs:startMs, durationMs:endMs-startMs};
+    draggedElRef.current = el;
+  }
+  function handleEventPointerMove(e){
+    const info = dragInfoRef.current;
+    if(!info || e.pointerId!==info.pointerId) return;
+    const dx=e.clientX-info.startX, dy=e.clientY-info.startY;
+    if(!info.moved && Math.hypot(dx,dy)>6) info.moved=true;
+    if(info.moved && draggedElRef.current){
+      draggedElRef.current.style.transform='translate('+dx+'px,'+dy+'px)';
+      draggedElRef.current.style.zIndex='30';
+      draggedElRef.current.style.opacity='0.85';
+      draggedElRef.current.style.boxShadow='0 4px 14px rgba(0,0,0,.4)';
+    }
+  }
+  function handleEventPointerUp(e){
+    const info = dragInfoRef.current;
+    if(!info || e.pointerId!==info.pointerId) return;
+    const el = draggedElRef.current;
+    if(el){ el.style.transform=''; el.style.zIndex=''; el.style.opacity=''; el.style.boxShadow='0 1px 3px rgba(0,0,0,.25)'; }
+    if(!info.moved){
+      setEditEvent(info.ev);
+    } else {
+      let targetDayIdx=null;
+      for(let i=0;i<dayColRefs.current.length;i++){
+        const rect = dayColRefs.current[i] && dayColRefs.current[i].getBoundingClientRect();
+        if(rect && e.clientX>=rect.left && e.clientX<=rect.right){ targetDayIdx=i; break; }
+      }
+      let newStartMs = info.origStartMs;
+      if(targetDayIdx!==null){
+        const rect = dayColRefs.current[targetDayIdx].getBoundingClientRect();
+        let hourFloat = HOUR_START + (e.clientY-rect.top)/PX_H;
+        hourFloat = Math.max(0, Math.min(24, Math.round(hourFloat*4)/4));
+        const target = new Date(days[targetDayIdx]); target.setHours(0,0,0,0);
+        target.setMinutes(Math.round(hourFloat*60));
+        newStartMs = target.getTime();
+      }
+      const newEndMs = newStartMs + info.durationMs;
+      patchEventTimes(info.ev.calendarId, info.ev.id, new Date(newStartMs).toISOString(), new Date(newEndMs).toISOString())
+        .then(()=>{ toast('Job déplacée.','ok'); setReloadKey(k=>k+1); })
+        .catch(err=>toast('Erreur: '+(err.message||JSON.stringify(err)),'err'));
+    }
+    dragInfoRef.current=null; draggedElRef.current=null;
+  }
 
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:10}}>
@@ -1328,7 +1406,7 @@ function AgendaView({cfg, data, toast}){
       {/* Une SEULE grille pour l'en-tête, la rangée "toute la journée" et les heures,
           pour que les colonnes s'alignent parfaitement (sinon 3 grilles séparées
           calculent chacune leurs largeurs indépendamment et ça ne s'aligne plus). */}
-      <div style={{display:'grid',gridTemplateColumns:'50px '+gridCols,gridTemplateRows:'auto auto '+(PX_H*hours.length)+'px',minWidth:days.length>1?900:460}}>
+      <div style={{display:'grid',gridTemplateColumns:'50px '+gridCols,gridTemplateRows:'auto auto '+(PX_H*hours.length)+'px',minWidth:days.length>1?900:undefined}}>
         <div style={{gridColumn:1,gridRow:1}}></div>
         {days.map((d,i)=><div key={'h'+i} style={{gridColumn:i+2,gridRow:1,padding:'8px 6px',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:12,background:localDateStr(d)===todayStr?'rgba(47,128,237,.10)':'transparent'}}>
           <div style={{textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'short'})}</div>
@@ -1350,20 +1428,24 @@ function AgendaView({cfg, data, toast}){
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const dayEvents = eventsForDay(dStr);
-          return <div key={'d'+i} style={{gridColumn:i+2,gridRow:3,position:'relative',borderLeft:'1px solid var(--border)'}}>
+          const placed = layoutDayEvents(dayEvents);
+          return <div key={'d'+i} ref={el=>dayColRefs.current[i]=el} style={{gridColumn:i+2,gridRow:3,position:'relative',borderLeft:'1px solid var(--border)'}}>
             {hours.map(h=><div key={h} onClick={()=>{ if(data) openNewJob(dStr, String(h).padStart(2,'0')+':00'); }}
               style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box',cursor:data?'copy':'default'}}
               title={data?'Cliquer pour créer une job à '+h+'h':''}></div>)}
-            {dayEvents.map(e=>{
+            {placed.map(({event:e,col,totalCols})=>{
               const start=new Date(e.start), end=e.end?new Date(e.end):new Date(start.getTime()+3600000);
               const startH=Math.max(HOUR_START, start.getHours()+start.getMinutes()/60);
               const endHraw=end.getHours()+end.getMinutes()/60;
               const endH=Math.min(HOUR_END+1, endHraw>startH?endHraw:startH+1);
               const top=(startH-HOUR_START)*PX_H;
               const height=Math.max(18,(endH-startH)*PX_H-2);
-              return <div key={e.id} title={'Cliquer pour modifier l\'heure — '+e.title}
-                onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }}
-                style={{position:'absolute',top,height,left:2,right:2,background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,.25)',cursor:'pointer'}}>
+              const widthPct=100/totalCols, leftPct=col*widthPct;
+              return <div key={e.id} title={'Glisser pour déplacer, cliquer pour modifier — '+e.title}
+                onPointerDown={ev=>handleEventPointerDown(ev,e)}
+                onPointerMove={handleEventPointerMove}
+                onPointerUp={handleEventPointerUp}
+                style={{position:'absolute',top,height,left:'calc('+leftPct+'% + 2px)',width:'calc('+widthPct+'% - 4px)',background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,.25)',cursor:'grab',touchAction:'none',userSelect:'none'}}>
                 <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
                 <div style={{opacity:.85}}>{start.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}</div>
               </div>;
