@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v8';
+const APP_VERSION = 'v9';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1192,6 +1192,51 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate, ini
 }
 
 // ── UI: Agenda — Jour / Semaine / Mois (grille), + création de job ───────
+// ── UI: Modal modification de l'heure d'un événement existant ────────────
+function EditEventModal({event, onClose, onSaved, toast}){
+  const startDt = new Date(event.start);
+  const endDt = event.end ? new Date(event.end) : new Date(startDt.getTime()+3600000);
+  const [date,setDate]=useState(localDateStr(startDt));
+  const [heureDebut,setHeureDebut]=useState(String(startDt.getHours()).padStart(2,'0')+':'+String(startDt.getMinutes()).padStart(2,'0'));
+  const [heureFin,setHeureFin]=useState(String(endDt.getHours()).padStart(2,'0')+':'+String(endDt.getMinutes()).padStart(2,'0'));
+  const [busy,setBusy]=useState(false);
+
+  async function handleSave(){
+    setBusy(true);
+    try{
+      await window.gapi.client.calendar.events.patch({
+        calendarId: event.calendarId,
+        eventId: event.id,
+        resource:{
+          start:{dateTime: date+'T'+heureDebut+':00', timeZone:'America/Toronto'},
+          end:{dateTime: date+'T'+heureFin+':00', timeZone:'America/Toronto'}
+        }
+      });
+      toast('Heure mise à jour.','ok');
+      onSaved(); onClose();
+    }catch(e){ toast('Erreur: '+(e.message||JSON.stringify(e)),'err'); }
+    setBusy(false);
+  }
+
+  if(event.allDay) return <Modal title={event.title} onClose={onClose}>
+    <div className="muted" style={{fontSize:13}}>Événement "toute la journée" — pas d'heure à modifier ici. Ouvre-le directement dans Google Agenda pour changer autre chose.</div>
+    <div style={{display:'flex',justifyContent:'flex-end',marginTop:10}}><button className="btn btn-s" onClick={onClose}>Fermer</button></div>
+  </Modal>;
+
+  return <Modal title={event.title} onClose={onClose}>
+    {event.location && <div className="muted" style={{fontSize:12.5,marginBottom:10}}>{event.location}</div>}
+    <div className="field"><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
+    <div className="row2">
+      <div className="field"><label>Début</label><input type="time" value={heureDebut} onChange={e=>setHeureDebut(e.target.value)}/></div>
+      <div className="field"><label>Fin</label><input type="time" value={heureFin} onChange={e=>setHeureFin(e.target.value)}/></div>
+    </div>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+      <button className="btn btn-s" onClick={onClose}>Annuler</button>
+      <button className="btn btn-p" onClick={handleSave} disabled={busy}>{busy?'Sauvegarde...':'Enregistrer'}</button>
+    </div>
+  </Modal>;
+}
+
 function AgendaView({cfg, data, toast}){
   const [viewMode,setViewMode]=useState('semaine'); // 'jour'|'semaine'|'mois'
   const [anchor,setAnchor]=useState(()=>new Date());
@@ -1201,6 +1246,7 @@ function AgendaView({cfg, data, toast}){
   const [showJobModal,setShowJobModal]=useState(false);
   const [jobDate,setJobDate]=useState(null);
   const [jobHeure,setJobHeure]=useState(null);
+  const [editEvent,setEditEvent]=useState(null);
   const [reloadKey,setReloadKey]=useState(0);
 
   const days = useMemo(()=>getRangeDays(viewMode, anchor), [viewMode, anchor.getTime()]);
@@ -1271,7 +1317,7 @@ function AgendaView({cfg, data, toast}){
           return <div key={i} onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }}
             style={{minHeight:80,border:'1px solid var(--border)',borderRadius:6,padding:4,cursor:'pointer',opacity:inMonth?1:.4,background:dStr===todayStr?'rgba(47,128,237,.08)':'transparent'}}>
             <div style={{fontSize:11,fontWeight:700,marginBottom:3}}>{d.getDate()}</div>
-            {dayEvents.slice(0,3).map(e=><div key={e.id} title={e.title} style={{background:eventColor(e),color:'#1d1d1d',fontSize:9.5,padding:'1px 4px',borderRadius:3,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
+            {dayEvents.slice(0,3).map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',background:eventColor(e),color:'#1d1d1d',fontSize:9.5,padding:'1px 4px',borderRadius:3,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
             {dayEvents.length>3 && <div className="muted" style={{fontSize:9.5}}>+{dayEvents.length-3} de plus</div>}
           </div>;
         })}
@@ -1279,29 +1325,32 @@ function AgendaView({cfg, data, toast}){
     </div>
     :
     <div className="card" style={{padding:0,overflowX:'auto'}}>
-      <div style={{display:'grid',gridTemplateColumns:'50px '+gridCols,minWidth:days.length>1?900:460}}>
-        <div></div>
-        {days.map((d,i)=><div key={i} style={{padding:'8px 6px',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:12,background:localDateStr(d)===todayStr?'rgba(47,128,237,.10)':'transparent'}}>
+      {/* Une SEULE grille pour l'en-tête, la rangée "toute la journée" et les heures,
+          pour que les colonnes s'alignent parfaitement (sinon 3 grilles séparées
+          calculent chacune leurs largeurs indépendamment et ça ne s'aligne plus). */}
+      <div style={{display:'grid',gridTemplateColumns:'50px '+gridCols,gridTemplateRows:'auto auto '+(PX_H*hours.length)+'px',minWidth:days.length>1?900:460}}>
+        <div style={{gridColumn:1,gridRow:1}}></div>
+        {days.map((d,i)=><div key={'h'+i} style={{gridColumn:i+2,gridRow:1,padding:'8px 6px',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:12,background:localDateStr(d)===todayStr?'rgba(47,128,237,.10)':'transparent'}}>
           <div style={{textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'short'})}</div>
           <div className="muted" style={{fontWeight:500}}>{d.getDate()}</div>
         </div>)}
-        <div></div>
+
+        <div style={{gridColumn:1,gridRow:2}}></div>
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const adEvents = allDayForDay(dStr);
-          return <div key={i} style={{borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
-            {adEvents.map(e=><div key={e.id} title={e.title} style={{background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
+          return <div key={'a'+i} style={{gridColumn:i+2,gridRow:2,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
+            {adEvents.map(e=><div key={e.id} title={e.title} onClick={()=>setEditEvent(e)} style={{cursor:'pointer',background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
           </div>;
         })}
-      </div>
-      <div style={{display:'grid',gridTemplateColumns:'50px '+gridCols,minWidth:days.length>1?900:460}}>
-        <div>
+
+        <div style={{gridColumn:1,gridRow:3}}>
           {hours.map(h=><div key={h} style={{height:PX_H,fontSize:10.5,color:'var(--muted)',textAlign:'right',paddingRight:6,borderTop:'1px solid var(--border)',boxSizing:'border-box'}}>{h}h</div>)}
         </div>
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const dayEvents = eventsForDay(dStr);
-          return <div key={i} style={{position:'relative',borderLeft:'1px solid var(--border)'}}>
+          return <div key={'d'+i} style={{gridColumn:i+2,gridRow:3,position:'relative',borderLeft:'1px solid var(--border)'}}>
             {hours.map(h=><div key={h} onClick={()=>{ if(data) openNewJob(dStr, String(h).padStart(2,'0')+':00'); }}
               style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box',cursor:data?'copy':'default'}}
               title={data?'Cliquer pour créer une job à '+h+'h':''}></div>)}
@@ -1312,7 +1361,9 @@ function AgendaView({cfg, data, toast}){
               const endH=Math.min(HOUR_END+1, endHraw>startH?endHraw:startH+1);
               const top=(startH-HOUR_START)*PX_H;
               const height=Math.max(18,(endH-startH)*PX_H-2);
-              return <div key={e.id} title={e.title} style={{position:'absolute',top,height,left:2,right:2,background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,.25)',pointerEvents:'none'}}>
+              return <div key={e.id} title={'Cliquer pour modifier l\'heure — '+e.title}
+                onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }}
+                style={{position:'absolute',top,height,left:2,right:2,background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,.25)',cursor:'pointer'}}>
                 <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
                 <div style={{opacity:.85}}>{start.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}</div>
               </div>;
@@ -1323,6 +1374,7 @@ function AgendaView({cfg, data, toast}){
     </div>}
     {showJobModal && data && <QuickJobModal cfg={cfg} addProjet={data.addProjet} toast={toast} initialDate={jobDate} initialHeure={jobHeure}
       onClose={()=>setShowJobModal(false)} onDone={()=>setReloadKey(k=>k+1)}/>}
+    {editEvent && <EditEventModal event={editEvent} toast={toast} onClose={()=>setEditEvent(null)} onSaved={()=>setReloadKey(k=>k+1)}/>}
   </div>;
 }
 
