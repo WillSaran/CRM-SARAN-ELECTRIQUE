@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v12';
+const APP_VERSION = 'v13';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1110,7 +1110,7 @@ function PromoteProjetModal({group, onClose, onSave}){
   </Modal>;
 }
 
-function ProjectsFromCalendar({cfg, filterC, data, toast}){
+function ProjectsFromCalendar({cfg, filterC, data, toast, refreshKey}){
   const [loading,setLoading]=useState(true);
   const [events,setEvents]=useState([]);
   const [err,setErr]=useState('');
@@ -1129,7 +1129,7 @@ function ProjectsFromCalendar({cfg, filterC, data, toast}){
       .catch(e=>{ if(!cancelled) setErr(apiErrMsg(e)||'Erreur de chargement du calendrier.'); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
-  },[cfg.calendarIds]);
+  },[cfg.calendarIds, refreshKey]);
 
   const groups = useMemo(()=>groupEventsByAddress(events), [events]);
   const filtered = filterC ? groups.filter(g=>g.contracteur===filterC) : groups;
@@ -1180,7 +1180,7 @@ function ProjectsFromCalendar({cfg, filterC, data, toast}){
 }
 
 // ── UI: Projets — vue centrale, tous contracteurs, regroupés par adresse ──
-function ProjetsView({data, cfg, toast}){
+function ProjetsView({data, cfg, toast, refreshKey}){
   const [filterC,setFilterC]=useState(null);
   const [filterS,setFilterS]=useState(null);
   const projets = data.projets||[];
@@ -1218,12 +1218,12 @@ function ProjetsView({data, cfg, toast}){
         </tbody>
       </table>
     </div>
-    {cfg && cfg.calendarIds && <ProjectsFromCalendar cfg={cfg} filterC={filterC} data={data} toast={toast}/>}
+    {cfg && cfg.calendarIds && <ProjectsFromCalendar cfg={cfg} filterC={filterC} data={data} toast={toast} refreshKey={refreshKey}/>}
   </div>;
 }
 
 // ── UI: Heures employés — LECTURE SEULE depuis le Sheet PunchPro ─────────
-function HeuresView({cfg}){
+function HeuresView({cfg, refreshKey}){
   const [loading,setLoading]=useState(true);
   const [emps,setEmps]=useState([]);
   const [pts,setPts]=useState([]);
@@ -1239,7 +1239,7 @@ function HeuresView({cfg}){
       .catch(e=>{ if(!cancelled) setErr((e&&e.result&&e.result.error&&e.result.error.message)||'Erreur de chargement (accès au Sheet PunchPro?).'); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
-  },[cfg.punchproSpreadsheetId]);
+  },[cfg.punchproSpreadsheetId, refreshKey]);
 
   const dates = weekDatesArr(week);
   const dateStrs = dates.map(localDateStr);
@@ -1418,7 +1418,7 @@ function EditEventModal({event, onClose, onSaved, toast}){
   </Modal>;
 }
 
-function AgendaView({cfg, data, toast, isDesktop}){
+function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   const [viewMode,setViewMode]=useState('semaine'); // 'jour'|'semaine'|'mois'
   const [anchor,setAnchor]=useState(()=>new Date());
   const [loading,setLoading]=useState(true);
@@ -1447,7 +1447,7 @@ function AgendaView({cfg, data, toast, isDesktop}){
       .catch(e=>{ if(!cancelled) setErr(apiErrMsg(e)||'Erreur de chargement du calendrier.'); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
-  },[viewMode, anchor.getTime(), cfg.calendarIds, reloadKey]);
+  },[viewMode, anchor.getTime(), cfg.calendarIds, reloadKey, refreshKey]);
 
   function goPrev(){ const d=new Date(anchor); if(viewMode==='jour') d.setDate(d.getDate()-1); else if(viewMode==='mois') d.setMonth(d.getMonth()-1); else d.setDate(d.getDate()-7); setAnchor(d); }
   function goNext(){ const d=new Date(anchor); if(viewMode==='jour') d.setDate(d.getDate()+1); else if(viewMode==='mois') d.setMonth(d.getMonth()+1); else d.setDate(d.getDate()+7); setAnchor(d); }
@@ -1673,7 +1673,7 @@ function AgendaView({cfg, data, toast, isDesktop}){
 
 // ── UI: Factures — LECTURE SEULE depuis "SUIVI TRAVAUX SARAN ÉLECTRIQUE" ──
 // Un appel de service sans facture associée = "facture manquante".
-function FacturesView({cfg}){
+function FacturesView({cfg, refreshKey}){
   const [loading,setLoading]=useState(true);
   const [rows,setRows]=useState([]);
   const [err,setErr]=useState('');
@@ -1686,10 +1686,10 @@ function FacturesView({cfg}){
     setLoading(true); setErr('');
     getAllSuiviTravaux(cfg.suiviTravauxSpreadsheetId)
       .then(r=>{ if(!cancelled) setRows(r); })
-      .catch(e=>{ if(!cancelled) setErr((e&&e.result&&e.result.error&&e.result.error.message)||'Erreur de chargement.'); })
+      .catch(e=>{ if(!cancelled) setErr(apiErrMsg(e)||'Erreur de chargement.'); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
-  },[cfg.suiviTravauxSpreadsheetId]);
+  },[cfg.suiviTravauxSpreadsheetId, refreshKey]);
 
   const contracteursPresent = [...new Set(rows.map(r=>r.contracteur))];
   let base = filterC ? rows.filter(r=>r.contracteur===filterC) : rows;
@@ -1801,8 +1801,18 @@ function App(){
   const [nav,setNav]=useState('pipeline');
   const [initErr,setInitErr]=useState('');
   const [show,toastNode]=useToast();
+  const [refreshKey,setRefreshKey]=useState(0);
+  const [refreshing,setRefreshing]=useState(false);
   useTheme();
   const isDesktop = useIsDesktop();
+
+  async function handleRefresh(){
+    setRefreshing(true);
+    try{ await data.reload(); }catch(e){}
+    setRefreshKey(k=>k+1);
+    setRefreshing(false);
+    show('Données actualisées.','ok');
+  }
 
   useEffect(()=>{
     initGoogle(cfg).then(()=>setReady(true)).catch(e=>setInitErr('Erreur d\'initialisation Google: '+apiErrMsg(e)));
@@ -1838,7 +1848,12 @@ function App(){
   return <div>
     <div className="topbar">
       <div className="logo"><span className="dot"></span>SoumissionPro <span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div>
-      {data.loading && <div className="muted" style={{fontSize:12}}>Chargement...</div>}
+      <div style={{display:'flex',alignItems:'center',gap:10}}>
+        {data.loading && <div className="muted" style={{fontSize:12}}>Chargement...</div>}
+        <button className="btn btn-sm" onClick={handleRefresh} disabled={refreshing} title="Relire les Google Sheets et le calendrier">
+          {refreshing ? 'Actualisation...' : '⟳ Refresh'}
+        </button>
+      </div>
     </div>
     <div className="shell">
       <div className="nav">
@@ -1849,10 +1864,10 @@ function App(){
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='pipeline' && <PipelineView data={data} cfg={cfg} toast={show}/>}
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
-        {nav==='projets' && <ProjetsView data={data} cfg={cfg} toast={show}/>}
-        {nav==='agenda' && <AgendaView cfg={cfg} data={data} toast={show} isDesktop={isDesktop}/>}
-        {nav==='heures' && <HeuresView cfg={cfg}/>}
-        {nav==='factures' && <FacturesView cfg={cfg}/>}
+        {nav==='projets' && <ProjetsView data={data} cfg={cfg} toast={show} refreshKey={refreshKey}/>}
+        {nav==='agenda' && <AgendaView cfg={cfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
+        {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
+        {nav==='factures' && <FacturesView cfg={cfg} refreshKey={refreshKey}/>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
       </div>
