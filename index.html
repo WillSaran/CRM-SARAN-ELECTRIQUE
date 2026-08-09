@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v16';
+const APP_VERSION = 'v17';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1498,9 +1498,78 @@ function DashboardRow({g, projetByAdresse, data, toast, onCreated}){
   </div>;
 }
 
-// ── UI: Tableau de bord — jobs d'aujourd'hui et de demain (calendrier),
-// regroupées par adresse, avec suivi rapide du statut de stock par projet.
-function TableauDeBordView({cfg, data, toast, refreshKey}){
+// ── UI: petites cartes-résumé du Tableau de bord (factures/heures/rappels) —
+// chacune fait son propre petit fetch et amène directement au bon onglet au clic.
+function DashboardFacturesCard({cfg, refreshKey, onNavigate}){
+  const [loading,setLoading]=useState(true);
+  const [count,setCount]=useState(0);
+  const [err,setErr]=useState(false);
+  useEffect(()=>{
+    if(!cfg.suiviTravauxSpreadsheetId){ setLoading(false); return; }
+    let cancelled=false;
+    setLoading(true); setErr(false);
+    getAllSuiviTravaux(cfg.suiviTravauxSpreadsheetId)
+      .then(rows=>{ if(!cancelled) setCount(rows.filter(r=>r.statutFacture==='manquant' && r.estPasseOuAujourdhui).length); })
+      .catch(()=>{ if(!cancelled) setErr(true); })
+      .finally(()=>{ if(!cancelled) setLoading(false); });
+    return ()=>{ cancelled=true; };
+  },[cfg.suiviTravauxSpreadsheetId, refreshKey]);
+  return <div className="card" style={{flex:'1 1 200px',minWidth:180,cursor:'pointer'}} onClick={()=>onNavigate('factures')}>
+    <div style={{fontSize:26,fontWeight:800,color:loading||err?'var(--text)':(count>0?'var(--danger)':'var(--success)')}}>{loading?'…':err?'—':count}</div>
+    <div className="muted" style={{fontSize:12.5,marginTop:2}}>Facture{count!==1?'s':''} manquante{count!==1?'s':''}</div>
+  </div>;
+}
+function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
+  const [loading,setLoading]=useState(true);
+  const [total,setTotal]=useState(0);
+  const [err,setErr]=useState(false);
+  useEffect(()=>{
+    if(!cfg.punchproSpreadsheetId){ setLoading(false); return; }
+    let cancelled=false;
+    setLoading(true); setErr(false);
+    Promise.all([getPunchProEmployees(cfg.punchproSpreadsheetId), getPunchProPointages(cfg.punchproSpreadsheetId)])
+      .then(([emps,pts])=>{
+        if(cancelled) return;
+        const week=getWeek(new Date());
+        const table=heuresParEmployeSemaine(pts, week);
+        const dateStrs=weekDatesArr(week).map(localDateStr);
+        setTotal(emps.reduce((s,e)=>{ const row=table[e.nom]||{}; return s+dateStrs.reduce((a,d)=>a+(row[d]||0),0); },0));
+      })
+      .catch(()=>{ if(!cancelled) setErr(true); })
+      .finally(()=>{ if(!cancelled) setLoading(false); });
+    return ()=>{ cancelled=true; };
+  },[cfg.punchproSpreadsheetId, refreshKey]);
+  return <div className="card" style={{flex:'1 1 200px',minWidth:180,cursor:'pointer'}} onClick={()=>onNavigate('heures')}>
+    <div style={{fontSize:26,fontWeight:800}}>{loading?'…':err?'—':fmtH(total)}</div>
+    <div className="muted" style={{fontSize:12.5,marginTop:2}}>Heures d'équipe cette semaine</div>
+  </div>;
+}
+function DashboardRappelsCard({data, onNavigate}){
+  const today = todayISO();
+  const soon = new Date(); soon.setDate(soon.getDate()+7);
+  const soonISO = soon.toISOString().slice(0,10);
+  const oppItems = (data.opps||[]).filter(o=>o.dateRelance && o.etape!=='Gagné' && o.etape!=='Perdu' && o.dateRelance<=soonISO)
+    .map(o=>({titre:o.titre||o.adresse, date:o.dateRelance}));
+  const rappelItems = (data.rappels||[]).filter(r=>r.statut!=='Fait' && ((r.dateEcheance && r.dateEcheance<=soonISO) || !r.dateEcheance))
+    .map(r=>({titre:r.titre, date:r.dateEcheance}));
+  const items = [...oppItems, ...rappelItems].sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999'));
+  return <div className="card" style={{flex:'1 1 240px',minWidth:220,cursor:'pointer'}} onClick={()=>onNavigate('rappels')}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+      <div className="muted" style={{fontSize:12.5}}>Rappels en attente</div>
+      <div style={{fontSize:22,fontWeight:800}}>{items.length}</div>
+    </div>
+    {items.slice(0,3).map((it,i)=><div key={i} className="muted" style={{fontSize:11.5,marginTop:6,display:'flex',justifyContent:'space-between',gap:8}}>
+      <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{it.titre}</span>
+      <span style={{color:(it.date && it.date<today)?'var(--danger)':'var(--muted)',flexShrink:0}}>{it.date||'—'}</span>
+    </div>)}
+    {items.length===0 && <div className="muted" style={{fontSize:11.5,marginTop:6}}>Rien en attente.</div>}
+  </div>;
+}
+
+// ── UI: Tableau de bord — factures manquantes / heures / rappels en un coup
+// d'œil, puis où l'équipe (par contracteur) travaille DEMAIN. Les particuliers
+// ne sont pas affichés ici (bruit inutile pour la planification d'équipe).
+function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const [loading,setLoading]=useState(true);
   const [events,setEvents]=useState([]);
   const [err,setErr]=useState('');
@@ -1510,8 +1579,9 @@ function TableauDeBordView({cfg, data, toast, refreshKey}){
     if(!cfg || !cfg.calendarIds){ setLoading(false); return; }
     let cancelled=false;
     setLoading(true); setErr('');
-    const timeMin=new Date(); timeMin.setHours(0,0,0,0);
-    const timeMax=new Date(timeMin); timeMax.setDate(timeMax.getDate()+2); timeMax.setMilliseconds(-1);
+    const tmrw=new Date(); tmrw.setDate(tmrw.getDate()+1); tmrw.setHours(0,0,0,0);
+    const timeMin=new Date(tmrw);
+    const timeMax=new Date(tmrw); timeMax.setDate(timeMax.getDate()+1); timeMax.setMilliseconds(-1);
     const calIds=(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
     listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
       .then(evs=>{ if(!cancelled) setEvents(evs); })
@@ -1520,34 +1590,42 @@ function TableauDeBordView({cfg, data, toast, refreshKey}){
     return ()=>{ cancelled=true; };
   },[cfg && cfg.calendarIds, refreshKey]);
 
-  const todayStr = localDateStr(new Date());
-  const tmrwD = new Date(); tmrwD.setDate(tmrwD.getDate()+1);
-  const tomorrowStr = localDateStr(tmrwD);
-  const groupsToday = useMemo(()=>groupEventsByAddress(events.filter(e=>String(e.start).slice(0,10)===todayStr)), [events]);
-  const groupsTomorrow = useMemo(()=>groupEventsByAddress(events.filter(e=>String(e.start).slice(0,10)===tomorrowStr)), [events]);
+  const groupsTomorrow = useMemo(()=>groupEventsByAddress(events).filter(g=>g.contracteur!=='PARTICULIER'), [events]);
+  const byTeam = useMemo(()=>{
+    const m={};
+    groupsTomorrow.forEach(g=>{ (m[g.contracteur]=m[g.contracteur]||[]).push(g); });
+    return Object.entries(m).sort((a,b)=>a[0].localeCompare(b[0]));
+  },[groupsTomorrow]);
   const projetByAdresse = useMemo(()=>buildProjetAddressIndex(data.projets), [data.projets]);
+  const tomorrowLabel = useMemo(()=>{ const d=new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'}); },[]);
 
   return <div>
     <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Tableau de bord</h2>
-    <div className="muted" style={{fontSize:11.5,marginBottom:16}}>Jobs planifiées aujourd'hui et demain (calendrier), regroupées par adresse — avec le suivi du stock par projet CRM.</div>
+    <div className="muted" style={{fontSize:11.5,marginBottom:16}}>Vue d'ensemble — factures manquantes, heures de la semaine, rappels, et où l'équipe travaille demain.</div>
+
+    <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:28}}>
+      <DashboardFacturesCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
+      <DashboardHeuresCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
+      <DashboardRappelsCard data={data} onNavigate={onNavigate}/>
+    </div>
+
+    <h3 style={{margin:'0 0 4px',fontSize:15,fontWeight:800}}>Demain, par équipe</h3>
+    <div className="muted" style={{fontSize:11.5,marginBottom:12,textTransform:'capitalize'}}>{tomorrowLabel} — contracteurs seulement, les particuliers ne sont pas affichés ici.</div>
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {!cfg || !cfg.calendarIds ? <div className="card">Configure les calendriers dans Réglages.</div> :
-    loading ? <div className="muted">Chargement...</div> : <>
-      <div style={{marginBottom:24}}>
-        <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Aujourd'hui ({groupsToday.length})</h3>
+    loading ? <div className="muted">Chargement...</div> :
+    byTeam.length===0 ? <div className="card muted" style={{fontSize:12.5}}>Aucune job d'équipe (hors particuliers) planifiée demain.</div> :
+    byTeam.map(([team,groups])=>
+      <div key={team} style={{marginBottom:18}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+          <span className="badge" style={{background:prefixColor(team),color:'#fff'}}>{team}</span>
+          <span className="muted" style={{fontSize:12}}>{groups.length} adresse{groups.length!==1?'s':''}</span>
+        </div>
         <div className="grid" style={{gap:8}}>
-          {groupsToday.map(g=><DashboardRow key={g.adresse} g={g} projetByAdresse={projetByAdresse} data={data} toast={toast} onCreated={setPromoteGroup}/>)}
-          {groupsToday.length===0 && <div className="card muted" style={{fontSize:12.5}}>Aucune job planifiée aujourd'hui.</div>}
+          {groups.map(g=><DashboardRow key={g.adresse} g={g} projetByAdresse={projetByAdresse} data={data} toast={toast} onCreated={setPromoteGroup}/>)}
         </div>
       </div>
-      <div>
-        <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Demain ({groupsTomorrow.length})</h3>
-        <div className="grid" style={{gap:8}}>
-          {groupsTomorrow.map(g=><DashboardRow key={g.adresse} g={g} projetByAdresse={projetByAdresse} data={data} toast={toast} onCreated={setPromoteGroup}/>)}
-          {groupsTomorrow.length===0 && <div className="card muted" style={{fontSize:12.5}}>Aucune job planifiée demain.</div>}
-        </div>
-      </div>
-    </>}
+    )}
     {promoteGroup && <PromoteProjetModal group={promoteGroup} onClose={()=>setPromoteGroup(null)} onSave={async(f)=>{
       try{ await data.addProjet(f); setPromoteGroup(null); toast('Projet créé.','ok'); }
       catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
@@ -2160,6 +2238,32 @@ function FacturesView({cfg, refreshKey}){
   </div>;
 }
 
+// ── UI: Soumissions — section en construction, on y ajoutera la création/
+// l'envoi de soumissions plus tard. Pour l'instant: liste en lecture seule
+// de ce qui existe déjà dans l'onglet "Soumissions" du CRM.
+function SoumissionsView({data}){
+  const oppById = Object.fromEntries((data.opps||[]).map(o=>[o.id,o]));
+  const list = [...(data.soums||[])].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Soumissions</h2>
+    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Section en construction — la création et l'envoi de soumissions seront ajoutés ici bientôt. En attendant, voici ce qui existe déjà.</div>
+    <div className="card" style={{padding:0,overflowX:'auto'}}>
+      <table>
+        <thead><tr><th>Date</th><th>Projet / adresse</th><th>Total</th><th>Statut</th></tr></thead>
+        <tbody>
+          {list.map(s=><tr key={s.id}>
+            <td className="muted">{s.date}</td>
+            <td style={{fontWeight:600}}>{oppById[s.opportuniteId] ? (oppById[s.opportuniteId].titre || oppById[s.opportuniteId].adresse) : '—'}</td>
+            <td>{fmtMoney(s.total)}</td>
+            <td><span className="badge" style={{background:'var(--bg3)'}}>{s.statut}</span></td>
+          </tr>)}
+          {list.length===0 && <tr><td colSpan="4" className="muted" style={{padding:16}}>Aucune soumission pour l'instant.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  </div>;
+}
+
 // ── UI: Réglages ──────────────────────────────────────────────────────────
 function SettingsView({cfg, setCfg, toast}){
   const [f,setF]=useState(cfg);
@@ -2212,6 +2316,24 @@ function App(){
   const [refreshKey,setRefreshKey]=useState(0);
   const [refreshing,setRefreshing]=useState(false);
   const [navCollapsed,setNavCollapsedState]=useState(()=>{ try{ return localStorage.getItem('crm_nav_collapsed')==='1'; }catch(e){ return false; } });
+  // Calendriers actifs — cases à cocher dans la barre du haut pour choisir de
+  // voir les événements d'un seul compte (info@saranelectrique / gmail) ou des
+  // deux. Persisté, mais toujours au moins un calendrier reste actif.
+  const configuredCals = (cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const [activeCalsList,setActiveCalsList]=useState(()=>{
+    try{ const raw=localStorage.getItem('crm_active_cals'); if(raw){ const arr=JSON.parse(raw); if(Array.isArray(arr) && arr.length) return arr; } }catch(e){}
+    return null; // null = pas encore choisi → tous actifs par défaut
+  });
+  const activeCals = new Set(activeCalsList && activeCalsList.length ? activeCalsList.filter(c=>configuredCals.includes(c)) : configuredCals);
+  function toggleCal(email){
+    const next = new Set(activeCals);
+    if(next.has(email)) next.delete(email); else next.add(email);
+    if(next.size===0) return; // toujours garder au moins un calendrier actif
+    const arr=[...next];
+    setActiveCalsList(arr);
+    try{ localStorage.setItem('crm_active_cals', JSON.stringify(arr)); }catch(e){}
+  }
+  const effectiveCfg = {...cfg, calendarIds: configuredCals.filter(c=>activeCals.has(c)).join(',')};
   useTheme();
   const isDesktop = useIsDesktop();
   function toggleNav(){ const v=!navCollapsed; setNavCollapsedState(v); try{ localStorage.setItem('crm_nav_collapsed', v?'1':'0'); }catch(e){} }
@@ -2252,13 +2374,22 @@ function App(){
     {id:'heures',label:'Heures'},
     {id:'factures',label:'Factures'},
     {id:'rappels',label:'Rappels & Suivi'},
+    {id:'soumissions',label:'Soumissions'},
     {id:'reglages',label:'Réglages'}
   ];
 
   return <div>
     <div className="topbar">
       <div className="logo"><span className="dot"></span>SoumissionPro <span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div>
-      <div style={{display:'flex',alignItems:'center',gap:10}}>
+      <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+        {configuredCals.length>1 && <div style={{display:'flex',gap:10,alignItems:'center'}}>
+          {configuredCals.map(email=>
+            <label key={email} className="muted" style={{display:'flex',alignItems:'center',gap:4,fontSize:11,cursor:'pointer'}} title={email}>
+              <input type="checkbox" checked={activeCals.has(email)} onChange={()=>toggleCal(email)} style={{width:14,height:14}}/>
+              {email.split('@')[0]}
+            </label>
+          )}
+        </div>}
         {data.loading && <div className="muted" style={{fontSize:12}}>Chargement...</div>}
         {isDesktop && <button className="btn btn-sm" onClick={toggleNav} title="Afficher/cacher le menu">{navCollapsed?'☰ Menu':'⟨⟨ Cacher le menu'}</button>}
         <button className="btn btn-sm" onClick={handleRefresh} disabled={refreshing} title="Relire les Google Sheets et le calendrier">
@@ -2273,13 +2404,14 @@ function App(){
       <div className="main" style={(nav==='agenda' && isDesktop) ? {maxWidth:'none',width:'100%'} : null}>
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
-        {nav==='dashboard' && <TableauDeBordView cfg={cfg} data={data} toast={show} refreshKey={refreshKey}/>}
+        {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
-        {nav==='projets' && <ProjetsView data={data} cfg={cfg} toast={show} refreshKey={refreshKey}/>}
-        {nav==='agenda' && <AgendaView cfg={cfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
+        {nav==='projets' && <ProjetsView data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
+        {nav==='agenda' && <AgendaView cfg={effectiveCfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
         {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
         {nav==='factures' && <FacturesView cfg={cfg} refreshKey={refreshKey}/>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
+        {nav==='soumissions' && <SoumissionsView data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
       </div>
     </div>
