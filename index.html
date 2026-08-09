@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v13';
+const APP_VERSION = 'v14';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -142,7 +142,11 @@ const CONTACTS_HEADERS = ['id','nom','entreprise','telephone','email','adresse',
 const OPP_HEADERS = ['id','contactId','titre','adresse','typeTravail','etape','montantEstime','dateCreation','dateRelance','dateCloture','notes','punchproJobCree','punchproEventId'];
 const SOUM_HEADERS = ['id','opportuniteId','date','itemsJson','total','statut','courrielEnvoye','dateEnvoi'];
 // Onglet "Projets" du CRM — sera donné à PunchPro plus tard (voir commentaire CONFIG plus haut)
-const PROJETS_HEADERS = ['id','opportuniteId','adresse','titre','contracteur','phase','typeTravail','client','telephone','notes','statut','dateCreation','eventId'];
+const PROJETS_HEADERS = ['id','opportuniteId','adresse','titre','contracteur','phase','typeTravail','client','telephone','notes','statut','dateCreation','eventId','po'];
+// Statuts de suivi d'un projet CRM (indépendant de l'étape "Gagné" du pipeline —
+// une fois la job créée, on suit ici si le chantier est à venir/en cours/fermé).
+const PROJET_STATUTS = ['À venir','Actif','Fermé'];
+const PROJET_STATUT_COLORS = {'À venir':'#0ea5e9','Actif':'#3fb950','Fermé':'#7d8590'};
 // Onglet "Rappels" du CRM — suivis/rappels créés manuellement (indépendants du pipeline
 // Opportunités). statut: 'A faire' | 'Fait'.
 const RAPPELS_HEADERS = ['id','titre','description','dateEcheance','adresse','statut','dateCreation'];
@@ -609,10 +613,14 @@ function useCrmData(cfg, ready){
     await reload();
   }
   async function addProjet(obj){
-    const full = {id:genId(), dateCreation:todayISO(), statut:'Actif', ...obj};
+    const full = {id:genId(), dateCreation:todayISO(), statut:'Actif', po:'', ...obj};
     await sheetsAppendRow(cfg.projetsSpreadsheetId,'Projets', objectToRow(full, PROJETS_HEADERS));
     await reload();
     return full;
+  }
+  async function updateProjet(obj){
+    await sheetsUpdateRow(cfg.projetsSpreadsheetId,'Projets', obj._row, objectToRow(obj, PROJETS_HEADERS));
+    await reload();
   }
   async function addRappel(obj){
     const full = {id:genId(), dateCreation:todayISO(), statut:'A faire', ...obj};
@@ -625,7 +633,7 @@ function useCrmData(cfg, ready){
     await reload();
   }
 
-  return {contacts,opps,soums,projets,rappels,loading,err,reload,addContact,updateContact,addOpp,updateOpp,addSoumission,updateSoumission,addProjet,addRappel,updateRappel};
+  return {contacts,opps,soums,projets,rappels,loading,err,reload,addContact,updateContact,addOpp,updateOpp,addSoumission,updateSoumission,addProjet,updateProjet,addRappel,updateRappel};
 }
 
 // ── Génération du courriel de soumission (mailto + copie) ───────────────
@@ -1082,7 +1090,7 @@ function RemindersView({data, toast}){
 // retrouver "le projet" derrière plusieurs événements planifiés au même endroit.
 // ── UI: Modal pour promouvoir un groupe d'adresse (calendrier) en Projet CRM ──
 function PromoteProjetModal({group, onClose, onSave}){
-  const [f,setF]=useState({adresse:group.adresse, titre:group.dernier.title, contracteur:group.contracteur, phase:'', client:'', telephone:'', notes:'', statut:'Actif'});
+  const [f,setF]=useState({adresse:group.adresse, titre:group.dernier.title, contracteur:group.contracteur, phase:'', client:'', telephone:'', notes:'', statut:'Actif', po:''});
   return <Modal title="Créer un projet CRM depuis cette adresse" onClose={onClose}>
     <div className="field"><label>Adresse</label><input value={f.adresse} onChange={e=>setF({...f,adresse:e.target.value})}/></div>
     <div className="field"><label>Titre</label><input value={f.titre} onChange={e=>setF({...f,titre:e.target.value})}/></div>
@@ -1100,52 +1108,115 @@ function PromoteProjetModal({group, onClose, onSave}){
       </div>
     </div>
     <div className="row2">
+      <div className="field"><label>Statut</label>
+        <select value={f.statut} onChange={e=>setF({...f,statut:e.target.value})}>
+          {PROJET_STATUTS.map(s=><option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+      <div className="field"><label>N° P.O. (optionnel)</label><input value={f.po} onChange={e=>setF({...f,po:e.target.value})}/></div>
+    </div>
+    <div className="row2">
       <div className="field"><label>Client (optionnel)</label><input value={f.client} onChange={e=>setF({...f,client:e.target.value})}/></div>
       <div className="field"><label>Téléphone</label><input value={f.telephone} onChange={e=>setF({...f,telephone:e.target.value})}/></div>
     </div>
-    <div className="muted" style={{fontSize:12,marginBottom:10}}>Regroupe les {group.count} job{group.count!==1?'s':''} du calendrier à cette adresse sous un seul projet dans le CRM.</div>
+    <div className="muted" style={{fontSize:12,marginBottom:10}}>Regroupe les {group.count} job{group.count!==1?'s':''} du calendrier à cette adresse sous un seul projet dans le CRM — les événements resteront visibles dans la fiche du projet (matching automatique par adresse).</div>
     <div style={{display:'flex',justifyContent:'flex-end'}}>
       <button className="btn btn-p" onClick={()=>onSave(f)}>Créer le projet</button>
     </div>
   </Modal>;
 }
 
-function ProjectsFromCalendar({cfg, filterC, data, toast, refreshKey}){
-  const [loading,setLoading]=useState(true);
-  const [events,setEvents]=useState([]);
-  const [err,setErr]=useState('');
+// ── UI: Fiche détail d'un Projet CRM — statut/P.O./notes éditables +
+// TOUS les événements Calendar dont l'adresse correspond (matching dynamique,
+// donc toujours à jour même si de nouveaux jobs sont ajoutées au calendrier
+// après coup — pas besoin de les "attacher" manuellement un par un).
+function ProjetDetailModal({projet, events, onClose, onSave}){
+  const [f,setF]=useState(projet);
+  const [busy,setBusy]=useState(false);
+  const linkedEvents = useMemo(()=>{
+    const key = String(projet.adresse||'').trim().toLowerCase();
+    if(!key) return [];
+    return (events||[]).filter(e=>{
+      const evKey = (e.location && e.location.trim()) || parseCivicStreet(e.title) || e.title;
+      return String(evKey||'').trim().toLowerCase()===key;
+    }).sort((a,b)=>String(b.start).localeCompare(String(a.start)));
+  },[projet.adresse, events]);
+
+  async function handleSave(){
+    setBusy(true);
+    try{ await onSave(f); onClose(); }
+    catch(e){ /* toast déjà affiché par le parent, on laisse la fiche ouverte */ }
+    setBusy(false);
+  }
+
+  return <Modal title={f.titre || f.adresse || 'Projet'} onClose={onClose} wide>
+    <div className="row2">
+      <div className="field"><label>Statut</label>
+        <select value={f.statut||'Actif'} onChange={e=>setF({...f,statut:e.target.value})}>
+          {PROJET_STATUTS.map(s=><option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+      <div className="field"><label>N° P.O.</label><input value={f.po||''} onChange={e=>setF({...f,po:e.target.value})} placeholder="Numéro de bon de commande"/></div>
+    </div>
+    <div className="field"><label>Titre</label><input value={f.titre||''} onChange={e=>setF({...f,titre:e.target.value})}/></div>
+    <div className="row2">
+      <div className="field"><label>Contracteur</label>
+        <select value={f.contracteur||'PARTICULIER'} onChange={e=>setF({...f,contracteur:e.target.value})}>
+          {CONTRACTEURS.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div className="field"><label>Phase</label>
+        <select value={f.phase||''} onChange={e=>setF({...f,phase:e.target.value})}>
+          <option value="">—</option>
+          {JOB_PHASES.map(p=><option key={p} value={p}>{JOB_PHASE_LABELS[p]}</option>)}
+        </select>
+      </div>
+    </div>
+    <div className="field"><label>Adresse</label><input value={f.adresse||''} onChange={e=>setF({...f,adresse:e.target.value})}/></div>
+    <div className="muted" style={{fontSize:11,marginTop:-7,marginBottom:11}}>Les événements du calendrier ci-dessous sont retrouvés automatiquement par correspondance d'adresse — si un événement manque, vérifie que son lieu correspond exactement à cette adresse.</div>
+    <div className="row2">
+      <div className="field"><label>Client</label><input value={f.client||''} onChange={e=>setF({...f,client:e.target.value})}/></div>
+      <div className="field"><label>Téléphone</label><input value={f.telephone||''} onChange={e=>setF({...f,telephone:e.target.value})}/></div>
+    </div>
+    <div className="field tag-input"><label>Notes</label><textarea value={f.notes||''} onChange={e=>setF({...f,notes:e.target.value})}/></div>
+    <div style={{display:'flex',justifyContent:'flex-end',marginBottom:18}}>
+      <button className="btn btn-p" onClick={handleSave} disabled={busy}>{busy?'Enregistrement...':'Enregistrer'}</button>
+    </div>
+    <h3 style={{margin:'0 0 8px',fontSize:14,fontWeight:800}}>Événements du calendrier à cette adresse ({linkedEvents.length})</h3>
+    {linkedEvents.length===0 && <div className="muted" style={{fontSize:12.5}}>Aucun événement du calendrier ne correspond à cette adresse pour l'instant.</div>}
+    {linkedEvents.map(e=><div key={e.id} style={{padding:'8px 10px',marginBottom:6,borderLeft:'3px solid '+eventColor(e),background:'var(--bg3)',borderRadius:6}}>
+      <div style={{fontWeight:700,fontSize:12.5}}>{String(e.start).slice(0,10)} — {e.title}</div>
+      {e.description && <div className="muted" style={{fontSize:11.5,marginTop:2,whiteSpace:'pre-wrap'}}>{e.description}</div>}
+      {e.attachments && e.attachments.length>0 && <div style={{marginTop:4,display:'flex',gap:6,flexWrap:'wrap'}}>
+        {e.attachments.map((a,i)=><a key={i} href={a.fileUrl} target="_blank" rel="noreferrer" className="btn btn-sm" style={{textDecoration:'none'}}>{a.title||'Fichier'}</a>)}
+      </div>}
+    </div>)}
+  </Modal>;
+}
+
+function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errEvents, onViewProjet}){
   const [expanded,setExpanded]=useState(null);
   const [promoteGroup,setPromoteGroup]=useState(null);
 
-  useEffect(()=>{
-    let cancelled=false;
-    setLoading(true); setErr('');
-    const now=new Date();
-    const timeMin=new Date(now); timeMin.setDate(timeMin.getDate()-180);
-    const timeMax=new Date(now); timeMax.setDate(timeMax.getDate()+180);
-    const calIds=(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
-    listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
-      .then(evs=>{ if(!cancelled) setEvents(evs); })
-      .catch(e=>{ if(!cancelled) setErr(apiErrMsg(e)||'Erreur de chargement du calendrier.'); })
-      .finally(()=>{ if(!cancelled) setLoading(false); });
-    return ()=>{ cancelled=true; };
-  },[cfg.calendarIds, refreshKey]);
-
-  const groups = useMemo(()=>groupEventsByAddress(events), [events]);
+  const groups = useMemo(()=>groupEventsByAddress(events||[]), [events]);
   const filtered = filterC ? groups.filter(g=>g.contracteur===filterC) : groups;
-  const projetAdresses = useMemo(()=>new Set((data && data.projets ? data.projets : []).map(p=>String(p.adresse||'').trim().toLowerCase())), [data && data.projets]);
+  const projetByAdresse = useMemo(()=>{
+    const m={};
+    (data && data.projets ? data.projets : []).forEach(p=>{ m[String(p.adresse||'').trim().toLowerCase()] = p; });
+    return m;
+  }, [data && data.projets]);
 
   return <div style={{marginTop:26}}>
     <h3 style={{margin:'0 0 4px',fontSize:15,fontWeight:800}}>Projets par adresse (calendrier, ±6 mois)</h3>
-    <div className="muted" style={{fontSize:11.5,marginBottom:10}}>Lecture seule sur le calendrier — regroupé par adresse d'événement, comme dans PunchPro. Clique "Détails" pour voir la description et les fichiers joints de chaque job, ou "Créer un projet CRM" pour rassembler cette adresse sous un projet.</div>
-    {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
-    {loading ? <div className="muted">Chargement...</div> :
+    <div className="muted" style={{fontSize:11.5,marginBottom:10}}>Lecture seule sur le calendrier — regroupé par adresse d'événement, comme dans PunchPro. Clique "Détails" pour voir la description et les fichiers joints de chaque job, "Créer un projet CRM" pour rassembler cette adresse sous un projet, ou "Voir le projet" si elle en a déjà un.</div>
+    {errEvents && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{errEvents}</div>}
+    {loadingEvents ? <div className="muted">Chargement...</div> :
     <div className="card" style={{padding:0,overflowX:'auto'}}>
       <table>
         <thead><tr><th>Adresse</th><th>Contracteur</th><th>Jobs</th><th>Dernière activité</th><th></th><th></th></tr></thead>
         <tbody>
           {filtered.map(g=>{
-            const dejaProjet = projetAdresses.has(String(g.adresse||'').trim().toLowerCase());
+            const dejaProjet = projetByAdresse[String(g.adresse||'').trim().toLowerCase()];
             return <React.Fragment key={g.adresse}>
             <tr>
               <td style={{fontWeight:600}}>{g.adresse}</td>
@@ -1154,7 +1225,7 @@ function ProjectsFromCalendar({cfg, filterC, data, toast, refreshKey}){
               <td className="muted">{String(g.dernier.start).slice(0,10)}</td>
               <td><button className="btn btn-sm" onClick={()=>setExpanded(expanded===g.adresse?null:g.adresse)}>{expanded===g.adresse?'Cacher':'Détails'}</button></td>
               <td>{data && (dejaProjet
-                ? <span className="muted" style={{fontSize:11.5}}>✓ Projet CRM existant</span>
+                ? <button className="btn btn-sm" onClick={()=>onViewProjet && onViewProjet(dejaProjet)}>✓ Voir le projet</button>
                 : <button className="btn btn-sm" onClick={()=>setPromoteGroup(g)}>Créer un projet CRM</button>)}</td>
             </tr>
             {expanded===g.adresse && g.evenements.map(e=><tr key={e.id} style={{background:'var(--bg2)'}}>
@@ -1180,45 +1251,85 @@ function ProjectsFromCalendar({cfg, filterC, data, toast, refreshKey}){
 }
 
 // ── UI: Projets — vue centrale, tous contracteurs, regroupés par adresse ──
+// Le calendrier n'est chargé qu'UNE FOIS ici (±180 jours) et partagé avec
+// ProjectsFromCalendar + la fiche détail, pour que "événements associés à un
+// projet" et "projets par adresse" utilisent exactement les mêmes données.
 function ProjetsView({data, cfg, toast, refreshKey}){
   const [filterC,setFilterC]=useState(null);
   const [filterS,setFilterS]=useState(null);
+  const [detailProjet,setDetailProjet]=useState(null);
+  const [loadingEv,setLoadingEv]=useState(true);
+  const [events,setEvents]=useState([]);
+  const [errEv,setErrEv]=useState('');
+
+  useEffect(()=>{
+    if(!cfg || !cfg.calendarIds){ setLoadingEv(false); return; }
+    let cancelled=false;
+    setLoadingEv(true); setErrEv('');
+    const now=new Date();
+    const timeMin=new Date(now); timeMin.setDate(timeMin.getDate()-180);
+    const timeMax=new Date(now); timeMax.setDate(timeMax.getDate()+180);
+    const calIds=(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
+    listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
+      .then(evs=>{ if(!cancelled) setEvents(evs); })
+      .catch(e=>{ if(!cancelled) setErrEv(apiErrMsg(e)||'Erreur de chargement du calendrier.'); })
+      .finally(()=>{ if(!cancelled) setLoadingEv(false); });
+    return ()=>{ cancelled=true; };
+  },[cfg && cfg.calendarIds, refreshKey]);
+
   const projets = data.projets||[];
-  const statuts = [...new Set(projets.map(p=>p.statut).filter(Boolean))];
   let list = projets;
   if(filterC) list = list.filter(p=>p.contracteur===filterC);
   if(filterS) list = list.filter(p=>p.statut===filterS);
   list = [...list].sort((a,b)=>(b.dateCreation||'').localeCompare(a.dateCreation||''));
+
+  function countEvents(p){
+    const key = String(p.adresse||'').trim().toLowerCase();
+    if(!key) return 0;
+    return events.filter(e=>{
+      const evKey = (e.location && e.location.trim()) || parseCivicStreet(e.title) || e.title;
+      return String(evKey||'').trim().toLowerCase()===key;
+    }).length;
+  }
+
+  async function handleSaveDetail(f){
+    try{ await data.updateProjet(f); toast('Projet mis à jour.','ok'); }
+    catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); throw e; }
+  }
+
   return <div>
     <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Projets</h2>
-    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Tous les contracteurs, tous les projets — regroupés par adresse.</div>
+    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Tous les contracteurs, tous les projets — regroupés par adresse. Clique "Voir" sur un projet pour changer son statut, ajouter un N° P.O., et voir tous les événements du calendrier associés.</div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
       <button className="btn btn-sm" onClick={()=>setFilterC(null)} style={!filterC?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous contracteurs</button>
       {CONTRACTEURS.map(c=><button key={c} className="btn btn-sm" onClick={()=>setFilterC(c)} style={filterC===c?{background:prefixColor(c),color:'#fff',border:'none'}:null}>{c==='PARTICULIER'?'Particuliers':c}</button>)}
     </div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
       <button className="btn btn-sm" onClick={()=>setFilterS(null)} style={!filterS?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous statuts</button>
-      {statuts.map(s=><button key={s} className="btn btn-sm" onClick={()=>setFilterS(s)} style={filterS===s?{background:'var(--accent)',color:'#fff',border:'none'}:null}>{s}</button>)}
+      {PROJET_STATUTS.map(s=><button key={s} className="btn btn-sm" onClick={()=>setFilterS(s)} style={filterS===s?{background:PROJET_STATUT_COLORS[s],color:'#fff',border:'none'}:null}>{s}</button>)}
     </div>
     <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Projets créés dans le CRM</h3>
     <div className="card" style={{padding:0,overflowX:'auto'}}>
       <table>
-        <thead><tr><th>Titre</th><th>Adresse</th><th>Contracteur</th><th>Phase</th><th>Client</th><th>Statut</th><th>Créé</th></tr></thead>
+        <thead><tr><th>Titre</th><th>Adresse</th><th>Contracteur</th><th>P.O.</th><th>Statut</th><th>Événements</th><th>Créé</th><th></th></tr></thead>
         <tbody>
           {list.map(p=><tr key={p.id}>
             <td style={{fontWeight:600}}>{p.titre}</td>
             <td className="muted">{p.adresse}</td>
             <td>{p.contracteur}</td>
-            <td>{p.phase}</td>
-            <td>{p.client}</td>
-            <td><span className="badge" style={{background:'var(--bg3)'}}>{p.statut}</span></td>
+            <td className="muted">{p.po||'—'}</td>
+            <td><span className="badge" style={{background:PROJET_STATUT_COLORS[p.statut]||'var(--bg3)',color:'#fff'}}>{p.statut||'—'}</span></td>
+            <td className="muted">{countEvents(p)}</td>
             <td className="muted">{p.dateCreation}</td>
+            <td><button className="btn btn-sm" onClick={()=>setDetailProjet(p)}>Voir</button></td>
           </tr>)}
-          {list.length===0 && <tr><td colSpan="7" className="muted" style={{padding:16}}>Aucun projet créé dans le CRM. (Section ci-dessous: projets vus par le calendrier.)</td></tr>}
+          {list.length===0 && <tr><td colSpan="8" className="muted" style={{padding:16}}>Aucun projet créé dans le CRM. (Section ci-dessous: projets vus par le calendrier.)</td></tr>}
         </tbody>
       </table>
     </div>
-    {cfg && cfg.calendarIds && <ProjectsFromCalendar cfg={cfg} filterC={filterC} data={data} toast={toast} refreshKey={refreshKey}/>}
+    {cfg && cfg.calendarIds && <ProjectsFromCalendar filterC={filterC} data={data} toast={toast} events={events} loadingEvents={loadingEv} errEvents={errEv} onViewProjet={setDetailProjet}/>}
+    {detailProjet && <ProjetDetailModal projet={projets.find(p=>p.id===detailProjet.id)||detailProjet} events={events}
+      onClose={()=>setDetailProjet(null)} onSave={handleSaveDetail}/>}
   </div>;
 }
 
@@ -1462,13 +1573,17 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   const HOUR_START=6, HOUR_END=20, PX_H=isDesktop?64:46;
   const hours = Array.from({length:HOUR_END-HOUR_START+1},(_,i)=>HOUR_START+i);
   const todayStr = localDateStr(new Date());
-  // Colonnes de largeur FIXE (pas minmax(...,1fr)) quand il y en a plusieurs:
-  // certains navigateurs mobiles compriment mal minmax(...,1fr) dans un conteneur
-  // overflow-x:auto (colonnes qui rapetissent au lieu de faire défiler), ce qui
-  // causait le désalignement "les carrés ne fittent pas". Une largeur fixe +
-  // width:max-content sur la grille est beaucoup plus fiable.
-  const DAY_COL_PX = isDesktop?180:130;
-  const gridCols = days.length>1 ? 'repeat('+days.length+','+DAY_COL_PX+'px)' : 'minmax(120px,1fr)';
+  // Colonnes responsives (minmax(0,1fr)) sur desktop pour remplir toute la largeur
+  // de l'écran — le vrai bug qui causait le désalignement "les carrés ne fittent
+  // pas" et le débordement horizontal du mois n'était PAS minmax(...,1fr) en soi,
+  // mais le fait que les cellules de la grille ont par défaut min-width:auto: un
+  // titre d'événement en whiteSpace:nowrap forçait alors la colonne à s'élargir
+  // au-delà de sa part de 1fr. Le fix est minWidth:0 sur chaque cellule de grille
+  // (voir plus bas) + overflow:hidden sur le texte. Sur mobile, on garde un minimum
+  // de largeur par colonne en vue semaine pour rester lisible (scroll horizontal
+  // naturel au doigt), géré par le overflowX:auto du conteneur .card.
+  const DAY_COL_MIN = (!isDesktop && days.length>1) ? '92px' : '0';
+  const gridCols = 'repeat('+days.length+',minmax('+DAY_COL_MIN+',1fr))';
 
   function eventsForDay(dStr){ return events.filter(e=>String(e.start).slice(0,10)===dStr && !e.allDay); }
   function allDayForDay(dStr){ return events.filter(e=>String(e.start).slice(0,10)===dStr && e.allDay); }
@@ -1597,7 +1712,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
           const dayEvents = [...eventsForDay(dStr), ...allDayForDay(dStr)].sort((a,b)=>String(a.start).localeCompare(String(b.start)));
           const maxShow = isDesktop?6:3;
           return <div key={i} onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }}
-            style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+2, minHeight:isDesktop?150:80,border:'1px solid var(--border)',borderRadius:6,padding:isDesktop?8:4,cursor:'pointer',opacity:inMonth?1:.4,background:dStr===todayStr?'rgba(47,128,237,.08)':'transparent'}}>
+            style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+2, minWidth:0, minHeight:isDesktop?150:80,border:'1px solid var(--border)',borderRadius:6,padding:isDesktop?8:4,cursor:'pointer',opacity:inMonth?1:.4,background:dStr===todayStr?'rgba(47,128,237,.08)':'transparent',overflow:'hidden'}}>
             <div style={{fontSize:isDesktop?15:11,fontWeight:700,marginBottom:5}}>{d.getDate()}</div>
             {dayEvents.slice(0,maxShow).map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',background:eventColor(e),color:'#1d1d1d',fontSize:isDesktop?11.5:9.5,padding:isDesktop?'3px 6px':'1px 4px',borderRadius:3,marginBottom:3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
             {dayEvents.length>maxShow && <div className="muted" style={{fontSize:isDesktop?11:9.5}}>+{dayEvents.length-maxShow} de plus</div>}
@@ -1610,9 +1725,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       {/* Une SEULE grille pour l'en-tête, la rangée "toute la journée" et les heures,
           pour que les colonnes s'alignent parfaitement (sinon 3 grilles séparées
           calculent chacune leurs largeurs indépendamment et ça ne s'aligne plus). */}
-      <div style={{display:'grid',gridTemplateColumns:'50px '+gridCols,gridTemplateRows:'auto auto '+(PX_H*hours.length)+'px',width:days.length>1?'max-content':'100%',minWidth:days.length>1?(50+DAY_COL_PX*days.length):undefined}}>
+      <div style={{display:'grid',gridTemplateColumns:'50px '+gridCols,gridTemplateRows:'auto auto '+(PX_H*hours.length)+'px',width:'100%'}}>
         <div style={{gridColumn:1,gridRow:1}}></div>
-        {days.map((d,i)=><div key={'h'+i} style={{gridColumn:i+2,gridRow:1,padding:'8px 6px',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:12,background:localDateStr(d)===todayStr?'rgba(47,128,237,.10)':'transparent'}}>
+        {days.map((d,i)=><div key={'h'+i} style={{gridColumn:i+2,gridRow:1,minWidth:0,padding:'8px 6px',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:12,background:localDateStr(d)===todayStr?'rgba(47,128,237,.10)':'transparent'}}>
           <div style={{textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'short'})}</div>
           <div className="muted" style={{fontWeight:500}}>{d.getDate()}</div>
         </div>)}
@@ -1621,7 +1736,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const adEvents = allDayForDay(dStr);
-          return <div key={'a'+i} style={{gridColumn:i+2,gridRow:2,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
+          return <div key={'a'+i} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
             {adEvents.map(e=><div key={e.id} title={e.title} onClick={()=>setEditEvent(e)} style={{cursor:'pointer',background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
           </div>;
         })}
@@ -1633,7 +1748,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
           const dStr = localDateStr(d);
           const dayEvents = eventsForDay(dStr);
           const placed = layoutDayEvents(dayEvents);
-          return <div key={'d'+i} ref={el=>dayColRefs.current[i]=el} style={{gridColumn:i+2,gridRow:3,position:'relative',borderLeft:'1px solid var(--border)'}}>
+          return <div key={'d'+i} ref={el=>dayColRefs.current[i]=el} style={{gridColumn:i+2,gridRow:3,minWidth:0,position:'relative',borderLeft:'1px solid var(--border)',overflow:'hidden'}}>
             {hours.map(h=><div key={h} onClick={()=>{ if(data) openNewJob(dStr, String(h).padStart(2,'0')+':00'); }}
               style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box',cursor:data?'copy':'default'}}
               title={data?'Cliquer pour créer une job à '+h+'h':''}></div>)}
@@ -1697,7 +1812,11 @@ function FacturesView({cfg, refreshKey}){
   const manquantList = [...base.filter(r=>r.statutFacture==='manquant' && r.estPasseOuAujourdhui)].sort(byDateDesc);
   const traitementList = [...base.filter(r=>r.statutFacture==='en_traitement' && r.estPasseOuAujourdhui)].sort(byDateDesc);
   const allList = [...base].sort(byDateDesc);
-  const missingCount = rows.filter(r=>r.factureManquante).length;
+  // Deux compteurs distincts — "manquante" (aucun appel de service) ne doit
+  // jamais inclure les lignes "en traitement" (appel de service fait, facture
+  // pas encore reçue): ce sont deux statuts différents, pas le même problème.
+  const trueMissingCount = rows.filter(r=>r.statutFacture==='manquant' && r.estPasseOuAujourdhui).length;
+  const traitementCount = rows.filter(r=>r.statutFacture==='en_traitement' && r.estPasseOuAujourdhui).length;
 
   function renderTable(list, emptyMsg){
     return <div className="card" style={{padding:0,overflowX:'auto'}}>
@@ -1729,9 +1848,16 @@ function FacturesView({cfg, refreshKey}){
     {!cfg.suiviTravauxSpreadsheetId && <div className="card">Configure l'ID du Sheet "SUIVI TRAVAUX" dans Réglages.</div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {cfg.suiviTravauxSpreadsheetId && <>
-      {!loading && <div className="card" style={{marginBottom:14,display:'flex',alignItems:'center',gap:10}}>
-        <div style={{fontSize:28,fontWeight:800,color:missingCount>0?'var(--danger)':'var(--success)'}}>{missingCount}</div>
-        <div className="muted" style={{fontSize:12.5}}>facture{missingCount!==1?'s':''} manquante{missingCount!==1?'s':''} sur {rows.length} lignes lues, tous contracteurs confondus.</div>
+      {!loading && <div className="card" style={{marginBottom:14,display:'flex',alignItems:'center',gap:24,flexWrap:'wrap'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{fontSize:28,fontWeight:800,color:trueMissingCount>0?'var(--danger)':'var(--success)'}}>{trueMissingCount}</div>
+          <div className="muted" style={{fontSize:12.5}}>facture{trueMissingCount!==1?'s':''} manquante{trueMissingCount!==1?'s':''}<br/>(aucun appel de service)</div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{fontSize:22,fontWeight:800,color:'#d29922'}}>{traitementCount}</div>
+          <div className="muted" style={{fontSize:12.5}}>en traitement<br/>(appel de service fait, facture à venir)</div>
+        </div>
+        <div className="muted" style={{fontSize:11}}>sur {rows.length} lignes lues, tous contracteurs confondus.</div>
       </div>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
         <button className="btn btn-sm" onClick={()=>setOnlyMissing(true)} style={onlyMissing?{background:'var(--danger)',color:'#fff',border:'none'}:null}>Manquantes seulement</button>
