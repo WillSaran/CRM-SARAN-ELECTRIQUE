@@ -53,7 +53,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .nav-item.active{background:rgba(var(--accent-rgb),0.13);color:var(--accent)}
 .nav-item:hover{background:var(--bg3)}
 .main{flex:1;padding:20px;max-width:1200px}
-@media(max-width:760px){.nav{position:fixed;bottom:0;left:0;right:0;top:auto;width:100%;display:flex;flex-direction:row;justify-content:space-around;border-right:none;border-top:1px solid var(--border);padding:6px;z-index:39}.nav-item{flex-direction:column;font-size:10.5px;gap:3px;padding:6px}.main{padding-bottom:80px}}
+@media(max-width:760px){.nav{position:fixed;bottom:0;left:0;right:0;top:auto;width:100%;display:flex;flex-direction:row;justify-content:space-around;border-right:none;border-top:1px solid var(--border);padding:6px;z-index:39}.nav-item{flex-direction:column;font-size:10.5px;gap:3px;padding:6px}.main{padding-bottom:80px}.remind-cols{grid-template-columns:1fr !important}}
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px}
 .grid{display:grid;gap:12px}
 .badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:700}
@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v14';
+const APP_VERSION = 'v15';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -142,14 +142,44 @@ const CONTACTS_HEADERS = ['id','nom','entreprise','telephone','email','adresse',
 const OPP_HEADERS = ['id','contactId','titre','adresse','typeTravail','etape','montantEstime','dateCreation','dateRelance','dateCloture','notes','punchproJobCree','punchproEventId'];
 const SOUM_HEADERS = ['id','opportuniteId','date','itemsJson','total','statut','courrielEnvoye','dateEnvoi'];
 // Onglet "Projets" du CRM — sera donné à PunchPro plus tard (voir commentaire CONFIG plus haut)
-const PROJETS_HEADERS = ['id','opportuniteId','adresse','titre','contracteur','phase','typeTravail','client','telephone','notes','statut','dateCreation','eventId','po'];
+// adressesLiees: adresses SECONDAIRES (séparées par ';') attachées manuellement à ce
+// projet depuis "Projets par adresse" — pour qu'un job dont l'adresse ne correspond
+// pas exactement puisse quand même être rattaché au bon projet CRM.
+// stockStatut: '' | 'À commander' | 'Prêt' — suivi utilisé par le Tableau de bord.
+const PROJETS_HEADERS = ['id','opportuniteId','adresse','titre','contracteur','phase','typeTravail','client','telephone','notes','statut','dateCreation','eventId','po','adressesLiees','stockStatut'];
 // Statuts de suivi d'un projet CRM (indépendant de l'étape "Gagné" du pipeline —
 // une fois la job créée, on suit ici si le chantier est à venir/en cours/fermé).
 const PROJET_STATUTS = ['À venir','Actif','Fermé'];
 const PROJET_STATUT_COLORS = {'À venir':'#0ea5e9','Actif':'#3fb950','Fermé':'#7d8590'};
+const STOCK_STATUTS = ['','À commander','Prêt'];
+const STOCK_LABELS = {'':'Stock: —','À commander':'Stock: à commander','Prêt':'Stock: prêt'};
+const STOCK_COLORS = {'À commander':'#d29922','Prêt':'#3fb950'};
+// Retourne toutes les clés d'adresse (principale + liées) qui identifient un projet,
+// pour retrouver les événements Calendar qui lui appartiennent.
+function projetAddressKeys(projet){
+  const keys = [String(projet.adresse||'').trim().toLowerCase()];
+  String(projet.adressesLiees||'').split(';').forEach(a=>{ const k=a.trim().toLowerCase(); if(k) keys.push(k); });
+  return keys.filter(Boolean);
+}
+function eventAddressKey(e){
+  return String((e.location && e.location.trim()) || parseCivicStreet(e.title) || e.title || '').trim().toLowerCase();
+}
+// Tous les événements Calendar dont l'adresse correspond à ce projet (principale OU liée).
+function projetLinkedEvents(projet, events){
+  const keys = new Set(projetAddressKeys(projet));
+  if(keys.size===0) return [];
+  return (events||[]).filter(e=>keys.has(eventAddressKey(e))).sort((a,b)=>String(b.start).localeCompare(String(a.start)));
+}
+// Map "clé d'adresse" -> projet, pour savoir si une adresse du calendrier a déjà un
+// projet CRM (via son adresse principale OU une adresse liée).
+function buildProjetAddressIndex(projets){
+  const map = {};
+  (projets||[]).forEach(p=>{ projetAddressKeys(p).forEach(k=>{ map[k]=p; }); });
+  return map;
+}
 // Onglet "Rappels" du CRM — suivis/rappels créés manuellement (indépendants du pipeline
-// Opportunités). statut: 'A faire' | 'Fait'.
-const RAPPELS_HEADERS = ['id','titre','description','dateEcheance','adresse','statut','dateCreation'];
+// Opportunités). statut: 'A faire' | 'Fait'. assigneA: 'William' | 'Isabelle'.
+const RAPPELS_HEADERS = ['id','titre','description','dateEcheance','adresse','statut','dateCreation','assigneA'];
 
 // ── Contracteurs (mêmes abréviations que PunchPro) ───────────────────────
 // 'PARTICULIER' = client résidentiel, pas de contracteur associé.
@@ -314,6 +344,19 @@ async function patchEventTimes(calendarId, eventId, startISO, endISO){
     calendarId, eventId,
     resource:{ start:{dateTime:startISO, timeZone:'America/Toronto'}, end:{dateTime:endISO, timeZone:'America/Toronto'} }
   });
+}
+// Modifie un événement Calendar au complet (titre/lieu/description/heures/pièces
+// jointes) — utilisé par la fiche "modifier l'événement" de l'Agenda, pour offrir
+// le même niveau d'édition que directement dans Google Agenda. supportsAttachments
+// doit être passé en paramètre de requête pour que le champ "attachments" soit pris
+// en compte par l'API Calendar.
+async function patchEventFull(calendarId, eventId, fields){
+  return window.gapi.client.calendar.events.patch({
+    calendarId, eventId, supportsAttachments:true, resource: fields
+  });
+}
+async function deleteCalendarEvent(calendarId, eventId){
+  return window.gapi.client.calendar.events.delete({calendarId, eventId});
 }
 // Calcule une disposition côte-à-côte pour les événements d'une journée qui se
 // chevauchent dans le temps (sinon ils s'empilent exactement l'un sur l'autre
@@ -1016,11 +1059,19 @@ function PipelineView({data, cfg, toast}){
 }
 
 // ── UI: Formulaire nouveau rappel ────────────────────────────────────────
+const RAPPEL_ASSIGNES = ['William','Isabelle'];
 function RappelForm({onSave, onClose}){
-  const [f,setF]=useState({titre:'', description:'', dateEcheance:todayISO(), adresse:''});
+  const [f,setF]=useState({titre:'', description:'', dateEcheance:todayISO(), adresse:'', assigneA:'William'});
   return <Modal title="Nouveau rappel" onClose={onClose}>
     <div className="field"><label>Titre</label><input value={f.titre} onChange={e=>setF({...f,titre:e.target.value})} placeholder="Ex: Rappeler le client pour la soumission"/></div>
-    <div className="field"><label>Échéance</label><input type="date" value={f.dateEcheance} onChange={e=>setF({...f,dateEcheance:e.target.value})}/></div>
+    <div className="row2">
+      <div className="field"><label>Échéance</label><input type="date" value={f.dateEcheance} onChange={e=>setF({...f,dateEcheance:e.target.value})}/></div>
+      <div className="field"><label>Assigné à</label>
+        <select value={f.assigneA} onChange={e=>setF({...f,assigneA:e.target.value})}>
+          {RAPPEL_ASSIGNES.map(a=><option key={a} value={a}>{a}</option>)}
+        </select>
+      </div>
+    </div>
     <div className="field"><label>Adresse / projet lié (optionnel)</label><input value={f.adresse} onChange={e=>setF({...f,adresse:e.target.value})}/></div>
     <div className="field tag-input"><label>Notes</label><textarea value={f.description} onChange={e=>setF({...f,description:e.target.value})}/></div>
     <div style={{display:'flex',justifyContent:'flex-end'}}>
@@ -1030,7 +1081,9 @@ function RappelForm({onSave, onClose}){
 }
 
 // ── UI: Rappels & Suivi — combine les rappels créés dans le CRM + les
-// relances des opportunités (dateRelance) du pipeline ───────────────────
+// relances des opportunités (dateRelance) du pipeline. Affiché en cartes
+// carrées (plutôt qu'en longues barres) et divisé en deux colonnes,
+// William / Isabelle, selon le champ "assigneA" du rappel.
 function RemindersView({data, toast}){
   const [showForm,setShowForm]=useState(false);
   const [showDone,setShowDone]=useState(false);
@@ -1040,17 +1093,37 @@ function RemindersView({data, toast}){
   const contactById = Object.fromEntries(data.contacts.map(c=>[c.id,c]));
 
   const oppItems = data.opps.filter(o=>o.dateRelance && o.etape!=='Gagné' && o.etape!=='Perdu' && o.dateRelance<=soonISO)
-    .map(o=>({source:'opp', id:o.id, titre:o.titre||o.adresse, sousTitre:(contactById[o.contactId]?contactById[o.contactId].nom:'')+' — '+o.etape, date:o.dateRelance, fait:false}));
+    .map(o=>({source:'opp', id:o.id, titre:o.titre||o.adresse, sousTitre:(contactById[o.contactId]?contactById[o.contactId].nom:'')+' — '+o.etape, date:o.dateRelance, fait:false, assigneA:'William'}));
   const rappelItems = (data.rappels||[])
     .filter(r=>showDone || r.statut!=='Fait')
     .filter(r=>showDone || (r.dateEcheance && r.dateEcheance<=soonISO) || !r.dateEcheance)
-    .map(r=>({source:'rappel', raw:r, id:r.id, titre:r.titre, sousTitre:r.adresse||r.description||'', date:r.dateEcheance, fait:r.statut==='Fait'}));
+    .map(r=>({source:'rappel', raw:r, id:r.id, titre:r.titre, sousTitre:r.adresse||r.description||'', date:r.dateEcheance, fait:r.statut==='Fait', assigneA:r.assigneA||'William'}));
 
   const items = [...oppItems, ...rappelItems].sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999'));
+  const williamItems = items.filter(i=>i.assigneA!=='Isabelle');
+  const isabelleItems = items.filter(i=>i.assigneA==='Isabelle');
 
   async function marquerFait(item){
     try{ await data.updateRappel({...item.raw, statut: item.fait?'A faire':'Fait'}); }
     catch(e){ toast && toast('Erreur: '+apiErrMsg(e),'err'); }
+  }
+
+  function renderCards(list, emptyMsg){
+    return <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(190px,1fr))',gap:10}}>
+      {list.map(item=>
+        <div key={item.source+item.id} className="card" style={{padding:12,display:'flex',flexDirection:'column',gap:6,minHeight:92,
+          borderLeft:(!item.fait && item.date && item.date<today)?'3px solid var(--danger)':'1px solid var(--border)',
+          opacity:item.fait?0.55:1}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:6}}>
+            <div style={{fontWeight:700,fontSize:13,textDecoration:item.fait?'line-through':'none'}}>{item.titre}</div>
+            {item.source==='rappel' && <input type="checkbox" checked={item.fait} onChange={()=>marquerFait(item)} style={{width:16,height:16,flexShrink:0}}/>}
+          </div>
+          {item.sousTitre && <div className="muted" style={{fontSize:11.5}}>{item.sousTitre}{item.source==='opp'?' (opportunité)':''}</div>}
+          <div style={{fontWeight:700,fontSize:12.5,marginTop:'auto',color:(!item.fait && item.date && item.date<today)?'var(--danger)':'var(--text)'}}>{item.date||'—'}</div>
+        </div>
+      )}
+      {list.length===0 && <div className="muted card" style={{padding:16,gridColumn:'1/-1'}}>{emptyMsg}</div>}
+    </div>;
   }
 
   return <div>
@@ -1058,23 +1131,18 @@ function RemindersView({data, toast}){
       <h2 className="fh" style={{margin:0,fontSize:20}}>Rappels & Suivi</h2>
       <button className="btn btn-p" onClick={()=>setShowForm(true)}>+ Nouveau rappel</button>
     </div>
-    <div style={{marginBottom:10}}>
+    <div style={{marginBottom:16}}>
       <button className="btn btn-sm" onClick={()=>setShowDone(v=>!v)} style={showDone?{background:'var(--accent)',color:'#fff',border:'none'}:null}>{showDone?'Cacher les rappels faits':'Afficher aussi les rappels faits'}</button>
     </div>
-    <div className="card" style={{padding:0}}>
-      {items.map(item=>
-        <div className={"remind-item"+(!item.fait && item.date && item.date<today?' late':'')} key={item.source+item.id} style={item.fait?{opacity:.55}:null}>
-          <div style={{display:'flex',alignItems:'center',gap:10}}>
-            {item.source==='rappel' && <input type="checkbox" checked={item.fait} onChange={()=>marquerFait(item)} style={{width:16,height:16}}/>}
-            <div>
-              <div style={{fontWeight:700,fontSize:13.5,textDecoration:item.fait?'line-through':'none'}}>{item.titre}</div>
-              <div className="muted" style={{fontSize:12}}>{item.sousTitre}{item.source==='opp'?' (opportunité)':''}</div>
-            </div>
-          </div>
-          <div style={{fontWeight:700,color:(!item.fait && item.date && item.date<today)?'var(--danger)':'var(--text)'}}>{item.date||'—'}</div>
-        </div>
-      )}
-      {items.length===0 && <div className="muted" style={{padding:16}}>Aucun rappel ou suivi en attente. Clique "+ Nouveau rappel" pour en créer un.</div>}
+    <div className="remind-cols" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:22}}>
+      <div>
+        <h3 style={{margin:'0 0 10px',fontSize:14,fontWeight:800}}>William</h3>
+        {renderCards(williamItems, 'Rien pour William.')}
+      </div>
+      <div>
+        <h3 style={{margin:'0 0 10px',fontSize:14,fontWeight:800}}>Isabelle</h3>
+        {renderCards(isabelleItems, 'Rien pour Isabelle.')}
+      </div>
     </div>
     {showForm && <RappelForm onClose={()=>setShowForm(false)} onSave={async(f)=>{
       try{ await data.addRappel(f); setShowForm(false); toast && toast('Rappel créé.','ok'); }
@@ -1133,14 +1201,7 @@ function PromoteProjetModal({group, onClose, onSave}){
 function ProjetDetailModal({projet, events, onClose, onSave}){
   const [f,setF]=useState(projet);
   const [busy,setBusy]=useState(false);
-  const linkedEvents = useMemo(()=>{
-    const key = String(projet.adresse||'').trim().toLowerCase();
-    if(!key) return [];
-    return (events||[]).filter(e=>{
-      const evKey = (e.location && e.location.trim()) || parseCivicStreet(e.title) || e.title;
-      return String(evKey||'').trim().toLowerCase()===key;
-    }).sort((a,b)=>String(b.start).localeCompare(String(a.start)));
-  },[projet.adresse, events]);
+  const linkedEvents = useMemo(()=>projetLinkedEvents(projet, events), [projet.adresse, projet.adressesLiees, events]);
 
   async function handleSave(){
     setBusy(true);
@@ -1172,8 +1233,20 @@ function ProjetDetailModal({projet, events, onClose, onSave}){
         </select>
       </div>
     </div>
-    <div className="field"><label>Adresse</label><input value={f.adresse||''} onChange={e=>setF({...f,adresse:e.target.value})}/></div>
-    <div className="muted" style={{fontSize:11,marginTop:-7,marginBottom:11}}>Les événements du calendrier ci-dessous sont retrouvés automatiquement par correspondance d'adresse — si un événement manque, vérifie que son lieu correspond exactement à cette adresse.</div>
+    <div className="field"><label>Adresse principale</label><input value={f.adresse||''} onChange={e=>setF({...f,adresse:e.target.value})}/></div>
+    {String(f.adressesLiees||'').split(';').map(s=>s.trim()).filter(Boolean).length>0 && <div className="field">
+      <label>Adresses liées (attachées manuellement)</label>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        {String(f.adressesLiees||'').split(';').map(s=>s.trim()).filter(Boolean).map((a,i)=>
+          <span key={i} className="badge" style={{background:'var(--bg4)',display:'inline-flex',alignItems:'center',gap:6}}>
+            {a}
+            <button type="button" onClick={()=>setF({...f, adressesLiees: String(f.adressesLiees||'').split(';').map(s=>s.trim()).filter(x=>x && x.toLowerCase()!==a.toLowerCase()).join(';')})}
+              style={{background:'none',border:'none',color:'inherit',cursor:'pointer',padding:0,fontSize:13,lineHeight:1}}>×</button>
+          </span>
+        )}
+      </div>
+    </div>}
+    <div className="muted" style={{fontSize:11,marginTop:-2,marginBottom:11}}>Les événements du calendrier ci-dessous sont retrouvés automatiquement par correspondance d'adresse (principale ou liée) — si un événement manque, vérifie que son lieu correspond exactement, ou attache son adresse depuis "Projets par adresse".</div>
     <div className="row2">
       <div className="field"><label>Client</label><input value={f.client||''} onChange={e=>setF({...f,client:e.target.value})}/></div>
       <div className="field"><label>Téléphone</label><input value={f.telephone||''} onChange={e=>setF({...f,telephone:e.target.value})}/></div>
@@ -1194,21 +1267,45 @@ function ProjetDetailModal({projet, events, onClose, onSave}){
   </Modal>;
 }
 
+// ── UI: Attacher une adresse du calendrier à un projet CRM EXISTANT (au lieu
+// d'en créer un nouveau) — ajoute cette adresse à "adressesLiees" du projet choisi.
+function AttachProjetModal({group, projets, onClose, onSave}){
+  const sorted = useMemo(()=>[...projets].sort((a,b)=>(a.titre||a.adresse||'').localeCompare(b.titre||b.adresse||'')), [projets]);
+  const [selected,setSelected]=useState(sorted[0] ? sorted[0].id : '');
+  const [busy,setBusy]=useState(false);
+  async function handleSave(){
+    if(!selected) return;
+    setBusy(true);
+    try{ await onSave(sorted.find(p=>p.id===selected)); onClose(); }
+    catch(e){ /* toast déjà géré par le parent */ }
+    setBusy(false);
+  }
+  return <Modal title="Attacher cette adresse à un projet existant" onClose={onClose}>
+    <div className="muted" style={{fontSize:12,marginBottom:10}}>Les {group.count} job{group.count!==1?'s':''} à "{group.adresse}" seront désormais aussi retrouvées sous le projet choisi (en plus de son adresse principale) — utile quand l'adresse d'un job diffère légèrement de celle du projet.</div>
+    <div className="field"><label>Projet CRM</label>
+      <select value={selected} onChange={e=>setSelected(e.target.value)}>
+        {sorted.map(p=><option key={p.id} value={p.id}>{p.titre||p.adresse} — {p.contracteur==='PARTICULIER'?'Particuliers':p.contracteur}</option>)}
+      </select>
+    </div>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+      <button className="btn btn-s" onClick={onClose}>Annuler</button>
+      <button className="btn btn-p" onClick={handleSave} disabled={busy || !selected}>{busy?'Enregistrement...':'Attacher'}</button>
+    </div>
+  </Modal>;
+}
+
 function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errEvents, onViewProjet}){
   const [expanded,setExpanded]=useState(null);
   const [promoteGroup,setPromoteGroup]=useState(null);
+  const [attachGroup,setAttachGroup]=useState(null);
 
   const groups = useMemo(()=>groupEventsByAddress(events||[]), [events]);
   const filtered = filterC ? groups.filter(g=>g.contracteur===filterC) : groups;
-  const projetByAdresse = useMemo(()=>{
-    const m={};
-    (data && data.projets ? data.projets : []).forEach(p=>{ m[String(p.adresse||'').trim().toLowerCase()] = p; });
-    return m;
-  }, [data && data.projets]);
+  const projetByAdresse = useMemo(()=>buildProjetAddressIndex(data && data.projets), [data && data.projets]);
 
   return <div style={{marginTop:26}}>
     <h3 style={{margin:'0 0 4px',fontSize:15,fontWeight:800}}>Projets par adresse (calendrier, ±6 mois)</h3>
-    <div className="muted" style={{fontSize:11.5,marginBottom:10}}>Lecture seule sur le calendrier — regroupé par adresse d'événement, comme dans PunchPro. Clique "Détails" pour voir la description et les fichiers joints de chaque job, "Créer un projet CRM" pour rassembler cette adresse sous un projet, ou "Voir le projet" si elle en a déjà un.</div>
+    <div className="muted" style={{fontSize:11.5,marginBottom:10}}>Lecture seule sur le calendrier — regroupé par adresse d'événement, comme dans PunchPro. Clique "Détails" pour voir la description et les fichiers joints de chaque job, "Créer un projet CRM" pour en créer un nouveau, "Attacher à existant" pour rattacher cette adresse à un projet CRM déjà créé, ou "Voir le projet" si elle en a déjà un.</div>
     {errEvents && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{errEvents}</div>}
     {loadingEvents ? <div className="muted">Chargement...</div> :
     <div className="card" style={{padding:0,overflowX:'auto'}}>
@@ -1226,7 +1323,10 @@ function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errE
               <td><button className="btn btn-sm" onClick={()=>setExpanded(expanded===g.adresse?null:g.adresse)}>{expanded===g.adresse?'Cacher':'Détails'}</button></td>
               <td>{data && (dejaProjet
                 ? <button className="btn btn-sm" onClick={()=>onViewProjet && onViewProjet(dejaProjet)}>✓ Voir le projet</button>
-                : <button className="btn btn-sm" onClick={()=>setPromoteGroup(g)}>Créer un projet CRM</button>)}</td>
+                : <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    <button className="btn btn-sm" onClick={()=>setPromoteGroup(g)}>Créer un projet CRM</button>
+                    {data.projets && data.projets.length>0 && <button className="btn btn-sm" onClick={()=>setAttachGroup(g)}>Attacher à existant</button>}
+                  </div>)}</td>
             </tr>
             {expanded===g.adresse && g.evenements.map(e=><tr key={e.id} style={{background:'var(--bg2)'}}>
               <td colSpan="6" style={{fontSize:12,paddingLeft:20,paddingTop:8,paddingBottom:8}}>
@@ -1247,6 +1347,14 @@ function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errE
       try{ await data.addProjet(f); setPromoteGroup(null); toast && toast('Projet créé.','ok'); }
       catch(e){ toast && toast('Erreur: '+apiErrMsg(e),'err'); }
     }}/>}
+    {attachGroup && data && data.projets && <AttachProjetModal group={attachGroup} projets={data.projets} onClose={()=>setAttachGroup(null)} onSave={async(selectedProjet)=>{
+      try{
+        const cur = String(selectedProjet.adressesLiees||'').split(';').map(s=>s.trim()).filter(Boolean);
+        if(!cur.some(a=>a.toLowerCase()===String(attachGroup.adresse).trim().toLowerCase())) cur.push(attachGroup.adresse);
+        await data.updateProjet({...selectedProjet, adressesLiees: cur.join(';')});
+        toast && toast('Adresse attachée au projet.','ok');
+      }catch(e){ toast && toast('Erreur: '+apiErrMsg(e),'err'); throw e; }
+    }}/>}
   </div>;
 }
 
@@ -1257,6 +1365,7 @@ function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errE
 function ProjetsView({data, cfg, toast, refreshKey}){
   const [filterC,setFilterC]=useState(null);
   const [filterS,setFilterS]=useState(null);
+  const [showClosed,setShowClosed]=useState(false);
   const [detailProjet,setDetailProjet]=useState(null);
   const [loadingEv,setLoadingEv]=useState(true);
   const [events,setEvents]=useState([]);
@@ -1281,16 +1390,10 @@ function ProjetsView({data, cfg, toast, refreshKey}){
   let list = projets;
   if(filterC) list = list.filter(p=>p.contracteur===filterC);
   if(filterS) list = list.filter(p=>p.statut===filterS);
+  else if(!showClosed) list = list.filter(p=>p.statut!=='Fermé');
   list = [...list].sort((a,b)=>(b.dateCreation||'').localeCompare(a.dateCreation||''));
 
-  function countEvents(p){
-    const key = String(p.adresse||'').trim().toLowerCase();
-    if(!key) return 0;
-    return events.filter(e=>{
-      const evKey = (e.location && e.location.trim()) || parseCivicStreet(e.title) || e.title;
-      return String(evKey||'').trim().toLowerCase()===key;
-    }).length;
-  }
+  function countEvents(p){ return projetLinkedEvents(p, events).length; }
 
   async function handleSaveDetail(f){
     try{ await data.updateProjet(f); toast('Projet mis à jour.','ok'); }
@@ -1304,9 +1407,10 @@ function ProjetsView({data, cfg, toast, refreshKey}){
       <button className="btn btn-sm" onClick={()=>setFilterC(null)} style={!filterC?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous contracteurs</button>
       {CONTRACTEURS.map(c=><button key={c} className="btn btn-sm" onClick={()=>setFilterC(c)} style={filterC===c?{background:prefixColor(c),color:'#fff',border:'none'}:null}>{c==='PARTICULIER'?'Particuliers':c}</button>)}
     </div>
-    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,alignItems:'center'}}>
       <button className="btn btn-sm" onClick={()=>setFilterS(null)} style={!filterS?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous statuts</button>
       {PROJET_STATUTS.map(s=><button key={s} className="btn btn-sm" onClick={()=>setFilterS(s)} style={filterS===s?{background:PROJET_STATUT_COLORS[s],color:'#fff',border:'none'}:null}>{s}</button>)}
+      {!filterS && <button className="btn btn-sm" onClick={()=>setShowClosed(v=>!v)} style={showClosed?{background:'var(--bg4)',border:'1px solid var(--border2)'}:null}>{showClosed?'Cacher les projets fermés':'Afficher aussi les projets fermés'}</button>}
     </div>
     <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Projets créés dans le CRM</h3>
     <div className="card" style={{padding:0,overflowX:'auto'}}>
@@ -1330,6 +1434,97 @@ function ProjetsView({data, cfg, toast, refreshKey}){
     {cfg && cfg.calendarIds && <ProjectsFromCalendar filterC={filterC} data={data} toast={toast} events={events} loadingEvents={loadingEv} errEvents={errEv} onViewProjet={setDetailProjet}/>}
     {detailProjet && <ProjetDetailModal projet={projets.find(p=>p.id===detailProjet.id)||detailProjet} events={events}
       onClose={()=>setDetailProjet(null)} onSave={handleSaveDetail}/>}
+  </div>;
+}
+
+// ── UI: sélecteur de statut de stock, en ligne dans le Tableau de bord ───
+function StockSelector({projet, data, toast}){
+  const [busy,setBusy]=useState(false);
+  async function change(v){
+    setBusy(true);
+    try{ await data.updateProjet({...projet, stockStatut:v}); }
+    catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
+    setBusy(false);
+  }
+  return <select value={projet.stockStatut||''} disabled={busy} onChange={e=>change(e.target.value)}
+    style={{width:'auto',fontWeight:700,border:'1px solid var(--border2)',
+      background:STOCK_COLORS[projet.stockStatut]||'var(--bg3)', color:projet.stockStatut?'#fff':'var(--text)'}}>
+    {STOCK_STATUTS.map(s=><option key={s} value={s}>{STOCK_LABELS[s]}</option>)}
+  </select>;
+}
+
+// ── UI: une rangée du Tableau de bord — une adresse/job planifiée aujourd'hui
+// ou demain, avec le contrôle de stock si un projet CRM existe déjà pour elle.
+function DashboardRow({g, projetByAdresse, data, toast, onCreated}){
+  const projet = projetByAdresse[String(g.adresse||'').trim().toLowerCase()];
+  return <div className="card" style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:10}}>
+    <div>
+      <div style={{fontWeight:700,fontSize:13.5}}>{g.adresse}</div>
+      <div className="muted" style={{fontSize:12,marginTop:2}}>
+        <span className="badge" style={{background:prefixColor(g.contracteur),color:'#fff',marginRight:6}}>{g.contracteur==='PARTICULIER'?'Particuliers':g.contracteur}</span>
+        {g.dernier.allDay ? 'Toute la journée' : new Date(g.dernier.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})} — {g.dernier.title}
+        {g.count>1 && <span> (+{g.count-1} autre{g.count-1!==1?'s':''})</span>}
+      </div>
+    </div>
+    {projet ? <StockSelector projet={projet} data={data} toast={toast}/>
+      : <button className="btn btn-sm" onClick={()=>onCreated(g)}>Créer un projet CRM (pour suivre le stock)</button>}
+  </div>;
+}
+
+// ── UI: Tableau de bord — jobs d'aujourd'hui et de demain (calendrier),
+// regroupées par adresse, avec suivi rapide du statut de stock par projet.
+function TableauDeBordView({cfg, data, toast, refreshKey}){
+  const [loading,setLoading]=useState(true);
+  const [events,setEvents]=useState([]);
+  const [err,setErr]=useState('');
+  const [promoteGroup,setPromoteGroup]=useState(null);
+
+  useEffect(()=>{
+    if(!cfg || !cfg.calendarIds){ setLoading(false); return; }
+    let cancelled=false;
+    setLoading(true); setErr('');
+    const timeMin=new Date(); timeMin.setHours(0,0,0,0);
+    const timeMax=new Date(timeMin); timeMax.setDate(timeMax.getDate()+2); timeMax.setMilliseconds(-1);
+    const calIds=(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
+    listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
+      .then(evs=>{ if(!cancelled) setEvents(evs); })
+      .catch(e=>{ if(!cancelled) setErr(apiErrMsg(e)||'Erreur de chargement du calendrier.'); })
+      .finally(()=>{ if(!cancelled) setLoading(false); });
+    return ()=>{ cancelled=true; };
+  },[cfg && cfg.calendarIds, refreshKey]);
+
+  const todayStr = localDateStr(new Date());
+  const tmrwD = new Date(); tmrwD.setDate(tmrwD.getDate()+1);
+  const tomorrowStr = localDateStr(tmrwD);
+  const groupsToday = useMemo(()=>groupEventsByAddress(events.filter(e=>String(e.start).slice(0,10)===todayStr)), [events]);
+  const groupsTomorrow = useMemo(()=>groupEventsByAddress(events.filter(e=>String(e.start).slice(0,10)===tomorrowStr)), [events]);
+  const projetByAdresse = useMemo(()=>buildProjetAddressIndex(data.projets), [data.projets]);
+
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Tableau de bord</h2>
+    <div className="muted" style={{fontSize:11.5,marginBottom:16}}>Jobs planifiées aujourd'hui et demain (calendrier), regroupées par adresse — avec le suivi du stock par projet CRM.</div>
+    {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
+    {!cfg || !cfg.calendarIds ? <div className="card">Configure les calendriers dans Réglages.</div> :
+    loading ? <div className="muted">Chargement...</div> : <>
+      <div style={{marginBottom:24}}>
+        <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Aujourd'hui ({groupsToday.length})</h3>
+        <div className="grid" style={{gap:8}}>
+          {groupsToday.map(g=><DashboardRow key={g.adresse} g={g} projetByAdresse={projetByAdresse} data={data} toast={toast} onCreated={setPromoteGroup}/>)}
+          {groupsToday.length===0 && <div className="card muted" style={{fontSize:12.5}}>Aucune job planifiée aujourd'hui.</div>}
+        </div>
+      </div>
+      <div>
+        <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Demain ({groupsTomorrow.length})</h3>
+        <div className="grid" style={{gap:8}}>
+          {groupsTomorrow.map(g=><DashboardRow key={g.adresse} g={g} projetByAdresse={projetByAdresse} data={data} toast={toast} onCreated={setPromoteGroup}/>)}
+          {groupsTomorrow.length===0 && <div className="card muted" style={{fontSize:12.5}}>Aucune job planifiée demain.</div>}
+        </div>
+      </div>
+    </>}
+    {promoteGroup && <PromoteProjetModal group={promoteGroup} onClose={()=>setPromoteGroup(null)} onSave={async(f)=>{
+      try{ await data.addProjet(f); setPromoteGroup(null); toast('Projet créé.','ok'); }
+      catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
+    }}/>}
   </div>;
 }
 
@@ -1492,39 +1687,95 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate, ini
 
 // ── UI: Agenda — Jour / Semaine / Mois (grille), + création de job ───────
 // ── UI: Modal modification de l'heure d'un événement existant ────────────
+// ── UI: fiche complète d'un événement Calendar — même niveau de détail que
+// directement dans Google Agenda: titre, lieu, description, heures, pièces
+// jointes Drive (par lien de partage) et suppression.
 function EditEventModal({event, onClose, onSaved, toast}){
   const startDt = new Date(event.start);
   const endDt = event.end ? new Date(event.end) : new Date(startDt.getTime()+3600000);
+  const [titre,setTitre]=useState(event.title||'');
+  const [lieu,setLieu]=useState(event.location||'');
+  const [desc,setDesc]=useState(event.description||'');
   const [date,setDate]=useState(localDateStr(startDt));
   const [heureDebut,setHeureDebut]=useState(String(startDt.getHours()).padStart(2,'0')+':'+String(startDt.getMinutes()).padStart(2,'0'));
   const [heureFin,setHeureFin]=useState(String(endDt.getHours()).padStart(2,'0')+':'+String(endDt.getMinutes()).padStart(2,'0'));
+  const [attachments,setAttachments]=useState(event.attachments||[]);
+  const [newFileUrl,setNewFileUrl]=useState('');
+  const [newFileTitre,setNewFileTitre]=useState('');
   const [busy,setBusy]=useState(false);
+  const [confirmDel,setConfirmDel]=useState(false);
+
+  function addAttachment(){
+    if(!newFileUrl.trim()) return;
+    setAttachments([...attachments, {fileUrl:newFileUrl.trim(), title:newFileTitre.trim()||newFileUrl.trim()}]);
+    setNewFileUrl(''); setNewFileTitre('');
+  }
+  function removeAttachment(i){ setAttachments(attachments.filter((_,idx)=>idx!==i)); }
 
   async function handleSave(){
     setBusy(true);
     try{
-      await patchEventTimes(event.calendarId, event.id, date+'T'+heureDebut+':00', date+'T'+heureFin+':00');
-      toast('Heure mise à jour.','ok');
+      const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(a=>({fileUrl:a.fileUrl, title:a.title})) };
+      if(!event.allDay){
+        fields.start = {dateTime: date+'T'+heureDebut+':00', timeZone:'America/Toronto'};
+        fields.end = {dateTime: date+'T'+heureFin+':00', timeZone:'America/Toronto'};
+      }
+      await patchEventFull(event.calendarId, event.id, fields);
+      toast('Événement mis à jour.','ok');
+      onSaved(); onClose();
+    }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
+    setBusy(false);
+  }
+  async function handleDelete(){
+    setBusy(true);
+    try{
+      await deleteCalendarEvent(event.calendarId, event.id);
+      toast('Événement supprimé.','ok');
       onSaved(); onClose();
     }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
     setBusy(false);
   }
 
-  if(event.allDay) return <Modal title={event.title} onClose={onClose}>
-    <div className="muted" style={{fontSize:13}}>Événement "toute la journée" — pas d'heure à modifier ici. Ouvre-le directement dans Google Agenda pour changer autre chose.</div>
-    <div style={{display:'flex',justifyContent:'flex-end',marginTop:10}}><button className="btn btn-s" onClick={onClose}>Fermer</button></div>
-  </Modal>;
+  return <Modal title="Modifier l'événement" onClose={onClose} wide>
+    <div className="field"><label>Titre</label><input value={titre} onChange={e=>setTitre(e.target.value)}/></div>
+    <div className="field"><label>Adresse / lieu</label><input value={lieu} onChange={e=>setLieu(e.target.value)}/></div>
+    {!event.allDay ? <>
+      <div className="field"><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
+      <div className="row2">
+        <div className="field"><label>Début</label><input type="time" value={heureDebut} onChange={e=>setHeureDebut(e.target.value)}/></div>
+        <div className="field"><label>Fin</label><input type="time" value={heureFin} onChange={e=>setHeureFin(e.target.value)}/></div>
+      </div>
+    </> : <div className="muted" style={{fontSize:12,marginBottom:10}}>Événement "toute la journée" — l'heure n'est pas modifiable ici.</div>}
+    <div className="field tag-input"><label>Notes / description</label><textarea value={desc} onChange={e=>setDesc(e.target.value)}/></div>
 
-  return <Modal title={event.title} onClose={onClose}>
-    {event.location && <div className="muted" style={{fontSize:12.5,marginBottom:10}}>{event.location}</div>}
-    <div className="field"><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
-    <div className="row2">
-      <div className="field"><label>Début</label><input type="time" value={heureDebut} onChange={e=>setHeureDebut(e.target.value)}/></div>
-      <div className="field"><label>Fin</label><input type="time" value={heureFin} onChange={e=>setHeureFin(e.target.value)}/></div>
+    <div className="field">
+      <label>Pièces jointes (Google Drive)</label>
+      {attachments.length>0 && <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:8}}>
+        {attachments.map((a,i)=>
+          <div key={i} style={{display:'flex',alignItems:'center',gap:8,background:'var(--bg3)',borderRadius:8,padding:'6px 10px'}}>
+            <a href={a.fileUrl} target="_blank" rel="noreferrer" style={{flex:1,fontSize:12.5,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.title||a.fileUrl}</a>
+            <button className="btn btn-sm btn-danger" onClick={()=>removeAttachment(i)}>×</button>
+          </div>
+        )}
+      </div>}
+      <div className="row2" style={{gridTemplateColumns:'2fr 1fr'}}>
+        <input placeholder="Lien Google Drive (copier le lien de partage)" value={newFileUrl} onChange={e=>setNewFileUrl(e.target.value)}/>
+        <input placeholder="Nom du fichier (optionnel)" value={newFileTitre} onChange={e=>setNewFileTitre(e.target.value)}/>
+      </div>
+      <button className="btn btn-sm" style={{marginTop:6}} onClick={addAttachment}>+ Ajouter le fichier</button>
     </div>
-    <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-      <button className="btn btn-s" onClick={onClose}>Annuler</button>
-      <button className="btn btn-p" onClick={handleSave} disabled={busy}>{busy?'Sauvegarde...':'Enregistrer'}</button>
+
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:6}}>
+      {!confirmDel ? <button className="btn btn-sm btn-danger" onClick={()=>setConfirmDel(true)}>Supprimer l'événement</button>
+        : <div style={{display:'flex',gap:6,alignItems:'center'}}>
+            <span className="muted" style={{fontSize:12}}>Supprimer définitivement?</span>
+            <button className="btn btn-sm btn-danger" onClick={handleDelete} disabled={busy}>Confirmer</button>
+            <button className="btn btn-sm" onClick={()=>setConfirmDel(false)}>Annuler</button>
+          </div>}
+      <div style={{display:'flex',gap:8}}>
+        <button className="btn btn-s" onClick={onClose}>Fermer</button>
+        <button className="btn btn-p" onClick={handleSave} disabled={busy}>{busy?'Sauvegarde...':'Enregistrer'}</button>
+      </div>
     </div>
   </Modal>;
 }
@@ -1793,6 +2044,7 @@ function FacturesView({cfg, refreshKey}){
   const [rows,setRows]=useState([]);
   const [err,setErr]=useState('');
   const [onlyMissing,setOnlyMissing]=useState(true);
+  const [hideTraitement,setHideTraitement]=useState(false);
   const [filterC,setFilterC]=useState(null);
 
   useEffect(()=>{
@@ -1862,6 +2114,7 @@ function FacturesView({cfg, refreshKey}){
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
         <button className="btn btn-sm" onClick={()=>setOnlyMissing(true)} style={onlyMissing?{background:'var(--danger)',color:'#fff',border:'none'}:null}>Manquantes seulement</button>
         <button className="btn btn-sm" onClick={()=>setOnlyMissing(false)} style={!onlyMissing?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Toutes les lignes</button>
+        <button className="btn btn-sm" onClick={()=>setHideTraitement(v=>!v)} style={hideTraitement?{background:'var(--bg4)',border:'1px solid var(--border2)'}:null}>{hideTraitement?'Réafficher "en traitement"':'Cacher "en traitement"'}</button>
       </div>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
         <button className="btn btn-sm" onClick={()=>setFilterC(null)} style={!filterC?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous contracteurs</button>
@@ -1871,9 +2124,11 @@ function FacturesView({cfg, refreshKey}){
       onlyMissing ? <>
         <h3 style={{margin:'0 0 8px',fontSize:14,fontWeight:800,color:'var(--danger)'}}>Manquantes ({manquantList.length})</h3>
         {renderTable(manquantList, 'Aucune facture manquante 🎉')}
-        <h3 style={{margin:'22px 0 8px',fontSize:14,fontWeight:800,color:'#d29922'}}>En traitement ({traitementList.length})</h3>
-        {renderTable(traitementList, 'Rien en traitement.')}
-      </> : renderTable(allList, 'Aucune ligne trouvée.')}
+        {!hideTraitement && <>
+          <h3 style={{margin:'22px 0 8px',fontSize:14,fontWeight:800,color:'#d29922'}}>En traitement ({traitementList.length})</h3>
+          {renderTable(traitementList, 'Rien en traitement.')}
+        </>}
+      </> : renderTable(hideTraitement ? allList.filter(r=>r.statutFacture!=='en_traitement') : allList, 'Aucune ligne trouvée.')}
     </>}
   </div>;
 }
@@ -1924,13 +2179,15 @@ function App(){
   const [cfg,setCfg]=useState(loadCfg);
   const [ready,setReady]=useState(false);
   const [authed,setAuthed]=useState(false);
-  const [nav,setNav]=useState('pipeline');
+  const [nav,setNav]=useState('dashboard');
   const [initErr,setInitErr]=useState('');
   const [show,toastNode]=useToast();
   const [refreshKey,setRefreshKey]=useState(0);
   const [refreshing,setRefreshing]=useState(false);
+  const [navCollapsed,setNavCollapsedState]=useState(()=>{ try{ return localStorage.getItem('crm_nav_collapsed')==='1'; }catch(e){ return false; } });
   useTheme();
   const isDesktop = useIsDesktop();
+  function toggleNav(){ const v=!navCollapsed; setNavCollapsedState(v); try{ localStorage.setItem('crm_nav_collapsed', v?'1':'0'); }catch(e){} }
 
   async function handleRefresh(){
     setRefreshing(true);
@@ -1961,7 +2218,7 @@ function App(){
   </div>;
 
   const navItems = [
-    {id:'pipeline',label:'Pipeline'},
+    {id:'dashboard',label:'Tableau de bord'},
     {id:'contacts',label:'Contacts'},
     {id:'projets',label:'Projets'},
     {id:'agenda',label:'Agenda'},
@@ -1976,19 +2233,20 @@ function App(){
       <div className="logo"><span className="dot"></span>SoumissionPro <span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div>
       <div style={{display:'flex',alignItems:'center',gap:10}}>
         {data.loading && <div className="muted" style={{fontSize:12}}>Chargement...</div>}
+        {isDesktop && <button className="btn btn-sm" onClick={toggleNav} title="Afficher/cacher le menu">{navCollapsed?'☰ Menu':'⟨⟨ Cacher le menu'}</button>}
         <button className="btn btn-sm" onClick={handleRefresh} disabled={refreshing} title="Relire les Google Sheets et le calendrier">
           {refreshing ? 'Actualisation...' : '⟳ Refresh'}
         </button>
       </div>
     </div>
     <div className="shell">
-      <div className="nav">
+      <div className="nav" style={(isDesktop && navCollapsed) ? {width:0,minWidth:0,padding:0,overflow:'hidden',border:'none'} : null}>
         {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id?' active':'')} onClick={()=>setNav(n.id)}>{n.label}</div>)}
       </div>
       <div className="main" style={(nav==='agenda' && isDesktop) ? {maxWidth:'none',width:'100%'} : null}>
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
-        {nav==='pipeline' && <PipelineView data={data} cfg={cfg} toast={show}/>}
+        {nav==='dashboard' && <TableauDeBordView cfg={cfg} data={data} toast={show} refreshKey={refreshKey}/>}
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
         {nav==='projets' && <ProjetsView data={data} cfg={cfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='agenda' && <AgendaView cfg={cfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
