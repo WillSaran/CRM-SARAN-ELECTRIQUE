@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v15';
+const APP_VERSION = 'v16';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1298,14 +1298,24 @@ function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errE
   const [expanded,setExpanded]=useState(null);
   const [promoteGroup,setPromoteGroup]=useState(null);
   const [attachGroup,setAttachGroup]=useState(null);
+  // Par défaut, on cache les adresses déjà associées à un projet CRM — inutile
+  // de les revoir en double ici une fois qu'elles ont déjà "✓ Voir le projet".
+  const [hideLinked,setHideLinked]=useState(true);
 
   const groups = useMemo(()=>groupEventsByAddress(events||[]), [events]);
-  const filtered = filterC ? groups.filter(g=>g.contracteur===filterC) : groups;
+  const filteredByContracteur = filterC ? groups.filter(g=>g.contracteur===filterC) : groups;
   const projetByAdresse = useMemo(()=>buildProjetAddressIndex(data && data.projets), [data && data.projets]);
+  const linkedCount = filteredByContracteur.filter(g=>projetByAdresse[String(g.adresse||'').trim().toLowerCase()]).length;
+  const filtered = hideLinked ? filteredByContracteur.filter(g=>!projetByAdresse[String(g.adresse||'').trim().toLowerCase()]) : filteredByContracteur;
 
   return <div style={{marginTop:26}}>
     <h3 style={{margin:'0 0 4px',fontSize:15,fontWeight:800}}>Projets par adresse (calendrier, ±6 mois)</h3>
     <div className="muted" style={{fontSize:11.5,marginBottom:10}}>Lecture seule sur le calendrier — regroupé par adresse d'événement, comme dans PunchPro. Clique "Détails" pour voir la description et les fichiers joints de chaque job, "Créer un projet CRM" pour en créer un nouveau, "Attacher à existant" pour rattacher cette adresse à un projet CRM déjà créé, ou "Voir le projet" si elle en a déjà un.</div>
+    <div style={{marginBottom:10}}>
+      <button className="btn btn-sm" onClick={()=>setHideLinked(v=>!v)} style={hideLinked?{background:'var(--accent)',color:'#fff',border:'none'}:null}>
+        {hideLinked ? 'Déjà dans un projet CRM cachées ('+linkedCount+')' : 'Afficher aussi celles déjà dans un projet CRM'}
+      </button>
+    </div>
     {errEvents && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{errEvents}</div>}
     {loadingEvents ? <div className="muted">Chargement...</div> :
     <div className="card" style={{padding:0,overflowX:'auto'}}>
@@ -1339,7 +1349,7 @@ function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errE
               </td>
             </tr>)}
           </React.Fragment>;})}
-          {filtered.length===0 && <tr><td colSpan="6" className="muted" style={{padding:16}}>Aucun projet trouvé sur cette période.</td></tr>}
+          {filtered.length===0 && <tr><td colSpan="6" className="muted" style={{padding:16}}>{hideLinked && linkedCount>0 ? 'Tout est déjà dans un projet CRM — clique "Afficher aussi..." ci-dessus pour les revoir.' : 'Aucun projet trouvé sur cette période.'}</td></tr>}
         </tbody>
       </table>
     </div>}
@@ -1366,6 +1376,7 @@ function ProjetsView({data, cfg, toast, refreshKey}){
   const [filterC,setFilterC]=useState(null);
   const [filterS,setFilterS]=useState(null);
   const [showClosed,setShowClosed]=useState(false);
+  const [q,setQ]=useState('');
   const [detailProjet,setDetailProjet]=useState(null);
   const [loadingEv,setLoadingEv]=useState(true);
   const [events,setEvents]=useState([]);
@@ -1391,6 +1402,19 @@ function ProjetsView({data, cfg, toast, refreshKey}){
   if(filterC) list = list.filter(p=>p.contracteur===filterC);
   if(filterS) list = list.filter(p=>p.statut===filterS);
   else if(!showClosed) list = list.filter(p=>p.statut!=='Fermé');
+  // La recherche texte matche aussi le contracteur (PAY, CRS, ASC...) — en plus
+  // des chips ci-dessous, pour retrouver vite un projet en tapant son code.
+  if(q.trim()){
+    const qq = q.trim().toLowerCase();
+    list = list.filter(p=>
+      (p.titre||'').toLowerCase().includes(qq) ||
+      (p.adresse||'').toLowerCase().includes(qq) ||
+      (p.client||'').toLowerCase().includes(qq) ||
+      (p.po||'').toLowerCase().includes(qq) ||
+      (p.contracteur||'').toLowerCase().includes(qq) ||
+      (p.contracteur==='PARTICULIER' && 'particulier'.includes(qq))
+    );
+  }
   list = [...list].sort((a,b)=>(b.dateCreation||'').localeCompare(a.dateCreation||''));
 
   function countEvents(p){ return projetLinkedEvents(p, events).length; }
@@ -1401,7 +1425,10 @@ function ProjetsView({data, cfg, toast, refreshKey}){
   }
 
   return <div>
-    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Projets</h2>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:10,marginBottom:6}}>
+      <h2 className="fh" style={{margin:0,fontSize:20}}>Projets</h2>
+      <input placeholder="Rechercher (titre, adresse, client, contracteur, P.O.)..." value={q} onChange={e=>setQ(e.target.value)} style={{width:280}}/>
+    </div>
     <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Tous les contracteurs, tous les projets — regroupés par adresse. Clique "Voir" sur un projet pour changer son statut, ajouter un N° P.O., et voir tous les événements du calendrier associés.</div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
       <button className="btn btn-sm" onClick={()=>setFilterC(null)} style={!filterC?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous contracteurs</button>
