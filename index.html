@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v11';
+const APP_VERSION = 'v12';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -176,6 +176,15 @@ function genId(){ return Date.now().toString(36)+Math.random().toString(36).slic
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function fmtMoney(n){ return (parseFloat(n)||0).toLocaleString('fr-CA',{style:'currency',currency:'CAD'}); }
 function safeFloat(v){ try{ return parseFloat(String(v).replace(',','.'))||0; }catch{ return 0; } }
+// Les erreurs gapi (Sheets/Calendar) ne sont PAS des Error JS standards — le vrai
+// message est niché dans e.result.error.message ; un simple "e.message" est donc
+// souvent undefined (d'où les toasts "Erreur: undefined" vus dans l'app).
+function apiErrMsg(e){
+  if(e && e.result && e.result.error && e.result.error.message) return e.result.error.message;
+  if(e && e.message) return e.message;
+  if(typeof e==='string') return e;
+  try{ return JSON.stringify(e); }catch(err){ return 'Erreur inconnue.'; }
+}
 function localDateStr(d){ const dt=d||new Date(); return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0'); }
 function fmtH(h){ if(!h) return '0h'; const totalMin=Math.round(h*60/15)*15; const hh=Math.floor(totalMin/60), mm=totalMin%60; return hh+'h'+(mm?String(mm).padStart(2,'0'):''); }
 
@@ -368,14 +377,20 @@ function findColIdx(headers, regex){ return headers.findIndex(h=>regex.test(Stri
 // (ISO, DD/MM/YYYY, texte reconnu par Date()...). Retourne null si impossible à lire.
 function parseSheetDate(str){
   if(!str) return null;
-  let d = new Date(str);
-  if(!isNaN(d.getTime())) return d;
-  const m = String(str).match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  const s = String(str).trim();
+  // Le Sheet "SUIVI TRAVAUX" utilise le format DD/MM/YYYY (confirmé en inspectant
+  // les données réelles) — on le tente EN PREMIER. new Date("07/08/2026") serait
+  // sinon lu comme MM/DD/YYYY par le moteur JS (7 juillet au lieu du 7 août),
+  // ce qui faussait silencieusement le calcul "passé vs futur" pour la plupart
+  // des dates (tout jour ≤ 12 est ambigu).
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
   if(m){
     let [,dd,mm,yy]=m; yy = yy.length===2 ? '20'+yy : yy;
-    d = new Date(parseInt(yy,10), parseInt(mm,10)-1, parseInt(dd,10));
+    const d = new Date(parseInt(yy,10), parseInt(mm,10)-1, parseInt(dd,10));
     if(!isNaN(d.getTime())) return d;
   }
+  const d2 = new Date(s);
+  if(!isNaN(d2.getTime())) return d2;
   return null;
 }
 // Retourne les lignes d'un onglet contracteur. Date/Projet/Adresse sont détectées
@@ -444,6 +459,17 @@ function useTheme(){
     return ()=>window.removeEventListener('crm-theme-change',onC);
   },[]);
   return [t,setThemePref];
+}
+// Détecte desktop (≥900px) vs téléphone, réactif au redimensionnement — utilisé
+// pour agrandir l'Agenda/Mois en plein écran sur desktop.
+function useIsDesktop(){
+  const [isDesktop,setIsDesktop]=useState(()=>typeof window!=='undefined' && window.innerWidth>=900);
+  useEffect(()=>{
+    function onResize(){ setIsDesktop(window.innerWidth>=900); }
+    window.addEventListener('resize',onResize);
+    return ()=>window.removeEventListener('resize',onResize);
+  },[]);
+  return isDesktop;
 }
 
 // ── Google API loading ───────────────────────────────────────────────────
@@ -527,18 +553,22 @@ function useCrmData(cfg, ready){
     if(!ready || !cfg.crmSpreadsheetId) return;
     setLoading(true); setErr('');
     try{
-      const calls = [
+      const [c,o,s] = await Promise.all([
         sheetsGetAll(cfg.crmSpreadsheetId,'Contacts'),
         sheetsGetAll(cfg.crmSpreadsheetId,'Opportunites'),
         sheetsGetAll(cfg.crmSpreadsheetId,'Soumissions')
-      ];
-      if(cfg.projetsSpreadsheetId) calls.push(sheetsGetAll(cfg.projetsSpreadsheetId,'Projets'));
-      const [c,o,s,p] = await Promise.all(calls);
+      ]);
       setContacts(rowsToObjects(c, CONTACTS_HEADERS));
       setOpps(rowsToObjects(o, OPP_HEADERS));
       setSoums(rowsToObjects(s, SOUM_HEADERS));
-      setProjets(p? rowsToObjects(p, PROJETS_HEADERS) : []);
     }catch(e){ setErr((e&&e.result&&e.result.error&&e.result.error.message) || 'Erreur de chargement des données.'); }
+    // L'onglet "Projets" vit dans un Sheet SÉPARÉ (projetsSpreadsheetId) — isolé
+    // dans son propre try/catch pour qu'une erreur ici (ex: onglet pas encore
+    // créé) ne bloque pas Contacts/Opportunites/Soumissions partout dans l'app.
+    if(cfg.projetsSpreadsheetId){
+      try{ const p = await sheetsGetAll(cfg.projetsSpreadsheetId,'Projets'); setProjets(rowsToObjects(p, PROJETS_HEADERS)); }
+      catch(e){ setProjets([]); }
+    } else { setProjets([]); }
     // L'onglet "Rappels" est nouveau — s'il n'existe pas encore chez un utilisateur
     // existant, on ne veut pas faire échouer tout le chargement du CRM pour ça.
     try{ const r = await sheetsGetAll(cfg.crmSpreadsheetId,'Rappels'); setRappels(rowsToObjects(r, RAPPELS_HEADERS)); }
@@ -719,7 +749,7 @@ function ContactsView({data, toast}){
       try{
         if(editing) await data.updateContact({...editing,...f}); else await data.addContact(f);
         setShowForm(false); toast('Contact enregistré.','ok');
-      }catch(e){ toast('Erreur: '+e.message,'err'); }
+      }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
     }}/>}
   </div>;
 }
@@ -738,7 +768,7 @@ function SoumissionBuilder({opp, contact, existing, onSaved, toast}){
       if(existing) await onSaved({...existing, ...payload});
       else await onSaved(payload);
       toast('Soumission enregistrée.','ok');
-    }catch(e){ toast('Erreur: '+e.message,'err'); }
+    }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
   }
   function handleEmail(){
     const body = buildEmailBody(contact||{}, opp||{}, items, total);
@@ -781,13 +811,13 @@ function OppDetail({opp, contact, soums, data, cfg, onClose, toast}){
 
   async function saveInfo(){
     try{ await data.updateOpp(f); toast('Opportunité mise à jour.','ok'); }
-    catch(e){ toast('Erreur: '+e.message,'err'); }
+    catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
   }
   async function changeEtape(etape){
     const upd = {...f, etape, dateCloture: (etape==='Gagné'||etape==='Perdu')?todayISO():f.dateCloture};
     setF(upd);
     try{ await data.updateOpp(upd); toast('Étape: '+etape,'ok'); }
-    catch(e){ toast('Erreur: '+e.message,'err'); }
+    catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
   }
 
   return <Modal title={f.titre || f.adresse || 'Opportunité'} onClose={onClose} wide>
@@ -882,7 +912,7 @@ function CreateJobModal({opp, contact, cfg, onClose, onDone, addProjet, toast}){
 
       toast('Job créée.','ok');
       onDone(ev.result.id);
-    }catch(e){ toast('Erreur création job: '+(e.message||JSON.stringify(e)),'err'); }
+    }catch(e){ toast('Erreur création job: '+apiErrMsg(e),'err'); }
     setBusy(false);
   }
 
@@ -970,7 +1000,7 @@ function PipelineView({data, cfg, toast}){
     </div>
     {showForm && <OppForm contacts={data.contacts} onClose={()=>setShowForm(false)} onSave={async(f)=>{
       try{ await data.addOpp(f); setShowForm(false); toast('Opportunité créée.','ok'); }
-      catch(e){ toast('Erreur: '+e.message,'err'); }
+      catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
     }}/>}
     {openOpp && <OppDetail opp={data.opps.find(o=>o.id===openOpp.id) || openOpp} contact={contactById[openOpp.contactId]} soums={data.soums} data={data} cfg={cfg}
       onClose={()=>setOpenOpp(null)} toast={toast}/>}
@@ -1012,7 +1042,7 @@ function RemindersView({data, toast}){
 
   async function marquerFait(item){
     try{ await data.updateRappel({...item.raw, statut: item.fait?'A faire':'Fait'}); }
-    catch(e){ toast && toast('Erreur: '+e.message,'err'); }
+    catch(e){ toast && toast('Erreur: '+apiErrMsg(e),'err'); }
   }
 
   return <div>
@@ -1040,7 +1070,7 @@ function RemindersView({data, toast}){
     </div>
     {showForm && <RappelForm onClose={()=>setShowForm(false)} onSave={async(f)=>{
       try{ await data.addRappel(f); setShowForm(false); toast && toast('Rappel créé.','ok'); }
-      catch(e){ toast && toast('Erreur: '+e.message+' (l\'onglet "Rappels" existe-t-il? Va dans Réglages → Initialiser les onglets.)','err'); }
+      catch(e){ toast && toast('Erreur: '+apiErrMsg(e)+' (l\'onglet "Rappels" existe-t-il? Va dans Réglages → Initialiser les onglets.)','err'); }
     }}/>}
   </div>;
 }
@@ -1096,7 +1126,7 @@ function ProjectsFromCalendar({cfg, filterC, data, toast}){
     const calIds=(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
     listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
       .then(evs=>{ if(!cancelled) setEvents(evs); })
-      .catch(e=>{ if(!cancelled) setErr(e.message||'Erreur de chargement du calendrier.'); })
+      .catch(e=>{ if(!cancelled) setErr(apiErrMsg(e)||'Erreur de chargement du calendrier.'); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
   },[cfg.calendarIds]);
@@ -1144,7 +1174,7 @@ function ProjectsFromCalendar({cfg, filterC, data, toast}){
     </div>}
     {promoteGroup && data && <PromoteProjetModal group={promoteGroup} onClose={()=>setPromoteGroup(null)} onSave={async(f)=>{
       try{ await data.addProjet(f); setPromoteGroup(null); toast && toast('Projet créé.','ok'); }
-      catch(e){ toast && toast('Erreur: '+e.message,'err'); }
+      catch(e){ toast && toast('Erreur: '+apiErrMsg(e),'err'); }
     }}/>}
   </div>;
 }
@@ -1312,7 +1342,7 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate, ini
       toast('Job créée.','ok');
       onDone && onDone();
       onClose();
-    }catch(e){ toast('Erreur création job: '+(e.message||JSON.stringify(e)),'err'); }
+    }catch(e){ toast('Erreur création job: '+apiErrMsg(e),'err'); }
     setBusy(false);
   }
 
@@ -1365,7 +1395,7 @@ function EditEventModal({event, onClose, onSaved, toast}){
       await patchEventTimes(event.calendarId, event.id, date+'T'+heureDebut+':00', date+'T'+heureFin+':00');
       toast('Heure mise à jour.','ok');
       onSaved(); onClose();
-    }catch(e){ toast('Erreur: '+(e.message||JSON.stringify(e)),'err'); }
+    }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
     setBusy(false);
   }
 
@@ -1388,7 +1418,7 @@ function EditEventModal({event, onClose, onSaved, toast}){
   </Modal>;
 }
 
-function AgendaView({cfg, data, toast}){
+function AgendaView({cfg, data, toast, isDesktop}){
   const [viewMode,setViewMode]=useState('semaine'); // 'jour'|'semaine'|'mois'
   const [anchor,setAnchor]=useState(()=>new Date());
   const [loading,setLoading]=useState(true);
@@ -1414,7 +1444,7 @@ function AgendaView({cfg, data, toast}){
     const calIds = (cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
     listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
       .then(evs=>{ if(!cancelled) setEvents(evs); })
-      .catch(e=>{ if(!cancelled) setErr(e.message||'Erreur de chargement du calendrier.'); })
+      .catch(e=>{ if(!cancelled) setErr(apiErrMsg(e)||'Erreur de chargement du calendrier.'); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
   },[viewMode, anchor.getTime(), cfg.calendarIds, reloadKey]);
@@ -1429,7 +1459,7 @@ function AgendaView({cfg, data, toast}){
     return weekRangeLabel(getWeek(anchor));
   }
 
-  const HOUR_START=6, HOUR_END=20, PX_H=46;
+  const HOUR_START=6, HOUR_END=20, PX_H=isDesktop?64:46;
   const hours = Array.from({length:HOUR_END-HOUR_START+1},(_,i)=>HOUR_START+i);
   const todayStr = localDateStr(new Date());
   // Colonnes de largeur FIXE (pas minmax(...,1fr)) quand il y en a plusieurs:
@@ -1437,7 +1467,7 @@ function AgendaView({cfg, data, toast}){
   // overflow-x:auto (colonnes qui rapetissent au lieu de faire défiler), ce qui
   // causait le désalignement "les carrés ne fittent pas". Une largeur fixe +
   // width:max-content sur la grille est beaucoup plus fiable.
-  const DAY_COL_PX = 130;
+  const DAY_COL_PX = isDesktop?180:130;
   const gridCols = days.length>1 ? 'repeat('+days.length+','+DAY_COL_PX+'px)' : 'minmax(120px,1fr)';
 
   function eventsForDay(dStr){ return events.filter(e=>String(e.start).slice(0,10)===dStr && !e.allDay); }
@@ -1497,7 +1527,7 @@ function AgendaView({cfg, data, toast}){
       const newEndMs = newStartMs + info.durationMs;
       patchEventTimes(info.ev.calendarId, info.ev.id, new Date(newStartMs).toISOString(), new Date(newEndMs).toISOString())
         .then(()=>{ toast('Job déplacée.','ok'); setReloadKey(k=>k+1); })
-        .catch(err=>toast('Erreur: '+(err.message||JSON.stringify(err)),'err'));
+        .catch(err=>toast('Erreur: '+apiErrMsg(err),'err'));
     }
     dragInfoRef.current=null; draggedElRef.current=null;
   }
@@ -1529,7 +1559,7 @@ function AgendaView({cfg, data, toast}){
     let newEndMs = Math.max(info.startMs+15*60000, info.origEndMs + deltaMin*60000);
     patchEventTimes(info.ev.calendarId, info.ev.id, new Date(info.startMs).toISOString(), new Date(newEndMs).toISOString())
       .then(()=>{ toast('Durée mise à jour.','ok'); setReloadKey(k=>k+1); })
-      .catch(err=>{ toast('Erreur: '+(err.message||JSON.stringify(err)),'err'); info.blockEl.style.height=info.origHeight+'px'; });
+      .catch(err=>{ toast('Erreur: '+apiErrMsg(err),'err'); info.blockEl.style.height=info.origHeight+'px'; });
     resizeInfoRef.current=null;
   }
 
@@ -1559,17 +1589,18 @@ function AgendaView({cfg, data, toast}){
     <div className="card" style={{padding:8}}>
       {/* Une seule grille (7 colonnes x 7 rangées: en-têtes + 6 semaines) pour que
           les jours de la semaine et les cases du mois restent alignés. */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gridTemplateRows:'auto repeat(6,1fr)',gap:4}}>
-        {['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map((j,i)=><div key={j} style={{gridColumn:i+1,gridRow:1}} className="muted"><div style={{textAlign:'center',fontSize:11,fontWeight:700}}>{j}</div></div>)}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gridTemplateRows:'auto repeat(6,1fr)',gap:isDesktop?8:4}}>
+        {['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map((j,i)=><div key={j} style={{gridColumn:i+1,gridRow:1}} className="muted"><div style={{textAlign:'center',fontSize:isDesktop?13:11,fontWeight:700}}>{j}</div></div>)}
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const inMonth = d.getMonth()===anchor.getMonth();
           const dayEvents = [...eventsForDay(dStr), ...allDayForDay(dStr)].sort((a,b)=>String(a.start).localeCompare(String(b.start)));
+          const maxShow = isDesktop?6:3;
           return <div key={i} onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }}
-            style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+2, minHeight:80,border:'1px solid var(--border)',borderRadius:6,padding:4,cursor:'pointer',opacity:inMonth?1:.4,background:dStr===todayStr?'rgba(47,128,237,.08)':'transparent'}}>
-            <div style={{fontSize:11,fontWeight:700,marginBottom:3}}>{d.getDate()}</div>
-            {dayEvents.slice(0,3).map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',background:eventColor(e),color:'#1d1d1d',fontSize:9.5,padding:'1px 4px',borderRadius:3,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
-            {dayEvents.length>3 && <div className="muted" style={{fontSize:9.5}}>+{dayEvents.length-3} de plus</div>}
+            style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+2, minHeight:isDesktop?150:80,border:'1px solid var(--border)',borderRadius:6,padding:isDesktop?8:4,cursor:'pointer',opacity:inMonth?1:.4,background:dStr===todayStr?'rgba(47,128,237,.08)':'transparent'}}>
+            <div style={{fontSize:isDesktop?15:11,fontWeight:700,marginBottom:5}}>{d.getDate()}</div>
+            {dayEvents.slice(0,maxShow).map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',background:eventColor(e),color:'#1d1d1d',fontSize:isDesktop?11.5:9.5,padding:isDesktop?'3px 6px':'1px 4px',borderRadius:3,marginBottom:3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
+            {dayEvents.length>maxShow && <div className="muted" style={{fontSize:isDesktop?11:9.5}}>+{dayEvents.length-maxShow} de plus</div>}
           </div>;
         })}
       </div>
@@ -1661,11 +1692,36 @@ function FacturesView({cfg}){
   },[cfg.suiviTravauxSpreadsheetId]);
 
   const contracteursPresent = [...new Set(rows.map(r=>r.contracteur))];
-  let list = rows;
-  if(onlyMissing) list = list.filter(r=>r.factureManquante);
-  if(filterC) list = list.filter(r=>r.contracteur===filterC);
-  list = [...list].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  let base = filterC ? rows.filter(r=>r.contracteur===filterC) : rows;
+  const byDateDesc = (a,b)=>(b.date||'').localeCompare(a.date||'');
+  const manquantList = [...base.filter(r=>r.statutFacture==='manquant' && r.estPasseOuAujourdhui)].sort(byDateDesc);
+  const traitementList = [...base.filter(r=>r.statutFacture==='en_traitement' && r.estPasseOuAujourdhui)].sort(byDateDesc);
+  const allList = [...base].sort(byDateDesc);
   const missingCount = rows.filter(r=>r.factureManquante).length;
+
+  function renderTable(list, emptyMsg){
+    return <div className="card" style={{padding:0,overflowX:'auto'}}>
+      <table>
+        <thead><tr><th>Contracteur</th><th>Date</th><th>Projet</th><th>Adresse</th><th>Appel de service</th><th>Ordre de travail</th><th>Facture</th></tr></thead>
+        <tbody>
+          {list.map((r,i)=><tr key={i} style={r.factureManquante?{background:'rgba(248,81,73,.08)'}:null}>
+            <td>{r.contracteur==='PARTICULIER'?'Particuliers':r.contracteur}</td>
+            <td className="muted">{r.date}</td>
+            <td style={{fontWeight:600}}>{r.projet}</td>
+            <td className="muted">{r.adresse}</td>
+            <td>{r.appelService||'—'}</td>
+            <td>{r.ordreTravail||'—'}</td>
+            <td>
+              {r.statutFacture==='complet' && r.facture}
+              {r.statutFacture==='en_traitement' && <span style={{color:'#d29922',fontWeight:700}}>En traitement</span>}
+              {r.statutFacture==='manquant' && <span style={{color:'var(--danger)',fontWeight:700}}>Manquant</span>}
+            </td>
+          </tr>)}
+          {list.length===0 && <tr><td colSpan="7" className="muted" style={{padding:16}}>{emptyMsg}</td></tr>}
+        </tbody>
+      </table>
+    </div>;
+  }
 
   return <div>
     <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Factures</h2>
@@ -1686,27 +1742,12 @@ function FacturesView({cfg}){
         {contracteursPresent.map(c=><button key={c} className="btn btn-sm" onClick={()=>setFilterC(c)} style={filterC===c?{background:prefixColor(c),color:'#fff',border:'none'}:null}>{c==='PARTICULIER'?'Particuliers':c}</button>)}
       </div>
       {loading ? <div className="muted">Chargement...</div> :
-      <div className="card" style={{padding:0,overflowX:'auto'}}>
-        <table>
-          <thead><tr><th>Contracteur</th><th>Date</th><th>Projet</th><th>Adresse</th><th>Appel de service</th><th>Ordre de travail</th><th>Facture</th></tr></thead>
-          <tbody>
-            {list.map((r,i)=><tr key={i} style={r.factureManquante?{background:'rgba(248,81,73,.08)'}:null}>
-              <td>{r.contracteur==='PARTICULIER'?'Particuliers':r.contracteur}</td>
-              <td className="muted">{r.date}</td>
-              <td style={{fontWeight:600}}>{r.projet}</td>
-              <td className="muted">{r.adresse}</td>
-              <td>{r.appelService||'—'}</td>
-              <td>{r.ordreTravail||'—'}</td>
-              <td>
-                {r.statutFacture==='complet' && r.facture}
-                {r.statutFacture==='en_traitement' && <span style={{color:'#d29922',fontWeight:700}}>En traitement</span>}
-                {r.statutFacture==='manquant' && <span style={{color:'var(--danger)',fontWeight:700}}>Manquant</span>}
-              </td>
-            </tr>)}
-            {list.length===0 && <tr><td colSpan="7" className="muted" style={{padding:16}}>{onlyMissing?'Aucune facture manquante 🎉':'Aucune ligne trouvée.'}</td></tr>}
-          </tbody>
-        </table>
-      </div>}
+      onlyMissing ? <>
+        <h3 style={{margin:'0 0 8px',fontSize:14,fontWeight:800,color:'var(--danger)'}}>Manquantes ({manquantList.length})</h3>
+        {renderTable(manquantList, 'Aucune facture manquante 🎉')}
+        <h3 style={{margin:'22px 0 8px',fontSize:14,fontWeight:800,color:'#d29922'}}>En traitement ({traitementList.length})</h3>
+        {renderTable(traitementList, 'Rien en traitement.')}
+      </> : renderTable(allList, 'Aucune ligne trouvée.')}
     </>}
   </div>;
 }
@@ -1730,7 +1771,7 @@ function SettingsView({cfg, setCfg, toast}){
         await ensureSheetsExist(f.projetsSpreadsheetId, [{name:'Projets', headers:PROJETS_HEADERS}]);
       }
       toast('Onglets initialisés.','ok');
-    }catch(e){ toast('Erreur: '+(e.message||JSON.stringify(e)),'err'); }
+    }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
     setBusy(false);
   }
   return <div style={{maxWidth:520}}>
@@ -1761,9 +1802,10 @@ function App(){
   const [initErr,setInitErr]=useState('');
   const [show,toastNode]=useToast();
   useTheme();
+  const isDesktop = useIsDesktop();
 
   useEffect(()=>{
-    initGoogle(cfg).then(()=>setReady(true)).catch(e=>setInitErr('Erreur d\'initialisation Google: '+e.message));
+    initGoogle(cfg).then(()=>setReady(true)).catch(e=>setInitErr('Erreur d\'initialisation Google: '+apiErrMsg(e)));
   },[]);
 
   const data = useCrmData(cfg, ready && authed);
@@ -1802,13 +1844,13 @@ function App(){
       <div className="nav">
         {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id?' active':'')} onClick={()=>setNav(n.id)}>{n.label}</div>)}
       </div>
-      <div className="main">
+      <div className="main" style={(nav==='agenda' && isDesktop) ? {maxWidth:'none',width:'100%'} : null}>
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='pipeline' && <PipelineView data={data} cfg={cfg} toast={show}/>}
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
         {nav==='projets' && <ProjetsView data={data} cfg={cfg} toast={show}/>}
-        {nav==='agenda' && <AgendaView cfg={cfg} data={data} toast={show}/>}
+        {nav==='agenda' && <AgendaView cfg={cfg} data={data} toast={show} isDesktop={isDesktop}/>}
         {nav==='heures' && <HeuresView cfg={cfg}/>}
         {nav==='factures' && <FacturesView cfg={cfg}/>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
