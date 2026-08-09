@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v17';
+const APP_VERSION = 'v18';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -269,6 +269,27 @@ async function getPunchProPointages(sid){
     semaine:r[5]||'', mois:r[6]||'', job:r[7]||'', jobColor:r[8]||'',
     deplacement:safeFloat(r[9]), heures:safeFloat(r[10]), note:r[11]||''
   })).filter(p=>p.nom);
+}
+function mapEmployeRows(rows){
+  return rows.map(r=>({
+    nom:r[0]||'', pin:r[1]||'', statut:r[2]||'out', heuresBanque:safeFloat(r[3]),
+    couleur:r[4]||'#ff7a1a', code:r[5]||(r[0]||'??').slice(0,2).toUpperCase(),
+    email:r[6]||'', telephone:r[7]||''
+  })).filter(e=>e.nom);
+}
+function mapPointageRows(rows){
+  return rows.map(r=>({
+    nom:r[0]||'', type:r[1]||'', datetime:r[2]||'', date:r[3]||'', heure:r[4]||'',
+    semaine:r[5]||'', mois:r[6]||'', job:r[7]||'', jobColor:r[8]||'',
+    deplacement:safeFloat(r[9]), heures:safeFloat(r[10]), note:r[11]||''
+  })).filter(p=>p.nom);
+}
+// Employés + Pointages en UN SEUL appel batchGet (au lieu de deux) — ce sont
+// deux onglets fixes de PunchPro (dont l'app dépend déjà), donc sans risque
+// de "l'un des deux manque" comme pour les onglets contracteur de Factures.
+async function getPunchProDataBatched(sid){
+  const [empRows, ptRows] = await sheetsBatchGet(sid, ['Employés!A2:Z','Pointages!A2:Z']);
+  return {emps: mapEmployeRows(empRows), pts: mapPointageRows(ptRows)};
 }
 // Heures par employé pour une semaine donnée: on additionne la colonne "heures"
 // des lignes 'out' et 'confirm' (les lignes 'in' n'ont pas de heures propres —
@@ -453,8 +474,13 @@ async function getSuiviTravauxRows(spreadsheetId, contracteurKey){
   if(!tabName) return [];
   let headers, rows;
   try{
-    headers = await sheetsGetHeaderRow(spreadsheetId, tabName);
-    rows = await sheetsGetAll(spreadsheetId, tabName);
+    // En-tête + données en UN SEUL appel (au lieu de deux) — chaque onglet
+    // contracteur reste lu séparément (try/catch propre) pour qu'un onglet
+    // manquant ou renommé n'empêche pas de lire les autres.
+    const resp = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId, range: tabName+'!A1:Z'});
+    const all = resp.result.values || [];
+    headers = all[0] || [];
+    rows = all.slice(1);
   }catch(e){ return []; } // onglet absent ou inaccessible — on l'ignore simplement
   const idxDate = findColIdx(headers, /date/i);
   const idxProjet = findColIdx(headers, /projet/i);
@@ -550,6 +576,18 @@ async function sheetsGetAll(spreadsheetId, sheetName){
   const resp = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId, range: sheetName+'!A2:Z'});
   return resp.result.values || [];
 }
+// Lit PLUSIEURS plages d'un même Sheet en UNE SEULE requête API (au lieu d'un
+// values.get() par plage) — l'API Sheets a un quota par défaut de 60 lectures/
+// minute/utilisateur, et regrouper les lectures ainsi réduit fortement le
+// nombre de requêtes envoyées (ex: Contacts+Opportunites+Soumissions en 1 seul
+// appel au lieu de 3). Attention: si UNE des plages référence un onglet
+// inexistant, TOUT le batch échoue — à n'utiliser que pour des onglets qu'on
+// sait fiables (crées par l'app elle-même), jamais pour des onglets externes
+// dont le nom pourrait varier.
+async function sheetsBatchGet(spreadsheetId, ranges){
+  const resp = await window.gapi.client.sheets.spreadsheets.values.batchGet({spreadsheetId, ranges});
+  return (resp.result.valueRanges||[]).map(vr=>vr.values||[]);
+}
 async function sheetsAppendRow(spreadsheetId, sheetName, rowArray){
   return window.gapi.client.sheets.spreadsheets.values.append({
     spreadsheetId, range: sheetName+'!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS',
@@ -600,11 +638,10 @@ function useCrmData(cfg, ready){
     if(!ready || !cfg.crmSpreadsheetId) return;
     setLoading(true); setErr('');
     try{
-      const [c,o,s] = await Promise.all([
-        sheetsGetAll(cfg.crmSpreadsheetId,'Contacts'),
-        sheetsGetAll(cfg.crmSpreadsheetId,'Opportunites'),
-        sheetsGetAll(cfg.crmSpreadsheetId,'Soumissions')
-      ]);
+      // Contacts/Opportunites/Soumissions sont dans le même Sheet et créés par
+      // l'app elle-même (Réglages → Initialiser les onglets) — on peut donc les
+      // lire en un seul appel batchGet plutôt que 3 appels séparés.
+      const [c,o,s] = await sheetsBatchGet(cfg.crmSpreadsheetId, ['Contacts!A2:Z','Opportunites!A2:Z','Soumissions!A2:Z']);
       setContacts(rowsToObjects(c, CONTACTS_HEADERS));
       setOpps(rowsToObjects(o, OPP_HEADERS));
       setSoums(rowsToObjects(s, SOUM_HEADERS));
@@ -1527,8 +1564,8 @@ function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
     if(!cfg.punchproSpreadsheetId){ setLoading(false); return; }
     let cancelled=false;
     setLoading(true); setErr(false);
-    Promise.all([getPunchProEmployees(cfg.punchproSpreadsheetId), getPunchProPointages(cfg.punchproSpreadsheetId)])
-      .then(([emps,pts])=>{
+    getPunchProDataBatched(cfg.punchproSpreadsheetId)
+      .then(({emps,pts})=>{
         if(cancelled) return;
         const week=getWeek(new Date());
         const table=heuresParEmployeSemaine(pts, week);
@@ -1645,8 +1682,8 @@ function HeuresView({cfg, refreshKey}){
     if(!cfg.punchproSpreadsheetId) { setLoading(false); return; }
     let cancelled=false;
     setLoading(true); setErr('');
-    Promise.all([getPunchProEmployees(cfg.punchproSpreadsheetId), getPunchProPointages(cfg.punchproSpreadsheetId)])
-      .then(([e,p])=>{ if(!cancelled){ setEmps(e); setPts(p); } })
+    getPunchProDataBatched(cfg.punchproSpreadsheetId)
+      .then(({emps:e,pts:p})=>{ if(!cancelled){ setEmps(e); setPts(p); } })
       .catch(e=>{ if(!cancelled) setErr((e&&e.result&&e.result.error&&e.result.error.message)||'Erreur de chargement (accès au Sheet PunchPro?).'); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
