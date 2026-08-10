@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v18';
+const APP_VERSION = 'v19';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1412,6 +1412,7 @@ function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errE
 function ProjetsView({data, cfg, toast, refreshKey}){
   const [filterC,setFilterC]=useState(null);
   const [filterS,setFilterS]=useState(null);
+  const [filterPhase,setFilterPhase]=useState(null);
   const [showClosed,setShowClosed]=useState(false);
   const [q,setQ]=useState('');
   const [detailProjet,setDetailProjet]=useState(null);
@@ -1437,6 +1438,7 @@ function ProjetsView({data, cfg, toast, refreshKey}){
   const projets = data.projets||[];
   let list = projets;
   if(filterC) list = list.filter(p=>p.contracteur===filterC);
+  if(filterPhase) list = list.filter(p=>p.phase===filterPhase);
   if(filterS) list = list.filter(p=>p.statut===filterS);
   else if(!showClosed) list = list.filter(p=>p.statut!=='Fermé');
   // La recherche texte matche aussi le contracteur (PAY, CRS, ASC...) — en plus
@@ -1449,7 +1451,8 @@ function ProjetsView({data, cfg, toast, refreshKey}){
       (p.client||'').toLowerCase().includes(qq) ||
       (p.po||'').toLowerCase().includes(qq) ||
       (p.contracteur||'').toLowerCase().includes(qq) ||
-      (p.contracteur==='PARTICULIER' && 'particulier'.includes(qq))
+      (p.contracteur==='PARTICULIER' && 'particulier'.includes(qq)) ||
+      (JOB_PHASE_LABELS[p.phase]||'').toLowerCase().includes(qq)
     );
   }
   list = [...list].sort((a,b)=>(b.dateCreation||'').localeCompare(a.dateCreation||''));
@@ -1471,6 +1474,10 @@ function ProjetsView({data, cfg, toast, refreshKey}){
       <button className="btn btn-sm" onClick={()=>setFilterC(null)} style={!filterC?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous contracteurs</button>
       {CONTRACTEURS.map(c=><button key={c} className="btn btn-sm" onClick={()=>setFilterC(c)} style={filterC===c?{background:prefixColor(c),color:'#fff',border:'none'}:null}>{c==='PARTICULIER'?'Particuliers':c}</button>)}
     </div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+      <button className="btn btn-sm" onClick={()=>setFilterPhase(null)} style={!filterPhase?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Toutes phases</button>
+      {JOB_PHASES.map(p=><button key={p} className="btn btn-sm" onClick={()=>setFilterPhase(p)} style={filterPhase===p?{background:'var(--accent)',color:'#fff',border:'none'}:null}>{JOB_PHASE_LABELS[p]}</button>)}
+    </div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,alignItems:'center'}}>
       <button className="btn btn-sm" onClick={()=>setFilterS(null)} style={!filterS?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous statuts</button>
       {PROJET_STATUTS.map(s=><button key={s} className="btn btn-sm" onClick={()=>setFilterS(s)} style={filterS===s?{background:PROJET_STATUT_COLORS[s],color:'#fff',border:'none'}:null}>{s}</button>)}
@@ -1479,19 +1486,20 @@ function ProjetsView({data, cfg, toast, refreshKey}){
     <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Projets créés dans le CRM</h3>
     <div className="card" style={{padding:0,overflowX:'auto'}}>
       <table>
-        <thead><tr><th>Titre</th><th>Adresse</th><th>Contracteur</th><th>P.O.</th><th>Statut</th><th>Événements</th><th>Créé</th><th></th></tr></thead>
+        <thead><tr><th>Titre</th><th>Adresse</th><th>Contracteur</th><th>Phase</th><th>P.O.</th><th>Statut</th><th>Événements</th><th>Créé</th><th></th></tr></thead>
         <tbody>
           {list.map(p=><tr key={p.id}>
             <td style={{fontWeight:600}}>{p.titre}</td>
             <td className="muted">{p.adresse}</td>
             <td>{p.contracteur}</td>
+            <td>{p.phase ? <span className="badge" style={{background:'var(--bg4)'}}>{JOB_PHASE_LABELS[p.phase]||p.phase}</span> : <span className="muted">—</span>}</td>
             <td className="muted">{p.po||'—'}</td>
             <td><span className="badge" style={{background:PROJET_STATUT_COLORS[p.statut]||'var(--bg3)',color:'#fff'}}>{p.statut||'—'}</span></td>
             <td className="muted">{countEvents(p)}</td>
             <td className="muted">{p.dateCreation}</td>
             <td><button className="btn btn-sm" onClick={()=>setDetailProjet(p)}>Voir</button></td>
           </tr>)}
-          {list.length===0 && <tr><td colSpan="8" className="muted" style={{padding:16}}>Aucun projet créé dans le CRM. (Section ci-dessous: projets vus par le calendrier.)</td></tr>}
+          {list.length===0 && <tr><td colSpan="9" className="muted" style={{padding:16}}>Aucun projet créé dans le CRM. (Section ci-dessous: projets vus par le calendrier.)</td></tr>}
         </tbody>
       </table>
     </div>
@@ -1616,9 +1624,8 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
     if(!cfg || !cfg.calendarIds){ setLoading(false); return; }
     let cancelled=false;
     setLoading(true); setErr('');
-    const tmrw=new Date(); tmrw.setDate(tmrw.getDate()+1); tmrw.setHours(0,0,0,0);
-    const timeMin=new Date(tmrw);
-    const timeMax=new Date(tmrw); timeMax.setDate(timeMax.getDate()+1); timeMax.setMilliseconds(-1);
+    const timeMin=new Date(); timeMin.setHours(0,0,0,0);
+    const timeMax=new Date(timeMin); timeMax.setDate(timeMax.getDate()+2); timeMax.setMilliseconds(-1);
     const calIds=(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
     listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
       .then(evs=>{ if(!cancelled) setEvents(evs); })
@@ -1627,18 +1634,19 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
     return ()=>{ cancelled=true; };
   },[cfg && cfg.calendarIds, refreshKey]);
 
-  const groupsTomorrow = useMemo(()=>groupEventsByAddress(events).filter(g=>g.contracteur!=='PARTICULIER'), [events]);
-  const byTeam = useMemo(()=>{
-    const m={};
-    groupsTomorrow.forEach(g=>{ (m[g.contracteur]=m[g.contracteur]||[]).push(g); });
-    return Object.entries(m).sort((a,b)=>a[0].localeCompare(b[0]));
-  },[groupsTomorrow]);
+  const todayStr = localDateStr(new Date());
+  const tmrwD = new Date(); tmrwD.setDate(tmrwD.getDate()+1);
+  const tomorrowStr = localDateStr(tmrwD);
+  // Vue simple et rapide — les journées telles qu'elles sont dans l'agenda,
+  // pas regroupées par équipe (juste un coup d'œil rapide sur où sont les
+  // équipes). Les particuliers restent exclus (bruit inutile ici).
+  const groupsToday = useMemo(()=>groupEventsByAddress(events.filter(e=>String(e.start).slice(0,10)===todayStr)).filter(g=>g.contracteur!=='PARTICULIER'), [events]);
+  const groupsTomorrow = useMemo(()=>groupEventsByAddress(events.filter(e=>String(e.start).slice(0,10)===tomorrowStr)).filter(g=>g.contracteur!=='PARTICULIER'), [events]);
   const projetByAdresse = useMemo(()=>buildProjetAddressIndex(data.projets), [data.projets]);
-  const tomorrowLabel = useMemo(()=>{ const d=new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'}); },[]);
 
   return <div>
     <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Tableau de bord</h2>
-    <div className="muted" style={{fontSize:11.5,marginBottom:16}}>Vue d'ensemble — factures manquantes, heures de la semaine, rappels, et où l'équipe travaille demain.</div>
+    <div className="muted" style={{fontSize:11.5,marginBottom:16}}>Vue d'ensemble — factures manquantes, heures de la semaine, rappels, et où les équipes sont aujourd'hui et demain.</div>
 
     <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:28}}>
       <DashboardFacturesCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
@@ -1646,23 +1654,24 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
       <DashboardRappelsCard data={data} onNavigate={onNavigate}/>
     </div>
 
-    <h3 style={{margin:'0 0 4px',fontSize:15,fontWeight:800}}>Demain, par équipe</h3>
-    <div className="muted" style={{fontSize:11.5,marginBottom:12,textTransform:'capitalize'}}>{tomorrowLabel} — contracteurs seulement, les particuliers ne sont pas affichés ici.</div>
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {!cfg || !cfg.calendarIds ? <div className="card">Configure les calendriers dans Réglages.</div> :
-    loading ? <div className="muted">Chargement...</div> :
-    byTeam.length===0 ? <div className="card muted" style={{fontSize:12.5}}>Aucune job d'équipe (hors particuliers) planifiée demain.</div> :
-    byTeam.map(([team,groups])=>
-      <div key={team} style={{marginBottom:18}}>
-        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
-          <span className="badge" style={{background:prefixColor(team),color:'#fff'}}>{team}</span>
-          <span className="muted" style={{fontSize:12}}>{groups.length} adresse{groups.length!==1?'s':''}</span>
-        </div>
+    loading ? <div className="muted">Chargement...</div> : <>
+      <div style={{marginBottom:24}}>
+        <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Aujourd'hui ({groupsToday.length})</h3>
         <div className="grid" style={{gap:8}}>
-          {groups.map(g=><DashboardRow key={g.adresse} g={g} projetByAdresse={projetByAdresse} data={data} toast={toast} onCreated={setPromoteGroup}/>)}
+          {groupsToday.map(g=><DashboardRow key={g.adresse} g={g} projetByAdresse={projetByAdresse} data={data} toast={toast} onCreated={setPromoteGroup}/>)}
+          {groupsToday.length===0 && <div className="card muted" style={{fontSize:12.5}}>Aucune job d'équipe planifiée aujourd'hui.</div>}
         </div>
       </div>
-    )}
+      <div>
+        <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Demain ({groupsTomorrow.length})</h3>
+        <div className="grid" style={{gap:8}}>
+          {groupsTomorrow.map(g=><DashboardRow key={g.adresse} g={g} projetByAdresse={projetByAdresse} data={data} toast={toast} onCreated={setPromoteGroup}/>)}
+          {groupsTomorrow.length===0 && <div className="card muted" style={{fontSize:12.5}}>Aucune job d'équipe planifiée demain.</div>}
+        </div>
+      </div>
+    </>}
     {promoteGroup && <PromoteProjetModal group={promoteGroup} onClose={()=>setPromoteGroup(null)} onSave={async(f)=>{
       try{ await data.addProjet(f); setPromoteGroup(null); toast('Projet créé.','ok'); }
       catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
@@ -2301,6 +2310,42 @@ function SoumissionsView({data}){
   </div>;
 }
 
+// ── UI: Stock — section en construction, la gestion complète (inventaire,
+// commandes) sera ajoutée plus tard. En attendant: vue rapide du statut de
+// stock déjà suivi par projet (champ stockStatut, réglé depuis le Tableau de
+// bord ou la fiche projet), pour préparer les commandes selon les besoins.
+function StockView({data}){
+  const projets = (data.projets||[]).filter(p=>p.stockStatut);
+  const aCommander = projets.filter(p=>p.stockStatut==='À commander').sort((a,b)=>(a.adresse||'').localeCompare(b.adresse||''));
+  const pret = projets.filter(p=>p.stockStatut==='Prêt').sort((a,b)=>(a.adresse||'').localeCompare(b.adresse||''));
+
+  function renderList(list, emptyMsg){
+    return <div className="card" style={{padding:0,overflowX:'auto'}}>
+      <table>
+        <thead><tr><th>Projet</th><th>Adresse</th><th>Contracteur</th><th>Phase</th></tr></thead>
+        <tbody>
+          {list.map(p=><tr key={p.id}>
+            <td style={{fontWeight:600}}>{p.titre}</td>
+            <td className="muted">{p.adresse}</td>
+            <td><span className="badge" style={{background:prefixColor(p.contracteur),color:'#fff'}}>{p.contracteur==='PARTICULIER'?'Particuliers':p.contracteur}</span></td>
+            <td className="muted">{p.phase?(JOB_PHASE_LABELS[p.phase]||p.phase):'—'}</td>
+          </tr>)}
+          {list.length===0 && <tr><td colSpan="4" className="muted" style={{padding:16}}>{emptyMsg}</td></tr>}
+        </tbody>
+      </table>
+    </div>;
+  }
+
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Stock</h2>
+    <div className="muted" style={{fontSize:11.5,marginBottom:16}}>Section en construction — la gestion complète du stock (inventaire, commandes) sera ajoutée ici bientôt. En attendant, voici le statut de stock déjà réglé par projet (depuis le Tableau de bord ou la fiche projet), pour préparer tes commandes.</div>
+    <h3 style={{margin:'0 0 8px',fontSize:14,fontWeight:800,color:'#d29922'}}>À commander ({aCommander.length})</h3>
+    {renderList(aCommander, 'Rien à commander pour l\'instant.')}
+    <h3 style={{margin:'22px 0 8px',fontSize:14,fontWeight:800,color:'var(--success)'}}>Prêt ({pret.length})</h3>
+    {renderList(pret, 'Aucun projet marqué "prêt" pour l\'instant.')}
+  </div>;
+}
+
 // ── UI: Réglages ──────────────────────────────────────────────────────────
 function SettingsView({cfg, setCfg, toast}){
   const [f,setF]=useState(cfg);
@@ -2412,6 +2457,7 @@ function App(){
     {id:'factures',label:'Factures'},
     {id:'rappels',label:'Rappels & Suivi'},
     {id:'soumissions',label:'Soumissions'},
+    {id:'stock',label:'Stock'},
     {id:'reglages',label:'Réglages'}
   ];
 
@@ -2449,6 +2495,7 @@ function App(){
         {nav==='factures' && <FacturesView cfg={cfg} refreshKey={refreshKey}/>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='soumissions' && <SoumissionsView data={data}/>}
+        {nav==='stock' && <StockView data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
       </div>
     </div>
