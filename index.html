@@ -133,7 +133,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v19';
+const APP_VERSION = 'v20';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -378,6 +378,10 @@ async function patchEventFull(calendarId, eventId, fields){
 }
 async function deleteCalendarEvent(calendarId, eventId){
   return window.gapi.client.calendar.events.delete({calendarId, eventId});
+}
+// Crée un nouvel événement — utilisé pour "Dupliquer" un événement existant.
+async function insertCalendarEvent(calendarId, fields){
+  return window.gapi.client.calendar.events.insert({calendarId, supportsAttachments:true, resource: fields});
 }
 // Calcule une disposition côte-à-côte pour les événements d'une journée qui se
 // chevauchent dans le temps (sinon ils s'empilent exactement l'un sur l'autre
@@ -1863,16 +1867,43 @@ function EditEventModal({event, onClose, onSaved, toast}){
   }
   function removeAttachment(i){ setAttachments(attachments.filter((_,idx)=>idx!==i)); }
 
+  // Construit les champs start/end à partir de l'état courant du formulaire —
+  // réutilisé pour Enregistrer ET pour Dupliquer, afin que la copie parte des
+  // heures/jour actuellement affichés (utile si on vient de les changer avant
+  // de dupliquer).
+  function buildTimeFields(){
+    if(event.allDay){
+      // Les événements "toute la journée" utilisent des dates (pas dateTime), et
+      // la date de fin est EXCLUSIVE — on préserve la durée d'origine (nb de jours)
+      // en la réappliquant à partir de la nouvelle date choisie.
+      const origStart = new Date(event.start+'T00:00:00');
+      const origEnd = event.end ? new Date(event.end+'T00:00:00') : new Date(origStart.getTime()+86400000);
+      const spanDays = Math.max(1, Math.round((origEnd-origStart)/86400000));
+      const endD = new Date(date+'T00:00:00'); endD.setDate(endD.getDate()+spanDays);
+      return { start:{date}, end:{date: localDateStr(endD)} };
+    }
+    return {
+      start:{dateTime: date+'T'+heureDebut+':00', timeZone:'America/Toronto'},
+      end:{dateTime: date+'T'+heureFin+':00', timeZone:'America/Toronto'}
+    };
+  }
+
   async function handleSave(){
     setBusy(true);
     try{
-      const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(a=>({fileUrl:a.fileUrl, title:a.title})) };
-      if(!event.allDay){
-        fields.start = {dateTime: date+'T'+heureDebut+':00', timeZone:'America/Toronto'};
-        fields.end = {dateTime: date+'T'+heureFin+':00', timeZone:'America/Toronto'};
-      }
+      const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(a=>({fileUrl:a.fileUrl, title:a.title})), ...buildTimeFields() };
       await patchEventFull(event.calendarId, event.id, fields);
       toast('Événement mis à jour.','ok');
+      onSaved(); onClose();
+    }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
+    setBusy(false);
+  }
+  async function handleDuplicate(){
+    setBusy(true);
+    try{
+      const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(a=>({fileUrl:a.fileUrl, title:a.title})), ...buildTimeFields() };
+      await insertCalendarEvent(event.calendarId, fields);
+      toast('Événement dupliqué.','ok');
       onSaved(); onClose();
     }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
     setBusy(false);
@@ -1890,13 +1921,11 @@ function EditEventModal({event, onClose, onSaved, toast}){
   return <Modal title="Modifier l'événement" onClose={onClose} wide>
     <div className="field"><label>Titre</label><input value={titre} onChange={e=>setTitre(e.target.value)}/></div>
     <div className="field"><label>Adresse / lieu</label><input value={lieu} onChange={e=>setLieu(e.target.value)}/></div>
-    {!event.allDay ? <>
-      <div className="field"><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
-      <div className="row2">
-        <div className="field"><label>Début</label><input type="time" value={heureDebut} onChange={e=>setHeureDebut(e.target.value)}/></div>
-        <div className="field"><label>Fin</label><input type="time" value={heureFin} onChange={e=>setHeureFin(e.target.value)}/></div>
-      </div>
-    </> : <div className="muted" style={{fontSize:12,marginBottom:10}}>Événement "toute la journée" — l'heure n'est pas modifiable ici.</div>}
+    <div className="field"><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
+    {!event.allDay ? <div className="row2">
+      <div className="field"><label>Début</label><input type="time" value={heureDebut} onChange={e=>setHeureDebut(e.target.value)}/></div>
+      <div className="field"><label>Fin</label><input type="time" value={heureFin} onChange={e=>setHeureFin(e.target.value)}/></div>
+    </div> : <div className="muted" style={{fontSize:12,marginBottom:10}}>Événement "toute la journée" — seule la date peut être changée ici (déplace l'événement, sans changer sa durée).</div>}
     <div className="field tag-input"><label>Notes / description</label><textarea value={desc} onChange={e=>setDesc(e.target.value)}/></div>
 
     <div className="field">
@@ -1923,8 +1952,9 @@ function EditEventModal({event, onClose, onSaved, toast}){
             <button className="btn btn-sm btn-danger" onClick={handleDelete} disabled={busy}>Confirmer</button>
             <button className="btn btn-sm" onClick={()=>setConfirmDel(false)}>Annuler</button>
           </div>}
-      <div style={{display:'flex',gap:8}}>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
         <button className="btn btn-s" onClick={onClose}>Fermer</button>
+        <button className="btn btn-s" onClick={handleDuplicate} disabled={busy} title="Crée une copie de cet événement avec les mêmes infos">{busy?'...':'Dupliquer'}</button>
         <button className="btn btn-p" onClick={handleSave} disabled={busy}>{busy?'Sauvegarde...':'Enregistrer'}</button>
       </div>
     </div>
