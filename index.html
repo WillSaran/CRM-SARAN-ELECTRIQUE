@@ -112,6 +112,10 @@ const {useState,useEffect,useMemo,useCallback,useRef} = React;
 // punchproSpreadsheetId : Sheet "HEURES & EMPLOYÉS APP SARAN ÉLECTRIQUE" — LECTURE SEULE.
 //            Le CRM y lit les onglets Employés/Pointages pour afficher les heures des
 //            employés et n'y écrit JAMAIS rien.
+// memoireJobsSpreadsheetId / memoireFacturesSpreadsheetId : registres « La mémoire — Jobs »
+//            et « La mémoire — Factures » (Drive info@, dossier La mémoire) — LECTURE SEULE.
+//            Une ligne par PO (montant, client, dossier Drive) et une ligne par facture
+//            (montant, date, envoi, PDF). Remplis par La mémoire; lus par l'onglet Clients.
 // suiviTravauxSpreadsheetId : Sheet "SUIVI TRAVAUX SARAN ÉLECTRIQUE" — LECTURE SEULE.
 //            Un onglet par contracteur (Particuliers/ASC/CRS/PAY/SAR/GGP/BOM/RROY/5PIL),
 //            utilisé pour détecter les appels de service sans facture ("factures
@@ -123,7 +127,9 @@ const DEFAULT_CFG = {
   projetsSpreadsheetId: '1XJldTQODgo207rnwneF1CsHYS7PKwGR80pkXn741Oug',
   punchproSpreadsheetId: '1uj7S1uHsE0BZwbNSJdtAEjpy_9YWqfh6mXoJwwLJ9UA',
   suiviTravauxSpreadsheetId: '1uHgs4eiD0t25hYHp69q27tESsuVB4HraCud3c04vLwY',
-  calendarIds: 'saranelectrique@gmail.com,info@saranelectrique.com'
+  calendarIds: 'saranelectrique@gmail.com,info@saranelectrique.com',
+  memoireJobsSpreadsheetId: '1POqSf9_TAJCr8cYsV2QEGYzcPdLOeIGeWnIX8Y_swBg',
+  memoireFacturesSpreadsheetId: '1I6QfEObkpfrSAqz2vSO_XdCKABWYoe2e5TOG3so3Uks'
 };
 function loadCfg(){
   try{ const raw=localStorage.getItem('crm_cfg'); return raw?{...DEFAULT_CFG,...JSON.parse(raw)}:{...DEFAULT_CFG}; }
@@ -133,7 +139,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v20';
+const APP_VERSION = 'v21';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2377,6 +2383,353 @@ function StockView({data}){
 }
 
 // ── UI: Réglages ──────────────────────────────────────────────────────────
+// ── CLIENTS (contracteurs + particuliers) ─────────────────────────────────
+// Lecture seule. Assemble, par client puis par job :
+//  - les événements de l'agenda (dates, appel de service, OT, facture du bloc « Suivi »)
+//  - le registre « La mémoire — Jobs » (montant du PO, client, dossier Drive), rempli par La mémoire.
+const CLIENT_CODES = {
+  CRS:'Cuisines Rive-Sud', PAY:'Payne Construction', PY:'Payne Construction', ASC:'Ascension', SAR:'Saran Construction',
+  GOU:'Goulet', '5PIL':'Cinq Piliers', BOM:'Beaumont', JOY:'JOY', GGP:'GGP', RROY:'RROY'
+};
+const CLIENT_CONTACT = {CRS:'Jonathan Asselin', PAY:'Danny', ASC:'Cédric Gagnon'};
+const CREW_INITIALS = {PB:'Philippe Bernier', MC:'Maude Charest', AU:'Adèle Underhill', DW:'Daniel Wenning', BP:'Brandon Pereira', AD:'AD (ancien employé)'};
+const CREW_COLORS = {'3':'Philippe Bernier','4':'Daniel Wenning','5':'Maude Charest','9':'Brandon Pereira'};
+const PHASES = [['ROUGH','ROUGH'],['FINITION','FINITION'],['FINALE','FINITION'],['SERV','SERV'],['SERVICE','SERV'],['AJUSTEMENTS','AJUST'],['AJUSTEMENT','AJUST'],['RAPUP','RAPUP'],['DÉMO','DÉMO'],['DEMO','DÉMO']];
+const CLIENT_IGNORE = /^(mon plan|plan de la semaine|topo|ma journée|congé|vacances|prep|préparation)/i;
+const CREW_CAL = 'saranelectrique@gmail.com';
+
+function cvNorm(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+function cvNum(v){ const n=parseFloat(String(v||'').replace(/\s/g,'').replace(',','.')); return isNaN(n)?null:n; }
+function cvMoney(n){ return n==null?'—':n.toLocaleString('fr-CA',{style:'currency',currency:'CAD'}); }
+function cvDay(iso){ return String(iso||'').slice(0,10); }
+function cvFmtDay(d){ if(!d) return '—'; const [y,m,j]=d.split('-'); const M=['','janv.','févr.','mars','avr.','mai','juin','juil.','août','sept.','oct.','nov.','déc.']; return (+j)+' '+M[+m]; }
+function cvTitleCase(s){ return s.toLowerCase().replace(/(^|[\s\-'’(])([a-zà-ÿ])/g,(m,a,b)=>a+b.toUpperCase()); }
+function cvSuivi(desc, label){
+  const m = String(desc||'').replace(/<[^>]+>/g,'\n').match(new RegExp(label+'\\s*:\\s*([^\\n]*)','i'));
+  const v = m ? m[1].trim() : '';
+  return /\d/.test(v) ? v.replace(/[^\d\-– ,]/g,'').trim() : '';
+}
+function cvPO(text){
+  const m = String(text||'').match(/\bP[O0]?\s?0?(\d{4})\b/i);
+  return m ? 'P0'+m[1] : '';
+}
+// Décortique le titre d'un événement : code client, phase, PO, initiales, nom.
+function cvParseEvent(e){
+  const title = String(e.title||'').trim();
+  const toks = title.replace(/[()]/g,' ').split(/[\s\-–]+/).filter(Boolean);
+  let code='', phase='', initials=[], nameParts=[];
+  toks.forEach(t=>{
+    const T=t.toUpperCase();
+    if(!code && CLIENT_CODES[T]){ code = (T==='PY'?'PAY':T); return; }
+    const ph = PHASES.find(p=>p[0]===T); if(ph){ if(!phase) phase=ph[1]; return; }
+    if(CREW_INITIALS[T] && t===T){ initials.push(T); return; }
+    if(/^P[O0]?0?\d{4}$/i.test(T)) return;
+    if(T==='CUI') return;
+    nameParts.push(t);
+  });
+  const po = cvPO(title) || cvPO(e.description);
+  const name = cvTitleCase(nameParts.join(' ').trim());
+  const crew = new Set(initials.map(i=>CREW_INITIALS[i]));
+  if(CREW_COLORS[e.colorId]) crew.add(CREW_COLORS[e.colorId]);
+  return {
+    code, phase: phase || (code?'SERV':''), po, name, key: cvNorm(name), crew:[...crew],
+    as: cvSuivi(e.description,'Appel de service'), ot: cvSuivi(e.description,'Ordre de travail'), fac: cvSuivi(e.description,'Facture'),
+    day: cvDay(e.start), location: e.location||'', title, attachments: e.attachments||[]
+  };
+}
+
+function useClientsData(cfg, refreshKey){
+  const [state,setState]=useState({loading:true, err:'', events:[], registry:[], factures:{}});
+  useEffect(()=>{
+    let alive=true;
+    (async()=>{
+      setState(s=>({...s,loading:true,err:''}));
+      try{
+        const now=new Date();
+        const min=new Date(now); min.setDate(min.getDate()-150);
+        const max=new Date(now); max.setDate(max.getDate()+120);
+        const calIds=(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
+        const readSheet = id => id
+          ? window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'A1:Z'}).then(r=>r.result.values||[]).catch(()=>[])
+          : Promise.resolve([]);
+        const [events, regRows, facRows] = await Promise.all([
+          listCalendarEventsRange(calIds, min.toISOString(), max.toISOString()),
+          readSheet(cfg.memoireJobsSpreadsheetId),
+          readSheet(cfg.memoireFacturesSpreadsheetId)
+        ]);
+        const fh=(facRows[0]||[]).map(h=>cvNorm(h)), fc=re=>fh.findIndex(h=>re.test(h));
+        const fx={num:fc(/^facture/),date:fc(/^date/),po:fc(/^po$/),desc:fc(/^description/),ht:fc(/^montant/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/)};
+        const fg=(r,k)=> fx[k]>=0 ? (r[fx[k]]||'').trim() : '';
+        const factures={};
+        facRows.slice(1).forEach(r=>{ const n=fg(r,'num'); if(n) factures[n]={num:n, date:fg(r,'date'), po:fg(r,'po'), desc:fg(r,'desc'), ht:cvNum(fg(r,'ht')), ttc:cvNum(fg(r,'ttc')), envoi:fg(r,'env'), pdf:fg(r,'pdf')}; });
+        const head=(regRows[0]||[]).map(h=>cvNorm(h));
+        const col=(re)=>head.findIndex(h=>re.test(h));
+        const ix={code:col(/^code/),po:col(/^po$/),nom:col(/^nom/),adr:col(/^adresse/),ville:col(/^ville/),ht:col(/^montant/),dos:col(/^dossier/),cli:col(/^client/),tel:col(/^telephone/),mail:col(/^courriel/),proj:col(/^projet/),note:col(/^note/)};
+        const g=(r,k)=> ix[k]>=0 ? (r[ix[k]]||'').trim() : '';
+        const registry = regRows.slice(1).filter(r=>g(r,'po')||g(r,'nom')).map(r=>({
+          code:(g(r,'code')||'').toUpperCase(), po:g(r,'po'), nom:g(r,'nom'), key:cvNorm(g(r,'nom')),
+          adresse:g(r,'adr'), ville:g(r,'ville'), ht:cvNum(g(r,'ht')), dossier:g(r,'dos'),
+          client:g(r,'cli'), tel:g(r,'tel'), courriel:g(r,'mail'), projet:g(r,'proj'), note:g(r,'note')
+        }));
+        if(alive) setState({loading:false, err:'', events, registry, factures});
+      }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}}); }
+    })();
+    return ()=>{alive=false};
+  },[cfg.calendarIds, cfg.memoireJobsSpreadsheetId, cfg.memoireFacturesSpreadsheetId, refreshKey]);
+  return state;
+}
+
+// Regroupe les événements en clients → jobs.
+function cvBuildClients(events, registry, factures){
+  factures = factures || {};
+  const today = cvDay(new Date().toISOString());
+  const regByPO = {}; registry.forEach(r=>{ if(r.po) regByPO[r.po]=r; });
+  const jobs = {};
+  const getJob = (id, base)=> jobs[id] || (jobs[id] = {id, events:[], ...base});
+  events.forEach(raw=>{
+    if(CLIENT_IGNORE.test(String(raw.title||'').trim())) return;
+    const p = cvParseEvent(raw);
+    if(p.code){
+      let po = p.po;
+      if(!po && p.key){
+        // Pas de PO dans le titre : on cherche une job du même client avec le même nom.
+        const cands = registry.filter(r=>r.code===p.code && r.key===p.key);
+        if(cands.length===1) po = cands[0].po;
+        else if(cands.length>1){
+          const loc = cvNorm(p.location);
+          const byLoc = cands.find(c=>c.adresse && loc.includes(cvNorm(c.adresse).slice(0,8)));
+          po = (byLoc||cands[0]).po;
+        }
+      }
+      const id = po ? p.code+'|'+po : p.code+'|'+(p.key || cvNorm(p.location) || p.title);
+      const reg = po ? regByPO[po] : null;
+      const j = getJob(id, {client:p.code, po, name: reg ? reg.nom : (p.name || p.location || p.title), reg});
+      j.events.push(p);
+    } else {
+      if(raw.calendarId !== CREW_CAL) return; // particuliers : seulement le calendrier de l'équipe
+      const k = cvNorm(p.location).slice(0,24) || p.key || cvNorm(p.title);
+      const j = getJob('PART|'+k, {client:'PART', po:'', name: p.name || p.title, reg:null});
+      j.events.push(p);
+    }
+  });
+  // Facture inscrite sur plus d'une job = à vérifier.
+  const facJobs = {};
+  Object.values(jobs).forEach(j=>j.events.forEach(e=>String(e.fac).split(/[\s,–-]+/).filter(Boolean).forEach(f=>{ (facJobs[f]=facJobs[f]||new Set()).add(j.id); })));
+  Object.values(jobs).forEach(j=>{
+    j.events.sort((a,b)=>a.day.localeCompare(b.day));
+    const ro=j.events.filter(e=>e.phase==='ROUGH'), fi=j.events.filter(e=>e.phase==='FINITION');
+    j.rough = ro[0] ? ro[0].day : ''; j.fin = fi.length ? fi[fi.length-1].day : '';
+    j.first = j.events[0].day; j.last = j.events[j.events.length-1].day;
+    j.status = j.last < today ? 'done' : (j.first <= today ? 'cours' : 'avenir');
+    const fromPO = j.po ? Object.values(factures).filter(f=>f.po===j.po).map(f=>f.num) : [];
+    j.factures = [...new Set([...j.events.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(Boolean)), ...fromPO])].sort();
+    j.billed = j.factures.reduce((t,f)=>t+((factures[f]&&factures[f].ht)||0),0);
+    j.crew = [...new Set(j.events.flatMap(e=>e.crew))];
+    j.address = (j.reg && [j.reg.adresse,j.reg.ville].filter(Boolean).join(', ')) || (j.events.find(e=>e.location)||{}).location || '';
+    j.missing = j.events.filter(e=>e.day < today && !e.fac).length;
+    j.dupFac = j.factures.filter(f=>facJobs[f] && facJobs[f].size>1);
+    j.flag = j.missing>0 || j.dupFac.length>0;
+  });
+  const clients = {};
+  Object.values(jobs).forEach(j=>{
+    const c = clients[j.client] || (clients[j.client] = {code:j.client, label: j.client==='PART' ? 'Particuliers' : (CLIENT_CODES[j.client]||j.client), contact: CLIENT_CONTACT[j.client]||'', jobs:[]});
+    c.jobs.push(j);
+  });
+  Object.values(clients).forEach(c=>{
+    c.jobs.sort((a,b)=>b.first.localeCompare(a.first));
+    c.active = c.jobs.filter(j=>j.status!=='done').length;
+    c.flags = c.jobs.filter(j=>j.flag).length;
+    c.poTotal = c.jobs.reduce((t,j)=>t+((j.reg&&j.reg.ht)||0),0);
+    c.billed = c.jobs.reduce((t,j)=>t+(j.billed||0),0);
+    c.lastDay = c.jobs.reduce((m,j)=>j.last>m?j.last:m,'');
+  });
+  return clients;
+}
+
+const CV_STATUS = {done:['Terminée','var(--success)'], cours:['En cours','var(--accent)'], avenir:['À venir','var(--muted)']};
+function CvPill({status}){
+  const [t,c]=CV_STATUS[status];
+  return <span className="badge" style={{background:'var(--bg3)',color:c,border:'1px solid var(--border2)'}}>{t}</span>;
+}
+
+// Jauge facturé / PO. Le repère de 75 % vient des PO de Jonathan (« 75 % rough et 25 % finition »).
+function CvGauge({job}){
+  const po = job.reg && job.reg.ht;
+  if(!po) return null;
+  const today = cvDay(new Date().toISOString());
+  const b = job.billed||0, pct = b/po, w = Math.min(pct,1.5)/1.5*100, m75 = 50, m100 = 100/1.5;
+  const finDone = job.events.some(e=>e.phase==='FINITION' && e.day<today), roughDone = job.events.some(e=>e.phase==='ROUGH' && e.day<today);
+  const etape = finDone ? 'Finition faite' : roughDone ? 'Rough fait, finition à venir' : 'Pas encore commencé';
+  const reste = po-b, col = pct>1 ? 'var(--danger)' : (pct>0.75 && !finDone ? 'var(--warning)' : 'var(--success)');
+  const msg = pct>1 ? <>Dépassement de <b>{cvMoney(-reste)}</b> ({Math.round((pct-1)*100)} % au-dessus du PO).</>
+    : finDone ? <>Sous le PO de <b>{cvMoney(reste)}</b>.</>
+    : <>Il reste <b>{cvMoney(reste)}</b> au PO pour {roughDone?'la finition':'la job'}.</>;
+  return <div style={{border:'1px solid var(--border2)',borderRadius:10,padding:12,margin:'10px 0',background:'var(--bg3)'}}>
+    <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',fontSize:13}}>
+      <span>Facturé <b>{cvMoney(b)}</b> sur un PO de <b>{cvMoney(po)}</b> avant taxes</span><b>{Math.round(pct*100)} %</b>
+    </div>
+    <div style={{position:'relative',height:12,borderRadius:6,background:'var(--bg4)',margin:'10px 0 4px',overflow:'hidden'}}>
+      <div style={{position:'absolute',left:0,top:0,bottom:0,width:w+'%',background:col,borderRadius:6}}></div>
+      <div style={{position:'absolute',top:0,bottom:0,left:m75+'%',width:2,background:'var(--muted)'}}></div>
+      <div style={{position:'absolute',top:0,bottom:0,left:m100+'%',width:3,background:'var(--text)'}}></div>
+    </div>
+    <div style={{position:'relative',height:16,fontSize:11,color:'var(--muted)'}}>
+      <span style={{position:'absolute',left:m75+'%',transform:'translateX(-50%)',whiteSpace:'nowrap'}}>fin du rough (75 %)</span>
+      <span style={{position:'absolute',left:m100+'%',transform:'translateX(-50%)'}}>PO</span>
+    </div>
+    <div style={{fontSize:13,marginTop:4}}>{etape}. {msg}</div>
+  </div>;
+}
+
+function ClientJobDetail({job, factures}){
+  if(!job) return <div className="card muted">Clique une job pour voir sa fiche.</div>;
+  const r = job.reg || {};
+  const today = cvDay(new Date().toISOString());
+  const maps = job.address ? 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(job.address+', QC') : '';
+  const Row = ({k,children}) => children ? <><div className="muted" style={{fontSize:12.5}}>{k}</div><div style={{fontSize:13.5}}>{children}</div></> : null;
+  return <div className="card" style={{position:'sticky',top:'calc(var(--topbar-h) + 12px)',maxHeight:'calc(100vh - var(--topbar-h) - 24px)',overflowY:'auto'}}>
+    <CvPill status={job.status}/>
+    <h2 className="fh" style={{margin:'8px 0 2px',fontSize:20}}>{job.name}</h2>
+    {r.projet && <div className="muted" style={{fontSize:13}}>{r.projet}</div>}
+    <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'5px 14px',margin:'12px 0'}}>
+      <Row k="PO">{job.po || 'Pas de PO'}</Row>
+      <Row k="Adresse">{job.address && <>{job.address} {maps && <a href={maps} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5}}>Maps ↗</a>}</>}</Row>
+      <Row k="Client">{r.client}</Row>
+      <Row k="Téléphone">{r.tel && <span style={{userSelect:'all'}}>{r.tel}</span>}</Row>
+      <Row k="Courriel">{r.courriel && <span style={{userSelect:'all'}}>{r.courriel}</span>}</Row>
+      <Row k="Équipe">{job.crew.join(', ')}</Row>
+      <Row k="Montant PO">{r.ht!=null && <>{cvMoney(r.ht)} avant taxes · {cvMoney(r.ht*1.14975)} taxes incluses</>}</Row>
+    </div>
+    <CvGauge job={job}/>
+    {job.factures.length>0 && <div style={{marginBottom:10}}>
+      <div className="fh" style={{fontSize:14,margin:'4px 0 6px'}}>Factures</div>
+      {job.factures.map(n=>{ const f=factures[n]; return <div key={n} style={{padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+        <b>#{n}</b>{f ? <> · <b>{cvMoney(f.ht)}</b>{f.desc ? ' · '+f.desc : ''}</> : <span className="muted"> · montant pas encore lu</span>}
+        {f && f.pdf && <a href={'https://drive.google.com/file/d/'+f.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',marginLeft:8,fontSize:12}}>PDF ↗</a>}
+        {f && <div className="muted" style={{fontSize:12}}>Datée du {cvFmtDay(f.date)}{f.envoi ? ', envoyée le '+cvFmtDay(f.envoi) : ''}</div>}
+      </div>; })}
+    </div>}
+    {job.dupFac.length>0 && <div className="card" style={{borderColor:'var(--danger)',padding:10,fontSize:13,marginBottom:10}}>La facture {job.dupFac.map(f=>'#'+f).join(', ')} est aussi inscrite sur une autre job. Une des deux est fausse.</div>}
+    {r.dossier && <a className="btn btn-p btn-sm" href={'https://drive.google.com/drive/folders/'+r.dossier} target="_blank" rel="noopener" style={{textDecoration:'none',marginBottom:12}}>Ouvrir le dossier (bon de commande et plans) ↗</a>}
+    <div className="fh" style={{fontSize:14,margin:'10px 0 6px'}}>Passages</div>
+    <div className="grid" style={{gap:6}}>
+      {job.events.map((e,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'64px 1fr',gap:10,padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:8}}>
+        <div style={{fontWeight:700,fontSize:13,fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</div>
+        <div>
+          <div style={{fontSize:11,fontWeight:800,letterSpacing:'.05em',color: e.phase==='ROUGH'?'var(--warning)':e.phase==='FINITION'?'var(--success)':'var(--accent)'}}>{e.phase||'—'}</div>
+          <div className="muted" style={{fontSize:12.5,display:'flex',flexWrap:'wrap',gap:'2px 12px'}}>
+            {e.as && <span>Appel <b style={{color:'var(--text)'}}>{e.as}</b></span>}
+            {e.ot && <span>OT <b style={{color:'var(--text)'}}>{e.ot}</b></span>}
+            {e.fac ? <span>Facture <b style={{color:'var(--text)'}}>{e.fac}</b>{String(e.fac).split(/[\s,–-]+/).filter(n=>factures[n]&&factures[n].ht!=null).map(n=><span key={n}> · <b style={{color:'var(--text)'}}>{cvMoney(factures[n].ht)}</b></span>)}</span>
+              : (e.day<today ? <span style={{color:'var(--danger)',fontWeight:700}}>Pas de facture inscrite</span> : <span>Planifié</span>)}
+          </div>
+          {e.attachments.length>0 && <div style={{fontSize:12,marginTop:3,display:'flex',flexWrap:'wrap',gap:'2px 10px'}}>
+            {e.attachments.slice(0,4).map((a,k)=><a key={k} href={a.fileUrl} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>{a.title}</a>)}
+          </div>}
+        </div>
+      </div>)}
+    </div>
+    {r.note && <div className="card" style={{marginTop:10,padding:10,fontSize:13,borderColor:'var(--warning)'}}>{r.note}</div>}
+  </div>;
+}
+
+function ClientDetailView({client, factures, onBack, isDesktop}){
+  const [filter,setFilter]=useState('all');
+  const [q,setQ]=useState('');
+  const [sel,setSel]=useState(null);
+  const detailRef=useRef(null);
+  const list = client.jobs.filter(j=>(filter==='all' || (filter==='flag'?j.flag:j.status===filter)) &&
+    (!q || cvNorm([j.po,j.name,j.address,...j.factures].join(' ')).includes(cvNorm(q))));
+  const job = client.jobs.find(j=>j.id===sel) || null;
+  function pick(id){ setSel(id); if(!isDesktop) setTimeout(()=>detailRef.current && detailRef.current.scrollIntoView({behavior:'smooth'}),50); }
+  const tiles = [
+    [client.jobs.length,'jobs'],
+    [client.poTotal ? Math.round(client.poTotal).toLocaleString('fr-CA')+' $' : '—','en PO, avant taxes'],
+    [client.billed ? Math.round(client.billed).toLocaleString('fr-CA')+' $' : '—','facturé, avant taxes'],
+    [client.jobs.filter(j=>j.status==='done').length,'terminées'],
+    [client.active,'en cours ou à venir'],
+    [client.flags,'à vérifier']
+  ];
+  return <div>
+    <button className="btn btn-sm btn-s" onClick={onBack} style={{marginBottom:10}}>← Tous les clients</button>
+    <h2 className="fh" style={{margin:'0 0 2px',fontSize:22}}>{client.label}{client.contact ? ' — '+client.contact : ''}</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:14}}>Jobs des 5 derniers mois et à venir, d'après l'agenda et La mémoire.</div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:10,marginBottom:14}}>
+      {tiles.map(([n,l],i)=><div key={i} className="card" style={{padding:12}}><div className="fh" style={{fontSize:22}}>{n}</div><div className="muted" style={{fontSize:12}}>{l}</div></div>)}
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1.2fr) minmax(0,1fr)':'1fr',gap:14,alignItems:'start'}}>
+      <div className="card" style={{minWidth:0}}>
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
+          {[['all','Toutes'],['done','Terminées'],['cours','En cours'],['avenir','À venir'],['flag','À vérifier']].map(([k,l])=>
+            <button key={k} className={'btn btn-sm'+(filter===k?' btn-p':'')} onClick={()=>setFilter(k)}>{l}</button>)}
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Nom, PO, ville, facture…" style={{flex:'1 1 150px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
+        </div>
+        <div style={{overflowX:'auto'}}>
+          <table>
+            <thead><tr><th>PO</th><th>Job</th><th>Rough</th><th>Finition</th><th>Facturé / PO</th><th>État</th></tr></thead>
+            <tbody>
+              {list.map(j=><tr key={j.id} onClick={()=>pick(j.id)} style={{cursor:'pointer',background:sel===j.id?'rgba(var(--accent-rgb),0.10)':undefined}}>
+                <td style={{whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>{j.po||'—'}</td>
+                <td><b>{j.name}</b>{j.flag && <span style={{color:'var(--danger)',fontWeight:800}}> !</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></td>
+                <td style={{whiteSpace:'nowrap'}}>{cvFmtDay(j.rough)}</td>
+                <td style={{whiteSpace:'nowrap'}}>{cvFmtDay(j.fin)}</td>
+                <td style={{fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>
+                  {(j.reg&&j.reg.ht&&j.billed) ? (()=>{ const p=j.billed/j.reg.ht; return <div><span style={{display:'inline-block',width:46,height:6,borderRadius:3,background:'var(--bg4)',verticalAlign:'middle',marginRight:6,position:'relative',overflow:'hidden'}}><i style={{position:'absolute',left:0,top:0,bottom:0,width:Math.min(p,1)*100+'%',background:p>1?'var(--danger)':'var(--success)'}}></i></span>{Math.round(p*100)} %</div>; })() : null}
+                  <div className="muted" style={{fontSize:12}}>{j.factures.join(', ')||'—'}</div>
+                </td>
+                <td><CvPill status={j.status}/></td>
+              </tr>)}
+              {!list.length && <tr><td colSpan="6" className="muted">Aucune job ne correspond.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures}/></div>
+    </div>
+  </div>;
+}
+
+function ClientsView({cfg, refreshKey, isDesktop}){
+  const {loading, err, events, registry, factures} = useClientsData(cfg, refreshKey);
+  const [open,setOpen]=useState(null);
+  const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
+  if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
+  if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les clients : {err}</div>;
+  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
+  const pros = Object.values(clients).filter(c=>c.code!=='PART').sort((a,b)=>b.jobs.length-a.jobs.length);
+  const part = clients.PART;
+  const Card = ({c})=> <div className="opp-card" onClick={()=>setOpen(c.code)} style={{padding:14}}>
+    <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'baseline'}}>
+      <div className="t" style={{fontSize:15}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{c.label}</div>
+      {c.flags>0 && <span className="badge" style={{background:'rgba(248,81,73,0.12)',color:'var(--danger)'}}>{c.flags} à vérifier</span>}
+    </div>
+    {c.contact && <div className="a">{c.contact}</div>}
+    <div className="a" style={{marginTop:6}}>{c.jobs.length} jobs · {c.active} en cours ou à venir{c.poTotal ? ' · '+Math.round(c.poTotal).toLocaleString('fr-CA')+' $ en PO' : ''}{c.billed ? ' · '+Math.round(c.billed).toLocaleString('fr-CA')+' $ facturé' : ''}</div>
+    <div className="a">Dernière activité : {cvFmtDay(c.lastDay)}</div>
+  </div>;
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Clients</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:14}}>Tes contracteurs et tes particuliers. Clique un client pour voir ses jobs, puis une job pour sa fiche complète.</div>
+    <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1fr) minmax(0,1fr)':'1fr',gap:16,alignItems:'start'}}>
+      <div>
+        <div className="pipe-col-h" style={{padding:'0 2px 8px'}}>Contracteurs</div>
+        {pros.length ? pros.map(c=><Card key={c.code} c={c}/>) : <div className="card muted">Aucun événement de contracteur trouvé dans l'agenda.</div>}
+      </div>
+      <div>
+        <div className="pipe-col-h" style={{padding:'0 2px 8px'}}>Particuliers</div>
+        {part ? <>
+          <Card c={part}/>
+          {part.jobs.slice(0,12).map(j=><div key={j.id} className="remind-item" style={{cursor:'pointer'}} onClick={()=>setOpen('PART')}>
+            <div><b style={{fontSize:13.5}}>{j.name}</b><div className="muted" style={{fontSize:12}}>{j.address}</div></div>
+            <div className="muted" style={{fontSize:12,whiteSpace:'nowrap'}}>{cvFmtDay(j.last)}</div>
+          </div>)}
+        </> : <div className="card muted">Aucun particulier trouvé dans l'agenda de l'équipe.</div>}
+      </div>
+    </div>
+    {!registry.length && <div className="card muted" style={{marginTop:14,fontSize:12.5}}>Le registre « La mémoire — Jobs » n'a pas pu être lu : les montants de PO et les liens vers les dossiers ne s'affichent pas. Vérifie son ID dans Réglages.</div>}
+  </div>;
+}
+
 function SettingsView({cfg, setCfg, toast}){
   const [f,setF]=useState(cfg);
   const [theme,setTheme]=useTheme();
@@ -2410,6 +2763,8 @@ function SettingsView({cfg, setCfg, toast}){
       <hr style={{border:'none',borderTop:'1px solid var(--border)'}}/>
       <div className="field"><label>ID du Sheet PunchPro (Heures &amp; Employés) — lecture seule</label><input value={f.punchproSpreadsheetId} onChange={e=>setF({...f,punchproSpreadsheetId:e.target.value})} placeholder="Sheet de pointage PunchPro, jamais modifié par le CRM"/></div>
       <div className="field"><label>ID du Sheet "SUIVI TRAVAUX" (Factures) — lecture seule</label><input value={f.suiviTravauxSpreadsheetId} onChange={e=>setF({...f,suiviTravauxSpreadsheetId:e.target.value})} placeholder="Sheet des appels de service / factures, jamais modifié par le CRM"/></div>
+      <div className="field"><label>ID du Sheet « La mémoire — Jobs » — lecture seule</label><input value={f.memoireJobsSpreadsheetId||''} onChange={e=>setF({...f,memoireJobsSpreadsheetId:e.target.value})}/></div>
+      <div className="field"><label>ID du Sheet « La mémoire — Factures » — lecture seule</label><input value={f.memoireFacturesSpreadsheetId||''} onChange={e=>setF({...f,memoireFacturesSpreadsheetId:e.target.value})}/></div>
       <div className="field"><label>Calendriers (séparés par virgule)</label><input value={f.calendarIds} onChange={e=>setF({...f,calendarIds:e.target.value})}/></div>
       <button className="btn btn-p" onClick={()=>{ saveCfg(f); setCfg(f); toast('Réglages enregistrés.','ok'); }}>Enregistrer les réglages</button>
       <div className="muted" style={{fontSize:11.5}}>Version {APP_VERSION}</div>
@@ -2480,6 +2835,7 @@ function App(){
 
   const navItems = [
     {id:'dashboard',label:'Tableau de bord'},
+    {id:'clients',label:'Clients'},
     {id:'contacts',label:'Contacts'},
     {id:'projets',label:'Projets'},
     {id:'agenda',label:'Agenda'},
@@ -2518,6 +2874,7 @@ function App(){
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
+        {nav==='clients' && <ClientsView cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
         {nav==='projets' && <ProjetsView data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='agenda' && <AgendaView cfg={effectiveCfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
