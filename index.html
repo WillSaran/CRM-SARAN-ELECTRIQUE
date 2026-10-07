@@ -112,8 +112,8 @@ const {useState,useEffect,useMemo,useCallback,useRef} = React;
 // punchproSpreadsheetId : Sheet "HEURES & EMPLOYÉS APP SARAN ÉLECTRIQUE" — LECTURE SEULE.
 //            Le CRM y lit les onglets Employés/Pointages pour afficher les heures des
 //            employés et n'y écrit JAMAIS rien.
-// memoireJobsSpreadsheetId / memoireFacturesSpreadsheetId : registres « La mémoire — Jobs »
-//            et « La mémoire — Factures » (Drive info@, dossier La mémoire) — LECTURE SEULE.
+// memoireJobsSpreadsheetId / memoireFacturesSpreadsheetId / memoireAppelsSpreadsheetId : registres
+//            « La mémoire — Jobs », « La mémoire — Factures » et « La mémoire — Appels de service » (Drive info@, dossier La mémoire) — LECTURE SEULE.
 //            Une ligne par PO (montant, client, dossier Drive) et une ligne par facture
 //            (montant, date, envoi, PDF). Remplis par La mémoire; lus par l'onglet Clients.
 // suiviTravauxSpreadsheetId : Sheet "SUIVI TRAVAUX SARAN ÉLECTRIQUE" — LECTURE SEULE.
@@ -129,7 +129,8 @@ const DEFAULT_CFG = {
   suiviTravauxSpreadsheetId: '1uHgs4eiD0t25hYHp69q27tESsuVB4HraCud3c04vLwY',
   calendarIds: 'saranelectrique@gmail.com,info@saranelectrique.com',
   memoireJobsSpreadsheetId: '1POqSf9_TAJCr8cYsV2QEGYzcPdLOeIGeWnIX8Y_swBg',
-  memoireFacturesSpreadsheetId: '1I6QfEObkpfrSAqz2vSO_XdCKABWYoe2e5TOG3so3Uks'
+  memoireFacturesSpreadsheetId: '1I6QfEObkpfrSAqz2vSO_XdCKABWYoe2e5TOG3so3Uks',
+  memoireAppelsSpreadsheetId: '1FJvH7oh82oRlEAyg2ddHOrJEDc-NGI6849m7StONcD8'
 };
 function loadCfg(){
   try{ const raw=localStorage.getItem('crm_cfg'); return raw?{...DEFAULT_CFG,...JSON.parse(raw)}:{...DEFAULT_CFG}; }
@@ -2439,7 +2440,7 @@ function cvParseEvent(e){
 }
 
 function useClientsData(cfg, refreshKey){
-  const [state,setState]=useState({loading:true, err:'', events:[], registry:[], factures:{}});
+  const [state,setState]=useState({loading:true, err:'', events:[], registry:[], factures:{}, appels:{}});
   useEffect(()=>{
     let alive=true;
     (async()=>{
@@ -2452,11 +2453,23 @@ function useClientsData(cfg, refreshKey){
         const readSheet = id => id
           ? window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'A1:Z'}).then(r=>r.result.values||[]).catch(()=>[])
           : Promise.resolve([]);
-        const [events, regRows, facRows] = await Promise.all([
+        const [events, regRows, facRows, apRows] = await Promise.all([
           listCalendarEventsRange(calIds, min.toISOString(), max.toISOString()),
           readSheet(cfg.memoireJobsSpreadsheetId),
-          readSheet(cfg.memoireFacturesSpreadsheetId)
+          readSheet(cfg.memoireFacturesSpreadsheetId),
+          readSheet(cfg.memoireAppelsSpreadsheetId)
         ]);
+        // Appels de service / OT papier : numéro -> photo, et facture -> appels
+        const ah=(apRows[0]||[]).map(h=>cvNorm(h)), ac=re=>ah.findIndex(h=>re.test(h));
+        const ax={as:ac(/^appel/),fac:ac(/^factures?$/),ot:ac(/^ordre/),po:ac(/^po$/),nom:ac(/^fichier$/),id:ac(/^fichierid/)};
+        const ag=(r,k)=> ax[k]>=0 ? (r[ax[k]]||'').trim() : '';
+        const appels={parNumero:{}, parFacture:{}};
+        apRows.slice(1).forEach(r=>{
+          const a={as:ag(r,'as'), ot:ag(r,'ot'), po:ag(r,'po'), nom:ag(r,'nom'), id:ag(r,'id'), factures:ag(r,'fac').split(/[\s,]+/).filter(Boolean)};
+          if(!a.id) return;
+          if(a.as) appels.parNumero[a.as]=a; else if(a.ot) appels.parNumero[a.ot]=appels.parNumero[a.ot]||a;
+          a.factures.forEach(f=>{ (appels.parFacture[f]=appels.parFacture[f]||[]).push(a); });
+        });
         const fh=(facRows[0]||[]).map(h=>cvNorm(h)), fc=re=>fh.findIndex(h=>re.test(h));
         const fx={num:fc(/^facture/),date:fc(/^date/),po:fc(/^po$/),desc:fc(/^description/),ht:fc(/^montant/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/)};
         const fg=(r,k)=> fx[k]>=0 ? (r[fx[k]]||'').trim() : '';
@@ -2471,11 +2484,11 @@ function useClientsData(cfg, refreshKey){
           adresse:g(r,'adr'), ville:g(r,'ville'), ht:cvNum(g(r,'ht')), dossier:g(r,'dos'),
           client:g(r,'cli'), tel:g(r,'tel'), courriel:g(r,'mail'), projet:g(r,'proj'), note:g(r,'note')
         }));
-        if(alive) setState({loading:false, err:'', events, registry, factures});
-      }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}}); }
+        if(alive) setState({loading:false, err:'', events, registry, factures, appels});
+      }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}, appels:{}}); }
     })();
     return ()=>{alive=false};
-  },[cfg.calendarIds, cfg.memoireJobsSpreadsheetId, cfg.memoireFacturesSpreadsheetId, refreshKey]);
+  },[cfg.calendarIds, cfg.memoireJobsSpreadsheetId, cfg.memoireFacturesSpreadsheetId, cfg.memoireAppelsSpreadsheetId, refreshKey]);
   return state;
 }
 
@@ -2581,7 +2594,9 @@ function CvGauge({job}){
   </div>;
 }
 
-function ClientJobDetail({job, factures}){
+function ClientJobDetail({job, factures, appels}){
+  appels = appels || {parNumero:{}, parFacture:{}};
+  const photo = a => 'https://drive.google.com/file/d/'+a.id+'/view';
   if(!job) return <div className="card muted">Clique une job pour voir sa fiche.</div>;
   const r = job.reg || {};
   const today = cvDay(new Date().toISOString());
@@ -2607,6 +2622,10 @@ function ClientJobDetail({job, factures}){
         <b>#{n}</b>{f ? <> · <b>{cvMoney(f.ht)}</b>{f.desc ? ' · '+f.desc : ''}</> : <span className="muted"> · montant pas encore lu</span>}
         {f && f.pdf && <a href={'https://drive.google.com/file/d/'+f.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',marginLeft:8,fontSize:12}}>PDF ↗</a>}
         {f && <div className="muted" style={{fontSize:12}}>Datée du {cvFmtDay(f.date)}{f.envoi ? ', envoyée le '+cvFmtDay(f.envoi) : ''}</div>}
+        {(appels.parFacture[n]||[]).length>0 && <div style={{fontSize:12}}>
+          <span className="muted">Appel{appels.parFacture[n].length>1?'s':''} de service papier : </span>
+          {appels.parFacture[n].map((a,k)=><a key={k} href={photo(a)} target="_blank" rel="noopener" style={{color:'var(--accent)',marginRight:8}}>{a.as||('OT '+a.ot)} ↗</a>)}
+        </div>}
       </div>; })}
     </div>}
     {job.dupFac.length>0 && <div className="card" style={{borderColor:'var(--danger)',padding:10,fontSize:13,marginBottom:10}}>La facture {job.dupFac.map(f=>'#'+f).join(', ')} est aussi inscrite sur une autre job. Une des deux est fausse.</div>}
@@ -2618,8 +2637,12 @@ function ClientJobDetail({job, factures}){
         <div>
           <div style={{fontSize:11,fontWeight:800,letterSpacing:'.05em',color: e.phase==='ROUGH'?'var(--warning)':e.phase==='FINITION'?'var(--success)':'var(--accent)'}}>{e.phase||'—'}</div>
           <div className="muted" style={{fontSize:12.5,display:'flex',flexWrap:'wrap',gap:'2px 12px'}}>
-            {e.as && <span>Appel <b style={{color:'var(--text)'}}>{e.as}</b></span>}
-            {e.ot && <span>OT <b style={{color:'var(--text)'}}>{e.ot}</b></span>}
+            {e.as && <span>Appel {String(e.as).split(/[\s,–-]+/).filter(Boolean).map(n=>appels.parNumero[n]
+              ? <a key={n} href={photo(appels.parNumero[n])} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700,marginRight:4}}>{n} ↗</a>
+              : <b key={n} style={{color:'var(--text)',marginRight:4}}>{n}</b>)}</span>}
+            {e.ot && <span>OT {appels.parNumero[e.ot]
+              ? <a href={photo(appels.parNumero[e.ot])} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>{e.ot} ↗</a>
+              : <b style={{color:'var(--text)'}}>{e.ot}</b>}</span>}
             {e.fac ? <span>Facture <b style={{color:'var(--text)'}}>{e.fac}</b>{String(e.fac).split(/[\s,–-]+/).filter(n=>factures[n]&&factures[n].ht!=null).map(n=><span key={n}> · <b style={{color:'var(--text)'}}>{cvMoney(factures[n].ht)}</b></span>)}</span>
               : (e.day<today ? <span style={{color:'var(--danger)',fontWeight:700}}>Pas de facture inscrite</span> : <span>Planifié</span>)}
           </div>
@@ -2633,7 +2656,7 @@ function ClientJobDetail({job, factures}){
   </div>;
 }
 
-function ClientDetailView({client, factures, onBack, isDesktop}){
+function ClientDetailView({client, factures, appels, onBack, isDesktop}){
   const [filter,setFilter]=useState('all');
   const [q,setQ]=useState('');
   const [sel,setSel]=useState(null);
@@ -2684,18 +2707,18 @@ function ClientDetailView({client, factures, onBack, isDesktop}){
           </table>
         </div>
       </div>
-      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures}/></div>
+      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels}/></div>
     </div>
   </div>;
 }
 
 function ClientsView({cfg, refreshKey, isDesktop}){
-  const {loading, err, events, registry, factures} = useClientsData(cfg, refreshKey);
+  const {loading, err, events, registry, factures, appels} = useClientsData(cfg, refreshKey);
   const [open,setOpen]=useState(null);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les clients : {err}</div>;
-  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
+  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
   const pros = Object.values(clients).filter(c=>c.code!=='PART').sort((a,b)=>b.jobs.length-a.jobs.length);
   const part = clients.PART;
   const Card = ({c})=> <div className="opp-card" onClick={()=>setOpen(c.code)} style={{padding:14}}>
@@ -2765,6 +2788,7 @@ function SettingsView({cfg, setCfg, toast}){
       <div className="field"><label>ID du Sheet "SUIVI TRAVAUX" (Factures) — lecture seule</label><input value={f.suiviTravauxSpreadsheetId} onChange={e=>setF({...f,suiviTravauxSpreadsheetId:e.target.value})} placeholder="Sheet des appels de service / factures, jamais modifié par le CRM"/></div>
       <div className="field"><label>ID du Sheet « La mémoire — Jobs » — lecture seule</label><input value={f.memoireJobsSpreadsheetId||''} onChange={e=>setF({...f,memoireJobsSpreadsheetId:e.target.value})}/></div>
       <div className="field"><label>ID du Sheet « La mémoire — Factures » — lecture seule</label><input value={f.memoireFacturesSpreadsheetId||''} onChange={e=>setF({...f,memoireFacturesSpreadsheetId:e.target.value})}/></div>
+      <div className="field"><label>ID du Sheet « La mémoire — Appels de service » — lecture seule</label><input value={f.memoireAppelsSpreadsheetId||''} onChange={e=>setF({...f,memoireAppelsSpreadsheetId:e.target.value})}/></div>
       <div className="field"><label>Calendriers (séparés par virgule)</label><input value={f.calendarIds} onChange={e=>setF({...f,calendarIds:e.target.value})}/></div>
       <button className="btn btn-p" onClick={()=>{ saveCfg(f); setCfg(f); toast('Réglages enregistrés.','ok'); }}>Enregistrer les réglages</button>
       <div className="muted" style={{fontSize:11.5}}>Version {APP_VERSION}</div>
