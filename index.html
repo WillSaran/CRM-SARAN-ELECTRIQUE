@@ -140,7 +140,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v21';
+const APP_VERSION = 'v22';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2463,10 +2463,11 @@ function useClientsData(cfg, refreshKey){
         const ah=(apRows[0]||[]).map(h=>cvNorm(h)), ac=re=>ah.findIndex(h=>re.test(h));
         const ax={as:ac(/^appel/),fac:ac(/^factures?$/),ot:ac(/^ordre/),po:ac(/^po$/),nom:ac(/^fichier$/),id:ac(/^fichierid/)};
         const ag=(r,k)=> ax[k]>=0 ? (r[ax[k]]||'').trim() : '';
-        const appels={parNumero:{}, parFacture:{}};
+        const appels={parNumero:{}, parFacture:{}, liste:[]};
         apRows.slice(1).forEach(r=>{
           const a={as:ag(r,'as'), ot:ag(r,'ot'), po:ag(r,'po'), nom:ag(r,'nom'), id:ag(r,'id'), factures:ag(r,'fac').split(/[\s,]+/).filter(Boolean)};
           if(!a.id) return;
+          appels.liste.push(a);
           if(a.as) appels.parNumero[a.as]=a; else if(a.ot) appels.parNumero[a.ot]=appels.parNumero[a.ot]||a;
           a.factures.forEach(f=>{ (appels.parFacture[f]=appels.parFacture[f]||[]).push(a); });
         });
@@ -2559,6 +2560,36 @@ function cvBuildClients(events, registry, factures){
   return clients;
 }
 
+// Ordres de travail d'une job : feuilles OT du registre (papier ou logiciel) rattachées à son PO,
+// plus les numéros d'OT inscrits dans le bloc Suivi de ses événements.
+function cvJobOTs(job, appels){
+  const L = (appels && appels.liste) || [];
+  const docs = job.po ? L.filter(a=>a.po===job.po && (a.ot || !a.as)) : [];
+  const nums = [...new Set(job.events.map(e=>e.ot).filter(Boolean))];
+  const out = docs.map(a=>({label:'OT '+(a.ot || (appels.parNumero && Object.keys(appels.parNumero).find(k=>appels.parNumero[k]===a)) || ''), id:a.id}));
+  const pn=(appels&&appels.parNumero)||{};
+  nums.forEach(n=>{ if(!out.some(o=>o.label==='OT '+n)) out.push({label:'OT '+n, id:(pn[n]||{}).id||''}); });
+  return out;
+}
+function CvOTLinks({ots}){
+  return <>{ots.map((o,k)=> o.id
+    ? <a key={k} href={'https://drive.google.com/file/d/'+o.id+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700,marginRight:10}}>{o.label} ↗</a>
+    : <span key={k} style={{marginRight:10,fontWeight:700}}>{o.label}</span>)}</>;
+}
+// Cellule Rough / Finition : date + factures de l'étape; rouge si l'étape est faite sans facture.
+function CvPhaseCell({job, phase}){
+  const today = cvDay(new Date().toISOString());
+  const ev = job.events.filter(e=>e.phase===phase);
+  if(!ev.length) return <span className="muted">—</span>;
+  const d = phase==='ROUGH' ? ev[0].day : ev[ev.length-1].day;
+  const fx = [...new Set(ev.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(Boolean)))];
+  const done = ev.some(e=>e.day<today);
+  return <div style={{whiteSpace:'nowrap'}}>{cvFmtDay(d)}<div style={{fontSize:11.5,fontWeight:700}}>
+    {fx.length ? <span className="muted">{fx.map(f=>'#'+f).join(' ')}</span>
+      : done ? <span style={{color:'var(--danger)'}}>pas facturée</span> : <span className="muted" style={{fontWeight:400}}>à venir</span>}
+  </div></div>;
+}
+
 const CV_STATUS = {done:['Terminée','var(--success)'], cours:['En cours','var(--accent)'], avenir:['À venir','var(--muted)']};
 function CvPill({status}){
   const [t,c]=CV_STATUS[status];
@@ -2629,6 +2660,10 @@ function ClientJobDetail({job, factures, appels}){
       </div>; })}
     </div>}
     {job.dupFac.length>0 && <div className="card" style={{borderColor:'var(--danger)',padding:10,fontSize:13,marginBottom:10}}>La facture {job.dupFac.map(f=>'#'+f).join(', ')} est aussi inscrite sur une autre job. Une des deux est fausse.</div>}
+    {cvJobOTs(job, appels).length>0 && <div style={{marginBottom:10,fontSize:13}}>
+      <div className="fh" style={{fontSize:14,margin:'4px 0 4px'}}>Ordres de travail</div>
+      <CvOTLinks ots={cvJobOTs(job, appels)}/>
+    </div>}
     {r.dossier && <a className="btn btn-p btn-sm" href={'https://drive.google.com/drive/folders/'+r.dossier} target="_blank" rel="noopener" style={{textDecoration:'none',marginBottom:12}}>Ouvrir le dossier (bon de commande et plans) ↗</a>}
     <div className="fh" style={{fontSize:14,margin:'10px 0 6px'}}>Passages</div>
     <div className="grid" style={{gap:6}}>
@@ -2694,8 +2729,8 @@ function ClientDetailView({client, factures, appels, onBack, isDesktop}){
               {list.map(j=><tr key={j.id} onClick={()=>pick(j.id)} style={{cursor:'pointer',background:sel===j.id?'rgba(var(--accent-rgb),0.10)':undefined}}>
                 <td style={{whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>{j.po||'—'}</td>
                 <td><b>{j.name}</b>{j.flag && <span style={{color:'var(--danger)',fontWeight:800}}> !</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></td>
-                <td style={{whiteSpace:'nowrap'}}>{cvFmtDay(j.rough)}</td>
-                <td style={{whiteSpace:'nowrap'}}>{cvFmtDay(j.fin)}</td>
+                <td><CvPhaseCell job={j} phase="ROUGH"/></td>
+                <td><CvPhaseCell job={j} phase="FINITION"/></td>
                 <td style={{fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>
                   {(j.reg&&j.reg.ht&&j.billed) ? (()=>{ const p=j.billed/j.reg.ht; return <div><span style={{display:'inline-block',width:46,height:6,borderRadius:3,background:'var(--bg4)',verticalAlign:'middle',marginRight:6,position:'relative',overflow:'hidden'}}><i style={{position:'absolute',left:0,top:0,bottom:0,width:Math.min(p,1)*100+'%',background:p>1?'var(--danger)':'var(--success)'}}></i></span>{Math.round(p*100)} %</div>; })() : null}
                   <div className="muted" style={{fontSize:12}}>{j.factures.join(', ')||'—'}</div>
@@ -2714,6 +2749,7 @@ function ClientDetailView({client, factures, appels, onBack, isDesktop}){
 
 function ClientsView({cfg, refreshKey, isDesktop}){
   const {loading, err, events, registry, factures, appels} = useClientsData(cfg, refreshKey);
+  const appelsOk = appels || {parNumero:{}, parFacture:{}, liste:[]};
   const [open,setOpen]=useState(null);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
@@ -2730,8 +2766,24 @@ function ClientsView({cfg, refreshKey, isDesktop}){
     <div className="a" style={{marginTop:6}}>{c.jobs.length} jobs · {c.active} en cours ou à venir{c.poTotal ? ' · '+Math.round(c.poTotal).toLocaleString('fr-CA')+' $ en PO' : ''}{c.billed ? ' · '+Math.round(c.billed).toLocaleString('fr-CA')+' $ facturé' : ''}</div>
     <div className="a">Dernière activité : {cvFmtDay(c.lastDay)}</div>
   </div>;
+  // Prochains passages (21 jours), tous clients confondus, avec OT ou rappel de commande de stock.
+  const today = cvDay(new Date().toISOString());
+  const limite = cvDay(new Date(Date.now()+21*864e5).toISOString());
+  const bientot = Object.values(clients).flatMap(c=>c.jobs.map(j=>({c, j, e:j.events.find(e=>e.day>today && e.day<=limite)})))
+    .filter(x=>x.e && x.c.code!=='PART').sort((a,b)=>a.e.day.localeCompare(b.e.day));
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Clients</h2>
+    <div className="card" style={{marginBottom:16}}>
+      <div className="fh" style={{fontSize:15,marginBottom:2}}>Bientôt</div>
+      <div className="muted" style={{fontSize:12.5,marginBottom:8}}>Passages des 3 prochaines semaines, avec l'ordre de travail (la liste de stock) quand il existe.</div>
+      {bientot.length ? bientot.map(({c,j,e},k)=>{
+        const ots = cvJobOTs(j, appelsOk), jours = Math.round((new Date(e.day)-new Date(today))/864e5);
+        return <div key={k} className="remind-item" style={{flexWrap:'wrap',gap:'4px 14px',cursor:'pointer'}} onClick={()=>setOpen(c.code)}>
+          <div><b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b> <span style={{fontSize:11,fontWeight:800,color:'var(--accent)'}}>{e.phase}</span> <b>{c.code} {j.name}</b></div>
+          <div style={{fontSize:12.5}} onClick={ev=>ev.stopPropagation()}>{ots.length ? <CvOTLinks ots={ots}/> :
+            <span style={{color:'var(--warning)',fontWeight:700}}>Pas d'ordre de travail : prévoir la commande de stock{jours<=7?' cette semaine':''}</span>}</div>
+        </div>; }) : <div className="muted" style={{fontSize:13}}>Aucun passage de contracteur dans les 3 prochaines semaines.</div>}
+    </div>
     <div className="muted" style={{fontSize:13,marginBottom:14}}>Tes contracteurs et tes particuliers. Clique un client pour voir ses jobs, puis une job pour sa fiche complète.</div>
     <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1fr) minmax(0,1fr)':'1fr',gap:16,alignItems:'start'}}>
       <div>
