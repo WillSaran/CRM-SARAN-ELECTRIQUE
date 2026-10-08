@@ -141,7 +141,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v26';
+const APP_VERSION = 'v27';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1435,7 +1435,7 @@ function pjEtapes(job, appels, commandes){
   const ro = ev.filter(e=>e.phase==='ROUGH'), fi = ev.filter(e=>e.phase==='FINITION');
   const sansFac = passes.filter(e=>!e.fac);
   const sansEquipe = avenir.filter(e=>!e.crew.length);
-  const cmdAPlacer = avenir.filter(e=>e.day<=cvDay(new Date(Date.now()+14*864e5).toISOString()) && ((commandes||{})[e.id]||{}).statut!=='Placée');
+  const cmdAPlacer = avenir.filter(e=>e.day<=cvDay(new Date(Date.now()+14*864e5).toISOString()) && !CMD_FAIT.includes(((commandes||{})[e.id]||{}).statut));
   const E = [];
   const add = (ok, titre, manque, ou, na) => E.push({ok, titre, manque, ou, na});
   if(pro) add(!!job.po, 'PO reçu', 'Aucun PO trouvé pour cette job', 'Ajoute le numéro P0xxxx au titre de l\'événement (ou demande-le au contracteur)');
@@ -1452,7 +1452,11 @@ function pjEtapes(job, appels, commandes){
   const etape = !ev.length ? 'Rien de planifié'
     : prochain ? (prochain.phase ? prochain.phase.charAt(0)+prochain.phase.slice(1).toLowerCase() : 'Passage')+' le '+cvFmtDay(prochain.day)
     : (sansFac.length ? 'À facturer' : 'Terminée');
-  return {E:actifs, manquants, etape, prochain, total:actifs.length, faits:actifs.length-manquants.length};
+  // Repères rapides : 🎤 mémo vocal attaché, 📝 OT fait, AP appel de service fait.
+  const vocal = ev.some(e=>e.attachments.some(a=>/^audio\//.test(a.mimeType||'') || /\.(m4a|mp3|wav|aac|ogg|caf)$/i.test(a.title||'') || /m[ée]mo vocal|vocal|voice/i.test(a.title||'')));
+  const otFait = ots.length>0 || ev.some(e=>e.ot);
+  const apFait = ev.some(e=>e.as) || (pro && (appels.liste||[]).some(a=>a.as && a.po && a.po===job.po));
+  return {E:actifs, manquants, etape, prochain, total:actifs.length, faits:actifs.length-manquants.length, vocal, otFait, apFait};
 }
 
 function ProjetsView(props){
@@ -1492,6 +1496,11 @@ function ProjetsSuivi({cfg, refreshKey}){
           <div style={{display:'flex',gap:3,marginTop:6}}>{s.E.map((e,i)=><span key={i} title={e.titre} style={{width:16,height:6,borderRadius:3,background:e.ok?'var(--success)':'var(--warning)'}}/>)}</div>
         </div>
         <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
+          <span style={{marginRight:8,fontSize:14}}>
+            {s.vocal && <span title="Mémo vocal attaché" style={{marginLeft:4}}>🎤</span>}
+            {s.otFait && <span title="OT fait" style={{marginLeft:4}}>📝</span>}
+            {s.apFait && <span title="Appel de service fait" style={{marginLeft:4,fontSize:11,fontWeight:800,padding:'1px 4px',borderRadius:4,background:'rgba(88,166,255,0.15)',color:'var(--accent)'}}>AP</span>}
+          </span>
           {s.manquants.length ? <span className="badge" style={{background:'rgba(210,153,34,0.15)',color:'var(--warning)'}}>{s.manquants.length} à compléter</span>
             : <span className="badge" style={{background:'rgba(63,185,80,0.15)',color:'var(--success)'}}>✓ tout est là</span>}
           <div className="muted" style={{fontSize:12,marginTop:4}}>{o?'▲':'▼'}</div>
@@ -2247,7 +2256,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       </div>
     </div>
     {cd.loading ? <div className="card muted" style={{marginBottom:16,fontSize:13}}>Lecture des jobs et des commandes…</div>
-      : <CvSemaine clients={cdClients} appels={cd.appels||{parNumero:{},parFacture:{},liste:[]}} ancre={anchor} commandes={commandes} onCommande={basculerCommande}/>}
+      : <CvSemaine clients={cdClients} appels={cd.appels||{parNumero:{},parFacture:{},liste:[]}} ancre={anchor} commandes={commandes} onCommande={basculerCommande} isDesktop={isDesktop}/>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {loading ? <div className="muted">Chargement...</div> :
 
@@ -2971,40 +2980,77 @@ function useCommandes(cfg){
   const lire = useCallback(async()=>{
     if(!id) return;
     try{
-      const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Commandes!A1:F'});
-      const map={}; (r.result.values||[]).slice(1).forEach((row,i)=>{ if(row[0]) map[row[0]]={row:i+2, statut:row[3]||'', quand:row[4]||''}; });
+      const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Commandes!A1:G'});
+      const map={}; (r.result.values||[]).slice(1).forEach((row,i)=>{ if(row[0]) map[row[0]]={row:i+2, statut:row[3]||'', quand:row[4]||'', note:row[6]||''}; });
       setEtat({map, pret:true});
     }catch(e){ setEtat({map:{}, pret:true}); }
   },[id]);
   useEffect(()=>{ lire(); },[lire]);
-  const basculer = async (cle, info, placee)=>{
-    const ligne = [cle, info.day, info.job, placee?'Placée':'À placer', new Date().toLocaleString('fr-CA'), info.ot||''];
-    setEtat(s=>({...s, map:{...s.map, [cle]:{...(s.map[cle]||{}), statut:ligne[3], quand:ligne[4]}}}));
+  // statut : 'Placée' | 'Rien à commander' | 'À placer' ; note : texte ajouté aussi à la description de l'événement.
+  const enregistrer = async (cle, info, statut, note)=>{
+    const ex = etat.map[cle] || {};
+    const ligne = [cle, info.day, info.job, statut ?? ex.statut ?? 'À placer', new Date().toLocaleString('fr-CA'), info.ot||'', note ?? ex.note ?? ''];
+    setEtat(s=>({...s, map:{...s.map, [cle]:{...ex, statut:ligne[3], quand:ligne[4], note:ligne[6]}}}));
     try{
-      if(!etat.pret || !Object.keys(etat.map).length) await ensureSheetsExist(id, [{name:'Commandes', headers:['Clé','Date','Job','Statut','Mis à jour le','OT']}]);
-      const ex = etat.map[cle];
-      if(ex && ex.row) await sheetsUpdateRow(id, 'Commandes', ex.row, ligne); else await sheetsAppendRow(id, 'Commandes', ligne);
+      if(!Object.keys(etat.map).length) await ensureSheetsExist(id, [{name:'Commandes', headers:['Clé','Date','Job','Statut','Mis à jour le','OT','Note']}]);
+      if(ex.row) await sheetsUpdateRow(id, 'Commandes', ex.row, ligne); else await sheetsAppendRow(id, 'Commandes', ligne);
+      if(note && info.eventId && info.calId){
+        const ev = await window.gapi.client.calendar.events.get({calendarId:info.calId, eventId:info.eventId});
+        const desc = (ev.result.description||'').replace(/\n?📦 Note commande :.*$/m,'');
+        await window.gapi.client.calendar.events.patch({calendarId:info.calId, eventId:info.eventId, resource:{description:(desc ? desc+'\n' : '')+'📦 Note commande : '+note}});
+      }
       await lire();
-    }catch(e){ alert('Impossible d\'enregistrer la commande : '+apiErrMsg(e)); lire(); }
+    }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); lire(); }
   };
-  return [etat.map, basculer];
+  return [etat.map, enregistrer];
 }
 
-function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande}){
+const CMD_FAIT = ['Placée','Rien à commander'];
+function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande, isDesktop}){
   const [dec,setDec]=useState(0);
+  const [noteDe,setNoteDe]=useState(null);
+  const [noteTxt,setNoteTxt]=useState('');
   const lundi = cvLundi(ancre || new Date()); if(!ancre) lundi.setDate(lundi.getDate()+dec*7);
   const jours = [...Array(7)].map((_,i)=>{ const d=new Date(lundi); d.setDate(d.getDate()+i); return cvDay(d.toISOString()); });
   const today = cvDay(new Date().toISOString());
   commandes = commandes || {};
   const items = Object.values(clients).flatMap(c=>c.jobs.flatMap(j=>j.events.filter(e=>jours.includes(e.day)).map(e=>{
     const ots = c.code!=='PART' ? cvJobOTs(j, appels) : [];
-    const cle = e.id || (e.day+'|'+j.id);
-    return {c, j, e, ots, cle, placee: (commandes[cle]||{}).statut==='Placée'};
+    const cle = e.id || (e.day+'|'+j.id), cmd = commandes[cle]||{};
+    return {c, j, e, ots, cle, cmd, fait: CMD_FAIT.includes(cmd.statut)};
   })));
-  const aPlacer = items.filter(x=>!x.placee && x.e.day>=today).length;
+  const aPlacer = items.filter(x=>!x.fait && x.e.day>=today).length;
   const fmtSem = d => d.toLocaleDateString('fr-CA',{day:'numeric',month:'long'});
   const dim = new Date(lundi); dim.setDate(dim.getDate()+6);
-  const nomJour = d => new Date(d+'T12:00:00').toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'short'});
+  const info = x => ({day:x.e.day, job:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name+(x.e.phase?' '+x.e.phase:''), ot:x.ots.map(o=>o.label).join(' '), eventId:x.e.id, calId:x.e.calId});
+  const vert = {background:'rgba(63,185,80,0.15)',color:'var(--success)',borderColor:'var(--success)',fontWeight:700};
+  const Item = ({x})=>{ const {c,j,e,ots,cle,cmd,fait}=x;
+    return <div style={{border:'1px solid var(--border2)',borderLeft:'3px solid '+(fait?'var(--success)':(e.day>=today?'var(--warning)':'var(--border2)')),borderRadius:8,padding:'6px 7px',marginBottom:6,fontSize:12}}>
+      <div style={{cursor:'pointer'}} onClick={()=>onOpen && onOpen(c.code)}>
+        <div style={{fontWeight:700,fontVariantNumeric:'tabular-nums'}}>{e.allDay ? 'Journée' : cvHeure(e.start)+(e.end?'–'+cvHeure(e.end):'')} <span style={{fontSize:10.5,fontWeight:800,color:'var(--accent)'}}>{e.phase}</span></div>
+        <div style={{fontWeight:700,lineHeight:1.25}}>{c.code!=='PART'?c.code+' ':''}{j.name}</div>
+        {e.crew.length>0 && <div className="muted" style={{fontSize:11}}>{e.crew.join(', ')}</div>}
+      </div>
+      {ots.length>0 && <div style={{marginTop:3}}><CvOTLinks ots={ots}/></div>}
+      {cmd.note && <div style={{marginTop:3,fontSize:11.5}}>📦 {cmd.note}</div>}
+      {onCommande && <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:5}}>
+        {fait
+          ? <button className="btn btn-sm" style={vert} title="Cliquer pour remettre « à placer »" onClick={()=>onCommande(cle, info(x), 'À placer')}>{cmd.statut==='Placée'?'✅ Placée':'✓ Rien à commander'}</button>
+          : <>
+            <button className="btn btn-sm" title="Commande placée chez le fournisseur" onClick={()=>onCommande(cle, info(x), 'Placée')}>✅ Placée</button>
+            <button className="btn btn-sm" title="Pas besoin de commande (stock déjà là)" onClick={()=>onCommande(cle, info(x), 'Rien à commander')}>✓ Rien</button>
+          </>}
+        <button className="btn btn-sm" title="Ajouter une note (va aussi dans la description de l'événement)" onClick={()=>{ setNoteDe(cle); setNoteTxt(cmd.note||''); }}>📝</button>
+      </div>}
+      {noteDe===cle && <div style={{marginTop:5}}>
+        <textarea value={noteTxt} onChange={ev=>setNoteTxt(ev.target.value)} rows={2} placeholder="Ex. : J'ai 10 gradateurs à la shop" style={{width:'100%',fontSize:12,boxSizing:'border-box'}}/>
+        <div style={{display:'flex',gap:4,marginTop:3}}>
+          <button className="btn btn-sm btn-p" onClick={()=>{ onCommande(cle, info(x), null, noteTxt.trim()); setNoteDe(null); }}>Enregistrer</button>
+          <button className="btn btn-sm" onClick={()=>setNoteDe(null)}>Annuler</button>
+        </div>
+      </div>}
+    </div>; };
+  const nomJour = d => new Date(d+'T12:00:00').toLocaleDateString('fr-CA',{weekday:'short',day:'numeric',month:'short'});
   return <div className="card" style={{marginBottom:16}}>
     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
       <div className="fh" style={{fontSize:15}}>Commandes de la semaine · {fmtSem(lundi)} au {fmtSem(dim)}</div>
@@ -3015,26 +3061,18 @@ function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande}){
       </div>}
     </div>
     <div className="muted" style={{fontSize:12.5,margin:'4px 0 10px'}}>
-      {items.length} passage{items.length>1?'s':''} · {aPlacer ? <b style={{color:'var(--warning)'}}>{aPlacer} commande{aPlacer>1?'s':''} à placer</b> : <b style={{color:'var(--success)'}}>toutes les commandes sont placées ✓</b>}
-      {' '}· l'OT, quand il existe, c'est la liste de stock.
+      {items.length} passage{items.length>1?'s':''} · {aPlacer ? <b style={{color:'var(--warning)'}}>{aPlacer} commande{aPlacer>1?'s':''} à confirmer</b> : <b style={{color:'var(--success)'}}>tout est confirmé ✓</b>}
+      {' '}· ✅ placée, ✓ rien à commander, 📝 note (ajoutée à l'événement).
     </div>
-    {jours.map(d=>{ const du=items.filter(x=>x.e.day===d).sort((a,b)=>String(a.e.start).localeCompare(String(b.e.start)));
-      if(!du.length) return null;
-      return <div key={d} style={{marginBottom:10}}>
-        <div style={{fontSize:12,fontWeight:800,textTransform:'uppercase',letterSpacing:'.04em',color: d===today?'var(--accent)':'var(--muted)',padding:'4px 0',borderBottom:'1px solid var(--border)'}}>{nomJour(d)}{d===today?' · aujourd\'hui':''}</div>
-        {du.map(({c,j,e,ots,cle,placee},k)=><div key={k} className="remind-item" style={{flexWrap:'wrap',gap:'4px 14px'}}>
-          <div style={{display:'flex',gap:10,alignItems:'baseline',cursor:'pointer'}} onClick={()=>onOpen && onOpen(c.code)}>
-            <span style={{fontVariantNumeric:'tabular-nums',fontSize:12.5,minWidth:78,fontWeight:700}}>{e.allDay ? 'Journée' : cvHeure(e.start)+(e.end?' – '+cvHeure(e.end):'')}</span>
-            <span><span style={{fontSize:11,fontWeight:800,color:'var(--accent)'}}>{e.phase}</span> <b>{c.code!=='PART'?c.code+' ':''}{j.name}</b>{e.crew.length ? <span className="muted" style={{fontSize:12}}> · {e.crew.join(', ')}</span> : null}</span>
-          </div>
-          <div style={{display:'flex',gap:10,alignItems:'center',fontSize:12.5,flexWrap:'wrap'}}>
-            {ots.length>0 && <CvOTLinks ots={ots}/>}
-            {onCommande && <button className="btn btn-sm" onClick={()=>onCommande(cle,{day:e.day, job:(c.code!=='PART'?c.code+' ':'')+j.name+(e.phase?' '+e.phase:''), ot:ots.map(o=>o.label).join(' ')}, !placee)}
-              style={placee?{background:'rgba(63,185,80,0.15)',color:'var(--success)',borderColor:'var(--success)',fontWeight:700}:{color:'var(--warning)',borderColor:'var(--warning)'}}>
-              {placee ? '✅ Commande placée' : '☐ Commande à placer'}</button>}
-          </div>
-        </div>)}
-      </div>; })}
+    <div style={{overflowX:'auto'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,minmax('+(isDesktop?'0':'150px')+',1fr))',gap:6}}>
+        {jours.map(d=>{ const du=items.filter(x=>x.e.day===d).sort((a,b)=>String(a.e.start).localeCompare(String(b.e.start)));
+          return <div key={d} style={{minWidth:0}}>
+            <div style={{fontSize:11.5,fontWeight:800,textTransform:'uppercase',letterSpacing:'.03em',color: d===today?'var(--accent)':'var(--muted)',padding:'4px 2px',borderBottom:'2px solid '+(d===today?'var(--accent)':'var(--border)'),marginBottom:6}}>{nomJour(d)}</div>
+            {du.map(x=><Item key={x.cle} x={x}/>)}
+          </div>; })}
+      </div>
+    </div>
     {!items.length && <div className="muted" style={{fontSize:13}}>Aucun passage cette semaine-là.</div>}
   </div>;
 }
