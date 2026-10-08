@@ -130,7 +130,8 @@ const DEFAULT_CFG = {
   calendarIds: 'saranelectrique@gmail.com,info@saranelectrique.com',
   memoireJobsSpreadsheetId: '1POqSf9_TAJCr8cYsV2QEGYzcPdLOeIGeWnIX8Y_swBg',
   memoireFacturesSpreadsheetId: '1I6QfEObkpfrSAqz2vSO_XdCKABWYoe2e5TOG3so3Uks',
-  memoireAppelsSpreadsheetId: '1FJvH7oh82oRlEAyg2ddHOrJEDc-NGI6849m7StONcD8'
+  memoireAppelsSpreadsheetId: '1FJvH7oh82oRlEAyg2ddHOrJEDc-NGI6849m7StONcD8',
+  memoireMajUrl: 'https://script.google.com/a/macros/saranelectrique.com/s/AKfycbwimU1z8lsEwIaL7zIx6Nqf1m8xSrCTPpmTEtTYaVs5PMbPqxhz91VIkcbthP56ZmDubA/exec'  // adresse de l'application Web Apps Script (bouton « Mettre à jour »)
 };
 function loadCfg(){
   try{ const raw=localStorage.getItem('crm_cfg'); return raw?{...DEFAULT_CFG,...JSON.parse(raw)}:{...DEFAULT_CFG}; }
@@ -140,7 +141,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v22';
+const APP_VERSION = 'v23';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2772,7 +2773,12 @@ function ClientsView({cfg, refreshKey, isDesktop}){
   const bientot = Object.values(clients).flatMap(c=>c.jobs.map(j=>({c, j, e:j.events.find(e=>e.day>today && e.day<=limite)})))
     .filter(x=>x.e && x.c.code!=='PART').sort((a,b)=>a.e.day.localeCompare(b.e.day));
   return <div>
-    <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Clients</h2>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,margin:'0 0 4px'}}>
+      <h2 className="fh" style={{margin:0,fontSize:22}}>Clients</h2>
+      {cfg.memoireMajUrl
+        ? <button className="btn btn-sm" title="Va chercher les nouveaux PO et factures, met le registre à jour et range tout (prêt dans environ 15 min)" onClick={()=>window.open(cfg.memoireMajUrl,'_blank')}>⟳ Mettre à jour La mémoire</button>
+        : <span className="muted" style={{fontSize:12}}>Bouton de mise à jour : ajoute l'adresse dans Réglages</span>}
+    </div>
     <div className="card" style={{marginBottom:16}}>
       <div className="fh" style={{fontSize:15,marginBottom:2}}>Bientôt</div>
       <div className="muted" style={{fontSize:12.5,marginBottom:8}}>Passages des 3 prochaines semaines, avec l'ordre de travail (la liste de stock) quand il existe.</div>
@@ -2841,6 +2847,7 @@ function SettingsView({cfg, setCfg, toast}){
       <div className="field"><label>ID du Sheet « La mémoire — Jobs » — lecture seule</label><input value={f.memoireJobsSpreadsheetId||''} onChange={e=>setF({...f,memoireJobsSpreadsheetId:e.target.value})}/></div>
       <div className="field"><label>ID du Sheet « La mémoire — Factures » — lecture seule</label><input value={f.memoireFacturesSpreadsheetId||''} onChange={e=>setF({...f,memoireFacturesSpreadsheetId:e.target.value})}/></div>
       <div className="field"><label>ID du Sheet « La mémoire — Appels de service » — lecture seule</label><input value={f.memoireAppelsSpreadsheetId||''} onChange={e=>setF({...f,memoireAppelsSpreadsheetId:e.target.value})}/></div>
+      <div className="field"><label>Adresse « Mettre à jour La mémoire » (application Web Apps Script, finit par /exec)</label><input value={f.memoireMajUrl||''} placeholder="https://script.google.com/macros/s/…/exec" onChange={e=>setF({...f,memoireMajUrl:e.target.value.trim()})}/></div>
       <div className="field"><label>Calendriers (séparés par virgule)</label><input value={f.calendarIds} onChange={e=>setF({...f,calendarIds:e.target.value})}/></div>
       <button className="btn btn-p" onClick={()=>{ saveCfg(f); setCfg(f); toast('Réglages enregistrés.','ok'); }}>Enregistrer les réglages</button>
       <div className="muted" style={{fontSize:11.5}}>Version {APP_VERSION}</div>
