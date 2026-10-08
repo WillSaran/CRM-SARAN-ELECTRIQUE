@@ -141,7 +141,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v27';
+const APP_VERSION = 'v28';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1424,7 +1424,7 @@ function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errE
 // ProjectsFromCalendar + la fiche détail, pour que "événements associés à un
 // projet" et "projets par adresse" utilisent exactement les mêmes données.
 // ── Projets : le miroir de Clients, axé sur la gestion — étapes, ce qui manque et où le compléter ──
-function pjEtapes(job, appels, commandes){
+function pjEtapes(job, appels, commandes, courriels){
   const today = cvDay(new Date().toISOString());
   const r = job.reg || {}, pro = job.client!=='PART', ev = job.events;
   const passes = ev.filter(e=>e.day<today), avenir = ev.filter(e=>e.day>=today);
@@ -1446,6 +1446,9 @@ function pjEtapes(job, appels, commandes){
   if(pro && ro.some(e=>e.day<today)) add(ots.length>0, 'OT du rough reçu (liste de stock pour la finition)', 'Le rough est fait mais aucun OT papier n\'est classé', 'Les gars doivent déposer la photo de l\'OT dans « B- REF OT » ou « 1-PAD »');
   add(!sansEquipe.length, 'Équipe assignée', sansEquipe.map(e=>cvFmtDay(e.day)).join(', ')+' sans employé', 'Couleur ou initiales de l\'employé dans l\'événement', !avenir.length);
   add(!cmdAPlacer.length, 'Commande de stock placée (2 prochaines semaines)', cmdAPlacer.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' : commande à placer', 'Agenda → Commandes de la semaine → ✅', !avenir.length);
+  const fils = (job.po && courriels && courriels[job.po]) || [];
+  const aRepondre = fils.filter(f=>/toi de r/i.test(f.statut));
+  if(fils.length) add(!aRepondre.length, 'Courriels répondus', aRepondre.map(f=>'« '+f.sujet+' » ('+cvFmtDay(f.dernier)+')').join(', ')+' attend ta réponse', 'Gmail — ouvre le fil dans la section Courriels plus bas');
   add(!sansFac.length, 'Appel ou facture inscrit à chaque passage fait', sansFac.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' sans numéro', 'Description de l\'événement : « Appel de service : … / Facture : … »', !passes.length);
   const actifs = E.filter(x=>!x.na);
   const manquants = actifs.filter(x=>!x.ok);
@@ -1457,6 +1460,24 @@ function pjEtapes(job, appels, commandes){
   const otFait = ots.length>0 || ev.some(e=>e.ot);
   const apFait = ev.some(e=>e.as) || (pro && (appels.liste||[]).some(a=>a.as && a.po && a.po===job.po));
   return {E:actifs, manquants, etape, prochain, total:actifs.length, faits:actifs.length-manquants.length, vocal, otFait, apFait};
+}
+
+// Fils de courriels d'une job : dates, qui a écrit en dernier, ce qui se passe.
+function CvCourriels({liste}){
+  if(!liste || !liste.length) return null;
+  const couleur = st => /toi de r/i.test(st) ? 'var(--danger)' : /attente/i.test(st) ? 'var(--warning)' : 'var(--muted)';
+  return <div style={{marginTop:10}}>
+    <div className="fh" style={{fontSize:14,margin:'4px 0 6px'}}>Courriels ({liste.length})</div>
+    {liste.map((c,i)=><div key={i} style={{padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:12.5}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8}}>
+        <b>{c.sujet}</b>
+        {c.lien && <a href={c.lien} target="_blank" rel="noopener" style={{color:'var(--accent)',whiteSpace:'nowrap'}}>Ouvrir ↗</a>}
+      </div>
+      <div className="muted" style={{fontSize:12}}>{c.premier===c.dernier ? cvFmtDay(c.dernier) : cvFmtDay(c.premier)+' → '+cvFmtDay(c.dernier)} · {c.n} message{c.n>1?'s':''} · dernier de {c.de}</div>
+      <div style={{fontSize:12,fontWeight:700,color:couleur(c.statut)}}>{c.statut}</div>
+      {c.extrait && <div className="muted" style={{fontSize:12,fontStyle:'italic'}}>« {c.extrait} »</div>}
+    </div>)}
+  </div>;
 }
 
 function ProjetsView(props){
@@ -1471,7 +1492,7 @@ function ProjetsView(props){
 }
 
 function ProjetsSuivi({cfg, refreshKey}){
-  const {loading, err, events, registry, factures, appels} = useClientsData(cfg, refreshKey);
+  const {loading, err, events, registry, factures, appels, courriels} = useClientsData(cfg, refreshKey);
   const [commandes] = useCommandes(cfg);
   const [filtre,setFiltre]=useState('');
   const [seulManque,setSeulManque]=useState(false);
@@ -1481,7 +1502,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des jobs…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les jobs : {err}</div>;
   const today = cvDay(new Date().toISOString()), recent = cvDay(new Date(Date.now()-30*864e5).toISOString());
-  let jobs = Object.values(clients).flatMap(c=>c.jobs.map(j=>({c, j, s:pjEtapes(j, ap, commandes)})))
+  let jobs = Object.values(clients).flatMap(c=>c.jobs.map(j=>({c, j, s:pjEtapes(j, ap, commandes, courriels)})))
     .filter(x=>x.j.status!=='done' || x.j.last>=recent || x.s.etape==='À facturer');
   if(filtre) jobs = jobs.filter(x=>x.c.code===filtre);
   if(seulManque) jobs = jobs.filter(x=>x.s.manquants.length);
@@ -1516,6 +1537,7 @@ function ProjetsSuivi({cfg, refreshKey}){
           <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b> <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span>
           {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac ? ' · facture '+e.fac : (e.day<today ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
         </div>)}
+        <CvCourriels liste={j.po ? (courriels||{})[j.po] : null}/>
         {j.reg && j.reg.note && <div className="card" style={{marginTop:8,padding:8,fontSize:12.5,borderColor:'var(--warning)'}}>{j.reg.note}</div>}
         {j.reg && j.reg.dossier && <a className="btn btn-sm" href={'https://drive.google.com/drive/folders/'+j.reg.dossier} target="_blank" rel="noopener" style={{textDecoration:'none',marginTop:8,display:'inline-block'}}>Dossier ↗</a>}
       </div>}
@@ -2577,15 +2599,20 @@ function useClientsData(cfg, refreshKey){
         // Chaque source a 25 s max : si une bloque, on le dit au lieu de tourner sans fin.
         const lent = [];
         const delai = (p, nom, vide) => Promise.race([Promise.resolve(p), new Promise(r=>setTimeout(()=>{ lent.push(nom); r(vide); }, 25000))]);
-        const readSheet = (id, nom) => id
-          ? delai(Promise.resolve(window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'A1:Z'})).then(r=>r.result.values||[], ()=>[]), nom, [])
+        const readSheet = (id, nom, range) => id
+          ? delai(Promise.resolve(window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:range||'A1:Z'})).then(r=>r.result.values||[], ()=>[]), nom, [])
           : Promise.resolve([]);
-        const [events, regRows, facRows, apRows] = await Promise.all([
+        const [events, regRows, facRows, apRows, coRows] = await Promise.all([
           delai(listCalendarEventsRange(calIds, min.toISOString(), max.toISOString()), 'agenda', []),
           readSheet(cfg.memoireJobsSpreadsheetId, 'registre des jobs'),
           readSheet(cfg.memoireFacturesSpreadsheetId, 'registre des factures'),
-          readSheet(cfg.memoireAppelsSpreadsheetId, 'registre des appels')
+          readSheet(cfg.memoireAppelsSpreadsheetId, 'registre des appels'),
+          readSheet(cfg.memoireJobsSpreadsheetId, 'courriels', 'Courriels!A1:J')
         ]);
+        // Fils de courriels par PO (onglet « Courriels », rempli par Apps Script)
+        const courriels = {};
+        coRows.slice(1).forEach(r=>{ if(!r[0]) return; (courriels[r[0]]=courriels[r[0]]||[]).push({sujet:r[2]||'', premier:r[3]||'', dernier:r[4]||'', n:r[5]||'', de:r[6]||'', statut:r[7]||'', extrait:r[8]||'', lien:r[9]||''}); });
+        Object.values(courriels).forEach(l=>l.sort((a,b)=>b.dernier.localeCompare(a.dernier)));
         if(lent.length && alive) setState(s=>({...s, lent}));
         // Appels de service / OT papier : numéro -> photo, et facture -> appels
         const ah=(apRows[0]||[]).map(h=>cvNorm(h)), ac=re=>ah.findIndex(h=>re.test(h));
@@ -2618,8 +2645,8 @@ function useClientsData(cfg, refreshKey){
           adresse:g(r,'adr'), ville:g(r,'ville'), ht:cvNum(g(r,'ht')), dossier:g(r,'dos'),
           client:g(r,'cli'), tel:g(r,'tel'), courriel:g(r,'mail'), projet:g(r,'proj'), note:g(r,'note')
         }));
-        CV_CACHE[cle] = {err:'', events, registry, factures, appels, lent};
-        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, lent});
+        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, lent};
+        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, lent});
       }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}, appels:{}}); }
     })();
     return ()=>{alive=false};
@@ -2759,7 +2786,7 @@ function CvGauge({job}){
   </div>;
 }
 
-function ClientJobDetail({job, factures, appels}){
+function ClientJobDetail({job, factures, appels, courriels}){
   appels = appels || {parNumero:{}, parFacture:{}};
   const photo = a => 'https://drive.google.com/file/d/'+a.id+'/view';
   if(!job) return <div className="card muted">Clique une job pour voir sa fiche.</div>;
@@ -2794,6 +2821,7 @@ function ClientJobDetail({job, factures, appels}){
         </div>}
       </div>; })}
     </div>}
+    <CvCourriels liste={job.po ? (courriels||{})[job.po] : null}/>
     {job.dupFac.length>0 && <div className="card" style={{borderColor:'var(--danger)',padding:10,fontSize:13,marginBottom:10}}>La facture {job.dupFac.map(f=>'#'+f).join(', ')} est aussi inscrite sur une autre job. Une des deux est fausse.</div>}
     {cvJobOTs(job, appels).length>0 && <div style={{marginBottom:10,fontSize:13}}>
       <div className="fh" style={{fontSize:14,margin:'4px 0 4px'}}>Ordres de travail</div>
@@ -2826,7 +2854,7 @@ function ClientJobDetail({job, factures, appels}){
   </div>;
 }
 
-function ClientDetailView({client, factures, appels, onBack, isDesktop}){
+function ClientDetailView({client, factures, appels, courriels, onBack, isDesktop}){
   const [filter,setFilter]=useState('all');
   const [q,setQ]=useState('');
   const [sel,setSel]=useState(null);
@@ -2877,7 +2905,7 @@ function ClientDetailView({client, factures, appels, onBack, isDesktop}){
           </table>
         </div>
       </div>
-      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels}/></div>
+      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels} courriels={courriels}/></div>
     </div>
   </div>;
 }
@@ -3080,14 +3108,14 @@ function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande, isDes
 function ClientsView({cfg, refreshKey, isDesktop}){
   const [tick,setTick]=useState(0);
   const [deplie,setDeplie]=useState({});
-  const {loading, err, events, registry, factures, appels, lent} = useClientsData(cfg, refreshKey+'|'+tick);
+  const {loading, err, events, registry, factures, appels, courriels, lent} = useClientsData(cfg, refreshKey+'|'+tick);
   const appelsOk = appels || {parNumero:{}, parFacture:{}, liste:[]};
   const [open,setOpen]=useState(null);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les clients : {err}</div>;
   const avisLent = lent && lent.length ? <div className="card" style={{marginBottom:12,fontSize:13,borderColor:'var(--warning)'}}>⚠️ Trop long à lire : {lent.join(', ')}. Les données affichées sont incomplètes — essaie « Actualiser » ou reconnecte-toi.</div> : null;
-  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
+  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} courriels={courriels} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
   // Contracteurs et particuliers dans la même liste ; la flèche déplie les jobs du client.
   const tous = Object.values(clients).sort((a,b)=>(a.code==='PART')-(b.code==='PART') || b.jobs.length-a.jobs.length);
   const Card = ({c})=>{ const ouvert = deplie[c.code];
