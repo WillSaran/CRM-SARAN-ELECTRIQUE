@@ -141,7 +141,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v24';
+const APP_VERSION = 'v25';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1974,6 +1974,10 @@ function EditEventModal({event, onClose, onSaved, toast}){
 function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   const [viewMode,setViewMode]=useState('semaine'); // 'jour'|'semaine'|'mois'
   const [anchor,setAnchor]=useState(()=>new Date());
+  // Commandes de la semaine (même semaine que l'agenda) : jobs, heures, équipe, OT et commande placée ou non.
+  const cd = useClientsData(cfg, refreshKey);
+  const cdClients = useMemo(()=>cvBuildClients(cd.events, cd.registry, cd.factures),[cd.events, cd.registry, cd.factures]);
+  const [commandes, basculerCommande] = useCommandes(cfg);
   const [loading,setLoading]=useState(true);
   const [events,setEvents]=useState([]);
   const [err,setErr]=useState('');
@@ -2139,6 +2143,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         )}
       </div>
     </div>
+    {cd.loading ? <div className="card muted" style={{marginBottom:16,fontSize:13}}>Lecture des jobs et des commandes…</div>
+      : <CvSemaine clients={cdClients} appels={cd.appels||{parNumero:{},parFacture:{},liste:[]}} ancre={anchor} commandes={commandes} onCommande={basculerCommande}/>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {loading ? <div className="muted">Chargement...</div> :
 
@@ -2438,7 +2444,7 @@ function cvParseEvent(e){
   return {
     code, phase: phase || (code?'SERV':''), po, name, key: cvNorm(name), crew:[...crew],
     as: cvSuivi(e.description,'Appel de service'), ot: cvSuivi(e.description,'Ordre de travail'), fac: cvSuivi(e.description,'Facture'),
-    day: cvDay(e.start), start: e.start||'', end: e.end||'', allDay: !!e.allDay, location: e.location||'', title, attachments: e.attachments||[]
+    id: e.id||'', calId: e.calendarId||'', day: cvDay(e.start), start: e.start||'', end: e.end||'', allDay: !!e.allDay, location: e.location||'', title, attachments: e.attachments||[]
   };
 }
 
@@ -2855,42 +2861,75 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
 // Semaine : les passages jour par jour (lun → dim), avec les heures, l'équipe, et ce qu'il faut commander.
 function cvLundi(d){ const x=new Date(d); x.setHours(12,0,0,0); x.setDate(x.getDate()-((x.getDay()+6)%7)); return x; }
 function cvHeure(iso){ const m=String(iso||'').match(/T(\d{2}):(\d{2})/); return m ? (+m[1])+' h'+(m[2]!=='00'?' '+m[2]:'') : ''; }
-function CvSemaine({clients, appels, onOpen}){
+// Commandes de stock : « placée » ou non, par passage (onglet « Commandes » du registre des jobs, partagé entre appareils).
+function useCommandes(cfg){
+  const [etat,setEtat]=useState({map:{}, pret:false});
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async()=>{
+    if(!id) return;
+    try{
+      const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Commandes!A1:F'});
+      const map={}; (r.result.values||[]).slice(1).forEach((row,i)=>{ if(row[0]) map[row[0]]={row:i+2, statut:row[3]||'', quand:row[4]||''}; });
+      setEtat({map, pret:true});
+    }catch(e){ setEtat({map:{}, pret:true}); }
+  },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const basculer = async (cle, info, placee)=>{
+    const ligne = [cle, info.day, info.job, placee?'Placée':'À placer', new Date().toLocaleString('fr-CA'), info.ot||''];
+    setEtat(s=>({...s, map:{...s.map, [cle]:{...(s.map[cle]||{}), statut:ligne[3], quand:ligne[4]}}}));
+    try{
+      if(!etat.pret || !Object.keys(etat.map).length) await ensureSheetsExist(id, [{name:'Commandes', headers:['Clé','Date','Job','Statut','Mis à jour le','OT']}]);
+      const ex = etat.map[cle];
+      if(ex && ex.row) await sheetsUpdateRow(id, 'Commandes', ex.row, ligne); else await sheetsAppendRow(id, 'Commandes', ligne);
+      await lire();
+    }catch(e){ alert('Impossible d\'enregistrer la commande : '+apiErrMsg(e)); lire(); }
+  };
+  return [etat.map, basculer];
+}
+
+function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande}){
   const [dec,setDec]=useState(0);
-  const lundi = cvLundi(new Date()); lundi.setDate(lundi.getDate()+dec*7);
+  const lundi = cvLundi(ancre || new Date()); if(!ancre) lundi.setDate(lundi.getDate()+dec*7);
   const jours = [...Array(7)].map((_,i)=>{ const d=new Date(lundi); d.setDate(d.getDate()+i); return cvDay(d.toISOString()); });
   const today = cvDay(new Date().toISOString());
+  commandes = commandes || {};
   const items = Object.values(clients).flatMap(c=>c.jobs.flatMap(j=>j.events.filter(e=>jours.includes(e.day)).map(e=>{
     const ots = c.code!=='PART' ? cvJobOTs(j, appels) : [];
-    return {c, j, e, ots, commander: c.code!=='PART' && !ots.length && e.day>=today};
+    const cle = e.id || (e.day+'|'+j.id);
+    return {c, j, e, ots, cle, placee: (commandes[cle]||{}).statut==='Placée'};
   })));
-  const aCommander = items.filter(x=>x.commander).length;
+  const aPlacer = items.filter(x=>!x.placee && x.e.day>=today).length;
   const fmtSem = d => d.toLocaleDateString('fr-CA',{day:'numeric',month:'long'});
   const dim = new Date(lundi); dim.setDate(dim.getDate()+6);
   const nomJour = d => new Date(d+'T12:00:00').toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'short'});
-  return <div className="card" style={{marginTop:16}}>
+  return <div className="card" style={{marginBottom:16}}>
     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
-      <div className="fh" style={{fontSize:15}}>Semaine du {fmtSem(lundi)} au {fmtSem(dim)}</div>
-      <div style={{display:'flex',gap:6}}>
+      <div className="fh" style={{fontSize:15}}>Commandes de la semaine · {fmtSem(lundi)} au {fmtSem(dim)}</div>
+      {!ancre && <div style={{display:'flex',gap:6}}>
         <button className="btn btn-sm" onClick={()=>setDec(d=>d-1)}>‹ Précédente</button>
         {dec!==0 && <button className="btn btn-sm btn-s" onClick={()=>setDec(0)}>Cette semaine</button>}
         <button className="btn btn-sm" onClick={()=>setDec(d=>d+1)}>Suivante ›</button>
-      </div>
+      </div>}
     </div>
     <div className="muted" style={{fontSize:12.5,margin:'4px 0 10px'}}>
-      {items.length} passage{items.length>1?'s':''}{aCommander ? <> · <b style={{color:'var(--warning)'}}>{aCommander} à commander</b> (pas d'ordre de travail)</> : ''}
+      {items.length} passage{items.length>1?'s':''} · {aPlacer ? <b style={{color:'var(--warning)'}}>{aPlacer} commande{aPlacer>1?'s':''} à placer</b> : <b style={{color:'var(--success)'}}>toutes les commandes sont placées ✓</b>}
+      {' '}· l'OT, quand il existe, c'est la liste de stock.
     </div>
     {jours.map(d=>{ const du=items.filter(x=>x.e.day===d).sort((a,b)=>String(a.e.start).localeCompare(String(b.e.start)));
       if(!du.length) return null;
       return <div key={d} style={{marginBottom:10}}>
         <div style={{fontSize:12,fontWeight:800,textTransform:'uppercase',letterSpacing:'.04em',color: d===today?'var(--accent)':'var(--muted)',padding:'4px 0',borderBottom:'1px solid var(--border)'}}>{nomJour(d)}{d===today?' · aujourd\'hui':''}</div>
-        {du.map(({c,j,e,ots,commander},k)=><div key={k} className="remind-item" style={{flexWrap:'wrap',gap:'4px 14px',cursor:'pointer'}} onClick={()=>onOpen(c.code)}>
-          <div style={{display:'flex',gap:10,alignItems:'baseline'}}>
+        {du.map(({c,j,e,ots,cle,placee},k)=><div key={k} className="remind-item" style={{flexWrap:'wrap',gap:'4px 14px'}}>
+          <div style={{display:'flex',gap:10,alignItems:'baseline',cursor:'pointer'}} onClick={()=>onOpen && onOpen(c.code)}>
             <span style={{fontVariantNumeric:'tabular-nums',fontSize:12.5,minWidth:78,fontWeight:700}}>{e.allDay ? 'Journée' : cvHeure(e.start)+(e.end?' – '+cvHeure(e.end):'')}</span>
             <span><span style={{fontSize:11,fontWeight:800,color:'var(--accent)'}}>{e.phase}</span> <b>{c.code!=='PART'?c.code+' ':''}{j.name}</b>{e.crew.length ? <span className="muted" style={{fontSize:12}}> · {e.crew.join(', ')}</span> : null}</span>
           </div>
-          <div style={{fontSize:12.5}} onClick={ev=>ev.stopPropagation()}>{ots.length ? <CvOTLinks ots={ots}/> :
-            commander ? <span className="badge" style={{background:'rgba(210,153,34,0.15)',color:'var(--warning)'}}>À commander</span> : null}</div>
+          <div style={{display:'flex',gap:10,alignItems:'center',fontSize:12.5,flexWrap:'wrap'}}>
+            {ots.length>0 && <CvOTLinks ots={ots}/>}
+            {onCommande && <button className="btn btn-sm" onClick={()=>onCommande(cle,{day:e.day, job:(c.code!=='PART'?c.code+' ':'')+j.name+(e.phase?' '+e.phase:''), ot:ots.map(o=>o.label).join(' ')}, !placee)}
+              style={placee?{background:'rgba(63,185,80,0.15)',color:'var(--success)',borderColor:'var(--success)',fontWeight:700}:{color:'var(--warning)',borderColor:'var(--warning)'}}>
+              {placee ? '✅ Commande placée' : '☐ Commande à placer'}</button>}
+          </div>
         </div>)}
       </div>; })}
     {!items.length && <div className="muted" style={{fontSize:13}}>Aucun passage cette semaine-là.</div>}
@@ -2899,6 +2938,7 @@ function CvSemaine({clients, appels, onOpen}){
 
 function ClientsView({cfg, refreshKey, isDesktop}){
   const [tick,setTick]=useState(0);
+  const [deplie,setDeplie]=useState({});
   const {loading, err, events, registry, factures, appels, lent} = useClientsData(cfg, refreshKey+'|'+tick);
   const appelsOk = appels || {parNumero:{}, parFacture:{}, liste:[]};
   const [open,setOpen]=useState(null);
@@ -2907,17 +2947,27 @@ function ClientsView({cfg, refreshKey, isDesktop}){
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les clients : {err}</div>;
   const avisLent = lent && lent.length ? <div className="card" style={{marginBottom:12,fontSize:13,borderColor:'var(--warning)'}}>⚠️ Trop long à lire : {lent.join(', ')}. Les données affichées sont incomplètes — essaie « Actualiser » ou reconnecte-toi.</div> : null;
   if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
-  const pros = Object.values(clients).filter(c=>c.code!=='PART').sort((a,b)=>b.jobs.length-a.jobs.length);
-  const part = clients.PART;
-  const Card = ({c})=> <div className="opp-card" onClick={()=>setOpen(c.code)} style={{padding:14}}>
-    <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'baseline'}}>
-      <div className="t" style={{fontSize:15}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{c.label}</div>
-      {c.flags>0 && <span className="badge" style={{background:'rgba(248,81,73,0.12)',color:'var(--danger)'}}>{c.flags} à vérifier</span>}
-    </div>
-    {c.contact && <div className="a">{c.contact}</div>}
-    <div className="a" style={{marginTop:6}}>{c.jobs.length} jobs · {c.active} en cours ou à venir{c.poTotal ? ' · '+Math.round(c.poTotal).toLocaleString('fr-CA')+' $ en PO' : ''}{c.billed ? ' · '+Math.round(c.billed).toLocaleString('fr-CA')+' $ facturé' : ''}</div>
-    <div className="a">Dernière activité : {cvFmtDay(c.lastDay)}</div>
-  </div>;
+  // Contracteurs et particuliers dans la même liste ; la flèche déplie les jobs du client.
+  const tous = Object.values(clients).sort((a,b)=>(a.code==='PART')-(b.code==='PART') || b.jobs.length-a.jobs.length);
+  const Card = ({c})=>{ const ouvert = deplie[c.code];
+    return <div className="opp-card" style={{padding:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start'}}>
+        <div style={{cursor:'pointer',flex:1}} onClick={()=>setOpen(c.code)}>
+          <div className="t" style={{fontSize:15}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{c.label}
+            {c.flags>0 && <span className="badge" style={{background:'rgba(248,81,73,0.12)',color:'var(--danger)',marginLeft:8}}>{c.flags} à vérifier</span>}</div>
+          {c.contact && <div className="a">{c.contact}</div>}
+          <div className="a" style={{marginTop:6}}>{c.jobs.length} jobs · {c.active} en cours ou à venir{c.poTotal ? ' · '+Math.round(c.poTotal).toLocaleString('fr-CA')+' $ en PO' : ''}{c.billed ? ' · '+Math.round(c.billed).toLocaleString('fr-CA')+' $ facturé' : ''}</div>
+          <div className="a">Dernière activité : {cvFmtDay(c.lastDay)}</div>
+        </div>
+        <button className="btn btn-sm" title={ouvert?'Cacher les jobs':'Voir les jobs'} onClick={()=>setDeplie(d=>({...d,[c.code]:!d[c.code]}))}>{ouvert?'▲':'▼'}</button>
+      </div>
+      {ouvert && <div style={{marginTop:8,borderTop:'1px solid var(--border)'}}>
+        {c.jobs.map(j=><div key={j.id} className="remind-item" style={{cursor:'pointer'}} onClick={()=>setOpen(c.code)}>
+          <div><b style={{fontSize:13.5}}>{j.name}</b>{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></div>
+          <div className="muted" style={{fontSize:12,whiteSpace:'nowrap'}}>{cvFmtDay(j.last)}</div>
+        </div>)}
+      </div>}
+    </div>; };
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,margin:'0 0 4px'}}>
       <h2 className="fh" style={{margin:0,fontSize:22}}>Clients</h2>
@@ -2926,26 +2976,12 @@ function ClientsView({cfg, refreshKey, isDesktop}){
         : <span className="muted" style={{fontSize:12}}>Bouton de mise à jour : ajoute l'adresse dans Réglages</span>}
     </div>
     {avisLent}
-    <div className="muted" style={{fontSize:13,marginBottom:14}}>Tes contracteurs et tes particuliers. Clique un client pour voir ses jobs, puis une job pour sa fiche complète.</div>
-    <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1fr) minmax(0,1fr)':'1fr',gap:16,alignItems:'start'}}>
-      <div>
-        <div className="pipe-col-h" style={{padding:'0 2px 8px'}}>Contracteurs</div>
-        {pros.length ? pros.map(c=><Card key={c.code} c={c}/>) : <div className="card muted">Aucun événement de contracteur trouvé dans l'agenda.</div>}
-      </div>
-      <div>
-        <div className="pipe-col-h" style={{padding:'0 2px 8px'}}>Particuliers</div>
-        {part ? <>
-          <Card c={part}/>
-          {part.jobs.slice(0,12).map(j=><div key={j.id} className="remind-item" style={{cursor:'pointer'}} onClick={()=>setOpen('PART')}>
-            <div><b style={{fontSize:13.5}}>{j.name}</b><div className="muted" style={{fontSize:12}}>{j.address}</div></div>
-            <div className="muted" style={{fontSize:12,whiteSpace:'nowrap'}}>{cvFmtDay(j.last)}</div>
-          </div>)}
-        </> : <div className="card muted">Aucun particulier trouvé dans l'agenda de l'équipe.</div>}
-      </div>
+    <div className="muted" style={{fontSize:13,marginBottom:14}}>Tes contracteurs et tes particuliers. ▼ pour voir les jobs d'un client, clique le client pour sa fiche complète.</div>
+    <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1fr) minmax(0,1fr)':'1fr',gap:'0 16px',alignItems:'start'}}>
+      {tous.length ? tous.map(c=><Card key={c.code} c={c}/>) : <div className="card muted">Aucun client trouvé dans l'agenda.</div>}
     </div>
     <div style={{height:16}}/>
     <CvAnomalies cfg={cfg} factures={factures} clients={clients} appels={appelsOk} onOpen={setOpen} onChanged={()=>setTick(t=>t+1)}/>
-    <CvSemaine clients={clients} appels={appelsOk} onOpen={setOpen}/>
     {!registry.length && <div className="card muted" style={{marginTop:14,fontSize:12.5}}>Le registre « La mémoire — Jobs » n'a pas pu être lu : les montants de PO et les liens vers les dossiers ne s'affichent pas. Vérifie son ID dans Réglages.</div>}
   </div>;
 }
