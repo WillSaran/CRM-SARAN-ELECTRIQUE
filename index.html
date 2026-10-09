@@ -131,6 +131,7 @@ const DEFAULT_CFG = {
   memoireJobsSpreadsheetId: '1POqSf9_TAJCr8cYsV2QEGYzcPdLOeIGeWnIX8Y_swBg',
   memoireFacturesSpreadsheetId: '1I6QfEObkpfrSAqz2vSO_XdCKABWYoe2e5TOG3so3Uks',
   memoireAppelsSpreadsheetId: '1FJvH7oh82oRlEAyg2ddHOrJEDc-NGI6849m7StONcD8',
+  memoireAchatsSpreadsheetId: '1i6DNjPmxKRubA8IcSxNoC12SEwefVLcNF39F-dvEnmw',  // La mémoire — Achats (factures fournisseurs)
   memoireMajUrl: 'https://script.google.com/a/macros/saranelectrique.com/s/AKfycbwimU1z8lsEwIaL7zIx6Nqf1m8xSrCTPpmTEtTYaVs5PMbPqxhz91VIkcbthP56ZmDubA/exec'  // adresse de l'application Web Apps Script (bouton « Mettre à jour »)
 };
 function loadCfg(){
@@ -141,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v28';
+const APP_VERSION = 'v29';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1480,6 +1481,87 @@ function CvCourriels({liste}){
   </div>;
 }
 
+// ── Fournisseurs : factures d'achat (Dubo, Lumen, Groupe Gagnon, Westburne), lien avec les jobs, stock ──
+function cvJobCle(c, j){ return (c.code!=='PART' ? c.code+' ' : '')+j.name+(j.po?' '+j.po:''); }
+// Matériel d'une job : part (%) du sous-total de chaque achat associé.
+function cvMateriel(job, achats){
+  const l = (achats||[]).filter(a=>a.job && a.job!=='Stock' && ((job.po && a.job.includes(job.po)) || cvNorm(a.job).endsWith(cvNorm(job.name))));
+  return {liste:l, total:l.reduce((t,a)=>t+a.st*(a.part??100)/100,0)};
+}
+function FournisseursView({cfg, refreshKey, isDesktop}){
+  const [tick,setTick]=useState(0);
+  const {loading, err, events, registry, factures, achats} = useClientsData(cfg, refreshKey+'|f'+tick);
+  const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
+  const [choix,setChoix]=useState({});
+  const [busy,setBusy]=useState('');
+  const [ouvert,setOuvert]=useState(null);
+  if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des achats…</span></div>;
+  if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les achats : {err}</div>;
+  const A = achats||[];
+  const today = cvDay(new Date().toISOString());
+  const jobsListe = Object.values(clients).flatMap(c=>c.jobs.filter(j=>j.last>=cvDay(new Date(Date.now()-120*864e5).toISOString())).map(j=>cvJobCle(c,j))).sort();
+  const enregistrer = async (a, job, part)=>{
+    setBusy(a.num);
+    try{
+      await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:cfg.memoireAchatsSpreadsheetId, range:'I'+a.row+':K'+a.row, valueInputOption:'RAW',
+        resource:{values:[[job, job==='Stock'?0:part, 'Confirmée '+new Date().toLocaleDateString('fr-CA')]]}});
+      setTick(t=>t+1);
+    }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); }
+    setBusy('');
+  };
+  const aAssocier = A.filter(a=>!a.job).sort((x,y)=>(y.date||y.recue).localeCompare(x.date||x.recue));
+  const mois = today.slice(0,7);
+  const parF = {}; A.forEach(a=>{ const f=parF[a.fournisseur]=parF[a.fournisseur]||{liste:[],mois:0,total:0}; f.liste.push(a); f.total+=a.st; if((a.date||a.recue).startsWith(mois)) f.mois+=a.st; });
+  const stock = A.filter(a=>a.job).reduce((t,a)=>t+a.st*(100-(a.job==='Stock'?0:(a.part??100)))/100,0);
+  const Assoc = ({a})=>{ const c = choix[a.row] || {job:a.propose||'', part:100};
+    const set = v => setChoix(s=>({...s,[a.row]:{...c,...v}}));
+    return <div style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+        <div><b>{a.fournisseur} #{a.num}</b> <span className="muted">· {cvFmtDay(a.date||a.recue)}</span> · <b>{cvMoney(a.st)}</b> avant taxes</div>
+        {a.pdf && <a href={'https://drive.google.com/file/d/'+a.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>PDF ↗</a>}
+      </div>
+      <div className="muted" style={{fontSize:12.5}}>Ta référence : <b style={{color:'var(--text)'}}>{a.ref||'(aucune)'}</b>{a.propose ? <> · proposée : <b style={{color:'var(--accent)'}}>{a.propose}</b></> : ' · aucune job reconnue'}</div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginTop:5}}>
+        <select value={c.job} onChange={e=>set({job:e.target.value})} style={{maxWidth:260}}>
+          <option value="">— Choisir la job —</option>
+          <option value="Stock">📦 Stock / inventaire (au complet)</option>
+          {a.propose && !jobsListe.includes(a.propose) && <option value={a.propose}>{a.propose}</option>}
+          {jobsListe.map(j=><option key={j} value={j}>{j}</option>)}
+        </select>
+        {c.job && c.job!=='Stock' && <label style={{fontSize:12.5,display:'flex',alignItems:'center',gap:4}}>
+          <input type="number" min="0" max="100" value={c.part} onChange={e=>set({part:Math.max(0,Math.min(100,+e.target.value||0))})} style={{width:58}}/> % à la job
+          {c.part<100 && <span className="muted">· {100-c.part} % au stock</span>}
+        </label>}
+        <button className="btn btn-sm btn-p" disabled={!c.job || busy===a.num} onClick={()=>enregistrer(a, c.job, c.part)}>{busy===a.num?'…':'✓ Confirmer'}</button>
+      </div>
+    </div>; };
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Fournisseurs</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:12}}>Tes factures d'achat lues dans tes courriels. Associe chacune à sa job ; ce qui est en trop va au stock.</div>
+    <div style={{display:'grid',gridTemplateColumns:isDesktop?'repeat(auto-fit,minmax(170px,1fr))':'1fr 1fr',gap:10,marginBottom:16}}>
+      {Object.entries(parF).map(([f,v])=><div key={f} className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setOuvert(ouvert===f?null:f)}>
+        <div className="muted" style={{fontSize:12}}>{f}</div>
+        <div style={{fontSize:18,fontWeight:800}}>{cvMoney(v.mois)}</div>
+        <div className="muted" style={{fontSize:11.5}}>ce mois-ci · {v.liste.length} factures</div>
+      </div>)}
+      <div className="card" style={{padding:12}}><div className="muted" style={{fontSize:12}}>📦 Stock / inventaire</div><div style={{fontSize:18,fontWeight:800}}>{cvMoney(stock)}</div><div className="muted" style={{fontSize:11.5}}>acheté en trop (avant taxes)</div></div>
+    </div>
+    <div className="card" style={{marginBottom:16,borderColor:aAssocier.length?'var(--warning)':undefined}}>
+      <div className="fh" style={{fontSize:15}}>À associer {aAssocier.length>0 && <span className="badge" style={{background:'rgba(210,153,34,0.15)',color:'var(--warning)'}}>{aAssocier.length}</span>}</div>
+      {aAssocier.length ? aAssocier.slice(0,40).map(a=><Assoc key={a.row} a={a}/>) : <div className="muted" style={{fontSize:13}}>✅ Toutes les factures sont associées.</div>}
+    </div>
+    {ouvert && parF[ouvert] && <div className="card">
+      <div className="fh" style={{fontSize:15,marginBottom:6}}>{ouvert} — toutes les factures</div>
+      {parF[ouvert].liste.sort((x,y)=>(y.date||y.recue).localeCompare(x.date||x.recue)).map(a=><div key={a.row} style={{display:'grid',gridTemplateColumns:'80px 1fr auto',gap:8,padding:'5px 0',borderBottom:'1px solid var(--border)',fontSize:12.5}}>
+        <span style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(a.date||a.recue)}</span>
+        <span><b>#{a.num}</b> · {a.ref||'—'}{a.job ? <span className="muted"> → {a.job==='Stock'?'📦 Stock':a.job}{a.job!=='Stock'&&a.part<100?' ('+a.part+' %)':''}</span> : <span style={{color:'var(--warning)'}}> → à associer</span>}</span>
+        <span style={{whiteSpace:'nowrap'}}><b>{cvMoney(a.st)}</b>{a.pdf && <a href={'https://drive.google.com/file/d/'+a.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',marginLeft:6}}>PDF</a>}</span>
+      </div>)}
+    </div>}
+    {!A.length && <div className="card muted">Aucun achat encore lu. Le script « achats » remplit ce registre à midi et à minuit.</div>}
+  </div>;
+}
+
 function ProjetsView(props){
   const [ancien,setAncien]=useState(false);
   return <div>
@@ -2585,7 +2667,7 @@ function cvParseEvent(e){
 // Dernières données lues : l'onglet Clients s'affiche tout de suite au retour, puis se met à jour en arrière-plan.
 const CV_CACHE = {};
 function useClientsData(cfg, refreshKey){
-  const cle = [cfg.calendarIds, cfg.memoireJobsSpreadsheetId, cfg.memoireFacturesSpreadsheetId, cfg.memoireAppelsSpreadsheetId].join('|');
+  const cle = [cfg.calendarIds, cfg.memoireJobsSpreadsheetId, cfg.memoireFacturesSpreadsheetId, cfg.memoireAppelsSpreadsheetId, cfg.memoireAchatsSpreadsheetId].join('|');
   const [state,setState]=useState(()=> CV_CACHE[cle] ? {...CV_CACHE[cle], loading:false, maj:true} : {loading:true, err:'', events:[], registry:[], factures:{}, appels:{}});
   useEffect(()=>{
     let alive=true;
@@ -2602,17 +2684,20 @@ function useClientsData(cfg, refreshKey){
         const readSheet = (id, nom, range) => id
           ? delai(Promise.resolve(window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:range||'A1:Z'})).then(r=>r.result.values||[], ()=>[]), nom, [])
           : Promise.resolve([]);
-        const [events, regRows, facRows, apRows, coRows] = await Promise.all([
+        const [events, regRows, facRows, apRows, coRows, acRows] = await Promise.all([
           delai(listCalendarEventsRange(calIds, min.toISOString(), max.toISOString()), 'agenda', []),
           readSheet(cfg.memoireJobsSpreadsheetId, 'registre des jobs'),
           readSheet(cfg.memoireFacturesSpreadsheetId, 'registre des factures'),
           readSheet(cfg.memoireAppelsSpreadsheetId, 'registre des appels'),
-          readSheet(cfg.memoireJobsSpreadsheetId, 'courriels', 'Courriels!A1:J')
+          readSheet(cfg.memoireJobsSpreadsheetId, 'courriels', 'Courriels!A1:J'),
+          readSheet(cfg.memoireAchatsSpreadsheetId, 'achats', 'A1:L')
         ]);
         // Fils de courriels par PO (onglet « Courriels », rempli par Apps Script)
         const courriels = {};
         coRows.slice(1).forEach(r=>{ if(!r[0]) return; (courriels[r[0]]=courriels[r[0]]||[]).push({sujet:r[2]||'', premier:r[3]||'', dernier:r[4]||'', n:r[5]||'', de:r[6]||'', statut:r[7]||'', extrait:r[8]||'', lien:r[9]||''}); });
         Object.values(courriels).forEach(l=>l.sort((a,b)=>b.dernier.localeCompare(a.dernier)));
+        // Achats fournisseurs (registre « La mémoire — Achats »)
+        const achats = acRows.slice(1).map((r,i)=>({row:i+2, fournisseur:r[0]||'', num:r[1]||'', date:r[2]||'', ref:r[3]||'', st:cvNum(r[4])||0, total:cvNum(r[5])||0, pdf:r[6]||'', propose:r[7]||'', job:r[8]||'', part: r[9]!==undefined && r[9]!=='' ? cvNum(r[9]) : 100, statut:r[10]||'', recue:r[11]||''})).filter(a=>a.fournisseur);
         if(lent.length && alive) setState(s=>({...s, lent}));
         // Appels de service / OT papier : numéro -> photo, et facture -> appels
         const ah=(apRows[0]||[]).map(h=>cvNorm(h)), ac=re=>ah.findIndex(h=>re.test(h));
@@ -2645,12 +2730,12 @@ function useClientsData(cfg, refreshKey){
           adresse:g(r,'adr'), ville:g(r,'ville'), ht:cvNum(g(r,'ht')), dossier:g(r,'dos'),
           client:g(r,'cli'), tel:g(r,'tel'), courriel:g(r,'mail'), projet:g(r,'proj'), note:g(r,'note')
         }));
-        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, lent};
-        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, lent});
+        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, lent};
+        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, lent});
       }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}, appels:{}}); }
     })();
     return ()=>{alive=false};
-  },[cfg.calendarIds, cfg.memoireJobsSpreadsheetId, cfg.memoireFacturesSpreadsheetId, cfg.memoireAppelsSpreadsheetId, refreshKey]);
+  },[cfg.calendarIds, cfg.memoireJobsSpreadsheetId, cfg.memoireFacturesSpreadsheetId, cfg.memoireAppelsSpreadsheetId, cfg.memoireAchatsSpreadsheetId, refreshKey]);
   return state;
 }
 
@@ -2786,7 +2871,7 @@ function CvGauge({job}){
   </div>;
 }
 
-function ClientJobDetail({job, factures, appels, courriels}){
+function ClientJobDetail({job, factures, appels, courriels, achats}){
   appels = appels || {parNumero:{}, parFacture:{}};
   const photo = a => 'https://drive.google.com/file/d/'+a.id+'/view';
   if(!job) return <div className="card muted">Clique une job pour voir sa fiche.</div>;
@@ -2808,6 +2893,10 @@ function ClientJobDetail({job, factures, appels, courriels}){
       <Row k="Montant PO">{r.ht!=null && <>{cvMoney(r.ht)} avant taxes · {cvMoney(r.ht*1.14975)} taxes incluses</>}</Row>
     </div>
     <CvGauge job={job}/>
+    {(()=>{ const m=cvMateriel(job, achats); return m.liste.length ? <div style={{fontSize:13,margin:'0 0 10px'}}>
+      <b>Matériel :</b> {cvMoney(m.total)} avant taxes ({m.liste.map(a=>a.fournisseur+' #'+a.num+(a.part<100?' '+a.part+' %':'')).join(', ')})
+      {job.billed>0 && <span className="muted"> · facturé {cvMoney(job.billed)} → reste {cvMoney(job.billed-m.total)} pour la main-d'œuvre</span>}
+    </div> : null; })()}
     {job.factures.length>0 && <div style={{marginBottom:10}}>
       <div className="fh" style={{fontSize:14,margin:'4px 0 6px'}}>Factures</div>
       {job.factures.map(n=>{ const f=factures[n]; return <div key={n} style={{padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
@@ -2854,7 +2943,7 @@ function ClientJobDetail({job, factures, appels, courriels}){
   </div>;
 }
 
-function ClientDetailView({client, factures, appels, courriels, onBack, isDesktop}){
+function ClientDetailView({client, factures, appels, courriels, achats, onBack, isDesktop}){
   const [filter,setFilter]=useState('all');
   const [q,setQ]=useState('');
   const [sel,setSel]=useState(null);
@@ -2905,7 +2994,7 @@ function ClientDetailView({client, factures, appels, courriels, onBack, isDeskto
           </table>
         </div>
       </div>
-      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels} courriels={courriels}/></div>
+      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels} courriels={courriels} achats={achats}/></div>
     </div>
   </div>;
 }
@@ -3108,14 +3197,14 @@ function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande, isDes
 function ClientsView({cfg, refreshKey, isDesktop}){
   const [tick,setTick]=useState(0);
   const [deplie,setDeplie]=useState({});
-  const {loading, err, events, registry, factures, appels, courriels, lent} = useClientsData(cfg, refreshKey+'|'+tick);
+  const {loading, err, events, registry, factures, appels, courriels, achats, lent} = useClientsData(cfg, refreshKey+'|'+tick);
   const appelsOk = appels || {parNumero:{}, parFacture:{}, liste:[]};
   const [open,setOpen]=useState(null);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les clients : {err}</div>;
   const avisLent = lent && lent.length ? <div className="card" style={{marginBottom:12,fontSize:13,borderColor:'var(--warning)'}}>⚠️ Trop long à lire : {lent.join(', ')}. Les données affichées sont incomplètes — essaie « Actualiser » ou reconnecte-toi.</div> : null;
-  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} courriels={courriels} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
+  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} courriels={courriels} achats={achats} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
   // Contracteurs et particuliers dans la même liste ; la flèche déplie les jobs du client.
   const tous = Object.values(clients).sort((a,b)=>(a.code==='PART')-(b.code==='PART') || b.jobs.length-a.jobs.length);
   const Card = ({c})=>{ const ouvert = deplie[c.code];
@@ -3268,6 +3357,7 @@ function App(){
     {id:'agenda',label:'Agenda'},
     {id:'heures',label:'Heures'},
     {id:'factures',label:'Factures'},
+    {id:'fournisseurs',label:'Fournisseurs'},
     {id:'rappels',label:'Rappels & Suivi'},
     {id:'soumissions',label:'Soumissions'},
     {id:'stock',label:'Stock'},
@@ -3302,6 +3392,7 @@ function App(){
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {nav==='clients' && <ClientsView cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
+        {nav==='fournisseurs' && <FournisseursView cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
         {nav==='projets' && <ProjetsView data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='agenda' && <AgendaView cfg={effectiveCfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
