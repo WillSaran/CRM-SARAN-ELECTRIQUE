@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v32';
+const APP_VERSION = 'v33';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2737,20 +2737,22 @@ function useClientsData(cfg, refreshKey){
         const readSheet = (id, nom, range) => id
           ? delai(Promise.resolve(window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:range||'A1:Z'})).then(r=>r.result.values||[], ()=>[]), nom, [])
           : Promise.resolve([]);
-        const [events, regRows, facRows, apRows, coRows, acRows, liRows] = await Promise.all([
+        const [events, regRows, facRows, apRows, coRows, acRows, liRows, flRows] = await Promise.all([
           delai(listCalendarEventsRange(calIds, min.toISOString(), max.toISOString()), 'agenda', []),
           readSheet(cfg.memoireJobsSpreadsheetId, 'registre des jobs'),
           readSheet(cfg.memoireFacturesSpreadsheetId, 'registre des factures'),
           readSheet(cfg.memoireAppelsSpreadsheetId, 'registre des appels'),
           readSheet(cfg.memoireJobsSpreadsheetId, 'courriels', 'Courriels!A1:J'),
           readSheet(cfg.memoireAchatsSpreadsheetId, 'achats', 'A1:L'),
-          readSheet(cfg.memoireAchatsSpreadsheetId, 'articles', 'Lignes!A1:F')
+          readSheet(cfg.memoireAchatsSpreadsheetId, 'articles', 'Lignes!A1:F'),
+          readSheet(cfg.memoireFacturesSpreadsheetId, 'articles facturés', 'Lignes!A1:F')
         ]);
         // Fils de courriels par PO (onglet « Courriels », rempli par Apps Script)
         const courriels = {};
         coRows.slice(1).forEach(r=>{ if(!r[0]) return; (courriels[r[0]]=courriels[r[0]]||[]).push({sujet:r[2]||'', premier:r[3]||'', dernier:r[4]||'', n:r[5]||'', de:r[6]||'', statut:r[7]||'', extrait:r[8]||'', lien:r[9]||''}); });
         Object.values(courriels).forEach(l=>l.sort((a,b)=>b.dernier.localeCompare(a.dernier)));
         // Achats fournisseurs (registre « La mémoire — Achats »)
+        const facLignes = {}; flRows.slice(1).forEach(r=>{ if(r[0]) (facLignes[r[0]]=facLignes[r[0]]||[]).push({codes:r[1]||'', desc:r[2]||'', qte:cvNum(r[3])||0, prix:cvNum(r[4])||0, montant:cvNum(r[5])||0}); });
         const articles = {}; liRows.slice(1).forEach(r=>{ if(r[0]&&r[1]) (articles[r[0]+'|'+r[1]]=articles[r[0]+'|'+r[1]]||[]).push({code:r[2]||'', desc:r[3]||'', qte:cvNum(r[4])||0, montant:cvNum(r[5])||0}); });
         const achats = acRows.slice(1).map((r,i)=>({row:i+2, fournisseur:r[0]||'', num:r[1]||'', date:r[2]||'', ref:r[3]||'', st:cvNum(r[4])||0, total:cvNum(r[5])||0, pdf:r[6]||'', propose:r[7]||'', job:r[8]||'', part: r[9]!==undefined && r[9]!=='' ? cvNum(r[9]) : 100, statut:r[10]||'', recue:r[11]||''})).filter(a=>a.fournisseur).map(a=>({...a, articles: articles[a.fournisseur+'|'+a.num]||null}));
         if(lent.length && alive) setState(s=>({...s, lent}));
@@ -2785,8 +2787,8 @@ function useClientsData(cfg, refreshKey){
           adresse:g(r,'adr'), ville:g(r,'ville'), ht:cvNum(g(r,'ht')), dossier:g(r,'dos'),
           client:g(r,'cli'), tel:g(r,'tel'), courriel:g(r,'mail'), projet:g(r,'proj'), note:g(r,'note')
         }));
-        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, lent};
-        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, lent});
+        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, lent};
+        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, lent});
       }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}, appels:{}}); }
     })();
     return ()=>{alive=false};
@@ -2969,7 +2971,48 @@ function CvCreerNoJob({cfg, job, registry, events, onChanged}){
   </div>;
 }
 
-function ClientJobDetail({job, factures, appels, courriels, achats, cfg, registry, events, onChanged}){
+// Acheté (factures fournisseurs associées à la job) vs facturé (tes factures de la job), article par article.
+const cvCode = c => String(c||'').toUpperCase().replace(/^[A-Z]{2,4}-(?=[A-Z0-9])/,'').replace(/[^A-Z0-9]/g,'');
+function cvComparer(achats, mesLignes){
+  const fact = mesLignes.filter(l=>!/^MO\b/.test(l.codes) && l.qte).map(l=>({...l, cles:l.codes.split(/\s+/).map(cvCode).filter(c=>c.length>=4), reste:l.qte}));
+  const lignes = [];
+  achats.forEach(a=>(a.articles||[]).filter(x=>x.code).forEach(x=>{
+    const k = cvCode(x.code);
+    const f = k.length>=4 && fact.find(l=>l.cles.some(c=>c===k || (Math.min(c.length,k.length)>=6 && (c.includes(k)||k.includes(c)))));
+    const fq = f ? Math.min(f.reste, x.qte) : 0; if(f) f.reste -= fq;
+    lignes.push({desc:x.desc, code:x.code, achete:x.qte, facture:fq, cout: x.qte ? x.montant/x.qte : 0, f:!!f});
+  }));
+  const surplus = lignes.reduce((t,l)=>t+Math.max(0,l.achete-l.facture)*l.cout,0);
+  const nonAchete = fact.filter(l=>l.reste>0);
+  return {lignes, surplus, nonAchete};
+}
+function CvAcheteFacture({job, achats, facLignes}){
+  const [ouvert,setOuvert]=useState(false);
+  const m = cvMateriel(job, achats);
+  const mes = job.factures.flatMap(n=>(facLignes||{})[n]||[]);
+  if(!m.liste.length) return null;
+  const c = cvComparer(m.liste, mes);
+  return <div style={{margin:'0 0 10px',fontSize:13}}>
+    <div style={{cursor:'pointer'}} onClick={()=>setOuvert(!ouvert)}>
+      <b>Acheté vs facturé</b> {ouvert?'▲':'▼'} <span className="muted">· {c.lignes.length} articles achetés{c.surplus>0.5 ? <> · <b style={{color:'var(--warning)'}}>{cvMoney(c.surplus)} pas facturé → inventaire ?</b></> : ''}{!mes.length ? ' · articles de tes factures pas encore lus' : ''}</span>
+    </div>
+    {ouvert && <div style={{marginTop:6}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 54px 54px 70px',gap:6,fontSize:11.5,fontWeight:800,color:'var(--muted)',borderBottom:'1px solid var(--border)',paddingBottom:3}}>
+        <span>Article</span><span style={{textAlign:'right'}}>Acheté</span><span style={{textAlign:'right'}}>Facturé</span><span style={{textAlign:'right'}}>Surplus</span>
+      </div>
+      {c.lignes.map((l,i)=>{ const s=l.achete-l.facture; return <div key={i} style={{display:'grid',gridTemplateColumns:'1fr 54px 54px 70px',gap:6,fontSize:12,padding:'3px 0',borderBottom:'1px dashed var(--border)'}}>
+        <span>{l.desc} <span className="muted">{l.code}</span></span>
+        <span style={{textAlign:'right'}}>{l.achete}</span>
+        <span style={{textAlign:'right',color:l.f?undefined:'var(--muted)'}}>{l.f?l.facture:'—'}</span>
+        <span style={{textAlign:'right',color:s>0?'var(--warning)':'var(--success)',fontWeight:700}}>{s>0 ? s+' · '+cvMoney(s*l.cout) : '✓'}</span>
+      </div>; })}
+      {c.nonAchete.length>0 && <div className="muted" style={{fontSize:12,marginTop:6}}>Facturé sans achat trouvé (pris dans l'inventaire ou un autre fournisseur) : {c.nonAchete.map(l=>l.reste+' × '+l.desc).join(' · ')}</div>}
+      <div className="muted" style={{fontSize:11.5,marginTop:4}}>Le lien se fait par le code de l'article ; « — » veut dire que je n'ai pas trouvé l'article sur tes factures (code différent ou pas facturé).</div>
+    </div>}
+  </div>;
+}
+
+function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, cfg, registry, events, onChanged}){
   appels = appels || {parNumero:{}, parFacture:{}};
   const photo = a => 'https://drive.google.com/file/d/'+a.id+'/view';
   if(!job) return <div className="card muted">Clique une job pour voir sa fiche.</div>;
@@ -2992,6 +3035,7 @@ function ClientJobDetail({job, factures, appels, courriels, achats, cfg, registr
     </div>
     {cfg && <CvCreerNoJob cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/>}
     <CvGauge job={job}/>
+    <CvAcheteFacture job={job} achats={achats} facLignes={facLignes}/>
     {(()=>{ const m=cvMateriel(job, achats); return m.liste.length ? <div style={{fontSize:13,margin:'0 0 10px'}}>
       <b>Matériel :</b> {cvMoney(m.total)} avant taxes ({m.liste.map(a=>a.fournisseur+' #'+a.num).join(', ')})
       {job.billed>0 && <span className="muted"> · facturé {cvMoney(job.billed)} → reste {cvMoney(job.billed-m.total)} pour la main-d'œuvre</span>}
@@ -3042,7 +3086,7 @@ function ClientJobDetail({job, factures, appels, courriels, achats, cfg, registr
   </div>;
 }
 
-function ClientDetailView({client, factures, appels, courriels, achats, cfg, registry, events, onChanged, onBack, isDesktop}){
+function ClientDetailView({client, factures, appels, courriels, achats, facLignes, cfg, registry, events, onChanged, onBack, isDesktop}){
   const [filter,setFilter]=useState('all');
   const [q,setQ]=useState('');
   const [sel,setSel]=useState(null);
@@ -3093,7 +3137,7 @@ function ClientDetailView({client, factures, appels, courriels, achats, cfg, reg
           </table>
         </div>
       </div>
-      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels} courriels={courriels} achats={achats} cfg={cfg} registry={registry} events={events} onChanged={onChanged}/></div>
+      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels} courriels={courriels} achats={achats} facLignes={facLignes} cfg={cfg} registry={registry} events={events} onChanged={onChanged}/></div>
     </div>
   </div>;
 }
@@ -3296,14 +3340,14 @@ function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande, isDes
 function ClientsView({cfg, refreshKey, isDesktop}){
   const [tick,setTick]=useState(0);
   const [deplie,setDeplie]=useState({});
-  const {loading, err, events, registry, factures, appels, courriels, achats, lent} = useClientsData(cfg, refreshKey+'|'+tick);
+  const {loading, err, events, registry, factures, appels, courriels, achats, facLignes, lent} = useClientsData(cfg, refreshKey+'|'+tick);
   const appelsOk = appels || {parNumero:{}, parFacture:{}, liste:[]};
   const [open,setOpen]=useState(null);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les clients : {err}</div>;
   const avisLent = lent && lent.length ? <div className="card" style={{marginBottom:12,fontSize:13,borderColor:'var(--warning)'}}>⚠️ Trop long à lire : {lent.join(', ')}. Les données affichées sont incomplètes — essaie « Actualiser » ou reconnecte-toi.</div> : null;
-  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} courriels={courriels} achats={achats} cfg={cfg} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
+  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} courriels={courriels} achats={achats} facLignes={facLignes} cfg={cfg} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
   // Contracteurs et particuliers dans la même liste ; la flèche déplie les jobs du client.
   const tous = Object.values(clients).sort((a,b)=>(a.code==='PART')-(b.code==='PART') || b.jobs.length-a.jobs.length);
   const Card = ({c})=>{ const ouvert = deplie[c.code];
