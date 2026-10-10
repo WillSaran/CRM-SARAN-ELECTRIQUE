@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v67';
+const APP_VERSION = 'v68';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3156,6 +3156,7 @@ function cvParseEvent(e){
   let code='', phase='', initials=[], nameParts=[];
   toks.forEach(t=>{
     const T=t.toUpperCase();
+    if(!code && T==='PAYNE'){ code = 'PAY'; return; }                 // « Payne Edison » = PAY
     if(!code && CLIENT_CODES[T]){ code = (T==='PY'?'PAY':T); return; }
     const ph = PHASES.find(p=>p[0]===T); if(ph){ if(!phase) phase=ph[1]; return; }
     if(CREW_INITIALS[T] && t===T){ initials.push(T); return; }
@@ -3716,12 +3717,12 @@ function cvAnomalies(factures, clients, appels){
     // B) Une même facture écrite sur deux jobs différentes
     j.dupFac.forEach(n=>{ if(String(c.code+' '+j.name) > String((j.dupAvec[n]||[''])[0])) return;   // une seule fois par paire
       // Preuves : la facture elle-même (PDF, description, montant) et chaque passage où le numéro est écrit.
-      const preuve = {facture: factures[n]||null, jobs: Object.values(clients).flatMap(cc=>cc.jobs.filter(jj=>jj.events.some(ev=>String(ev.fac).split(/[\s,–-]+/).includes(n))).map(jj=>({
+      const preuve = {n, facture: factures[n]||null, jobs: Object.values(clients).flatMap(cc=>cc.jobs.filter(jj=>jj.events.some(ev=>String(ev.fac).split(/[\s,–-]+/).includes(n))).map(jj=>({
         label:(cc.code!=='PART'?cc.code+' ':'')+jj.name, address:jj.address,
         passages: jj.events.filter(ev=>String(ev.fac).split(/[\s,–-]+/).includes(n)).map(ev=>({...ev}))})))};
       out.push({type:'dup', cle:'dup|'+n+'|'+j.id, job:j, preuve, titre:'Facture #'+n,
         texte:'La facture #'+n+' est écrite sur deux jobs différentes : '+(c.code!=='PART'?c.code+' ':'')+j.name+' et '+(j.dupAvec[n]||[]).join(', ')+'.',
-        quoi:'Regarde le PDF ci-dessous, puis corrige le numéro sur le mauvais passage avec ✏️ Modifier (directement ici).', client:c.code}); });
+        quoi:'Si c\'est la même job écrite de plusieurs façons, clique « ✓ C\'est la même job ». Sinon, ouvre la job qui n\'est pas la bonne et corrige le numéro avec ✏️ Modifier.', client:c.code}); });
     if(c.code==='PART') return;
     // C) Facturé plus que le PO (job terminée)
     if(j.status==='done' && j.reg && j.reg.ht>0 && j.billed>j.reg.ht*1.10)
@@ -3759,6 +3760,19 @@ function useVerifsReglees(cfg){
 // Une erreur d'argent reste à traiter même si la job est terminée : on enlève seulement celles marquées « réglé ».
 function cvAnomaliesActives(liste, reglees){
   return liste.filter(a=>!(reglees||{})[a.cle]);
+}
+
+// Une job dans les preuves : une ligne (nom, adresse, nombre de passages), les passages s'ouvrent au clic.
+function CvPreuveJob({pj, cfg, onChanged}){
+  const [ouvert,setOuvert]=useState(false);
+  const appels = [...new Set(pj.passages.map(p=>p.as).filter(Boolean))];
+  return <div style={{paddingLeft:6}}>
+    <div style={{cursor:'pointer'}} onClick={()=>setOuvert(!ouvert)}>{ouvert?'▾':'▸'} <b>{pj.label}</b>{pj.address ? <span className="muted"> · {pj.address}</span> : ''}
+      <span className="muted"> · {pj.passages.length} passage{pj.passages.length>1?'s':''} ({pj.passages.map(p=>cvFmtDay(p.day)).join(', ')}){appels.length ? ' · appel '+appels.join(', ') : ''}</span></div>
+    {ouvert && pj.passages.map((ps,m)=><div key={m} style={{paddingLeft:18}}>{cvFmtDay(ps.day)} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{ps.phase}</span> « {ps.title} »{ps.as ? ' · appel '+ps.as : ''}
+      {ps.lien && <> · <a href={ps.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>ouvrir l'événement ↗</a></>}
+      <CvInscrirePassage cfg={cfg} e={ps} onDone={onChanged}/></div>)}
+  </div>;
 }
 
 const CV_ANOM_ORDRE = [['double','Facturé deux fois ?'],['dup','Facture écrite sur la mauvaise job ?'],['po','Plus que le PO']];
@@ -3809,10 +3823,8 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
           {a.preuve.facture ? <div><b>Ce que dit la facture :</b> {[a.preuve.facture.client, a.preuve.facture.nom, a.preuve.facture.desc].filter(Boolean).join(' · ')}{a.preuve.facture.ht!=null ? ' · '+cvMoney(a.preuve.facture.ht) : ''}{a.preuve.facture.date ? ' · '+cvFmtDay(String(a.preuve.facture.date).slice(0,10)) : ''}
               {a.preuve.facture.pdf && <> · <a href={'https://drive.google.com/file/d/'+a.preuve.facture.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>Voir le PDF ↗</a></>}</div>
             : <div className="muted">Facture pas encore dans le registre (pas de PDF).</div>}
-          {a.preuve.jobs.map((pj,k)=><div key={k}><b>Écrite sur {pj.label}</b>{pj.address ? <span className="muted"> · {pj.address}</span> : ''}
-            {pj.passages.map((ps,m)=><div key={m} style={{paddingLeft:10}}>{cvFmtDay(ps.day)} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{ps.phase}</span> « {ps.title} »{ps.as ? ' · appel '+ps.as : ''}
-              {ps.lien && <> · <a href={ps.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>ouvrir l'événement ↗</a></>}
-              <CvInscrirePassage cfg={cfg} e={ps} onDone={onChanged}/></div>)}</div>)}
+          <div><b>Le numéro #{a.preuve.n} est écrit sur {a.preuve.jobs.length} « jobs » :</b></div>
+          {a.preuve.jobs.map((pj,k)=><CvPreuveJob key={k} pj={pj} cfg={cfg} onChanged={onChanged}/>)}
         </div>}
         <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:5}}>
           {(a.factures||[]).map(f=><React.Fragment key={f.num}>
@@ -3822,7 +3834,7 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
               : <button className="btn btn-sm" disabled={!!busy} onClick={()=>setConfirme(f.num)}>Annuler #{f.num}</button>}
           </React.Fragment>)}
           {voirReglees ? <button className="btn btn-sm" onClick={()=>marquerRegle(a.cle,false)}>↩ Remettre à vérifier</button>
-            : <button className="btn btn-sm btn-s" onClick={()=>marquerRegle(a.cle,true)}>✓ C'est réglé</button>}
+            : <button className="btn btn-sm btn-s" onClick={()=>marquerRegle(a.cle,true)}>{a.type==='dup' ? '✓ C\'est la même job' : '✓ C\'est réglé'}</button>}
           {a.client && <button className="btn btn-sm" onClick={()=>onOpen(a.client)}>Ouvrir le client</button>}
           {a.lien && <a className="btn btn-sm" href={a.lien} target="_blank" rel="noopener" style={{textDecoration:'none'}}>Voir l'appel ↗</a>}
         </div>
