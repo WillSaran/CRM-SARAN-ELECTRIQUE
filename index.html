@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v72';
+const APP_VERSION = 'v73';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3663,6 +3663,7 @@ function CvAcheteFacture({job, achats, facLignes}){
 }
 
 function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged}){
+  const [reglees, marquerRegle] = useVerifsReglees(cfg);
   appels = appels || {parNumero:{}, parFacture:{}};
   const photo = a => 'https://drive.google.com/file/d/'+a.id+'/view';
   if(!job) return <div className="card muted">Clique une job pour voir sa fiche.</div>;
@@ -3704,7 +3705,7 @@ function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, a
       </div>; })}
     </div>}
     <CvCourriels liste={job.po ? (courriels||{})[job.po] : null}/>
-    {job.dupFac.length>0 && <div className="card" style={{borderColor:'var(--danger)',padding:10,fontSize:13,marginBottom:10}}>La facture {job.dupFac.map(f=>'#'+f).join(', ')} est aussi inscrite sur une autre job. Une des deux est fausse.</div>}
+    {job.dupFac.filter(n=>!estRegleDup(reglees, n)).map(n=><CvDupJob key={n} job={job} n={n} facture={factures[n]} cfg={cfg} onRegle={()=>marquerRegle('dup|'+n, true)} onChanged={onChanged}/>)}
     {cvJobOTs(job, appels).length>0 && <div style={{marginBottom:10,fontSize:13}}>
       <div className="fh" style={{fontSize:14,margin:'4px 0 4px'}}>Ordres de travail</div>
       <CvOTLinks ots={cvJobOTs(job, appels)}/>
@@ -3831,7 +3832,7 @@ function cvAnomalies(factures, clients, appels){
       const preuve = {n, facture: factures[n]||null, jobs: Object.values(clients).flatMap(cc=>cc.jobs.filter(jj=>jj.events.some(ev=>String(ev.fac).split(/[\s,–-]+/).includes(n))).map(jj=>({
         label:(cc.code!=='PART'?cc.code+' ':'')+jj.name, address:jj.address,
         passages: jj.events.filter(ev=>String(ev.fac).split(/[\s,–-]+/).includes(n)).map(ev=>({...ev}))})))};
-      out.push({type:'dup', cle:'dup|'+n+'|'+j.id, job:j, preuve, titre:'Facture #'+n,
+      out.push({type:'dup', cle:'dup|'+n, job:j, preuve, titre:'Facture #'+n,
         texte:'La facture #'+n+' est écrite sur deux jobs différentes : '+(c.code!=='PART'?c.code+' ':'')+j.name+' et '+(j.dupAvec[n]||[]).join(', ')+'.',
         quoi:'Si c\'est la même job écrite de plusieurs façons, clique « ✓ C\'est la même job ». Sinon, ouvre la job qui n\'est pas la bonne et corrige le numéro avec ✏️ Modifier.', client:c.code}); });
     if(c.code==='PART') return;
@@ -3869,8 +3870,29 @@ function useVerifsReglees(cfg){
 }
 // Ce qui reste à vérifier : sans les réglées, et sans les jobs terminées si la case « Terminées » est décochée.
 // Une erreur d'argent reste à traiter même si la job est terminée : on enlève seulement celles marquées « réglé ».
+function estRegleDup(reglees, n){ return Object.keys(reglees||{}).some(k=>k==='dup|'+n || k.startsWith('dup|'+n+'|')); }
 function cvAnomaliesActives(liste, reglees){
-  return liste.filter(a=>!(reglees||{})[a.cle]);
+  return liste.filter(a=>!(reglees||{})[a.cle] && !(a.type==='dup' && estRegleDup(reglees, a.cle.split('|')[1])));
+}
+
+// Dans la fiche d'une job : « la facture #n est aussi écrite sur… » avec quoi faire, sur place.
+function CvDupJob({job, n, facture, cfg, onRegle, onChanged}){
+  const [corriger,setCorriger]=useState(false);
+  const autres = (job.dupAvec||{})[n] || [];
+  const ici = job.events.filter(e=>String(e.fac).split(/[\s,–-]+/).includes(n));
+  return <div className="card" style={{borderColor:'var(--danger)',padding:10,fontSize:13,marginBottom:10}}>
+    <div><b>La facture #{n} est aussi écrite sur {autres.length ? autres.join(', ') : 'une autre job'}.</b></div>
+    {facture && <div className="muted" style={{fontSize:12.5,marginTop:2}}>Ce que dit la facture : {[facture.client, facture.nom, facture.desc].filter(Boolean).join(' · ')}{facture.ht!=null ? ' · '+cvMoney(facture.ht) : ''}
+      {facture.pdf && <> · <a href={'https://drive.google.com/file/d/'+facture.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>Voir le PDF ↗</a></>}</div>}
+    <div className="muted" style={{fontSize:12.5,marginTop:4}}>👉 Si c'est la même job écrite autrement : « C'est la même job ». Si le numéro n'est pas le bon ici : « Corriger ici ».</div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6}}>
+      <button className="btn btn-sm btn-s" onClick={onRegle}>✓ C'est la même job</button>
+      <button className="btn btn-sm" onClick={()=>setCorriger(!corriger)}>✏️ Corriger ici ({ici.length} passage{ici.length>1?'s':''})</button>
+    </div>
+    {corriger && ici.map((e,i)=><div key={i} style={{paddingLeft:8,marginTop:4}}>{cvFmtDay(e.day)} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span> « {e.title} »{e.as ? ' · appel '+e.as : ''}
+      {e.lien && <> · <a href={e.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>ouvrir l'événement ↗</a></>}
+      <CvInscrirePassage cfg={cfg} e={e} onDone={onChanged}/></div>)}
+  </div>;
 }
 
 // Une job dans les preuves : une ligne (nom, adresse, nombre de passages), les passages s'ouvrent au clic.
