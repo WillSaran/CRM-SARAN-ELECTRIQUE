@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v53';
+const APP_VERSION = 'v54';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -545,18 +545,63 @@ async function suiviMarquerAnnule(spreadsheetId, r, annule){
   delete SUIVI_CACHE[spreadsheetId];
   // Ton script Suivi Travaux recopie K/L/M dans la description de l'événement quand TU modifies le Sheet,
   // mais il ne voit pas une modification faite par le CRM : on met donc la description à jour ici aussi.
-  if(r.eventId){
-    for(const calendarId of [CREW_CAL, EN_ATTENTE_CAL]){
-      try{
-        const ev = await window.gapi.client.calendar.events.get({calendarId, eventId:r.eventId});
-        let d = ev.result.description || '';
-        const poser = (lab, val)=>{ const re = new RegExp('('+lab+'\\s*:)[^\\n<]*','i'); if(re.test(d)) d = d.replace(re, '$1 '+val); else if(val) d = (d ? d+'\n' : '')+lab+' : '+val; };
-        poser('Appel de service', k); poser('Facture', m);
-        await window.gapi.client.calendar.events.patch({calendarId, eventId:r.eventId, resource:{description:d}});
-        break;
-      }catch(e){ /* pas dans ce calendrier : on essaie le suivant */ }
-    }
+  if(r.eventId) await majDescriptionSuivi(r.eventId, {'Appel de service':k, 'Facture':m});
+}
+// Met « Appel de service : … / Ordre de travail : … / Facture : … » dans la description de l'événement (comme ton script).
+async function majDescriptionSuivi(eventId, valeurs, calendarIdConnu){
+  for(const calendarId of (calendarIdConnu ? [calendarIdConnu] : [CREW_CAL, EN_ATTENTE_CAL])){
+    try{
+      const ev = await window.gapi.client.calendar.events.get({calendarId, eventId});
+      let d = ev.result.description || '';
+      Object.entries(valeurs).forEach(([lab, val])=>{ if(val===undefined) return;
+        const re = new RegExp('('+lab+'\\s*:)[^\\n<]*','i');
+        if(re.test(d)) d = d.replace(re, '$1 '+val); else if(val) d = (d ? d+'\n' : '')+lab+' : '+val; });
+      await window.gapi.client.calendar.events.patch({calendarId, eventId, resource:{description:d}});
+      return true;
+    }catch(e){ /* pas dans ce calendrier : on essaie le suivant */ }
   }
+  return false;
+}
+// Inscrit appel / OT / facture d'un passage : dans le Sheet Suivi Travaux (ligne trouvée par l'ID de l'événement)
+// ET dans la description de l'événement. Un champ laissé vide ne touche à rien.
+async function inscrirePassage(cfg, e, v){
+  const id = cfg.suiviTravauxSpreadsheetId;
+  let ligne = null;
+  if(id){ const rows = await getAllSuiviTravaux(id, true); ligne = rows.find(r=>r.eventId && e.id && (r.eventId===e.id || e.id.startsWith(r.eventId) || r.eventId.startsWith(e.id))); }
+  if(ligne){
+    const plage = c => "'"+ligne.onglet.replace(/'/g,"''")+"'!"+c+ligne.ligne;
+    const data = [['K',v.as],['L',v.ot],['M',v.fac]].filter(([,x])=>x!==undefined && x!=='').map(([c,x])=>({range:plage(c), values:[[x]]}));
+    if(data.length) await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data}});
+    delete SUIVI_CACHE[id];
+  }
+  const val = x => (x===undefined || x==='') ? undefined : x;
+  await majDescriptionSuivi(e.id, {'Appel de service':val(v.as), 'Ordre de travail':val(v.ot), 'Facture':val(v.fac)}, e.calId);
+  return !!ligne;
+}
+// Petit formulaire sous un passage : inscrire l'appel, l'OT, la facture — ou « pas à facturer » (**).
+function CvInscrirePassage({cfg, e, onDone}){
+  const [ouvert,setOuvert]=useState(false);
+  const [v,setV]=useState({as:e.as==='**'?'':(e.as||''), ot:e.ot||'', fac:e.fac==='**'?'':(e.fac||'')});
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  if(!e.id || e.attente) return null;
+  const envoyer = async (vals, texte)=>{
+    setBusy(true); setMsg('');
+    try{ const dansSheet = await inscrirePassage(cfg, e, vals); setMsg('✅ '+texte+(dansSheet ? ' (Suivi Travaux + agenda)' : ' (agenda — ligne introuvable dans Suivi Travaux)')); setOuvert(false); onDone && onDone(); }
+    catch(err){ setMsg('Impossible : '+apiErrMsg(err)); }
+    setBusy(false);
+  };
+  const champ = (k, l) => <input value={v[k]} onChange={x=>setV({...v,[k]:x.target.value})} placeholder={l} inputMode="numeric" style={{width:90,padding:'5px 8px'}}/>;
+  return <span style={{display:'inline-block'}}>
+    {!ouvert && <button className="btn btn-sm" style={{fontSize:11.5,padding:'2px 8px',marginLeft:6}} onClick={()=>setOuvert(true)}>✏️ {e.fac ? 'Modifier' : 'Inscrire'}</button>}
+    {msg && <span style={{fontSize:11.5,marginLeft:6}}>{msg}</span>}
+    {ouvert && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',margin:'5px 0'}}>
+      {champ('as','Appel')}{champ('ot','OT')}{champ('fac','Facture')}
+      <button className="btn btn-sm btn-p" disabled={busy || (!v.as && !v.ot && !v.fac)} onClick={()=>envoyer(v,'Inscrit')}>{busy?'…':'✓ Inscrire'}</button>
+      <button className="btn btn-sm" disabled={busy} title="Met « ** » : ce passage ne se facture pas (annulé, garantie, visite)" onClick={()=>envoyer({as:v.as||'**', fac:'**'},'Marqué pas à facturer')}>Pas à facturer</button>
+      <button className="btn btn-sm" disabled={busy} onClick={()=>setOuvert(false)}>✕</button>
+    </div>}
+  </span>;
 }
 
 // ── Thème clair/sombre ───────────────────────────────────────────────────
@@ -1795,7 +1840,8 @@ function ProjetsSuivi({cfg, refreshKey}){
         <div className="fh" style={{fontSize:13,margin:'8px 0 4px'}}>Passages</div>
         {j.events.map((e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
           {e.attente ? <b style={{color:'var(--warning)'}}>En attente</b> : <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b>} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span>
-          {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac ? ' · facture '+e.fac : (e.day<today && !e.attente ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
+          {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac==='**' ? <span className="muted"> · pas à facturer</span> : e.fac ? ' · facture '+e.fac : (e.day<today && !e.attente ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
+          {e.day<=today && <CvInscrirePassage cfg={cfg} e={e} onDone={()=>setTick(t=>t+1)}/>}
         </div>)}
         <CvCourriels liste={j.po ? (courriels||{})[j.po] : null}/>
         {j.reg && j.reg.note && <div className="card" style={{marginTop:8,padding:8,fontSize:12.5,borderColor:'var(--warning)'}}>{j.reg.note}</div>}
@@ -3479,8 +3525,9 @@ function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, a
             {e.ot && <span>OT {appels.parNumero[e.ot]
               ? <a href={photo(appels.parNumero[e.ot])} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>{e.ot} ↗</a>
               : <b style={{color:'var(--text)'}}>{e.ot}</b>}</span>}
-            {e.fac ? <span>Facture <b style={{color:'var(--text)'}}>{e.fac}</b>{String(e.fac).split(/[\s,–-]+/).filter(n=>factures[n]&&factures[n].ht!=null).map(n=><span key={n}> · <b style={{color:'var(--text)'}}>{cvMoney(factures[n].ht)}</b></span>)}</span>
+            {e.fac==='**' ? <span>Pas à facturer</span> : e.fac ? <span>Facture <b style={{color:'var(--text)'}}>{e.fac}</b>{String(e.fac).split(/[\s,–-]+/).filter(n=>factures[n]&&factures[n].ht!=null).map(n=><span key={n}> · <b style={{color:'var(--text)'}}>{cvMoney(factures[n].ht)}</b></span>)}</span>
               : (e.day<today ? <span style={{color:'var(--danger)',fontWeight:700}}>Pas de facture inscrite</span> : <span>Planifié</span>)}
+            {e.day<=today && <CvInscrirePassage cfg={cfg} e={e} onDone={onChanged}/>}
           </div>
           {e.attachments.length>0 && <div style={{fontSize:12,marginTop:3,display:'flex',flexWrap:'wrap',gap:'2px 10px'}}>
             {e.attachments.slice(0,4).map((a,k)=><a key={k} href={a.fileUrl} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>{a.title}</a>)}
