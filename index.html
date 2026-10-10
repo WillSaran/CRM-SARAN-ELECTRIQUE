@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v43';
+const APP_VERSION = 'v47';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -561,12 +561,35 @@ function useIsDesktop(){
 }
 
 // ── Google API loading ───────────────────────────────────────────────────
+// Google Sheets limite à 60 lectures par minute. Si on dépasse (erreur 429 « Quota exceeded »),
+// on attend et on réessaie tout seul (3 s, 10 s, 25 s) au lieu d'afficher une erreur.
+function avecReessaiSheets(){
+  const sp = window.gapi.client.sheets && window.gapi.client.sheets.spreadsheets; if(!sp || sp.__reessai) return;
+  const envelopper = (obj, nom)=>{ const f = obj[nom]; if(typeof f!=='function') return;
+    obj[nom] = function(params){
+      const essai = async (n)=>{
+        try{ return await f.call(obj, params); }
+        catch(e){
+          const code = e && (e.status || (e.result && e.result.error && e.result.error.code));
+          const quota = code===429 || /quota/i.test(JSON.stringify((e && e.result) || '')) ;
+          if(quota && n<3){ await new Promise(r=>setTimeout(r, [3000,10000,25000][n])); return essai(n+1); }
+          throw e;
+        }
+      };
+      return essai(0);
+    };
+  };
+  ['get','batchUpdate'].forEach(n=>envelopper(sp, n));
+  ['get','batchGet','update','append','clear'].forEach(n=>envelopper(sp.values, n));
+  sp.__reessai = true;
+}
 let tokenClient=null;
 function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
 async function initGoogle(cfg){
   await loadScript('https://apis.google.com/js/api.js');
   await new Promise(res=>window.gapi.load('client',res));
   await window.gapi.client.init({apiKey:cfg.apiKey, discoveryDocs:DISCOVERY});
+  avecReessaiSheets();
   await loadScript('https://accounts.google.com/gsi/client');
   return new Promise((resolve)=>{
     tokenClient = google.accounts.oauth2.initTokenClient({
@@ -1687,14 +1710,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
 }
 
 function ProjetsView(props){
-  const [ancien,setAncien]=useState(false);
-  return <div>
-    <div style={{display:'flex',gap:6,marginBottom:12}}>
-      <button className="btn btn-sm" style={!ancien?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>setAncien(false)}>Suivi des jobs</button>
-      <button className="btn btn-sm" style={ancien?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>setAncien(true)}>Liste des projets</button>
-    </div>
-    {ancien ? <ProjetsListeView {...props}/> : <ProjetsSuivi cfg={props.cfg} refreshKey={props.refreshKey}/>}
-  </div>;
+  return <ProjetsSuivi cfg={props.cfg} refreshKey={props.refreshKey}/>;
 }
 
 function ProjetsSuivi({cfg, refreshKey}){
@@ -1704,6 +1720,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   const [voirTerm,setVoirTerm]=useVoirTerminees();
   const [commandes] = useCommandes(cfg);
   const [manuels, basculerEtape] = useEtapesManuelles(cfg);
+  const [propAdresses] = useAdresses(cfg);
   const [filtre,setFiltre]=useState('');
   const [seulManque,setSeulManque]=useState(false);
   const [ouvert,setOuvert]=useState(null);
@@ -1721,7 +1738,8 @@ function ProjetsSuivi({cfg, refreshKey}){
   // Terminées cachées, sauf celles qui restent à facturer.
   const nbTerm = jobs.filter(x=>x.j.status==='done' && x.s.etape!=='À facturer').length;
   if(!voirTerm) jobs = jobs.filter(x=>x.j.status!=='done' || x.s.etape==='À facturer');
-  const codes = [...new Set(Object.values(clients).map(c=>c.code))];
+  // Contracteurs en ordre alphabétique, particuliers à la fin.
+  const codes = [...new Set(Object.values(clients).map(c=>c.code))].sort((a,b)=>(a==='PART')-(b==='PART') || a.localeCompare(b,'fr'));
   const groupes = [['cours','En cours'],['avenir','À venir'],['done','Terminées (30 derniers jours)']];
   const Ligne = ({x})=>{ const {c,j,s}=x, k=c.code+j.id, o=ouvert===k;
     return <div className="opp-card" style={{padding:12}}>
@@ -1749,6 +1767,7 @@ function ProjetsSuivi({cfg, refreshKey}){
           {!e.ok ? <button className="btn btn-sm" title="Marquer comme fait" style={{color:'var(--warning)',borderColor:'var(--warning)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, true)}>Non</button>
             : e.manuel ? <button className="btn btn-sm" title="Décocher" style={{color:'var(--success)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, false)}>Oui ✓</button> : <span/>}
         </div>)}
+        <CvAdresseJob job={j} propositions={propAdresses} onDone={()=>setTick(t=>t+1)}/>
         <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/><CvArchiver cfg={cfg} job={j} archives={archives} onChanged={()=>setTick(t=>t+1)}/></div>
         <div className="fh" style={{fontSize:13,margin:'8px 0 4px'}}>Passages</div>
         {j.events.map((e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
@@ -1979,15 +1998,94 @@ function DashboardRappelsCard({data, onNavigate}){
   </div>;
 }
 
+// Écrit une adresse SEULEMENT dans les événements qui n'en ont pas : relit chaque événement juste avant,
+// et ne touche jamais une adresse déjà là (même si tu l'as ajoutée entre-temps à la main).
+async function ecrireAdresseVide(evs, adresse){
+  let n = 0;
+  for(const {eventId, calendarId} of evs){
+    const ev = await window.gapi.client.calendar.events.get({calendarId, eventId});
+    if(String(ev.result.location||'').trim()) continue;
+    await window.gapi.client.calendar.events.patch({calendarId, eventId, resource:{location:adresse}});
+    n++;
+  }
+  return n;
+}
+// Adresses manquantes : propositions du script « adresses » (onglet « Adresses » du registre des jobs).
+// ✓ écrit l'adresse dans tous les événements de la job (agenda) ; ✕ la refuse.
+function useAdresses(cfg){
+  const [etat,setEtat]=useState({liste:[], lu:false});
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async(force)=>{
+    if(!id) return;
+    try{
+      const r = await lireCache(id, 'Adresses!A1:J', force);
+      const liste = (r.result.values||[]).slice(1).map((v,i)=>({row:i+2, cle:v[0]||'', job:v[1]||'', date:v[2]||'', evs:(v[3]||'').split(';').filter(Boolean), adresse:v[4]||'', autres:(v[5]||'').split(' | ').filter(Boolean), source:v[6]||'', lien:v[7]||'', statut:v[8]||''}));
+      setEtat({liste, lu:true});
+    }catch(e){ setEtat({liste:[], lu:true}); }
+  },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const decider = async (a, adresse)=>{
+    const statut = adresse ? 'Écrite' : 'Refusée';
+    setEtat(s=>({...s, liste:s.liste.map(x=>x.row===a.row ? {...x, statut} : x)}));
+    try{
+      if(adresse) await ecrireAdresseVide(a.evs.map(ev=>{ const [eventId, calendarId] = ev.split('|'); return {eventId, calendarId}; }), adresse);
+      await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Adresses!E'+a.row+':J'+a.row, valueInputOption:'RAW',
+        resource:{values:[[adresse||a.adresse, a.autres.join(' | '), a.source, a.lien, statut, new Date().toLocaleString('fr-CA')]]}});
+    }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); lire(); }
+  };
+  return [etat.liste.filter(a=>a.statut==='Proposée').sort((x,y)=>x.date.localeCompare(y.date)), decider, etat.liste.filter(a=>/^Rien/.test(a.statut)).length];
+}
+// Adresse d'une job dans Projets : affichée si elle existe ; sinon un champ (avec la proposition trouvée, s'il y en a une)
+// pour l'écrire dans les passages qui n'en ont pas.
+function CvAdresseJob({job, propositions, onDone}){
+  const sans = job.events.filter(e=>!String(e.location||'').trim() && e.id && e.calId);
+  const prop = (propositions||[]).find(a=>a.evs.some(x=>sans.some(e=>x.startsWith(e.id+'|'))));
+  const [txt,setTxt]=useState(prop ? prop.adresse : '');
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  if(!sans.length) return job.address ? <div style={{fontSize:12.5,margin:'6px 0'}}>📍 {job.address}</div> : null;
+  const ecrire = async ()=>{
+    setBusy(true); setMsg('');
+    try{ const n = await ecrireAdresseVide(sans.map(e=>({eventId:e.id, calendarId:e.calId})), txt.trim()); setMsg('✅ Adresse ajoutée à '+n+' passage'+(n>1?'s':'')+'.'); onDone && onDone(); }
+    catch(e){ setMsg('Impossible : '+apiErrMsg(e)); }
+    setBusy(false);
+  };
+  return <div style={{margin:'8px 0',padding:8,border:'1px dashed var(--border2)',borderRadius:8,fontSize:12.5}}>
+    <div style={{marginBottom:4}}>📍 {job.address ? <>Adresse : <b>{job.address}</b> — mais {sans.length} passage{sans.length>1?'s':''} sans adresse.</> : <>Pas d'adresse sur {sans.length} passage{sans.length>1?'s':''}.</>}{prop && <span className="muted"> Proposée par La mémoire.</span>}</div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+      <input value={txt} onChange={e=>setTxt(e.target.value)} placeholder={job.address || 'Ex. : 123 rue Dauphine, Saint-Jean-sur-Richelieu'} style={{flex:'1 1 200px',minWidth:0,padding:'6px 10px'}}/>
+      {job.address && !txt && <button className="btn btn-sm" onClick={()=>setTxt(job.address)}>Même adresse</button>}
+      <button className="btn btn-sm btn-p" disabled={busy || !txt.trim()} onClick={ecrire}>{busy?'…':'✓ Écrire'}</button>
+    </div>
+    {msg && <div style={{marginTop:4}}>{msg}</div>}
+    <div className="muted" style={{fontSize:11,marginTop:3}}>Écrit seulement dans les passages sans adresse — les adresses déjà là ne sont jamais touchées.</div>
+  </div>;
+}
+function CvAdresse({a, onDecider}){
+  const [txt,setTxt]=useState(a.adresse);
+  return <div style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+    <div><b>{a.job}</b> <span className="muted">· {cvFmtDay(a.date)} · {a.evs.length} passage{a.evs.length>1?'s':''}</span></div>
+    <div style={{display:'flex',gap:6,marginTop:5,flexWrap:'wrap'}}>
+      <input value={txt} onChange={e=>setTxt(e.target.value)} style={{flex:'1 1 200px',minWidth:0,padding:'6px 10px'}}/>
+      <button className="btn btn-sm btn-p" disabled={!txt.trim()} onClick={()=>onDecider(a, txt.trim())}>✓ Écrire</button>
+      <button className="btn btn-sm" title="Pas la bonne adresse" onClick={()=>onDecider(a, '')}>✕</button>
+    </div>
+    {a.autres.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:4}}>{a.autres.map(o=><button key={o} className="btn btn-sm" style={{fontSize:11.5}} onClick={()=>setTxt(o)}>{o}</button>)}</div>}
+    <div className="muted" style={{fontSize:11.5,marginTop:3}}>{a.lien ? <a href={a.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>{a.source} ↗</a> : a.source}</div>
+  </div>;
+}
+
 // ── UI: Tableau de bord — tout ce qui demande ton attention, tiré des mêmes données que
 // Clients, Projets, Agenda et Fournisseurs (La mémoire + agenda). Chaque bloc mène à sa section.
 function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const {loading, err, events, registry, factures, appels, courriels, achats, archives, lent} = useClientsData(cfg, refreshKey+'|d');
   const [commandes] = useCommandes(cfg);
   const [manuels] = useEtapesManuelles(cfg);
+  const [adresses, deciderAdresse, nbSansAdresse] = useAdresses(cfg);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les données : {err}</div>;
+  const urlAdresses = cfg.memoireMajUrl ? cfg.memoireMajUrl+(cfg.memoireMajUrl.includes('?')?'&':'?')+'quoi=adresses' : '';
   const jour = n => { const d=new Date(); d.setDate(d.getDate()+n); return localDateStr(d); };
   const today = jour(0), demain = jour(1), dans14 = jour(14), mois = today.slice(0,7);
   const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
@@ -2057,6 +2155,15 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
         </Bloc>
       </div>
       <div>
+        <div className="card" style={{marginBottom:14,borderColor:adresses.length?'var(--accent)':undefined}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:4}}>
+            <div className="fh" style={{fontSize:15}}>Adresses à confirmer {adresses.length>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{adresses.length}</span>}</div>
+            {urlAdresses && <button className="btn btn-sm" title="Cherche l'adresse des jobs qui n'en ont pas (registre + courriels). Prêt dans environ 5 min." onClick={()=>window.open(urlAdresses,'_blank')}>🔎 Chercher les adresses manquantes</button>}
+          </div>
+          {adresses.length ? adresses.slice(0,10).map(a=><CvAdresse key={a.row} a={a} onDecider={deciderAdresse}/>)
+            : <div className="muted" style={{fontSize:13}}>Aucune adresse à confirmer.{nbSansAdresse ? ' '+nbSansAdresse+' job'+(nbSansAdresse>1?'s':'')+' sans adresse trouvée — à ajouter à la main dans l\'agenda.' : ''}</div>}
+          {adresses.length>0 && <div className="muted" style={{fontSize:11.5,marginTop:6}}>✓ écrit l'adresse dans tous les passages de la job dans l'agenda. Tu peux la corriger avant.</div>}
+        </div>
         <Bloc titre="Courriels à répondre" n={aRepondre.length} go="projets" vide="✅ Aucun courriel n'attend ta réponse.">
           {aRepondre.slice(0,8).map((f,i)=><Rang key={i} go="projets" droite={cvFmtDay(String(f.dernier).slice(0,10))}>« {f.sujet} »<div className="muted" style={{fontSize:11.5}}>{nomPO(f.po)}{f.de ? ' · '+f.de : ''}</div></Rang>)}
         </Bloc>
@@ -2841,8 +2948,12 @@ const CV_CACHE = {};
 function useClientsData(cfg, refreshKey){
   const cle = [cfg.calendarIds, cfg.memoireJobsSpreadsheetId, cfg.memoireFacturesSpreadsheetId, cfg.memoireAppelsSpreadsheetId, cfg.memoireAchatsSpreadsheetId].join('|');
   const [state,setState]=useState(()=> CV_CACHE[cle] ? {...CV_CACHE[cle], loading:false, maj:true} : {loading:true, err:'', events:[], registry:[], factures:{}, appels:{}});
+  // « force » change seulement avec ⟳ Refresh ou après une modification (tick) — pas en changeant d'onglet.
+  const force = (String(refreshKey).includes('|') ? String(refreshKey) : refreshKey+'|0').replace(/\|[a-z]?/,'|').replace(/\|$/,'|0');
   useEffect(()=>{
     let alive=true;
+    const c = CV_CACHE[cle];
+    if(c && c.force===force && Date.now()-c.t < 120000){ setState({...c, loading:false, maj:false}); return; }   // lu il y a moins de 2 min
     (async()=>{
       setState(s=> CV_CACHE[cle] ? {...s, maj:true} : {...s,loading:true,err:''});
       try{
@@ -2913,7 +3024,7 @@ function useClientsData(cfg, refreshKey){
           client:g(r,'cli'), tel:g(r,'tel'), courriel:g(r,'mail'), projet:g(r,'proj'), note:g(r,'note')
         })).filter(r=>!/^fusionn/i.test(cvNorm(r.statut)));
         Object.defineProperty(registry,'__colStatut',{value: ix.st>=0 ? ix.st : Math.max(head.length, 12), enumerable:false});
-        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent};
+        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent, t:Date.now(), force};
         if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent});
       }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}, appels:{}}); }
     })();
@@ -3425,13 +3536,22 @@ function cvLundi(d){ const x=new Date(d); x.setHours(12,0,0,0); x.setDate(x.getD
 function cvHeure(iso){ const m=String(iso||'').match(/T(\d{2}):(\d{2})/); return m ? (+m[1])+' h'+(m[2]!=='00'?' '+m[2]:'') : ''; }
 // Commandes de stock : « placée » ou non, par passage (onglet « Commandes » du registre des jobs, partagé entre appareils).
 // Étapes cochées à la main dans Projets : onglet « Etapes » du registre des jobs (Job | Étape | Statut | Le).
+// Petites lectures partagées entre les onglets (Commandes, Etapes, Adresses) : gardées 2 min.
+const LECT_CACHE = {};
+async function lireCache(id, range, force){
+  const k = id+'|'+range, c = LECT_CACHE[k];
+  if(!force && c && Date.now()-c.t < 120000) return c.r;
+  const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range});
+  LECT_CACHE[k] = {t:Date.now(), r};
+  return r;
+}
 function useEtapesManuelles(cfg){
   const [etat,setEtat]=useState({map:{}, rows:{}, lu:false});
   const id = cfg.memoireJobsSpreadsheetId;
-  const lire = useCallback(async()=>{
+  const lire = useCallback(async(force)=>{
     if(!id) return;
     try{
-      const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Etapes!A1:D'});
+      const r = await lireCache(id, 'Etapes!A1:D', force);
       const map={}, rows={}; (r.result.values||[]).slice(1).forEach((row,i)=>{ if(!row[0]) return; const k=row[0]+'|'+row[1]; rows[k]=i+2; if(row[2]==='Fait') map[k]=true; });
       setEtat({map, rows, lu:true, existe:true});
     }catch(e){ setEtat({map:{}, rows:{}, lu:true, existe:false}); }
@@ -3443,7 +3563,7 @@ function useEtapesManuelles(cfg){
     try{
       if(!etat.existe) await ensureSheetsExist(id, [{name:'Etapes', headers:['Job','Étape','Statut','Le']}]);
       if(etat.rows[k]) await sheetsUpdateRow(id, 'Etapes', etat.rows[k], ligne); else await sheetsAppendRow(id, 'Etapes', ligne);
-      await lire();
+      await lire(true);
     }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); lire(); }
   };
   return [etat.map, basculer];
@@ -3452,10 +3572,10 @@ function useEtapesManuelles(cfg){
 function useCommandes(cfg){
   const [etat,setEtat]=useState({map:{}, pret:false});
   const id = cfg.memoireJobsSpreadsheetId;
-  const lire = useCallback(async()=>{
+  const lire = useCallback(async(force)=>{
     if(!id) return;
     try{
-      const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Commandes!A1:G'});
+      const r = await lireCache(id, 'Commandes!A1:G', force);
       const map={}; (r.result.values||[]).slice(1).forEach((row,i)=>{ if(row[0]) map[row[0]]={row:i+2, statut:row[3]||'', quand:row[4]||'', note:row[6]||''}; });
       setEtat({map, pret:true});
     }catch(e){ setEtat({map:{}, pret:true}); }
@@ -3474,7 +3594,7 @@ function useCommandes(cfg){
         const desc = (ev.result.description||'').replace(/\n?📦 Note commande :.*$/m,'');
         await window.gapi.client.calendar.events.patch({calendarId:info.calId, eventId:info.eventId, resource:{description:(desc ? desc+'\n' : '')+'📦 Note commande : '+note}});
       }
-      await lire();
+      await lire(true);
     }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); lire(); }
   };
   return [etat.map, enregistrer];
