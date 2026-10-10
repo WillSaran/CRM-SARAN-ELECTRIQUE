@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v55';
+const APP_VERSION = 'v56';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2899,6 +2899,14 @@ function FacturesView({cfg, refreshKey}){
   const [busy,setBusy]=useState('');
   const [tick,setTick]=useState(0);
   const id = cfg.suiviTravauxSpreadsheetId;
+  // Papiers déposés par les gars (appels de service / OT) que l'adjointe n'a pas encore traités : registre des appels de La mémoire.
+  const [papiers,setPapiers]=useState([]);
+  useEffect(()=>{ const ap = cfg.memoireAppelsSpreadsheetId; if(!ap) return; let ok=true;
+    lireCache(ap, 'A1:Z', refreshKey>0).then(r=>{ if(!ok) return; const v=r.result.values||[]; const h=(v[0]||[]).map(x=>cvNorm(x)), c=re=>h.findIndex(x=>re.test(x));
+      const ix={as:c(/^appel/),ot:c(/^ordre/),po:c(/^po$/),nom:c(/^fichier$/),id:c(/^fichierid/),st:c(/^statut/),date:c(/^date|^recu|^ajout/)};
+      const g=(row,k)=> ix[k]>=0 ? String(row[ix[k]]||'').trim() : '';
+      setPapiers(v.slice(1).map(row=>({as:g(row,'as'), ot:g(row,'ot'), po:g(row,'po'), nom:g(row,'nom'), id:g(row,'id'), statut:g(row,'st'), date:g(row,'date')})).filter(a=>a.id && /^averifier|^atraiter|^enattente/.test(cvNorm(a.statut))));
+    }).catch(()=>{}); return ()=>{ ok=false; }; },[cfg.memoireAppelsSpreadsheetId, refreshKey]);
   useEffect(()=>{
     if(!id){ setLoading(false); return; }
     let cancelled=false;
@@ -2938,16 +2946,26 @@ function FacturesView({cfg, refreshKey}){
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginBottom:12}}>
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('afacturer')}><div style={{fontSize:24,fontWeight:800,color:manquantes.length?'var(--danger)':'var(--success)'}}>{manquantes.length}</div><div className="muted" style={{fontSize:12}}>rien d'inscrit (ni appel ni facture)</div></div>
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('afacturer')}><div style={{fontSize:24,fontWeight:800,color:'var(--warning)'}}>{traitement.length}</div><div className="muted" style={{fontSize:12}}>appel fait, facture à faire</div></div>
+        <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('papiers')}><div style={{fontSize:24,fontWeight:800,color:'var(--accent)'}}>{papiers.length}</div><div className="muted" style={{fontSize:12}}>papiers à traiter (AP / OT déposés)</div></div>
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('annulees')}><div style={{fontSize:24,fontWeight:800}}>{annulees.length}</div><div className="muted" style={{fontSize:12}}>pas à facturer (**)</div></div>
       </div>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
-        {[['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
+        {[['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['papiers','Papiers à traiter ('+papiers.length+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (projet, adresse, no)…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
       </div>
       <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:10}}>
         <button className="btn btn-sm" style={!filterC?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(null)}>Tous</button>
         {contracteurs.map(c=><button key={c} className="btn btn-sm" style={filterC===c?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(filterC===c?null:c)}>{nom(c)}</button>)}
       </div>
+      {vue==='papiers' ? <div className="card">
+        <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Appels de service et OT papier déposés dans le Drive par les gars, pas encore traités (inscrits au Suivi Travaux et facturés). Ce n'est pas une erreur : ils partent d'ici tout seuls quand ils sont traités.</div>
+        {!papiers.length && <div className="muted" style={{fontSize:13}}>✅ Aucun papier en attente.</div>}
+        {papiers.map((a,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:10,padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
+          <div style={{minWidth:0}}><b style={{color:'var(--accent)'}}>{a.as ? 'AP '+a.as : a.ot ? 'OT '+a.ot : 'Papier'}</b> <span className="muted">· {a.nom}</span>
+            <div className="muted" style={{fontSize:12}}>{a.statut.replace(/^à vérifier\s*:?\s*/i,'')}{a.po ? ' · '+a.po : ''}{a.date ? ' · '+a.date : ''}</div></div>
+          <a className="btn btn-sm" href={'https://drive.google.com/file/d/'+a.id+'/view'} target="_blank" rel="noopener" style={{textDecoration:'none',alignSelf:'center'}}>Voir ↗</a>
+        </div>)}
+      </div> :
       <div className="card">
         {!liste.length && <div className="muted" style={{fontSize:13}}>{vue==='afacturer' ? '✅ Tout est facturé.' : 'Rien ici.'}</div>}
         {liste.slice(0,300).map(r=>{ const k=r.onglet+r.ligne, j=jours(r);
@@ -2968,7 +2986,7 @@ function FacturesView({cfg, refreshKey}){
               {r.statutFacture==='annule' && <button className="btn btn-sm" disabled={busy===k} onClick={()=>marquer(r, false)}>{busy===k?'…':'↩ Remettre à facturer'}</button>}
             </div>
           </div>; })}
-      </div>
+      </div>}
       <div className="muted" style={{fontSize:11.5,marginTop:8}}>Le Sheet est rempli à partir de l'agenda par ton script Suivi Travaux. Les numéros d'appel et de facture s'y inscrivent dans les colonnes K et M.</div>
     </>)}
   </div>;
@@ -3629,15 +3647,12 @@ function cvAnomalies(factures, clients, appels){
     // C) Facture inscrite sur deux jobs
     j.dupFac.forEach(n=>out.push({type:'dup', cle:'dup|'+n+'|'+j.id, job:j, titre:'Facture sur deux jobs', texte:'#'+n+' est inscrite sur '+c.code+' '+j.name+' et sur une autre job.', client:c.code}));
     if(c.code==='PART') return;
-    // D) Passages faits sans facture
-    const sans = j.events.filter(e=>!e.attente && e.day<today && !e.fac);
-    if(sans.length) out.push({type:'nofac', cle:'nofac|'+j.id+'|'+sans.map(e=>e.day).join(','), job:j, titre:'Passage sans facture', texte:c.code+' '+j.name+' : '+sans.map(e=>cvFmtDay(e.day)+(e.phase?' ('+e.phase.toLowerCase()+')':'')).join(', '), client:c.code});
+    // (Les passages faits sans facture ne sont pas ici : ce sont les factures manquantes, dans l'onglet Factures.)
     // E) Facturé au-delà du PO (job terminée)
     if(j.status==='done' && j.reg && j.reg.ht>0 && j.billed>j.reg.ht*1.10)
       out.push({type:'po', cle:'po|'+j.id+'|'+Math.round(j.billed), job:j, titre:'Au-delà du PO', texte:c.code+' '+j.name+' : '+cvMoney(j.billed)+' facturé sur un PO de '+cvMoney(j.reg.ht)+' (+'+Math.round((j.billed/j.reg.ht-1)*100)+' %)', client:c.code});
   }));
-  // F) Appels de service papier que le rangement n'a pas pu classer
-  ((appels&&appels.liste)||[]).filter(a=>/^averifier/.test(cvNorm(a.statut))).forEach(a=>out.push({type:'appel', cle:'appel|'+a.id, titre:'Appel papier à classer', texte:(a.as?'Appel '+a.as:'OT '+a.ot)+' · '+a.nom+' : '+a.statut, lien:'https://drive.google.com/file/d/'+a.id+'/view'}));
+  // (Les appels / OT papier pas encore traités ne sont pas une erreur : ils sont dans Factures → « Papiers à traiter ».)
   return out;
 }
 
@@ -3669,7 +3684,7 @@ function cvAnomaliesActives(liste, reglees, voirTerm){
   return liste.filter(a=>!(reglees||{})[a.cle] && (voirTerm || !a.job || a.job.status!=='done'));
 }
 
-const CV_ANOM_ORDRE = [['double','Factures en double'],['zero','Factures à 0,01 $'],['dup','Facture sur deux jobs'],['nofac','Passages sans facture'],['appel','Appels papier à classer'],['po','Au-delà du PO']];
+const CV_ANOM_ORDRE = [['double','Factures en double'],['zero','Factures à 0,01 $'],['dup','Facture sur deux jobs'],['po','Au-delà du PO']];
 
 function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
   const [ouvert,setOuvert]=useState(null);
