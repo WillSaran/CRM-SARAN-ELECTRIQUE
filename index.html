@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v37';
+const APP_VERSION = 'v38';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1506,12 +1506,16 @@ function CvArticles({a}){
 // Jobs d'un client : liste en ordre alphabétique, avec recherche.
 function CvListeJobs({jobs, onChoix}){
   const [q,setQ]=useState('');
-  const liste = jobs.slice().sort((a,b)=>a.label.localeCompare(b.label,'fr')).filter(j=>!q || cvNorm(j.label).includes(cvNorm(q)));
+  const liste = jobs.slice().sort((a,b)=>a.label.localeCompare(b.label,'fr')).filter(j=>!q || cvNorm(j.label+' '+(j.po||'')).includes(cvNorm(q)));
+  // Liste cliquable (un <select> s'affiche en petit menu fermé sur iPhone).
   return <div style={{marginTop:5,paddingLeft:8,borderLeft:'2px solid var(--accent)'}}>
-    <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder={'Chercher parmi '+jobs.length+' jobs…'} style={{width:'100%',boxSizing:'border-box',marginBottom:4}}/>
-    <select size={Math.min(8, Math.max(2, liste.length))} style={{width:'100%'}} onChange={e=>e.target.value && onChoix(e.target.value)}>
-      {liste.map(j=><option key={j.cle} value={j.cle}>{j.label}</option>)}
-    </select>
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder={'Chercher parmi '+jobs.length+' jobs (nom ou numéro)…'} style={{width:'100%',boxSizing:'border-box',marginBottom:4}}/>
+    <div style={{maxHeight:260,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
+      {liste.map(j=><div key={j.cle} onClick={()=>onChoix(j.cle)} style={{padding:'7px 10px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13,display:'flex',justifyContent:'space-between',gap:8}}>
+        <span>{j.po && <b style={{color:'var(--accent)'}}>{j.po} </b>}{j.label}</span>
+        <span className="muted" style={{fontSize:11.5,whiteSpace:'nowrap'}}>{j.info}</span>
+      </div>)}
+    </div>
     {!liste.length && <div className="muted" style={{fontSize:12}}>Aucune job ne correspond.</div>}
   </div>;
 }
@@ -1533,7 +1537,7 @@ function CvChoixJob({clients, propose, onChoix}){
     <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5}}>
       {groupes.map(c=>pill(c.code==='PART'?'Particuliers':c.code, ()=>setGroupe(groupe===c.code?'':c.code), groupe===c.code?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null))}
     </div>
-    {g && <CvListeJobs key={g.code} jobs={g.jobs.filter(j=>j.last>=today).map(j=>({cle:cvJobCle(g,j), label:j.name+(j.po?' · '+j.po:'')+' · '+cvFmtDay(j.last)}))} onChoix={onChoix}/>}
+    {g && <CvListeJobs key={g.code} jobs={g.jobs.filter(j=>j.last>=today).map(j=>({cle:cvJobCle(g,j), po:j.po, label:j.name, info:(CV_STATUS[j.status]||[''])[0]+' · '+cvFmtDay(j.last)}))} onChoix={onChoix}/>}
     {autre!==null && <div style={{display:'flex',gap:5,marginTop:5}}>
       <input value={autre} onChange={e=>setAutre(e.target.value)} placeholder="Ex. : Outils, Bureau, Job Rejean Roy…" style={{flex:1}}/>
       <button className="btn btn-sm btn-p" disabled={!autre.trim()} onClick={()=>onChoix(autre.trim())}>OK</button>
