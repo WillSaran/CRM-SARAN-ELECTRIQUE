@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v59';
+const APP_VERSION = 'v60';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1878,14 +1878,16 @@ function ProjetsSuivi({cfg, refreshKey}){
         {s.E.map((e,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'22px 1fr auto',gap:6,padding:'5px 0',fontSize:13,alignItems:'start'}}>
           <span>{e.ok?'✅':'⬜'}</span>
           <div><b>{e.titre}</b>{e.manuel && <span className="muted" style={{fontSize:11.5}}> · coché à la main</span>}{!e.ok && <div style={{color:'var(--warning)',fontSize:12.5}}>{e.manque}</div>}
-            {!e.ok && (/^(Rough|Finition) planifi/.test(e.titre)
+            {!e.ok && /^OT du rough/.test(e.titre) && <div style={{marginTop:3,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+              <button className="btn btn-sm" title="Il n'y a pas d'OT pour cette job : l'étape devient faite" onClick={()=>basculerEtape(j.id, e.titre, true)}>Pas d'OT</button>
+              <span className="muted" style={{fontSize:12}}>ou les gars déposent la photo dans « B- REF OT » / « 1-PAD »</span></div>}
+            {!e.ok && !/^OT du rough/.test(e.titre) && (/^(Rough|Finition) planifi/.test(e.titre)
               ? <div style={{marginTop:3}}><CvAjouterPassage job={j} phaseDefaut={/^Rough/.test(e.titre)?'ROUGH':'FINITION'} libelle={'+ Planifier la '+(/^Rough/.test(e.titre)?'journée de rough':'journée de finition')} onDone={()=>setTick(t=>t+1)}/></div>
               : <div className="muted" style={{fontSize:12}}>Où : {e.ou}</div>)}</div>
           {!e.ok ? <button className="btn btn-sm" title="Marquer comme fait" style={{color:'var(--warning)',borderColor:'var(--warning)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, true)}>Non</button>
             : e.manuel ? <button className="btn btn-sm" title="Décocher" style={{color:'var(--success)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, false)}>Oui ✓</button> : <span/>}
         </div>)}
-        {(()=>{ const etapeAdr = c.code!=='PART' ? 'Adresse du chantier' : 'Coordonnées complètes';
-          return manuels[j.id+'|'+etapeAdr] ? null : <CvAdresseJob job={j} propositions={propAdresses} onDone={()=>setTick(t=>t+1)} onPasDAdresse={()=>basculerEtape(j.id, etapeAdr, true)}/>; })()}
+        <CvAdresseJob job={j} propositions={propAdresses} onDone={()=>setTick(t=>t+1)}/>
         <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/><CvArchiver cfg={cfg} job={j} archives={archives} onChanged={()=>setTick(t=>t+1)}/></div>
         {c.code!=='PART' && <div style={{fontSize:12.5,margin:'6px 0'}}>👤 Contracteur : <b>{CLIENT_CODES[c.code]||c.code}</b>{CLIENT_CONTACT[c.code] ? ' — '+CLIENT_CONTACT[c.code] : ''}
           {(()=>{ const gens=[...new Set(((j.po && (courriels||{})[j.po])||[]).map(f=>f.de).filter(n=>n && !/saran|william/i.test(n)))]; return gens.length ? <div className="muted" style={{fontSize:12}}>Dans les courriels de cette job : {gens.join(', ')}</div> : null; })()}</div>}
@@ -2177,7 +2179,6 @@ function CvAdresseJob({job, propositions, onDone, onPasDAdresse}){
       <input value={txt} onChange={e=>setTxt(e.target.value)} placeholder={job.address || 'Ex. : 123 rue Dauphine, Saint-Jean-sur-Richelieu'} style={{flex:'1 1 200px',minWidth:0,padding:'6px 10px'}}/>
       {job.address && !txt && <button className="btn btn-sm" onClick={()=>setTxt(job.address)}>Même adresse</button>}
       <button className="btn btn-sm btn-p" disabled={busy || !txt.trim()} onClick={ecrire}>{busy?'…':'✓ Écrire'}</button>
-      {onPasDAdresse && !job.address && <button className="btn btn-sm" title="Cette job n'a pas d'adresse à mettre : l'étape devient faite" onClick={onPasDAdresse}>Pas d'adresse</button>}
     </div>
     {msg && <div style={{marginTop:4}}>{msg}</div>}
     <div className="muted" style={{fontSize:11,marginTop:3}}>Écrit seulement dans les passages sans adresse — les adresses déjà là ne sont jamais touchées.</div>
