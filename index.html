@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v49';
+const APP_VERSION = 'v50';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1480,7 +1480,7 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
   const ro = ev.filter(e=>e.phase==='ROUGH'), fi = ev.filter(e=>e.phase==='FINITION');
   const sansFac = passes.filter(e=>!e.fac);
   const sansEquipe = avenir.filter(e=>!e.crew.length);
-  const cmdAPlacer = avenir.filter(e=>e.day<=cvDay(new Date(Date.now()+14*864e5).toISOString()) && !CMD_FAIT.includes(((commandes||{})[e.id]||{}).statut));
+  const cmdAPlacer = avenir.filter(e=>e.day<=cvFinSemaineProchaine() && !CMD_FAIT.includes(((commandes||{})[e.id]||{}).statut));
   const E = [];
   const add = (ok, titre, manque, ou, na) => E.push({ok, titre, manque, ou, na});
   if(pro) add(!!job.po, 'PO reçu', 'Aucun PO trouvé pour cette job', 'Ajoute le numéro P0xxxx au titre de l\'événement (ou demande-le au contracteur)');
@@ -1490,7 +1490,7 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
   if(pro) add(fi.length>0, 'Finition planifiée', 'Pas de passage FINITION dans l\'agenda', 'Crée l\'événement « '+job.client+' FINITION '+job.name+' '+(job.po||'')+' »');
   if(pro && ro.some(e=>e.day<today)) add(ots.length>0, 'OT du rough reçu (liste de stock pour la finition)', 'Le rough est fait mais aucun OT papier n\'est classé', 'Les gars doivent déposer la photo de l\'OT dans « B- REF OT » ou « 1-PAD »');
   add(!sansEquipe.length, 'Équipe assignée', sansEquipe.map(e=>cvFmtDay(e.day)).join(', ')+' sans employé', 'Couleur ou initiales de l\'employé dans l\'événement', !avenir.length);
-  add(!cmdAPlacer.length, 'Commande de stock placée (2 prochaines semaines)', cmdAPlacer.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' : commande à placer', 'Agenda → Commandes de la semaine → ✅', !avenir.length);
+  add(!cmdAPlacer.length, 'Commande de stock placée (cette semaine et la prochaine)', cmdAPlacer.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' : commande à placer', 'Agenda → Commandes de la semaine → ✅', !avenir.length);
   const fils = (job.po && courriels && courriels[job.po]) || [];
   const aRepondre = fils.filter(f=>/toi de r/i.test(f.statut));
   if(fils.length) add(!aRepondre.length, 'Courriels répondus', aRepondre.map(f=>'« '+f.sujet+' » ('+cvFmtDay(f.dernier)+')').join(', ')+' attend ta réponse', 'Gmail — ouvre le fil dans la section Courriels plus bas');
@@ -2104,6 +2104,8 @@ function useCourrielsReglés(cfg){
   };
   return [etat.map, marquer];
 }
+// Fin de la semaine prochaine (dimanche) : les commandes à placer = cette semaine + la prochaine, comme dans Agenda.
+function cvFinSemaineProchaine(){ const d=new Date(); const dow=(d.getDay()+6)%7; d.setDate(d.getDate()-dow+13); return localDateStr(d); }
 function cvJoursDepuis(d){ const t=Date.parse(String(d).slice(0,10)); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
 
 // ── UI: Courriels — suivi des fils de courriels de tes jobs (onglet « Courriels » rempli par La mémoire).
@@ -2176,7 +2178,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les données : {err}</div>;
   const urlAdresses = cfg.memoireMajUrl ? cfg.memoireMajUrl+(cfg.memoireMajUrl.includes('?')?'&':'?')+'quoi=adresses' : '';
   const jour = n => { const d=new Date(); d.setDate(d.getDate()+n); return localDateStr(d); };
-  const today = jour(0), demain = jour(1), dans14 = jour(14), mois = today.slice(0,7);
+  const today = jour(0), demain = jour(1), dans14 = cvFinSemaineProchaine(), mois = today.slice(0,7);
   const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
   const cmds = commandes || {};
   const tous = Object.values(clients).flatMap(c=>c.jobs.filter(j=>!(archives||{})[j.id]).map(j=>({c, j, s:pjEtapes(j, ap, cmds, courriels, manuels)})));
@@ -2230,7 +2232,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
       <Tuile n={enCours.length} l="Jobs en cours" sub={aCompleter ? aCompleter+' étapes à compléter' : 'tout est complet'} go="projets"/>
       <Tuile n={suivi ? aFacturer.length : '…'} l="À facturer" sub={suivi ? (sansFac ? sansFac+" sans rien d'inscrit, "+(aFacturer.length-sansFac)+' facture à faire' : (aFacturer.length ? 'appels faits, factures à faire' : 'tout est facturé')) : 'Suivi Travaux'} alerte={aFacturer.length>0} go="factures"/>
       <Tuile n={anomalies.length} l="À vérifier" sub="factures, PO, appels" alerte={anomalies.length>0} go="clients"/>
-      <Tuile n={aCommander.length} l="Commandes à placer" sub="2 prochaines semaines" alerte={aCommander.some(x=>x.e.day<=jour(3))} go="agenda"/>
+      <Tuile n={aCommander.length} l="Commandes à placer" sub={'cette semaine et la prochaine (jusqu\'au '+cvFmtDay(dans14)+')'} alerte={aCommander.some(x=>x.e.day<=jour(3))} go="agenda"/>
       <Tuile n={aRepondre.length} l="Courriels à répondre" sub={aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'le plus vieux : '+cvJoursDepuis(aRepondre[0].dernier)+' jours' : 'clients et contracteurs'} alerte={aRepondre.length>0} go="courriels"/>
       <Tuile n={aAssocier.length} l="Achats à associer" sub={cvMoney(achatsMois)+' achetés ce mois-ci'} go="fournisseurs"/>
       <DashboardHeuresCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
@@ -2240,7 +2242,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
       <div>
         <Bloc titre="Aujourd'hui" n={auj.length} go="agenda" vide="Aucun passage aujourd'hui."><Journee liste={auj}/></Bloc>
         <Bloc titre="Demain" n={dem.length} go="agenda" vide="Aucun passage demain."><Journee liste={dem}/></Bloc>
-        <Bloc titre="Commandes à placer" n={aCommander.length} go="agenda" vide="✅ Toutes les commandes des 2 prochaines semaines sont réglées.">
+        <Bloc titre="Commandes à placer" n={aCommander.length} go="agenda" vide="✅ Toutes les commandes de cette semaine et de la prochaine sont réglées.">
           {aCommander.slice(0,8).map((x,i)=><Rang key={i} go="agenda" droite={cvFmtDay(x.e.day)}><span style={{fontWeight:800,fontSize:11,color:'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}</Rang>)}
         </Bloc>
       </div>
