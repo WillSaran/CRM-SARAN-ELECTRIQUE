@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v48';
+const APP_VERSION = 'v49';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -484,56 +484,61 @@ function parseSheetDate(str){
 const SUIVI_COL_APPEL = 10;  // colonne K (0-indexé: A=0 ... K=10)
 const SUIVI_COL_ORDRE = 11;  // colonne L
 const SUIVI_COL_FACTURE = 12; // colonne M
-async function getSuiviTravauxRows(spreadsheetId, contracteurKey){
+// Une ligne marquée « ** » (colonne K ou M) = pas à facturer (annulée). On garde le numéro de ligne pour pouvoir écrire.
+function parseSuiviRows(all, contracteurKey){
   const tabName = SUIVI_TAB_NAMES[contracteurKey];
-  if(!tabName) return [];
-  let headers, rows;
-  try{
-    // En-tête + données en UN SEUL appel (au lieu de deux) — chaque onglet
-    // contracteur reste lu séparément (try/catch propre) pour qu'un onglet
-    // manquant ou renommé n'empêche pas de lire les autres.
-    const resp = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId, range: tabName+'!A1:Z'});
-    const all = resp.result.values || [];
-    headers = all[0] || [];
-    rows = all.slice(1);
-  }catch(e){ return []; } // onglet absent ou inaccessible — on l'ignore simplement
+  const headers = all[0] || [], rows = all.slice(1);
   const idxDate = findColIdx(headers, /date/i);
   const idxProjet = findColIdx(headers, /projet/i);
   const idxAdresse = findColIdx(headers, /adresse/i);
   const idxEvent = findColIdx(headers, /calendar/i);
   const out = [];
-  rows.forEach(r=>{
+  rows.forEach((r,i)=>{
     const date=(idxDate>=0?r[idxDate]:'')||'';
     const projet=(idxProjet>=0?r[idxProjet]:'')||'';
     const adresse=(idxAdresse>=0?r[idxAdresse]:'')||'';
-    const appelService=r[SUIVI_COL_APPEL]||'';
+    const appelService=String(r[SUIVI_COL_APPEL]||'').trim();
     const ordreTravail=r[SUIVI_COL_ORDRE]||'';
-    const facture=r[SUIVI_COL_FACTURE]||'';
+    const facture=String(r[SUIVI_COL_FACTURE]||'').trim();
     const eventId=(idxEvent>=0?r[idxEvent]:'')||'';
-    // ligne "réelle": au moins une date ou un projet/adresse — filtre les lignes
-    // orphelines (ex: bloc d'IDs Calendar collé en fin d'onglet) et les diviseurs de mois.
+    // ligne "réelle": au moins une date ou un projet/adresse — filtre les lignes orphelines et les diviseurs de mois.
     if(!date && !projet && !adresse && !appelService) return;
-    // Statut: 'manquant' = pas d'appel de service du tout (K vide) — à créer.
-    // 'en_traitement' = appel de service (K) présent mais pas encore de facture (M).
-    // 'complet' = facture (M) présente.
+    // 'manquant' = pas d'appel de service (K vide) ; 'en_traitement' = appel fait, pas de facture (M vide) ;
+    // 'complet' = facture (M) ; 'annule' = « ** » dans K ou M (pas à facturer).
     let statutFacture = 'complet';
-    if(!appelService) statutFacture = 'manquant';
+    if(/^\*\*/.test(appelService) || /^\*\*/.test(facture)) statutFacture = 'annule';
+    else if(!appelService) statutFacture = 'manquant';
     else if(!facture) statutFacture = 'en_traitement';
-    // Une facture "manquante" ne compte que si la date est aujourd'hui ou avant —
-    // un job planifié plus tard n'a normalement pas encore de facture.
     const dateObj = parseSheetDate(date);
     const endOfToday = new Date(); endOfToday.setHours(23,59,59,999);
     const estPasseOuAujourdhui = dateObj ? dateObj<=endOfToday : false;
-    out.push({contracteur:contracteurKey, date, projet, adresse, appelService, ordreTravail, facture, eventId,
+    out.push({contracteur:contracteurKey, onglet:tabName, ligne:i+2, date, dateObj, projet, adresse, appelService, ordreTravail, facture, eventId,
       statutFacture, dateConnue: !!dateObj, estPasseOuAujourdhui,
-      factureManquante: statutFacture!=='complet' && estPasseOuAujourdhui});
+      factureManquante: (statutFacture==='manquant' || statutFacture==='en_traitement') && estPasseOuAujourdhui});
   });
   return out;
 }
-async function getAllSuiviTravaux(spreadsheetId){
-  const keys = Object.keys(SUIVI_TAB_NAMES);
-  const results = await Promise.all(keys.map(k=>getSuiviTravauxRows(spreadsheetId, k)));
-  return results.flat();
+// Tous les onglets contracteurs en 2 lectures (liste des onglets + lecture groupée), au lieu d'une lecture par onglet.
+const SUIVI_CACHE = {};
+async function getAllSuiviTravaux(spreadsheetId, force){
+  const c = SUIVI_CACHE[spreadsheetId];
+  if(!force && c && Date.now()-c.t < 120000) return c.rows;
+  const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId, fields:'sheets.properties.title'});
+  const titres = (meta.result.sheets||[]).map(x=>x.properties.title);
+  const keys = Object.keys(SUIVI_TAB_NAMES).filter(k=>titres.includes(SUIVI_TAB_NAMES[k]));
+  if(!keys.length) return [];
+  const vals = await sheetsBatchGet(spreadsheetId, keys.map(k=>"'"+SUIVI_TAB_NAMES[k].replace(/'/g,"''")+"'!A1:Z"));
+  const rows = keys.flatMap((k,i)=>parseSuiviRows(vals[i]||[], k));
+  SUIVI_CACHE[spreadsheetId] = {t:Date.now(), rows};
+  return rows;
+}
+// « Pas à facturer » : écrit « ** » dans K et M (seulement si vides) ; « Remettre » efface les « ** ».
+async function suiviMarquerAnnule(spreadsheetId, r, annule){
+  const plage = c => "'"+r.onglet.replace(/'/g,"''")+"'!"+c+r.ligne;
+  const k = annule ? (r.appelService || '**') : (/^\*\*/.test(r.appelService) ? '' : r.appelService);
+  const m = annule ? (r.facture || '**') : (/^\*\*/.test(r.facture) ? '' : r.facture);
+  await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId, resource:{valueInputOption:'RAW', data:[{range:plage('K'), values:[[k]]},{range:plage('M'), values:[[m]]}]}});
+  delete SUIVI_CACHE[spreadsheetId];
 }
 
 // ── Thème clair/sombre ───────────────────────────────────────────────────
@@ -580,7 +585,7 @@ function avecReessaiSheets(){
     };
   };
   ['get','batchUpdate'].forEach(n=>envelopper(sp, n));
-  ['get','batchGet','update','append','clear'].forEach(n=>envelopper(sp.values, n));
+  ['get','batchGet','update','append','clear','batchUpdate'].forEach(n=>envelopper(sp.values, n));
   sp.__reessai = true;
 }
 let tokenClient=null;
@@ -2162,6 +2167,10 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const [manuels] = useEtapesManuelles(cfg);
   const [adresses, deciderAdresse, nbSansAdresse] = useAdresses(cfg);
   const [reglés] = useCourrielsReglés(cfg);
+  const [suivi,setSuivi]=useState(null);
+  useEffect(()=>{ if(!cfg.suiviTravauxSpreadsheetId) return; let ok=true;
+    getAllSuiviTravaux(cfg.suiviTravauxSpreadsheetId).then(r=>{ if(ok) setSuivi(r); }).catch(()=>{ if(ok) setSuivi([]); });
+    return ()=>{ ok=false; }; },[cfg.suiviTravauxSpreadsheetId, refreshKey]);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les données : {err}</div>;
@@ -2173,8 +2182,9 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const tous = Object.values(clients).flatMap(c=>c.jobs.filter(j=>!(archives||{})[j.id]).map(j=>({c, j, s:pjEtapes(j, ap, cmds, courriels, manuels)})));
   const enCours = tous.filter(x=>x.j.status!=='done');
   const aCompleter = enCours.reduce((t,x)=>t+x.s.manquants.length,0);
-  const aFacturer = tous.filter(x=>x.s.etape==='À facturer');
-  const sansFac = tous.filter(x=>x.c.code!=='PART').reduce((t,x)=>t+(x.j.missing||0),0);
+  // À facturer : le Sheet Suivi Travaux (même source que l'onglet Factures).
+  const aFacturer = (suivi||[]).filter(r=>r.factureManquante).sort((a,b)=>((a.dateObj||0)-(b.dateObj||0)));
+  const sansFac = aFacturer.filter(r=>r.statutFacture==='manquant').length;
   const anomalies = cvAnomalies(factures, clients, ap);
   const passages = d => tous.flatMap(x=>x.j.events.filter(e=>!e.attente && e.day===d).map(e=>({...x, e}))).sort((a,b)=>String(a.e.start).localeCompare(String(b.e.start)));
   const auj = passages(today), dem = passages(demain);
@@ -2218,7 +2228,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
 
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:16}}>
       <Tuile n={enCours.length} l="Jobs en cours" sub={aCompleter ? aCompleter+' étapes à compléter' : 'tout est complet'} go="projets"/>
-      <Tuile n={aFacturer.length} l="À facturer" sub={sansFac ? sansFac+' passages sans facture' : 'rien en retard'} alerte={aFacturer.length>0} go="projets"/>
+      <Tuile n={suivi ? aFacturer.length : '…'} l="À facturer" sub={suivi ? (sansFac ? sansFac+" sans rien d'inscrit, "+(aFacturer.length-sansFac)+' facture à faire' : (aFacturer.length ? 'appels faits, factures à faire' : 'tout est facturé')) : 'Suivi Travaux'} alerte={aFacturer.length>0} go="factures"/>
       <Tuile n={anomalies.length} l="À vérifier" sub="factures, PO, appels" alerte={anomalies.length>0} go="clients"/>
       <Tuile n={aCommander.length} l="Commandes à placer" sub="2 prochaines semaines" alerte={aCommander.some(x=>x.e.day<=jour(3))} go="agenda"/>
       <Tuile n={aRepondre.length} l="Courriels à répondre" sub={aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'le plus vieux : '+cvJoursDepuis(aRepondre[0].dernier)+' jours' : 'clients et contracteurs'} alerte={aRepondre.length>0} go="courriels"/>
@@ -2247,8 +2257,11 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
         <Bloc titre="Courriels à répondre" n={aRepondre.length} go="courriels" vide="✅ Aucun courriel n'attend ta réponse.">
           {aRepondre.slice(0,8).map((f,i)=><Rang key={i} go="courriels" droite={cvJoursDepuis(f.dernier)!=null ? 'il y a '+cvJoursDepuis(f.dernier)+' j' : ''}>« {f.sujet} »<div className="muted" style={{fontSize:11.5}}>{nomPO(f.po)}{f.de ? ' · '+f.de : ''}</div></Rang>)}
         </Bloc>
-        <Bloc titre="À facturer" n={aFacturer.length} go="projets" vide="✅ Rien à facturer.">
-          {aFacturer.slice(0,8).map((x,i)=><Rang key={i} go="projets" droite={'dernier passage '+cvFmtDay(x.j.last)}>{etiquette(x)}</Rang>)}
+        <Bloc titre="À facturer" n={aFacturer.length} go="factures" vide={suivi ? '✅ Tout est facturé.' : 'Lecture du Suivi Travaux…'}>
+          {aFacturer.slice(0,8).map((r,i)=><Rang key={i} go="factures" droite={r.date}>
+            <b style={{color:'var(--accent)'}}>{r.contracteur==='PARTICULIER'?'':r.contracteur+' '}</b>{r.projet||r.adresse}
+            <div style={{fontSize:11.5,color:r.statutFacture==='manquant'?'var(--danger)':'var(--warning)'}}>{r.statutFacture==='manquant' ? "rien d'inscrit" : 'appel '+r.appelService+' — facture à faire'}</div>
+          </Rang>)}
         </Bloc>
         <Bloc titre="Achats à associer" n={aAssocier.length} go="fournisseurs" vide="✅ Toutes les factures fournisseurs sont associées.">
           {aAssocier.slice().sort((a,b)=>String(b.date||b.recue).localeCompare(String(a.date||a.recue))).slice(0,6).map((a,i)=><Rang key={i} go="fournisseurs" droite={cvMoney(a.st)}>
@@ -2804,97 +2817,91 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
 
 // ── UI: Factures — LECTURE SEULE depuis "SUIVI TRAVAUX SARAN ÉLECTRIQUE" ──
 // Un appel de service sans facture associée = "facture manquante".
+// ── UI: Factures — suivi des factures à partir du Sheet « SUIVI TRAVAUX SARAN ÉLECTRIQUE » (colonnes K/L/M).
+// À facturer = passages faits sans appel de service (manquant) ou avec appel mais sans facture (en traitement).
+// « Pas à facturer » écrit « ** » dans K et M : la ligne sort de la liste (et « Remettre » l'y ramène).
 function FacturesView({cfg, refreshKey}){
   const [loading,setLoading]=useState(true);
   const [rows,setRows]=useState([]);
   const [err,setErr]=useState('');
-  const [onlyMissing,setOnlyMissing]=useState(true);
-  const [hideTraitement,setHideTraitement]=useState(false);
+  const [vue,setVue]=useState('afacturer');
   const [filterC,setFilterC]=useState(null);
-
+  const [q,setQ]=useState('');
+  const [busy,setBusy]=useState('');
+  const [tick,setTick]=useState(0);
+  const id = cfg.suiviTravauxSpreadsheetId;
   useEffect(()=>{
-    if(!cfg.suiviTravauxSpreadsheetId){ setLoading(false); return; }
+    if(!id){ setLoading(false); return; }
     let cancelled=false;
-    setLoading(true); setErr('');
-    getAllSuiviTravaux(cfg.suiviTravauxSpreadsheetId)
+    setLoading(rows.length===0); setErr('');
+    getAllSuiviTravaux(id, tick>0 || refreshKey>0)
       .then(r=>{ if(!cancelled) setRows(r); })
       .catch(e=>{ if(!cancelled) setErr(apiErrMsg(e)||'Erreur de chargement.'); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
-  },[cfg.suiviTravauxSpreadsheetId, refreshKey]);
-
-  const contracteursPresent = [...new Set(rows.map(r=>r.contracteur))];
-  let base = filterC ? rows.filter(r=>r.contracteur===filterC) : rows;
-  const byDateDesc = (a,b)=>(b.date||'').localeCompare(a.date||'');
-  const manquantList = [...base.filter(r=>r.statutFacture==='manquant' && r.estPasseOuAujourdhui)].sort(byDateDesc);
-  const traitementList = [...base.filter(r=>r.statutFacture==='en_traitement' && r.estPasseOuAujourdhui)].sort(byDateDesc);
-  const allList = [...base].sort(byDateDesc);
-  // Deux compteurs distincts — "manquante" (aucun appel de service) ne doit
-  // jamais inclure les lignes "en traitement" (appel de service fait, facture
-  // pas encore reçue): ce sont deux statuts différents, pas le même problème.
-  const trueMissingCount = rows.filter(r=>r.statutFacture==='manquant' && r.estPasseOuAujourdhui).length;
-  const traitementCount = rows.filter(r=>r.statutFacture==='en_traitement' && r.estPasseOuAujourdhui).length;
-
-  function renderTable(list, emptyMsg){
-    return <div className="card" style={{padding:0,overflowX:'auto'}}>
-      <table>
-        <thead><tr><th>Contracteur</th><th>Date</th><th>Projet</th><th>Adresse</th><th>Appel de service</th><th>Ordre de travail</th><th>Facture</th></tr></thead>
-        <tbody>
-          {list.map((r,i)=><tr key={i} style={r.factureManquante?{background:'rgba(248,81,73,.08)'}:null}>
-            <td>{r.contracteur==='PARTICULIER'?'Particuliers':r.contracteur}</td>
-            <td className="muted">{r.date}</td>
-            <td style={{fontWeight:600}}>{r.projet}</td>
-            <td className="muted">{r.adresse}</td>
-            <td>{r.appelService||'—'}</td>
-            <td>{r.ordreTravail||'—'}</td>
-            <td>
-              {r.statutFacture==='complet' && r.facture}
-              {r.statutFacture==='en_traitement' && <span style={{color:'#d29922',fontWeight:700}}>En traitement</span>}
-              {r.statutFacture==='manquant' && <span style={{color:'var(--danger)',fontWeight:700}}>Manquant</span>}
-            </td>
-          </tr>)}
-          {list.length===0 && <tr><td colSpan="7" className="muted" style={{padding:16}}>{emptyMsg}</td></tr>}
-        </tbody>
-      </table>
-    </div>;
-  }
-
+  },[id, refreshKey, tick]);
+  const marquer = async (r, annule)=>{
+    const k = r.onglet+r.ligne; setBusy(k);
+    try{ await suiviMarquerAnnule(id, r, annule); setRows(rs=>rs.map(x=>x===r ? {...x, statutFacture: annule?'annule':(x.appelService && !/^\*\*/.test(x.appelService) ? 'en_traitement':'manquant'), factureManquante:!annule && x.estPasseOuAujourdhui} : x)); setTick(t=>t+1); }
+    catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); }
+    setBusy('');
+  };
+  const nom = c => c==='PARTICULIER' ? 'Particuliers' : c;
+  const contracteurs = [...new Set(rows.map(r=>r.contracteur))].sort((a,b)=>(a==='PARTICULIER')-(b==='PARTICULIER') || a.localeCompare(b,'fr'));
+  const base = rows.filter(r=>(!filterC || r.contracteur===filterC) && (!q || cvNorm([r.projet,r.adresse,r.appelService,r.facture,r.contracteur].join(' ')).includes(cvNorm(q))));
+  const manquantes = base.filter(r=>r.statutFacture==='manquant' && r.estPasseOuAujourdhui);
+  const traitement = base.filter(r=>r.statutFacture==='en_traitement' && r.estPasseOuAujourdhui);
+  const annulees = base.filter(r=>r.statutFacture==='annule');
+  const vieux = (a,b)=>((a.dateObj||0)-(b.dateObj||0));
+  const recents = (a,b)=>((b.dateObj||0)-(a.dateObj||0));
+  const liste = vue==='afacturer' ? [...manquantes, ...traitement].sort(vieux) : vue==='annulees' ? annulees.slice().sort(recents) : base.slice().sort(recents);
+  const jours = r => r.dateObj ? Math.floor((Date.now()-r.dateObj.getTime())/864e5) : null;
+  const Statut = ({r}) => r.statutFacture==='complet' ? <span style={{color:'var(--success)',fontWeight:700}}>Facture {r.facture}</span>
+    : r.statutFacture==='en_traitement' ? <span style={{color:'var(--warning)',fontWeight:700}}>Appel {r.appelService} — facture à faire</span>
+    : r.statutFacture==='annule' ? <span className="muted" style={{fontWeight:700}}>** Pas à facturer</span>
+    : r.estPasseOuAujourdhui ? <span style={{color:'var(--danger)',fontWeight:700}}>Rien d'inscrit</span> : <span className="muted">À venir</span>;
   return <div>
-    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Factures</h2>
-    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Lecture seule — Sheet "SUIVI TRAVAUX SARAN ÉLECTRIQUE" (colonnes K/L/M). "Manquant" = pas d'appel de service (K vide). "En traitement" = appel de service fait mais pas encore de facture (M vide). Seules les lignes datées d'aujourd'hui ou avant comptent comme manquantes — un job futur n'a normalement pas encore de facture.</div>
-    {!cfg.suiviTravauxSpreadsheetId && <div className="card">Configure l'ID du Sheet "SUIVI TRAVAUX" dans Réglages.</div>}
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Factures</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:12}}>Tiré du Sheet « SUIVI TRAVAUX SARAN ÉLECTRIQUE ». Tout passage fait qui n'a pas encore de facture est ici, le plus vieux en premier. Un passage qui ne se facture pas (annulé, garantie, visite) : « Pas à facturer » met « ** » dans le Sheet.</div>
+    {!id && <div className="card">Configure l'ID du Sheet "SUIVI TRAVAUX" dans Réglages.</div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
-    {cfg.suiviTravauxSpreadsheetId && <>
-      {!loading && <div className="card" style={{marginBottom:14,display:'flex',alignItems:'center',gap:24,flexWrap:'wrap'}}>
-        <div style={{display:'flex',alignItems:'center',gap:10}}>
-          <div style={{fontSize:28,fontWeight:800,color:trueMissingCount>0?'var(--danger)':'var(--success)'}}>{trueMissingCount}</div>
-          <div className="muted" style={{fontSize:12.5}}>facture{trueMissingCount!==1?'s':''} manquante{trueMissingCount!==1?'s':''}<br/>(aucun appel de service)</div>
-        </div>
-        <div style={{display:'flex',alignItems:'center',gap:10}}>
-          <div style={{fontSize:22,fontWeight:800,color:'#d29922'}}>{traitementCount}</div>
-          <div className="muted" style={{fontSize:12.5}}>en traitement<br/>(appel de service fait, facture à venir)</div>
-        </div>
-        <div className="muted" style={{fontSize:11}}>sur {rows.length} lignes lues, tous contracteurs confondus.</div>
-      </div>}
+    {id && (loading ? <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture du suivi des travaux…</span></div> : <>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginBottom:12}}>
+        <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('afacturer')}><div style={{fontSize:24,fontWeight:800,color:manquantes.length?'var(--danger)':'var(--success)'}}>{manquantes.length}</div><div className="muted" style={{fontSize:12}}>rien d'inscrit (ni appel ni facture)</div></div>
+        <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('afacturer')}><div style={{fontSize:24,fontWeight:800,color:'var(--warning)'}}>{traitement.length}</div><div className="muted" style={{fontSize:12}}>appel fait, facture à faire</div></div>
+        <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('annulees')}><div style={{fontSize:24,fontWeight:800}}>{annulees.length}</div><div className="muted" style={{fontSize:12}}>pas à facturer (**)</div></div>
+      </div>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
-        <button className="btn btn-sm" onClick={()=>setOnlyMissing(true)} style={onlyMissing?{background:'var(--danger)',color:'#fff',border:'none'}:null}>Manquantes seulement</button>
-        <button className="btn btn-sm" onClick={()=>setOnlyMissing(false)} style={!onlyMissing?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Toutes les lignes</button>
-        <button className="btn btn-sm" onClick={()=>setHideTraitement(v=>!v)} style={hideTraitement?{background:'var(--bg4)',border:'1px solid var(--border2)'}:null}>{hideTraitement?'Réafficher "en traitement"':'Cacher "en traitement"'}</button>
+        {[['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (projet, adresse, no)…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
       </div>
-      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
-        <button className="btn btn-sm" onClick={()=>setFilterC(null)} style={!filterC?{background:'var(--accent)',color:'#fff',border:'none'}:null}>Tous contracteurs</button>
-        {contracteursPresent.map(c=><button key={c} className="btn btn-sm" onClick={()=>setFilterC(c)} style={filterC===c?{background:prefixColor(c),color:'#fff',border:'none'}:null}>{c==='PARTICULIER'?'Particuliers':c}</button>)}
+      <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:10}}>
+        <button className="btn btn-sm" style={!filterC?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(null)}>Tous</button>
+        {contracteurs.map(c=><button key={c} className="btn btn-sm" style={filterC===c?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(filterC===c?null:c)}>{nom(c)}</button>)}
       </div>
-      {loading ? <div className="muted">Chargement...</div> :
-      onlyMissing ? <>
-        <h3 style={{margin:'0 0 8px',fontSize:14,fontWeight:800,color:'var(--danger)'}}>Manquantes ({manquantList.length})</h3>
-        {renderTable(manquantList, 'Aucune facture manquante 🎉')}
-        {!hideTraitement && <>
-          <h3 style={{margin:'22px 0 8px',fontSize:14,fontWeight:800,color:'#d29922'}}>En traitement ({traitementList.length})</h3>
-          {renderTable(traitementList, 'Rien en traitement.')}
-        </>}
-      </> : renderTable(hideTraitement ? allList.filter(r=>r.statutFacture!=='en_traitement') : allList, 'Aucune ligne trouvée.')}
-    </>}
+      <div className="card">
+        {!liste.length && <div className="muted" style={{fontSize:13}}>{vue==='afacturer' ? '✅ Tout est facturé.' : 'Rien ici.'}</div>}
+        {liste.slice(0,300).map(r=>{ const k=r.onglet+r.ligne, j=jours(r);
+          return <div key={k} style={{padding:'9px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+            <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
+              <div style={{minWidth:0}}><b style={{color:'var(--accent)'}}>{nom(r.contracteur)} </b><b>{r.projet||r.adresse||'—'}</b>
+                {r.projet && r.adresse && <div className="muted" style={{fontSize:12}}>{r.adresse}</div>}
+                <div style={{fontSize:12.5,marginTop:2}}><Statut r={r}/>{r.ordreTravail ? <span className="muted"> · OT {r.ordreTravail}</span> : ''}</div>
+              </div>
+              <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
+                <div className="muted" style={{fontSize:12}}>{r.date}</div>
+                {vue==='afacturer' && j!=null && <div style={{fontSize:12,fontWeight:700,color:j>=14?'var(--danger)':j>=7?'var(--warning)':'var(--muted)'}}>il y a {j} j</div>}
+              </div>
+            </div>
+            <div style={{marginTop:5}}>
+              {(r.statutFacture==='manquant' || r.statutFacture==='en_traitement') && r.estPasseOuAujourdhui &&
+                <button className="btn btn-sm" disabled={busy===k} title="Met « ** » dans les colonnes K et M du Sheet" onClick={()=>marquer(r, true)}>{busy===k?'…':'✕ Pas à facturer'}</button>}
+              {r.statutFacture==='annule' && <button className="btn btn-sm" disabled={busy===k} onClick={()=>marquer(r, false)}>{busy===k?'…':'↩ Remettre à facturer'}</button>}
+            </div>
+          </div>; })}
+      </div>
+      <div className="muted" style={{fontSize:11.5,marginTop:8}}>Le Sheet est rempli à partir de l'agenda par ton script Suivi Travaux. Les numéros d'appel et de facture s'y inscrivent dans les colonnes K et M.</div>
+    </>)}
   </div>;
 }
 
@@ -3744,7 +3751,7 @@ function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande, isDes
         {jours.map(d=>{ const du=items.filter(x=>x.e.day===d).sort((a,b)=>String(a.e.start).localeCompare(String(b.e.start)));
           return <div key={d} style={{minWidth:0}}>
             <div style={{fontSize:11.5,fontWeight:800,textTransform:'uppercase',letterSpacing:'.03em',color: d===today?'var(--accent)':'var(--muted)',padding:'4px 2px',borderBottom:'2px solid '+(d===today?'var(--accent)':'var(--border)'),marginBottom:6}}>{nomJour(d)}</div>
-            {du.map(x=><Item key={x.cle} x={x}/>)}
+            {du.map(x=><React.Fragment key={x.cle}>{Item({x})}</React.Fragment>)}
           </div>; })}
       </div>
     </div>
