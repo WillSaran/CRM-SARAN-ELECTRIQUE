@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v35';
+const APP_VERSION = 'v37';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1624,6 +1624,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   const [tick,setTick]=useState(0);
   const {loading, err, events, registry, factures, appels, courriels, archives} = useClientsData(cfg, refreshKey+'|p'+tick);
   const [voirArch,setVoirArch]=useState(false);
+  const [voirTerm,setVoirTerm]=useVoirTerminees();
   const [commandes] = useCommandes(cfg);
   const [filtre,setFiltre]=useState('');
   const [seulManque,setSeulManque]=useState(false);
@@ -1639,8 +1640,11 @@ function ProjetsSuivi({cfg, refreshKey}){
   jobs = jobs.filter(x=>voirArch ? (archives||{})[x.j.id] : !(archives||{})[x.j.id]);
   if(filtre) jobs = jobs.filter(x=>x.c.code===filtre);
   if(seulManque) jobs = jobs.filter(x=>x.s.manquants.length);
+  // Terminées cachées, sauf celles qui restent à facturer.
+  const nbTerm = jobs.filter(x=>x.j.status==='done' && x.s.etape!=='À facturer').length;
+  if(!voirTerm) jobs = jobs.filter(x=>x.j.status!=='done' || x.s.etape==='À facturer');
   const codes = [...new Set(Object.values(clients).map(c=>c.code))];
-  const groupes = [['cours','En cours'],['avenir','À venir'],['attente','En attente (pas encore cédulées)'],['done','Terminées (30 derniers jours)']];
+  const groupes = [['cours','En cours'],['avenir','À venir'],['done','Terminées (30 derniers jours)']];
   const Ligne = ({x})=>{ const {c,j,s}=x, k=c.code+j.id, o=ouvert===k;
     return <div className="opp-card" style={{padding:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:10,cursor:'pointer'}} onClick={()=>setOuvert(o?null:k)}>
@@ -1684,6 +1688,7 @@ function ProjetsSuivi({cfg, refreshKey}){
       <button className="btn btn-sm" style={!filtre?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>setFiltre('')}>Tous</button>
       {codes.map(cd=><button key={cd} className="btn btn-sm" style={filtre===cd?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>setFiltre(cd)}>{cd==='PART'?'Particuliers':cd}</button>)}
       <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,marginLeft:'auto'}}><input type="checkbox" checked={seulManque} onChange={e=>setSeulManque(e.target.checked)}/> Seulement ce qui manque</label>
+      <CaseTerminees v={voirTerm} set={setVoirTerm} n={nbTerm}/>
       <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13}}><input type="checkbox" checked={voirArch} onChange={e=>setVoirArch(e.target.checked)}/> Archivées{nbArch?' ('+nbArch+')':''}</label>
     </div>
     {groupes.map(([st,nom])=>{ const g=jobs.filter(x=>x.j.status===st).sort((a,b)=> st==='done' ? b.j.last.localeCompare(a.j.last) : ((a.s.prochain||{}).day||'').localeCompare((b.s.prochain||{}).day||''));
@@ -2855,7 +2860,7 @@ function cvBuildClients(events, registry, factures){
     const base = reels.length ? reels : j.events;
     j.first = base[0].day; j.last = base[base.length-1].day;
     j.status = j.last < today ? 'done' : (j.first <= today ? 'cours' : 'avenir');
-    if(j.attente.length && (!reels.length || j.status==='done')) j.status = 'attente';
+    if(j.attente.length && (!reels.length || j.status==='done')) j.status = 'cours'; // en attente = encore à faire
     const fromPO = j.po ? Object.values(factures).filter(f=>f.po===j.po).map(f=>f.num) : [];
     j.factures = [...new Set([...j.events.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(Boolean)), ...fromPO])].sort();
     j.billed = j.factures.reduce((t,f)=>t+((factures[f]&&!factures[f].annulee&&factures[f].ht)||0),0);
@@ -3162,7 +3167,10 @@ function ClientDetailView({client, factures, appels, courriels, achats, facLigne
   const [sel,setSel]=useState(null);
   const detailRef=useRef(null);
   const arch = j => !!(archives||{})[j.id];
+  const [voirTerm,setVoirTerm]=useVoirTerminees();
+  const nbTerm = client.jobs.filter(j=>j.status==='done' && !arch(j)).length;
   const list = client.jobs.filter(j=>(filter==='arch' ? arch(j) : !arch(j)) && (filter==='all' || filter==='arch' || (filter==='flag'?j.flag:j.status===filter)) &&
+    (voirTerm || filter==='done' || filter==='arch' || j.status!=='done') &&
     (!q || cvNorm([j.po,j.name,j.address,...j.factures].join(' ')).includes(cvNorm(q))));
   const job = client.jobs.find(j=>j.id===sel) || null;
   function pick(id){ setSel(id); if(!isDesktop) setTimeout(()=>detailRef.current && detailRef.current.scrollIntoView({behavior:'smooth'}),50); }
@@ -3171,8 +3179,7 @@ function ClientDetailView({client, factures, appels, courriels, achats, facLigne
     [client.poTotal ? Math.round(client.poTotal).toLocaleString('fr-CA')+' $' : '—','en PO, avant taxes'],
     [client.billed ? Math.round(client.billed).toLocaleString('fr-CA')+' $' : '—','facturé, avant taxes'],
     [client.jobs.filter(j=>j.status==='done').length,'terminées'],
-    [client.jobs.filter(j=>j.status==='cours'||j.status==='avenir').length,'en cours ou à venir'],
-    [client.jobs.filter(j=>j.status==='attente').length,'en attente'],
+    [client.active,'en cours ou à venir'],
     [client.flags,'à vérifier']
   ];
   return <div>
@@ -3185,8 +3192,9 @@ function ClientDetailView({client, factures, appels, courriels, achats, facLigne
     <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1.2fr) minmax(0,1fr)':'1fr',gap:14,alignItems:'start'}}>
       <div className="card" style={{minWidth:0}}>
         <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
-          {[['all','Toutes'],['done','Terminées'],['cours','En cours'],['avenir','À venir'],['attente','En attente'],['flag','À vérifier'],['arch','Archivées']].map(([k,l])=>
+          {[['all','Toutes'],['done','Terminées'],['cours','En cours'],['avenir','À venir'],['flag','À vérifier'],['arch','Archivées']].map(([k,l])=>
             <button key={k} className={'btn btn-sm'+(filter===k?' btn-p':'')} onClick={()=>setFilter(k)}>{l}</button>)}
+          <CaseTerminees v={voirTerm} set={setVoirTerm} n={nbTerm}/>
           <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Nom, PO, ville, facture…" style={{flex:'1 1 150px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
         </div>
         <div style={{overflowX:'auto'}}>
@@ -3409,7 +3417,16 @@ function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande, isDes
   </div>;
 }
 
+// Case « Terminées » : cachées par défaut, le choix est retenu sur cet appareil.
+function useVoirTerminees(){
+  const [v,setV]=useState(()=>{ try{ return localStorage.getItem('crmVoirTerminees')==='1'; }catch(e){ return false; } });
+  const set = b=>{ setV(b); try{ localStorage.setItem('crmVoirTerminees', b?'1':'0'); }catch(e){} };
+  return [v,set];
+}
+const CaseTerminees = ({v,set,n})=><label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,whiteSpace:'nowrap'}}><input type="checkbox" checked={v} onChange={e=>set(e.target.checked)}/> Terminées{n?' ('+n+')':''}</label>;
+
 function ClientsView({cfg, refreshKey, isDesktop}){
+  const [voirTerm,setVoirTerm]=useVoirTerminees();
   const [tick,setTick]=useState(0);
   const [deplie,setDeplie]=useState({});
   const {loading, err, events, registry, factures, appels, courriels, achats, facLignes, archives, lent} = useClientsData(cfg, refreshKey+'|'+tick);
@@ -3429,13 +3446,14 @@ function ClientsView({cfg, refreshKey, isDesktop}){
           <div className="t" style={{fontSize:15}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{c.label}
             {c.flags>0 && <span className="badge" style={{background:'rgba(248,81,73,0.12)',color:'var(--danger)',marginLeft:8}}>{c.flags} à vérifier</span>}</div>
           {c.contact && <div className="a">{c.contact}</div>}
-          <div className="a" style={{marginTop:6}}>{c.jobs.length} jobs · {c.active} à faire (en cours, à venir ou en attente){c.poTotal ? ' · '+Math.round(c.poTotal).toLocaleString('fr-CA')+' $ en PO' : ''}{c.billed ? ' · '+Math.round(c.billed).toLocaleString('fr-CA')+' $ facturé' : ''}</div>
+          <div className="a" style={{marginTop:6}}>{c.jobs.length} jobs · {c.active} en cours ou à venir{c.poTotal ? ' · '+Math.round(c.poTotal).toLocaleString('fr-CA')+' $ en PO' : ''}{c.billed ? ' · '+Math.round(c.billed).toLocaleString('fr-CA')+' $ facturé' : ''}</div>
           <div className="a">Dernière activité : {cvFmtDay(c.lastDay)}</div>
         </div>
         <button className="btn btn-sm" title={ouvert?'Cacher les jobs':'Voir les jobs'} onClick={()=>setDeplie(d=>({...d,[c.code]:!d[c.code]}))}>{ouvert?'▲':'▼'}</button>
       </div>
       {ouvert && <div style={{marginTop:8,borderTop:'1px solid var(--border)'}}>
-        {c.jobs.map(j=><div key={j.id} className="remind-item" style={{cursor:'pointer'}} onClick={()=>setOpen(c.code)}>
+        {!voirTerm && !c.jobs.some(j=>j.status!=='done') && <div className="muted" style={{fontSize:12.5,padding:'8px 0'}}>Toutes terminées — coche « Terminées » pour les voir.</div>}
+        {c.jobs.filter(j=>voirTerm || j.status!=='done').map(j=><div key={j.id} className="remind-item" style={{cursor:'pointer'}} onClick={()=>setOpen(c.code)}>
           <div><b style={{fontSize:13.5}}>{j.name}</b>{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></div>
           <div className="muted" style={{fontSize:12,whiteSpace:'nowrap'}}>{cvFmtDay(j.last)}</div>
         </div>)}
@@ -3449,7 +3467,10 @@ function ClientsView({cfg, refreshKey, isDesktop}){
         : <span className="muted" style={{fontSize:12}}>Bouton de mise à jour : ajoute l'adresse dans Réglages</span>}
     </div>
     {avisLent}
-    <div className="muted" style={{fontSize:13,marginBottom:14}}>Tes contracteurs et tes particuliers. ▼ pour voir les jobs d'un client, clique le client pour sa fiche complète.</div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,marginBottom:14}}>
+      <div className="muted" style={{fontSize:13}}>Tes contracteurs et tes particuliers. ▼ pour voir les jobs d'un client, clique le client pour sa fiche complète.</div>
+      <CaseTerminees v={voirTerm} set={setVoirTerm}/>
+    </div>
     <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1fr) minmax(0,1fr)':'1fr',gap:'0 16px',alignItems:'start'}}>
       {tous.length ? tous.map(c=><Card key={c.code} c={c}/>) : <div className="card muted">Aucun client trouvé dans l'agenda.</div>}
     </div>
