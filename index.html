@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v68';
+const APP_VERSION = 'v69';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -495,6 +495,7 @@ function parseSuiviRows(all, contracteurKey){
   const idxProjet = tete(/projet/i, 1);
   const idxAdresse = tete(/adresse/i, 2);
   const idxEvent = tete(/calendar|event\s*id/i, 13);
+  const idxDesc = tete(/description/i, 3);
   const out = [];
   rows.forEach((r,i)=>{
     const date=(idxDate>=0?r[idxDate]:'')||'';
@@ -517,7 +518,7 @@ function parseSuiviRows(all, contracteurKey){
     // Compte à facturer à partir du lendemain (comme ton rapport Apps Script) : un passage d'aujourd'hui n'est pas en retard.
     const debutAujourdhui = new Date(); debutAujourdhui.setHours(0,0,0,0);
     const estPasseOuAujourdhui = dateObj ? dateObj<debutAujourdhui : false;
-    out.push({contracteur:contracteurKey, onglet:tabName, ligne:i+2, date, dateObj, projet, adresse, appelService, ordreTravail, facture, eventId,
+    out.push({contracteur:contracteurKey, onglet:tabName, ligne:i+2, date, dateObj, projet, adresse, description:(idxDesc>=0?r[idxDesc]:'')||'', appelService, ordreTravail, facture, eventId,
       statutFacture, dateConnue: !!dateObj, estPasseOuAujourdhui,
       factureManquante: (statutFacture==='manquant' || statutFacture==='en_traitement') && estPasseOuAujourdhui});
   });
@@ -2942,6 +2943,72 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
 
 // ── UI: Factures — LECTURE SEULE depuis "SUIVI TRAVAUX SARAN ÉLECTRIQUE" ──
 // Un appel de service sans facture associée = "facture manquante".
+// Mode tableur : les onglets du Sheet Suivi Travaux, cases Appel (K) / OT (L) / Facture (M) modifiables.
+// Chaque case enregistrée va dans le Sheet ET dans la description de l'événement (comme ton script).
+async function suiviEcrireCellule(spreadsheetId, r, col, val){
+  await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId, range:"'"+r.onglet.replace(/'/g,"''")+"'!"+col+r.ligne, valueInputOption:'RAW', resource:{values:[[val]]}});
+  delete SUIVI_CACHE[spreadsheetId];
+  const lab = {K:'Appel de service', L:'Ordre de travail', M:'Facture'}[col];
+  if(r.eventId) await majDescriptionSuivi(r.eventId, {[lab]:val});
+}
+function CvCellule({r, col, valeur, id, onSaved}){
+  const [v,setV]=useState(valeur||'');
+  const [etat,setEtat]=useState('');
+  const sauver = async ()=>{
+    if(v.trim()===(valeur||'').trim()) return;
+    setEtat('…');
+    try{ await suiviEcrireCellule(id, r, col, v.trim()); setEtat('✓'); onSaved && onSaved(col, v.trim()); setTimeout(()=>setEtat(''),1500); }
+    catch(e){ setEtat('!'); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); }
+  };
+  const vide = !v.trim() && r.estPasseOuAujourdhui && col!=='L' && r.statutFacture!=='annule';
+  return <td style={{padding:0,position:'relative',background:vide?'rgba(248,81,73,.10)':undefined}}>
+    <input value={v} onChange={e=>setV(e.target.value)} onBlur={sauver} onKeyDown={e=>{ if(e.key==='Enter') e.target.blur(); }}
+      style={{width:'100%',minWidth:70,border:'none',background:'transparent',padding:'6px 8px',fontVariantNumeric:'tabular-nums',color:'var(--text)'}}/>
+    {etat && <span style={{position:'absolute',right:4,top:6,fontSize:11,color:etat==='!'?'var(--danger)':'var(--success)'}}>{etat}</span>}
+  </td>;
+}
+function SuiviTableur({rows, id, onChanged}){
+  const onglets = [...new Set(rows.map(r=>r.contracteur))].sort((a,b)=>(a==='PARTICULIER')-(b==='PARTICULIER') || a.localeCompare(b,'fr'));
+  const [onglet,setOnglet]=useState(onglets[0]||'');
+  const [q,setQ]=useState('');
+  const liste = rows.filter(r=>r.contracteur===onglet && (!q || cvNorm([r.projet,r.adresse,r.description,r.appelService,r.ordreTravail,r.facture].join(' ')).includes(cvNorm(q)))).sort((a,b)=>a.ligne-b.ligne);
+  const nom = c => c==='PARTICULIER' ? 'Particuliers' : c;
+  let mois = '';
+  return <div>
+    <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:8,alignItems:'center'}}>
+      {onglets.map(o=>{ const n = rows.filter(r=>r.contracteur===o && r.factureManquante).length;
+        return <button key={o} className="btn btn-sm" style={onglet===o?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>setOnglet(o)}>{nom(o)}{n ? <span style={{marginLeft:4,color:onglet===o?'#fff':'var(--danger)',fontWeight:800}}>{n}</span> : ''}</button>; })}
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher dans l'onglet…" style={{flex:'1 1 140px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
+      <a className="btn btn-sm" href={'https://docs.google.com/spreadsheets/d/'+id} target="_blank" rel="noopener" style={{textDecoration:'none'}}>Ouvrir le Sheet ↗</a>
+    </div>
+    <div className="card" style={{padding:0,overflow:'auto',maxHeight:'70vh'}}>
+      <table style={{borderCollapse:'collapse',width:'100%',fontSize:12.5}}>
+        <thead style={{position:'sticky',top:0,background:'var(--bg2)',zIndex:1}}><tr>
+          {['Date','Projet (titre)','Adresse','Description','Appel de service','Ordre de travail','Facture'].map(h=><th key={h} style={{textAlign:'left',padding:'6px 8px',borderBottom:'1px solid var(--border2)',whiteSpace:'nowrap'}}>{h}</th>)}
+        </tr></thead>
+        <tbody>
+          {liste.map(r=>{ const m = r.dateObj ? r.dateObj.toLocaleDateString('fr-CA',{month:'long',year:'numeric'}) : '';
+            const sep = m && m!==mois; if(sep) mois = m;
+            return <React.Fragment key={r.onglet+r.ligne}>
+              {sep && <tr><td colSpan="7" style={{padding:'8px 8px 4px',fontWeight:800,color:'var(--accent)',background:'var(--bg3)'}}>{m}</td></tr>}
+              <tr style={{borderBottom:'1px solid var(--border)',opacity:r.statutFacture==='annule'?0.55:1}}>
+                <td style={{padding:'6px 8px',whiteSpace:'nowrap'}}>{r.date}</td>
+                <td style={{padding:'6px 8px',fontWeight:600,minWidth:180}}>{r.projet}</td>
+                <td className="muted" style={{padding:'6px 8px',minWidth:140}}>{r.adresse}</td>
+                <td className="muted" style={{padding:'6px 8px',minWidth:140,maxWidth:260,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={r.description}>{r.description}</td>
+                <CvCellule r={r} col="K" valeur={r.appelService} id={id} onSaved={onChanged}/>
+                <CvCellule r={r} col="L" valeur={r.ordreTravail} id={id} onSaved={onChanged}/>
+                <CvCellule r={r} col="M" valeur={r.facture} id={id} onSaved={onChanged}/>
+              </tr>
+            </React.Fragment>; })}
+          {!liste.length && <tr><td colSpan="7" className="muted" style={{padding:16}}>Aucune ligne.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+    <div className="muted" style={{fontSize:11.5,marginTop:6}}>Clique une case Appel / OT / Facture, écris, puis Entrée (ou clique ailleurs) : c'est enregistré dans le Sheet et dans l'événement de l'agenda. Rouge = à remplir. « ** » ou « - » = pas à facturer.</div>
+  </div>;
+}
+
 // ── UI: Factures — suivi des factures à partir du Sheet « SUIVI TRAVAUX SARAN ÉLECTRIQUE » (colonnes K/L/M).
 // À facturer = passages faits sans appel de service (manquant) ou avec appel mais sans facture (en traitement).
 // « Pas à facturer » écrit « ** » dans K et M : la ligne sort de la liste (et « Remettre » l'y ramène).
@@ -3006,14 +3073,15 @@ function FacturesView({cfg, refreshKey}){
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('annulees')}><div style={{fontSize:24,fontWeight:800}}>{annulees.length}</div><div className="muted" style={{fontSize:12}}>pas à facturer (**)</div></div>
       </div>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
-        {[['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['papiers','Papiers à traiter ('+papiers.length+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
+        {[['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['tableur','📊 Mode tableur'],['papiers','Papiers à traiter ('+papiers.length+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (projet, adresse, no)…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
       </div>
       <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:10}}>
         <button className="btn btn-sm" style={!filterC?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(null)}>Tous</button>
         {contracteurs.map(c=><button key={c} className="btn btn-sm" style={filterC===c?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(filterC===c?null:c)}>{nom(c)}</button>)}
       </div>
-      {vue==='papiers' ? <div className="card">
+      {vue==='tableur' ? <SuiviTableur rows={rows} id={id} onChanged={()=>setTick(t=>t+1)}/> :
+      vue==='papiers' ? <div className="card">
         <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Appels de service et OT papier déposés dans le Drive par les gars, pas encore traités (inscrits au Suivi Travaux et facturés). Ce n'est pas une erreur : ils partent d'ici tout seuls quand ils sont traités.</div>
         {!papiers.length && <div className="muted" style={{fontSize:13}}>✅ Aucun papier en attente.</div>}
         {papiers.map((a,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:10,padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
