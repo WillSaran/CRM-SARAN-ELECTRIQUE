@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v63';
+const APP_VERSION = 'v64';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3716,10 +3716,10 @@ function cvAnomalies(factures, clients, appels){
       // Preuves : la facture elle-même (PDF, description, montant) et chaque passage où le numéro est écrit.
       const preuve = {facture: factures[n]||null, jobs: Object.values(clients).flatMap(cc=>cc.jobs.filter(jj=>jj.events.some(ev=>String(ev.fac).split(/[\s,–-]+/).includes(n))).map(jj=>({
         label:(cc.code!=='PART'?cc.code+' ':'')+jj.name, address:jj.address,
-        passages: jj.events.filter(ev=>String(ev.fac).split(/[\s,–-]+/).includes(n)).map(ev=>({day:ev.day, phase:ev.phase, title:ev.title, lien:ev.lien, as:ev.as, location:ev.location}))})))};
+        passages: jj.events.filter(ev=>String(ev.fac).split(/[\s,–-]+/).includes(n)).map(ev=>({...ev}))})))};
       out.push({type:'dup', cle:'dup|'+n+'|'+j.id, job:j, preuve, titre:'Facture #'+n,
         texte:'La facture #'+n+' est écrite sur deux jobs différentes : '+(c.code!=='PART'?c.code+' ':'')+j.name+' et '+(j.dupAvec[n]||[]).join(', ')+'.',
-        quoi:'Ouvre le passage qui n\'est pas le bon et corrige le numéro (✏️ Modifier dans Projets).', client:c.code}); });
+        quoi:'Regarde le PDF ci-dessous, puis corrige le numéro sur le mauvais passage avec ✏️ Modifier (directement ici).', client:c.code}); });
     if(c.code==='PART') return;
     // C) Facturé plus que le PO (job terminée)
     if(j.status==='done' && j.reg && j.reg.ht>0 && j.billed>j.reg.ht*1.10)
@@ -3809,7 +3809,8 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
             : <div className="muted">Facture pas encore dans le registre (pas de PDF).</div>}
           {a.preuve.jobs.map((pj,k)=><div key={k}><b>Écrite sur {pj.label}</b>{pj.address ? <span className="muted"> · {pj.address}</span> : ''}
             {pj.passages.map((ps,m)=><div key={m} style={{paddingLeft:10}}>{cvFmtDay(ps.day)} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{ps.phase}</span> « {ps.title} »{ps.as ? ' · appel '+ps.as : ''}
-              {ps.lien && <> · <a href={ps.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>ouvrir l'événement ↗</a></>}</div>)}</div>)}
+              {ps.lien && <> · <a href={ps.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>ouvrir l'événement ↗</a></>}
+              <CvInscrirePassage cfg={cfg} e={ps} onDone={onChanged}/></div>)}</div>)}
         </div>}
         <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:5}}>
           {(a.factures||[]).map(f=><React.Fragment key={f.num}>
