@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v64';
+const APP_VERSION = 'v65';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3265,6 +3265,16 @@ function useClientsData(cfg, refreshKey){
 // Mots significatifs d'un nom de job (pour savoir si deux noms parlent de la même job).
 function cvMemeJob(a, b){ const A=[...cvMotsNom(a)], B=[...cvMotsNom(b)]; if(!A.length || !B.length) return true;   // nom trop vague : on ne conclut pas
   return A.some(x=>B.some(y=>x===y || (x.length>=5 && y.length>=5 && (x.includes(y) || y.includes(x))))); }
+// Deux « jobs » sont la même si : les noms se ressemblent, OU même adresse (même numéro civique + même rue),
+// OU même numéro d'appel de service (un appel qui a pris deux visites).
+function cvMemesJobs(a, b){
+  if(cvMemeJob(a.name, b.name)) return true;
+  const adr = j => String(j.address || (j.events.find(e=>e.location)||{}).location || '');
+  const A = adr(a), B = adr(b), na = (A.match(/^\s*(\d+)/)||[])[1], nb = (B.match(/^\s*(\d+)/)||[])[1];
+  if(na && na===nb && [...cvMotsNom(A)].some(m=>cvMotsNom(B).has(m))) return true;
+  const appels = j => new Set(j.events.flatMap(e=>String(e.as).split(/[\s,–-]+/).filter(t=>/\d/.test(t))));
+  const pa = appels(a); return [...appels(b)].some(x=>pa.has(x));
+}
 function cvMotsNom(n){ return new Set(String(n||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().replace(/(\d)([A-Z])/g,'$1 $2').split(/[^A-Z0-9]+/)
   .filter(m=>m.length>=4 && !/^(ROUGH|FINITION|FINALE|SERV|SERVICE|AJUSTEMENTS?|RAPUP|CUISINE|SALLE|BAIN|BORNE|EXTRA|MAISON|ENTREE|PHIL)$/.test(m))); }
 // Regroupe les événements en clients → jobs.
@@ -3326,7 +3336,7 @@ function cvBuildClients(events, registry, factures){
     // (« CRS ROUGH AUBIN » et « CRS aubin », c'est la même job, écrite autrement).
     j.dupAvec = {};
     j.dupFac = j.factures.filter(f=>{ if(!facJobs[f] || facJobs[f].size<2) return false;
-      const autres = [...facJobs[f]].filter(id=>id!==j.id).map(id=>jobs[id]).filter(Boolean).filter(o=>!cvMemeJob(o.name, j.name));
+      const autres = [...facJobs[f]].filter(id=>id!==j.id).map(id=>jobs[id]).filter(Boolean).filter(o=>!cvMemesJobs(o, j));
       if(autres.length) j.dupAvec[f] = autres.map(o=>(o.client!=='PART'?o.client+' ':'')+o.name);
       return autres.length>0; });
     j.flag = j.missing>0 || j.dupFac.length>0;
