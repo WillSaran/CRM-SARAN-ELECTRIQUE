@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v44';
+const APP_VERSION = 'v45';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1973,15 +1973,56 @@ function DashboardRappelsCard({data, onNavigate}){
   </div>;
 }
 
+// Adresses manquantes : propositions du script « adresses » (onglet « Adresses » du registre des jobs).
+// ✓ écrit l'adresse dans tous les événements de la job (agenda) ; ✕ la refuse.
+function useAdresses(cfg){
+  const [etat,setEtat]=useState({liste:[], lu:false});
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async()=>{
+    if(!id) return;
+    try{
+      const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Adresses!A1:J'});
+      const liste = (r.result.values||[]).slice(1).map((v,i)=>({row:i+2, cle:v[0]||'', job:v[1]||'', date:v[2]||'', evs:(v[3]||'').split(';').filter(Boolean), adresse:v[4]||'', autres:(v[5]||'').split(' | ').filter(Boolean), source:v[6]||'', lien:v[7]||'', statut:v[8]||''}));
+      setEtat({liste, lu:true});
+    }catch(e){ setEtat({liste:[], lu:true}); }
+  },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const decider = async (a, adresse)=>{
+    const statut = adresse ? 'Écrite' : 'Refusée';
+    setEtat(s=>({...s, liste:s.liste.map(x=>x.row===a.row ? {...x, statut} : x)}));
+    try{
+      if(adresse) for(const ev of a.evs){ const [eventId, calendarId] = ev.split('|'); await window.gapi.client.calendar.events.patch({calendarId, eventId, resource:{location:adresse}}); }
+      await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Adresses!E'+a.row+':J'+a.row, valueInputOption:'RAW',
+        resource:{values:[[adresse||a.adresse, a.autres.join(' | '), a.source, a.lien, statut, new Date().toLocaleString('fr-CA')]]}});
+    }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); lire(); }
+  };
+  return [etat.liste.filter(a=>a.statut==='Proposée').sort((x,y)=>x.date.localeCompare(y.date)), decider, etat.liste.filter(a=>/^Rien/.test(a.statut)).length];
+}
+function CvAdresse({a, onDecider}){
+  const [txt,setTxt]=useState(a.adresse);
+  return <div style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+    <div><b>{a.job}</b> <span className="muted">· {cvFmtDay(a.date)} · {a.evs.length} passage{a.evs.length>1?'s':''}</span></div>
+    <div style={{display:'flex',gap:6,marginTop:5,flexWrap:'wrap'}}>
+      <input value={txt} onChange={e=>setTxt(e.target.value)} style={{flex:'1 1 200px',minWidth:0,padding:'6px 10px'}}/>
+      <button className="btn btn-sm btn-p" disabled={!txt.trim()} onClick={()=>onDecider(a, txt.trim())}>✓ Écrire</button>
+      <button className="btn btn-sm" title="Pas la bonne adresse" onClick={()=>onDecider(a, '')}>✕</button>
+    </div>
+    {a.autres.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:4}}>{a.autres.map(o=><button key={o} className="btn btn-sm" style={{fontSize:11.5}} onClick={()=>setTxt(o)}>{o}</button>)}</div>}
+    <div className="muted" style={{fontSize:11.5,marginTop:3}}>{a.lien ? <a href={a.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>{a.source} ↗</a> : a.source}</div>
+  </div>;
+}
+
 // ── UI: Tableau de bord — tout ce qui demande ton attention, tiré des mêmes données que
 // Clients, Projets, Agenda et Fournisseurs (La mémoire + agenda). Chaque bloc mène à sa section.
 function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const {loading, err, events, registry, factures, appels, courriels, achats, archives, lent} = useClientsData(cfg, refreshKey+'|d');
   const [commandes] = useCommandes(cfg);
   const [manuels] = useEtapesManuelles(cfg);
+  const [adresses, deciderAdresse, nbSansAdresse] = useAdresses(cfg);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les données : {err}</div>;
+  const urlAdresses = cfg.memoireMajUrl ? cfg.memoireMajUrl+(cfg.memoireMajUrl.includes('?')?'&':'?')+'quoi=adresses' : '';
   const jour = n => { const d=new Date(); d.setDate(d.getDate()+n); return localDateStr(d); };
   const today = jour(0), demain = jour(1), dans14 = jour(14), mois = today.slice(0,7);
   const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
@@ -2051,6 +2092,15 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
         </Bloc>
       </div>
       <div>
+        <div className="card" style={{marginBottom:14,borderColor:adresses.length?'var(--accent)':undefined}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:4}}>
+            <div className="fh" style={{fontSize:15}}>Adresses à confirmer {adresses.length>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{adresses.length}</span>}</div>
+            {urlAdresses && <button className="btn btn-sm" title="Cherche l'adresse des jobs qui n'en ont pas (registre + courriels). Prêt dans environ 5 min." onClick={()=>window.open(urlAdresses,'_blank')}>🔎 Chercher les adresses manquantes</button>}
+          </div>
+          {adresses.length ? adresses.slice(0,10).map(a=><CvAdresse key={a.row} a={a} onDecider={deciderAdresse}/>)
+            : <div className="muted" style={{fontSize:13}}>Aucune adresse à confirmer.{nbSansAdresse ? ' '+nbSansAdresse+' job'+(nbSansAdresse>1?'s':'')+' sans adresse trouvée — à ajouter à la main dans l\'agenda.' : ''}</div>}
+          {adresses.length>0 && <div className="muted" style={{fontSize:11.5,marginTop:6}}>✓ écrit l'adresse dans tous les passages de la job dans l'agenda. Tu peux la corriger avant.</div>}
+        </div>
         <Bloc titre="Courriels à répondre" n={aRepondre.length} go="projets" vide="✅ Aucun courriel n'attend ta réponse.">
           {aRepondre.slice(0,8).map((f,i)=><Rang key={i} go="projets" droite={cvFmtDay(String(f.dernier).slice(0,10))}>« {f.sujet} »<div className="muted" style={{fontSize:11.5}}>{nomPO(f.po)}{f.de ? ' · '+f.de : ''}</div></Rang>)}
         </Bloc>
