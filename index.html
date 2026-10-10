@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v42';
+const APP_VERSION = 'v43';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -577,14 +577,30 @@ async function initGoogle(cfg){
     resolve();
   });
 }
-function requestToken(){
+// Le jeton Google dure 1 h. On garde son heure d'expiration (aussi dans sessionStorage, pour
+// qu'un rechargement de la page ne redemande pas la connexion tant qu'il est valide).
+let tokenExpire = 0;
+function requestToken(prompt){
   return new Promise((resolve,reject)=>{
     tokenClient.callback = (resp)=>{
-      if(resp && resp.access_token){ resolve(resp); } else { reject(resp); }
+      if(resp && resp.access_token){
+        tokenExpire = Date.now() + (Number(resp.expires_in)||3600)*1000;
+        try{ sessionStorage.setItem('crm_tok', JSON.stringify({t:resp.access_token, e:tokenExpire})); }catch(e){}
+        resolve(resp);
+      } else { reject(resp); }
     };
-    tokenClient.requestAccessToken({prompt: window.gapi.client.getToken()?'':'consent'});
+    tokenClient.error_callback = (e)=>reject(e);
+    tokenClient.requestAccessToken({prompt: prompt!==undefined ? prompt : (window.gapi.client.getToken()?'':'consent')});
   });
 }
+function restoreToken(){
+  try{
+    const o = JSON.parse(sessionStorage.getItem('crm_tok')||'null');
+    if(o && o.t && o.e > Date.now()+60000){ window.gapi.client.setToken({access_token:o.t}); tokenExpire=o.e; return true; }
+  }catch(e){}
+  return false;
+}
+function tokenExpired(){ return !!tokenExpire && Date.now() > tokenExpire - 60000; }
 
 // ── Sheets helpers ───────────────────────────────────────────────────────
 async function sheetsGetAll(spreadsheetId, sheetName){
@@ -1963,71 +1979,98 @@ function DashboardRappelsCard({data, onNavigate}){
   </div>;
 }
 
-// ── UI: Tableau de bord — factures manquantes / heures / rappels en un coup
-// d'œil, puis où l'équipe (par contracteur) travaille DEMAIN. Les particuliers
-// ne sont pas affichés ici (bruit inutile pour la planification d'équipe).
+// ── UI: Tableau de bord — tout ce qui demande ton attention, tiré des mêmes données que
+// Clients, Projets, Agenda et Fournisseurs (La mémoire + agenda). Chaque bloc mène à sa section.
 function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
-  const [loading,setLoading]=useState(true);
-  const [events,setEvents]=useState([]);
-  const [err,setErr]=useState('');
-  const [promoteGroup,setPromoteGroup]=useState(null);
+  const {loading, err, events, registry, factures, appels, courriels, achats, archives, lent} = useClientsData(cfg, refreshKey+'|d');
+  const [commandes] = useCommandes(cfg);
+  const [manuels] = useEtapesManuelles(cfg);
+  const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
+  if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
+  if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les données : {err}</div>;
+  const jour = n => { const d=new Date(); d.setDate(d.getDate()+n); return localDateStr(d); };
+  const today = jour(0), demain = jour(1), dans14 = jour(14), mois = today.slice(0,7);
+  const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
+  const cmds = commandes || {};
+  const tous = Object.values(clients).flatMap(c=>c.jobs.filter(j=>!(archives||{})[j.id]).map(j=>({c, j, s:pjEtapes(j, ap, cmds, courriels, manuels)})));
+  const enCours = tous.filter(x=>x.j.status!=='done');
+  const aCompleter = enCours.reduce((t,x)=>t+x.s.manquants.length,0);
+  const aFacturer = tous.filter(x=>x.s.etape==='À facturer');
+  const sansFac = tous.filter(x=>x.c.code!=='PART').reduce((t,x)=>t+(x.j.missing||0),0);
+  const anomalies = cvAnomalies(factures, clients, ap);
+  const passages = d => tous.flatMap(x=>x.j.events.filter(e=>!e.attente && e.day===d).map(e=>({...x, e}))).sort((a,b)=>String(a.e.start).localeCompare(String(b.e.start)));
+  const auj = passages(today), dem = passages(demain);
+  const aCommander = tous.flatMap(x=>x.j.events.filter(e=>!e.attente && e.day>=today && e.day<=dans14 && !CMD_FAIT.includes((cmds[e.id]||{}).statut)).map(e=>({...x, e}))).sort((a,b)=>a.e.day.localeCompare(b.e.day));
+  const nomPO = po => { const x = tous.find(t=>t.j.po===po); return x ? (x.c.code!=='PART'?x.c.code+' ':'')+x.j.name : po; };
+  const aRepondre = Object.entries(courriels||{}).flatMap(([po,l])=>l.filter(f=>/toi de r/i.test(f.statut)).map(f=>({...f, po}))).sort((a,b)=>String(a.dernier).localeCompare(String(b.dernier)));
+  const A = achats || [];
+  const aAssocier = A.filter(a=>!a.job);
+  const achatsMois = A.filter(a=>String(a.date||a.recue).startsWith(mois)).reduce((t,a)=>t+(a.st||0),0);
+  const heure = e => e.allDay || !/T/.test(e.start) ? '' : new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'});
+  const etiquette = x => <><b style={{color:'var(--accent)'}}>{x.c.code!=='PART'?x.c.code+' ':''}</b>{x.j.name}{x.j.po && <span className="muted"> · {x.j.po}</span>}</>;
 
-  useEffect(()=>{
-    if(!cfg || !cfg.calendarIds){ setLoading(false); return; }
-    let cancelled=false;
-    setLoading(true); setErr('');
-    const timeMin=new Date(); timeMin.setHours(0,0,0,0);
-    const timeMax=new Date(timeMin); timeMax.setDate(timeMax.getDate()+2); timeMax.setMilliseconds(-1);
-    const calIds=(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
-    listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
-      .then(evs=>{ if(!cancelled) setEvents(evs); })
-      .catch(e=>{ if(!cancelled) setErr(apiErrMsg(e)||'Erreur de chargement du calendrier.'); })
-      .finally(()=>{ if(!cancelled) setLoading(false); });
-    return ()=>{ cancelled=true; };
-  },[cfg && cfg.calendarIds, refreshKey]);
-
-  const todayStr = localDateStr(new Date());
-  const tmrwD = new Date(); tmrwD.setDate(tmrwD.getDate()+1);
-  const tomorrowStr = localDateStr(tmrwD);
-  // Vue simple et rapide — les journées telles qu'elles sont dans l'agenda,
-  // pas regroupées par équipe (juste un coup d'œil rapide sur où sont les
-  // équipes). Les particuliers restent exclus (bruit inutile ici).
-  const groupsToday = useMemo(()=>groupEventsByAddress(events.filter(e=>String(e.start).slice(0,10)===todayStr)).filter(g=>g.contracteur!=='PARTICULIER'), [events]);
-  const groupsTomorrow = useMemo(()=>groupEventsByAddress(events.filter(e=>String(e.start).slice(0,10)===tomorrowStr)).filter(g=>g.contracteur!=='PARTICULIER'), [events]);
-  const projetByAdresse = useMemo(()=>buildProjetAddressIndex(data.projets), [data.projets]);
+  const Tuile = ({n, l, sub, alerte, go}) => <div className="card" style={{padding:14,cursor:'pointer',borderColor:alerte?'var(--warning)':undefined}} onClick={()=>onNavigate(go)}>
+    <div style={{fontSize:26,fontWeight:800,color:alerte?'var(--warning)':'var(--text)'}}>{n}</div>
+    <div style={{fontSize:13,fontWeight:600}}>{l}</div>
+    {sub && <div className="muted" style={{fontSize:11.5,marginTop:2}}>{sub}</div>}
+  </div>;
+  const Bloc = ({titre, n, go, vide, children}) => <div className="card" style={{marginBottom:14}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:6}}>
+      <div className="fh" style={{fontSize:15}}>{titre} {n>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{n}</span>}</div>
+      <span style={{color:'var(--accent)',fontSize:12.5,cursor:'pointer'}} onClick={()=>onNavigate(go)}>Ouvrir ›</span>
+    </div>
+    {n ? children : <div className="muted" style={{fontSize:13}}>{vide}</div>}
+  </div>;
+  const Rang = ({children, droite, go}) => <div onClick={()=>onNavigate(go)} style={{display:'flex',justifyContent:'space-between',gap:10,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
+    <div style={{minWidth:0}}>{children}</div><div className="muted" style={{fontSize:12,whiteSpace:'nowrap'}}>{droite}</div>
+  </div>;
+  const Journee = ({liste}) => liste.map((x,i)=>{ const c=(cmds[x.e.id]||{}).statut;
+    return <Rang key={i} go="projets" droite={<>{heure(x.e)}{c==='Placée'?' · ✅ commandé':c==='Rien à commander'?' · ✓ rien':' · 📦 à commander'}</>}>
+      <span style={{fontWeight:800,fontSize:11,color:'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}
+      {x.e.crew.length>0 && <div className="muted" style={{fontSize:11.5}}>{x.e.crew.join(', ')}</div>}
+    </Rang>; });
 
   return <div>
-    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Tableau de bord</h2>
-    <div className="muted" style={{fontSize:11.5,marginBottom:16}}>Vue d'ensemble — factures manquantes, heures de la semaine, rappels, et où les équipes sont aujourd'hui et demain.</div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:4}}>
+      <h2 className="fh" style={{margin:0,fontSize:22}}>Tableau de bord</h2>
+      {cfg.memoireMajUrl && <button className="btn btn-sm" title="Va chercher les nouveaux PO, factures, courriels et achats (prêt dans environ 15 min)" onClick={()=>window.open(cfg.memoireMajUrl,'_blank')}>⟳ Mettre à jour La mémoire</button>}
+    </div>
+    <div className="muted" style={{fontSize:13,marginBottom:14}}>{new Date().toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})} — ce qui demande ton attention. Clique un bloc pour aller à sa section.</div>
+    {lent && lent.length>0 && <div className="card" style={{marginBottom:12,fontSize:13,borderColor:'var(--warning)'}}>⚠️ Trop long à lire : {lent.join(', ')}. Certains chiffres sont incomplets — essaie « Refresh ».</div>}
 
-    <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:28}}>
-      <DashboardFacturesCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:16}}>
+      <Tuile n={enCours.length} l="Jobs en cours" sub={aCompleter ? aCompleter+' étapes à compléter' : 'tout est complet'} go="projets"/>
+      <Tuile n={aFacturer.length} l="À facturer" sub={sansFac ? sansFac+' passages sans facture' : 'rien en retard'} alerte={aFacturer.length>0} go="projets"/>
+      <Tuile n={anomalies.length} l="À vérifier" sub="factures, PO, appels" alerte={anomalies.length>0} go="clients"/>
+      <Tuile n={aCommander.length} l="Commandes à placer" sub="2 prochaines semaines" alerte={aCommander.some(x=>x.e.day<=jour(3))} go="agenda"/>
+      <Tuile n={aRepondre.length} l="Courriels à répondre" sub="clients et contracteurs" alerte={aRepondre.length>0} go="projets"/>
+      <Tuile n={aAssocier.length} l="Achats à associer" sub={cvMoney(achatsMois)+' achetés ce mois-ci'} go="fournisseurs"/>
       <DashboardHeuresCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
-      <DashboardRappelsCard data={data} onNavigate={onNavigate}/>
     </div>
 
-    {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
-    {!cfg || !cfg.calendarIds ? <div className="card">Configure les calendriers dans Réglages.</div> :
-    loading ? <div className="muted">Chargement...</div> : <>
-      <div style={{marginBottom:24}}>
-        <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Aujourd'hui ({groupsToday.length})</h3>
-        <div className="grid" style={{gap:8}}>
-          {groupsToday.map(g=><DashboardRow key={g.adresse} g={g} projetByAdresse={projetByAdresse} data={data} toast={toast} onCreated={setPromoteGroup}/>)}
-          {groupsToday.length===0 && <div className="card muted" style={{fontSize:12.5}}>Aucune job d'équipe planifiée aujourd'hui.</div>}
-        </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,360px),1fr))',gap:14,alignItems:'start'}}>
+      <div>
+        <Bloc titre="Aujourd'hui" n={auj.length} go="agenda" vide="Aucun passage aujourd'hui."><Journee liste={auj}/></Bloc>
+        <Bloc titre="Demain" n={dem.length} go="agenda" vide="Aucun passage demain."><Journee liste={dem}/></Bloc>
+        <Bloc titre="Commandes à placer" n={aCommander.length} go="agenda" vide="✅ Toutes les commandes des 2 prochaines semaines sont réglées.">
+          {aCommander.slice(0,8).map((x,i)=><Rang key={i} go="agenda" droite={cvFmtDay(x.e.day)}><span style={{fontWeight:800,fontSize:11,color:'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}</Rang>)}
+        </Bloc>
       </div>
       <div>
-        <h3 style={{margin:'0 0 10px',fontSize:15,fontWeight:800}}>Demain ({groupsTomorrow.length})</h3>
-        <div className="grid" style={{gap:8}}>
-          {groupsTomorrow.map(g=><DashboardRow key={g.adresse} g={g} projetByAdresse={projetByAdresse} data={data} toast={toast} onCreated={setPromoteGroup}/>)}
-          {groupsTomorrow.length===0 && <div className="card muted" style={{fontSize:12.5}}>Aucune job d'équipe planifiée demain.</div>}
-        </div>
+        <Bloc titre="Courriels à répondre" n={aRepondre.length} go="projets" vide="✅ Aucun courriel n'attend ta réponse.">
+          {aRepondre.slice(0,8).map((f,i)=><Rang key={i} go="projets" droite={cvFmtDay(String(f.dernier).slice(0,10))}>« {f.sujet} »<div className="muted" style={{fontSize:11.5}}>{nomPO(f.po)}{f.de ? ' · '+f.de : ''}</div></Rang>)}
+        </Bloc>
+        <Bloc titre="À facturer" n={aFacturer.length} go="projets" vide="✅ Rien à facturer.">
+          {aFacturer.slice(0,8).map((x,i)=><Rang key={i} go="projets" droite={'dernier passage '+cvFmtDay(x.j.last)}>{etiquette(x)}</Rang>)}
+        </Bloc>
+        <Bloc titre="Achats à associer" n={aAssocier.length} go="fournisseurs" vide="✅ Toutes les factures fournisseurs sont associées.">
+          {aAssocier.slice().sort((a,b)=>String(b.date||b.recue).localeCompare(String(a.date||a.recue))).slice(0,6).map((a,i)=><Rang key={i} go="fournisseurs" droite={cvMoney(a.st)}>
+            <b>{a.fournisseur}</b> <span className="muted">· {cvFmtDay(a.date||a.recue)}</span>{a.ref && <span className="muted"> · « {a.ref} »</span>}
+            {a.propose && <div style={{fontSize:11.5,color:'var(--accent)'}}>proposé : {a.propose}</div>}
+          </Rang>)}
+        </Bloc>
       </div>
-    </>}
-    {promoteGroup && <PromoteProjetModal group={promoteGroup} onClose={()=>setPromoteGroup(null)} onSave={async(f)=>{
-      try{ await data.addProjet(f); setPromoteGroup(null); toast('Projet créé.','ok'); }
-      catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
-    }}/>}
+    </div>
   </div>;
 }
 
@@ -3650,6 +3693,7 @@ function App(){
   function toggleNav(){ const v=!navCollapsed; setNavCollapsedState(v); try{ localStorage.setItem('crm_nav_collapsed', v?'1':'0'); }catch(e){} }
 
   async function handleRefresh(){
+    if(tokenExpired()){ await reconnecter(); return; }
     setRefreshing(true);
     try{ await data.reload(); }catch(e){}
     setRefreshKey(k=>k+1);
@@ -3657,14 +3701,29 @@ function App(){
     show('Données actualisées.','ok');
   }
 
+  const [expired,setExpired]=useState(false);
   useEffect(()=>{
-    initGoogle(cfg).then(()=>setReady(true)).catch(e=>setInitErr('Erreur d\'initialisation Google: '+apiErrMsg(e)));
+    initGoogle(cfg).then(()=>{ if(restoreToken()) setAuthed(true); setReady(true); }).catch(e=>setInitErr('Erreur d\'initialisation Google: '+apiErrMsg(e)));
   },[]);
+  // Surveille l'expiration du jeton (1 h) : au retour sur la page ou toutes les 30 s.
+  useEffect(()=>{
+    if(!authed) return;
+    const verifier = ()=>{ if(tokenExpired()) setExpired(true); };
+    const id = setInterval(verifier, 30000);
+    window.addEventListener('focus', verifier);
+    document.addEventListener('visibilitychange', verifier);
+    return ()=>{ clearInterval(id); window.removeEventListener('focus', verifier); document.removeEventListener('visibilitychange', verifier); };
+  },[authed]);
+  // Reconnexion (clic = geste de l'utilisateur, donc la fenêtre Google n'est pas bloquée), puis on relit tout.
+  async function reconnecter(){
+    try{ await requestToken(''); setExpired(false); try{ await data.reload(); }catch(e){} setRefreshKey(k=>k+1); show('Reconnecté.','ok'); }
+    catch(e){ show('Reconnexion annulée.','err'); }
+  }
 
   const data = useCrmData(cfg, ready && authed);
 
   async function handleLogin(){
-    try{ await requestToken(); setAuthed(true); }
+    try{ await requestToken(); setAuthed(true); setExpired(false); }
     catch(e){ show('Connexion refusée ou annulée.','err'); }
   }
 
@@ -3679,13 +3738,13 @@ function App(){
 
   const navItems = [
     {id:'dashboard',label:'Tableau de bord'},
-    {id:'clients',label:'Clients'},
-    {id:'contacts',label:'Contacts'},
     {id:'projets',label:'Projets'},
+    {id:'clients',label:'Clients'},
     {id:'agenda',label:'Agenda'},
+    {id:'fournisseurs',label:'Fournisseurs'},
     {id:'heures',label:'Heures'},
     {id:'factures',label:'Factures'},
-    {id:'fournisseurs',label:'Fournisseurs'},
+    {id:'contacts',label:'Contacts'},
     {id:'rappels',label:'Rappels & Suivi'},
     {id:'soumissions',label:'Soumissions'},
     {id:'stock',label:'Stock'},
@@ -3711,6 +3770,10 @@ function App(){
         </button>
       </div>
     </div>
+    {expired && <div style={{background:'rgba(210,153,34,0.15)',borderBottom:'1px solid var(--warning)',padding:'10px 16px',display:'flex',gap:12,alignItems:'center',justifyContent:'center',flexWrap:'wrap',fontSize:13.5}}>
+      <span>⏱ Ta connexion Google a expiré (elle dure 1 h). Rien n'est perdu.</span>
+      <button className="btn btn-sm btn-p" onClick={reconnecter}>Reconnecter</button>
+    </div>}
     <div className="shell">
       <div className="nav" style={(isDesktop && navCollapsed) ? {width:0,minWidth:0,padding:0,overflow:'hidden',border:'none'} : null}>
         {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id?' active':'')} onClick={()=>setNav(n.id)}>{n.label}</div>)}
