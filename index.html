@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v56';
+const APP_VERSION = 'v57';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -579,6 +579,50 @@ async function inscrirePassage(cfg, e, v){
   await majDescriptionSuivi(e.id, {'Appel de service':val(v.as), 'Ordre de travail':val(v.ot), 'Facture':val(v.fac)}, e.calId);
   return !!ligne;
 }
+// Ajouter un passage (rough, finition, service…) à une job, directement dans l'agenda.
+const cvEquipe = ()=>Object.entries(CREW_COLORS).map(([colorId, nom])=>({colorId, nom, ini:(Object.entries(CREW_INITIALS).find(([,n])=>n===nom)||[''])[0]}));
+function cvSamediProchain(){ const d=new Date(); d.setDate(d.getDate()+((6-d.getDay()+7)%7||7)); return localDateStr(d); }
+function CvAjouterPassage({job, phaseDefaut, libelle, onDone}){
+  const [ouvert,setOuvert]=useState(false);
+  const [f,setF]=useState({phase:phaseDefaut||'FINITION', date:'', debut:'', fin:'', qui:'', attente:false});
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  const pro = job.client!=='PART';
+  const membre = cvEquipe().find(m=>m.colorId===f.qui);
+  const titre = [pro ? job.client : '', f.phase, job.name, job.po, membre ? membre.ini : ''].filter(Boolean).join(' ');
+  const creer = async ()=>{
+    setBusy(true); setMsg('');
+    try{
+      const date = f.attente ? (f.date || cvSamediProchain()) : f.date;
+      const lendemain = (()=>{ const d=new Date(date+'T12:00:00'); d.setDate(d.getDate()+1); return localDateStr(d); })();
+      const quand = (!f.attente && f.debut) ? {start:{dateTime:date+'T'+f.debut+':00', timeZone:'America/Toronto'}, end:{dateTime:date+'T'+(f.fin||f.debut)+':00', timeZone:'America/Toronto'}}
+        : {start:{date}, end:{date:lendemain}};
+      const resource = {summary:titre, location:job.address||'', ...quand};
+      if(membre) resource.colorId = membre.colorId;
+      await window.gapi.client.calendar.events.insert({calendarId: f.attente ? EN_ATTENTE_CAL : CREW_CAL, resource});
+      setMsg('✅ « '+titre+' » ajouté '+(f.attente ? 'dans En Attente.' : 'le '+cvFmtDay(date)+'.')); setOuvert(false); onDone && onDone();
+    }catch(e){ setMsg('Impossible : '+apiErrMsg(e)); }
+    setBusy(false);
+  };
+  if(!ouvert) return <span>{msg && <span style={{fontSize:12,marginRight:6}}>{msg}</span>}<button className="btn btn-sm" onClick={()=>setOuvert(true)}>{libelle || '+ Ajouter un passage'}</button></span>;
+  return <div style={{border:'1px solid var(--accent)',borderRadius:8,padding:8,margin:'6px 0',fontSize:12.5,display:'grid',gap:6}}>
+    <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+      {['ROUGH','FINITION','SERV','AJUST','RAPUP'].map(ph=><button key={ph} className="btn btn-sm" style={f.phase===ph?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setF({...f,phase:ph})}>{ph}</button>)}
+    </div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+      <input type="date" value={f.date} onChange={e=>setF({...f,date:e.target.value})} disabled={f.attente && !f.date} style={{padding:'5px 8px'}}/>
+      {!f.attente && <><input type="time" value={f.debut} onChange={e=>setF({...f,debut:e.target.value})} style={{padding:'5px 8px'}} title="Début (vide = toute la journée)"/><span className="muted">à</span><input type="time" value={f.fin} onChange={e=>setF({...f,fin:e.target.value})} style={{padding:'5px 8px'}}/></>}
+      <select value={f.qui} onChange={e=>setF({...f,qui:e.target.value})} style={{padding:'5px 8px'}}><option value="">Employé (plus tard)</option>{cvEquipe().map(m=><option key={m.colorId} value={m.colorId}>{m.nom}</option>)}</select>
+    </div>
+    <label style={{display:'flex',gap:6,alignItems:'center'}}><input type="checkbox" checked={f.attente} onChange={e=>setF({...f,attente:e.target.checked})}/> Pas encore de date — mettre dans En Attente</label>
+    <div className="muted">Titre : <b style={{color:'var(--text)'}}>{titre}</b>{job.address ? ' · 📍 '+job.address : ''}</div>
+    <div style={{display:'flex',gap:6}}>
+      <button className="btn btn-sm btn-p" disabled={busy || (!f.attente && !f.date)} onClick={creer}>{busy?'…':'✓ Ajouter à l\'agenda'}</button>
+      <button className="btn btn-sm" onClick={()=>setOuvert(false)}>Annuler</button>
+    </div>
+  </div>;
+}
+
 // Petit formulaire sous un passage : inscrire l'appel, l'OT, la facture — ou « pas à facturer » (**).
 function CvInscrirePassage({cfg, e, onDone}){
   const [ouvert,setOuvert]=useState(false);
@@ -1540,7 +1584,8 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
   const prochain = avenir[0];
   const ots = pro ? cvJobOTs(job, appels) : [];
   const plans = ev.some(e=>e.attachments.some(a=>/plan|tout le dossier/i.test(a.title||'')));
-  const coord = [['adresse', job.address], ['nom du client', r.client], ['téléphone', r.tel], ['courriel', r.courriel]].filter(x=>!x[1]).map(x=>x[0]);
+  // Contracteur : le contact, c'est le contracteur (et son gestionnaire de projet, suivi par les courriels) — seulement l'adresse du chantier à avoir.
+  const coord = (pro ? [['adresse du chantier', job.address]] : [['adresse', job.address], ['nom du client', r.client], ['téléphone', r.tel], ['courriel', r.courriel]]).filter(x=>!x[1]).map(x=>x[0]);
   const ro = ev.filter(e=>e.phase==='ROUGH'), fi = ev.filter(e=>e.phase==='FINITION');
   const sansFac = passes.filter(e=>!e.fac);
   const sansEquipe = avenir.filter(e=>!e.crew.length);
@@ -1548,7 +1593,7 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
   const E = [];
   const add = (ok, titre, manque, ou, na) => E.push({ok, titre, manque, ou, na});
   if(pro) add(!!job.po, 'PO reçu', 'Aucun PO trouvé pour cette job', 'Ajoute le numéro P0xxxx au titre de l\'événement (ou demande-le au contracteur)');
-  add(!coord.length, 'Coordonnées complètes', 'Il manque : '+coord.join(', '), pro ? 'Registre « La mémoire — Jobs »' : 'Adresse dans l\'événement de l\'agenda', !pro && coord.length===3 && !!job.address);
+  add(!coord.length, pro ? 'Adresse du chantier' : 'Coordonnées complètes', 'Il manque : '+coord.join(', '), pro ? 'Champ d\'adresse plus bas (ou l\'adresse dans l\'événement)' : 'Adresse dans l\'événement de l\'agenda', !pro && coord.length===3 && !!job.address);
   add(plans, 'Plans dans l\'événement', 'Aucun plan attaché aux passages', 'Ils s\'ajoutent tout seuls à la passe de 15 h / 3 h si le plan est dans le dossier ; sinon, attache-le à l\'événement', !pro);
   if(pro) add(ro.length>0, 'Rough planifié', 'Pas de passage ROUGH dans l\'agenda', 'Crée l\'événement « '+job.client+' ROUGH '+job.name+' '+(job.po||'')+' »');
   if(pro) add(fi.length>0, 'Finition planifiée', 'Pas de passage FINITION dans l\'agenda', 'Crée l\'événement « '+job.client+' FINITION '+job.name+' '+(job.po||'')+' »');
@@ -1832,13 +1877,18 @@ function ProjetsSuivi({cfg, refreshKey}){
       {o && <div style={{marginTop:10,borderTop:'1px solid var(--border)',paddingTop:8}}>
         {s.E.map((e,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'22px 1fr auto',gap:6,padding:'5px 0',fontSize:13,alignItems:'start'}}>
           <span>{e.ok?'✅':'⬜'}</span>
-          <div><b>{e.titre}</b>{e.manuel && <span className="muted" style={{fontSize:11.5}}> · coché à la main</span>}{!e.ok && <div style={{color:'var(--warning)',fontSize:12.5}}>{e.manque}</div>}{!e.ok && <div className="muted" style={{fontSize:12}}>Où : {e.ou}</div>}</div>
+          <div><b>{e.titre}</b>{e.manuel && <span className="muted" style={{fontSize:11.5}}> · coché à la main</span>}{!e.ok && <div style={{color:'var(--warning)',fontSize:12.5}}>{e.manque}</div>}
+            {!e.ok && (/^(Rough|Finition) planifi/.test(e.titre)
+              ? <div style={{marginTop:3}}><CvAjouterPassage job={j} phaseDefaut={/^Rough/.test(e.titre)?'ROUGH':'FINITION'} libelle={'+ Planifier la '+(/^Rough/.test(e.titre)?'journée de rough':'journée de finition')} onDone={()=>setTick(t=>t+1)}/></div>
+              : <div className="muted" style={{fontSize:12}}>Où : {e.ou}</div>)}</div>
           {!e.ok ? <button className="btn btn-sm" title="Marquer comme fait" style={{color:'var(--warning)',borderColor:'var(--warning)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, true)}>Non</button>
             : e.manuel ? <button className="btn btn-sm" title="Décocher" style={{color:'var(--success)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, false)}>Oui ✓</button> : <span/>}
         </div>)}
         <CvAdresseJob job={j} propositions={propAdresses} onDone={()=>setTick(t=>t+1)}/>
         <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/><CvArchiver cfg={cfg} job={j} archives={archives} onChanged={()=>setTick(t=>t+1)}/></div>
-        <div className="fh" style={{fontSize:13,margin:'8px 0 4px'}}>Passages</div>
+        {c.code!=='PART' && <div style={{fontSize:12.5,margin:'6px 0'}}>👤 Contracteur : <b>{CLIENT_CODES[c.code]||c.code}</b>{CLIENT_CONTACT[c.code] ? ' — '+CLIENT_CONTACT[c.code] : ''}
+          {(()=>{ const gens=[...new Set(((j.po && (courriels||{})[j.po])||[]).map(f=>f.de).filter(n=>n && !/saran|william/i.test(n)))]; return gens.length ? <div className="muted" style={{fontSize:12}}>Dans les courriels de cette job : {gens.join(', ')}</div> : null; })()}</div>}
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,margin:'8px 0 4px',flexWrap:'wrap'}}><div className="fh" style={{fontSize:13}}>Passages</div><CvAjouterPassage job={j} onDone={()=>setTick(t=>t+1)}/></div>
         {j.events.map((e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
           {e.attente ? <b style={{color:'var(--warning)'}}>En attente</b> : <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b>} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span>
           {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac==='**' ? <span className="muted"> · pas à facturer</span> : e.fac ? ' · facture '+e.fac : (e.day<today && !e.attente ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
