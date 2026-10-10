@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v51';
+const APP_VERSION = 'v52';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -487,11 +487,14 @@ const SUIVI_COL_FACTURE = 12; // colonne M
 // Une ligne marquée « ** » (colonne K ou M) = pas à facturer (annulée). On garde le numéro de ligne pour pouvoir écrire.
 function parseSuiviRows(all, contracteurKey){
   const tabName = SUIVI_TAB_NAMES[contracteurKey];
-  const headers = all[0] || [], rows = all.slice(1);
-  const idxDate = findColIdx(headers, /date/i);
-  const idxProjet = findColIdx(headers, /projet/i);
-  const idxAdresse = findColIdx(headers, /adresse/i);
-  const idxEvent = findColIdx(headers, /calendar/i);
+  // Les en-têtes ne sont pas toujours en ligne 1 (CRS/ASC/5PIL ont une note en A1, GOU a ses en-têtes en ligne 2) :
+  // on cherche dans les 3 premières lignes, sinon les colonnes habituelles A (date), B (projet), C (adresse), N (ID événement).
+  const tete = (re, defaut)=>{ for(let i=0;i<3;i++){ const k = findColIdx(all[i]||[], re); if(k>=0) return k; } return defaut; };
+  const rows = all.slice(1);
+  const idxDate = tete(/^\s*date\s*$/i, 0);
+  const idxProjet = tete(/projet/i, 1);
+  const idxAdresse = tete(/adresse/i, 2);
+  const idxEvent = tete(/calendar|event\s*id/i, 13);
   const out = [];
   rows.forEach((r,i)=>{
     const date=(idxDate>=0?r[idxDate]:'')||'';
@@ -501,12 +504,13 @@ function parseSuiviRows(all, contracteurKey){
     const ordreTravail=r[SUIVI_COL_ORDRE]||'';
     const facture=String(r[SUIVI_COL_FACTURE]||'').trim();
     const eventId=(idxEvent>=0?r[idxEvent]:'')||'';
-    // ligne "réelle": au moins une date ou un projet/adresse — filtre les lignes orphelines et les diviseurs de mois.
-    if(!date && !projet && !adresse && !appelService) return;
+    // Une vraie ligne a une date lisible : ça écarte les en-têtes, les diviseurs de mois (« juillet 2026 ») et les lignes vides.
+    if(!parseSheetDate(date)) return;
     // 'manquant' = pas d'appel de service (K vide) ; 'en_traitement' = appel fait, pas de facture (M vide) ;
     // 'complet' = facture (M) ; 'annule' = « ** » dans K ou M (pas à facturer).
     let statutFacture = 'complet';
-    if(/^\*\*/.test(appelService) || /^\*\*/.test(facture)) statutFacture = 'annule';
+    const regle = v => /^\*\*/.test(v) || /^-+$/.test(v);     // « ** » ou « - » = pas à facturer
+    if(regle(appelService) || regle(facture)) statutFacture = 'annule';
     else if(!appelService) statutFacture = 'manquant';
     else if(!facture) statutFacture = 'en_traitement';
     const dateObj = parseSheetDate(date);
@@ -2874,7 +2878,7 @@ function FacturesView({cfg, refreshKey}){
   const jours = r => r.dateObj ? Math.floor((Date.now()-r.dateObj.getTime())/864e5) : null;
   const Statut = ({r}) => r.statutFacture==='complet' ? <span style={{color:'var(--success)',fontWeight:700}}>Facture {r.facture}</span>
     : r.statutFacture==='en_traitement' ? <span style={{color:'var(--warning)',fontWeight:700}}>Appel {r.appelService} — facture à faire</span>
-    : r.statutFacture==='annule' ? <span className="muted" style={{fontWeight:700}}>** Pas à facturer</span>
+    : r.statutFacture==='annule' ? <span className="muted" style={{fontWeight:700}}>{r.appelService==='-'||r.facture==='-' ? '- ' : '** '}Pas à facturer</span>
     : r.estPasseOuAujourdhui ? <span style={{color:'var(--danger)',fontWeight:700}}>Rien d'inscrit</span> : <span className="muted">À venir</span>;
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Factures</h2>
