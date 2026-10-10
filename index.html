@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v62';
+const APP_VERSION = 'v64';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2307,7 +2307,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   // À facturer : le Sheet Suivi Travaux (même source que l'onglet Factures).
   const aFacturer = (suivi||[]).filter(r=>r.factureManquante).sort((a,b)=>((a.dateObj||0)-(b.dateObj||0)));
   const sansFac = aFacturer.filter(r=>r.statutFacture==='manquant').length;
-  const anomalies = cvAnomaliesActives(cvAnomalies(factures, clients, ap), reglees, voirTermDash);
+  const anomalies = cvAnomaliesActives(cvAnomalies(factures, clients, ap), reglees);
   const passages = d => tous.flatMap(x=>x.j.events.filter(e=>!e.attente && e.day===d).map(e=>({...x, e}))).sort((a,b)=>String(a.e.start).localeCompare(String(b.e.start)));
   const auj = passages(today), dem = passages(demain);
   const aCommander = tous.flatMap(x=>x.j.events.filter(e=>!e.attente && e.day>=today && e.day<=dans14 && !CMD_FAIT.includes((cmds[e.id]||{}).statut)).map(e=>({...x, e}))).sort((a,b)=>a.e.day.localeCompare(b.e.day));
@@ -3716,10 +3716,10 @@ function cvAnomalies(factures, clients, appels){
       // Preuves : la facture elle-même (PDF, description, montant) et chaque passage où le numéro est écrit.
       const preuve = {facture: factures[n]||null, jobs: Object.values(clients).flatMap(cc=>cc.jobs.filter(jj=>jj.events.some(ev=>String(ev.fac).split(/[\s,–-]+/).includes(n))).map(jj=>({
         label:(cc.code!=='PART'?cc.code+' ':'')+jj.name, address:jj.address,
-        passages: jj.events.filter(ev=>String(ev.fac).split(/[\s,–-]+/).includes(n)).map(ev=>({day:ev.day, phase:ev.phase, title:ev.title, lien:ev.lien, as:ev.as, location:ev.location}))})))};
+        passages: jj.events.filter(ev=>String(ev.fac).split(/[\s,–-]+/).includes(n)).map(ev=>({...ev}))})))};
       out.push({type:'dup', cle:'dup|'+n+'|'+j.id, job:j, preuve, titre:'Facture #'+n,
         texte:'La facture #'+n+' est écrite sur deux jobs différentes : '+(c.code!=='PART'?c.code+' ':'')+j.name+' et '+(j.dupAvec[n]||[]).join(', ')+'.',
-        quoi:'Ouvre le passage qui n\'est pas le bon et corrige le numéro (✏️ Modifier dans Projets).', client:c.code}); });
+        quoi:'Regarde le PDF ci-dessous, puis corrige le numéro sur le mauvais passage avec ✏️ Modifier (directement ici).', client:c.code}); });
     if(c.code==='PART') return;
     // C) Facturé plus que le PO (job terminée)
     if(j.status==='done' && j.reg && j.reg.ht>0 && j.billed>j.reg.ht*1.10)
@@ -3754,8 +3754,9 @@ function useVerifsReglees(cfg){
   return [etat.map, marquer];
 }
 // Ce qui reste à vérifier : sans les réglées, et sans les jobs terminées si la case « Terminées » est décochée.
-function cvAnomaliesActives(liste, reglees, voirTerm){
-  return liste.filter(a=>!(reglees||{})[a.cle] && (voirTerm || !a.job || a.job.status!=='done'));
+// Une erreur d'argent reste à traiter même si la job est terminée : on enlève seulement celles marquées « réglé ».
+function cvAnomaliesActives(liste, reglees){
+  return liste.filter(a=>!(reglees||{})[a.cle]);
 }
 
 const CV_ANOM_ORDRE = [['double','Facturé deux fois ?'],['dup','Facture écrite sur la mauvaise job ?'],['po','Plus que le PO']];
@@ -3771,10 +3772,9 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
   const [voirReglees, setVoirReglees] = useState(false);
   const nbReglees = tout.filter(a=>reglees[a.cle]).length;
   const nbTerm = tout.filter(a=>!reglees[a.cle] && a.job && a.job.status==='done').length;
-  const liste = voirReglees ? tout.filter(a=>reglees[a.cle]) : cvAnomaliesActives(tout, reglees, voirTerm);
+  const liste = voirReglees ? tout.filter(a=>reglees[a.cle]) : cvAnomaliesActives(tout, reglees);
   const options = <div style={{display:'flex',gap:12,flexWrap:'wrap',marginTop:6}}>
-    <CaseTerminees v={voirTerm} set={setVoirTerm} n={nbTerm}/>
-    {nbReglees>0 && <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13}}><input type="checkbox" checked={voirReglees} onChange={e=>setVoirReglees(e.target.checked)}/> Réglées ({nbReglees})</label>}
+    {nbReglees>0 && <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13}}><input type="checkbox" checked={voirReglees} onChange={e=>setVoirReglees(e.target.checked)}/> Voir celles déjà réglées ({nbReglees})</label>}
   </div>;
   if(!liste.length) return <div className="card" style={{marginBottom:16,fontSize:13}}>{voirReglees ? 'Aucune vérification réglée.' : '✅ Rien à vérifier : factures, agenda et PO concordent.'}{options}</div>;
   const col = factures.__statutCol, lettre = String.fromCharCode(65+col);
@@ -3791,7 +3791,7 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
   };
   const groupes = CV_ANOM_ORDRE.map(([t,nom])=>[t,nom,liste.filter(a=>a.type===t)]).filter(g=>g[2].length);
   return <div className="card" style={{marginBottom:16,borderColor:'var(--warning)'}}>
-    <div className="fh" style={{fontSize:15,marginBottom:2}}>À vérifier <span className="badge" style={{background:'rgba(210,153,34,0.15)',color:'var(--warning)'}}>{liste.length}</span></div>
+    <div className="fh" style={{fontSize:15,marginBottom:2}}>{voirReglees ? 'Déjà réglées' : 'À vérifier'} <span className="badge" style={{background:'rgba(210,153,34,0.15)',color:'var(--warning)'}}>{liste.length}{voirReglees ? '' : ' à traiter'}</span></div>
     <div className="muted" style={{fontSize:12.5,marginBottom:4}}>Seulement ce qui ressemble à une erreur d'argent : une job facturée deux fois, une facture sur la mauvaise job, ou plus que le PO. Pour chaque point, ce qu'il faut faire est écrit. Si c'est correct, « ✓ C'est réglé ».</div>
     {options}<div style={{height:8}}/>
     {msg && <div style={{fontSize:13,marginBottom:8,color:'var(--success)'}}>{msg}</div>}
@@ -3809,7 +3809,8 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
             : <div className="muted">Facture pas encore dans le registre (pas de PDF).</div>}
           {a.preuve.jobs.map((pj,k)=><div key={k}><b>Écrite sur {pj.label}</b>{pj.address ? <span className="muted"> · {pj.address}</span> : ''}
             {pj.passages.map((ps,m)=><div key={m} style={{paddingLeft:10}}>{cvFmtDay(ps.day)} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{ps.phase}</span> « {ps.title} »{ps.as ? ' · appel '+ps.as : ''}
-              {ps.lien && <> · <a href={ps.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>ouvrir l'événement ↗</a></>}</div>)}</div>)}
+              {ps.lien && <> · <a href={ps.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>ouvrir l'événement ↗</a></>}
+              <CvInscrirePassage cfg={cfg} e={ps} onDone={onChanged}/></div>)}</div>)}
         </div>}
         <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:5}}>
           {(a.factures||[]).map(f=><React.Fragment key={f.num}>
@@ -3977,7 +3978,7 @@ function useVoirTerminees(){
   const set = b=>{ setV(b); try{ localStorage.setItem('crmVoirTerminees', b?'1':'0'); }catch(e){} };
   return [v,set];
 }
-const CaseTerminees = ({v,set,n})=><label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,whiteSpace:'nowrap'}}><input type="checkbox" checked={v} onChange={e=>set(e.target.checked)}/> Terminées{n?' ('+n+')':''}</label>;
+const CaseTerminees = ({v,set,n})=><label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,whiteSpace:'nowrap'}}><input type="checkbox" checked={v} onChange={e=>set(e.target.checked)}/> Afficher les jobs terminées{n?' ('+n+')':''}</label>;
 
 function ClientsView({cfg, refreshKey, isDesktop}){
   const [voirTerm,setVoirTerm]=useVoirTerminees();
