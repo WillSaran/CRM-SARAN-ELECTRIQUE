@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v50';
+const APP_VERSION = 'v51';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -539,6 +539,20 @@ async function suiviMarquerAnnule(spreadsheetId, r, annule){
   const m = annule ? (r.facture || '**') : (/^\*\*/.test(r.facture) ? '' : r.facture);
   await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId, resource:{valueInputOption:'RAW', data:[{range:plage('K'), values:[[k]]},{range:plage('M'), values:[[m]]}]}});
   delete SUIVI_CACHE[spreadsheetId];
+  // Ton script Suivi Travaux recopie K/L/M dans la description de l'événement quand TU modifies le Sheet,
+  // mais il ne voit pas une modification faite par le CRM : on met donc la description à jour ici aussi.
+  if(r.eventId){
+    for(const calendarId of [CREW_CAL, EN_ATTENTE_CAL]){
+      try{
+        const ev = await window.gapi.client.calendar.events.get({calendarId, eventId:r.eventId});
+        let d = ev.result.description || '';
+        const poser = (lab, val)=>{ const re = new RegExp('('+lab+'\\s*:)[^\\n<]*','i'); if(re.test(d)) d = d.replace(re, '$1 '+val); else if(val) d = (d ? d+'\n' : '')+lab+' : '+val; };
+        poser('Appel de service', k); poser('Facture', m);
+        await window.gapi.client.calendar.events.patch({calendarId, eventId:r.eventId, resource:{description:d}});
+        break;
+      }catch(e){ /* pas dans ce calendrier : on essaie le suivant */ }
+    }
+  }
 }
 
 // ── Thème clair/sombre ───────────────────────────────────────────────────
@@ -2996,6 +3010,7 @@ function cvTitleCase(s){ return s.toLowerCase().replace(/(^|[\s\-'’(])([a-zà-
 function cvSuivi(desc, label){
   const m = String(desc||'').replace(/<[^>]+>/g,'\n').match(new RegExp(label+'\\s*:\\s*([^\\n]*)','i'));
   const v = m ? m[1].trim() : '';
+  if(/^\*\*/.test(v)) return '**';            // « ** » = pas à facturer (marqué dans Suivi Travaux)
   return /\d/.test(v) ? v.replace(/[^\d\-– ,]/g,'').trim() : '';
 }
 // Numéros de job : P0xxxx (PO de CRS) ou nos propres numéros « PAY-012 », « ASC-004 », « PART-031 ».
@@ -3158,7 +3173,7 @@ function cvBuildClients(events, registry, factures){
   });
   // Facture inscrite sur plus d'une job = à vérifier.
   const facJobs = {};
-  Object.values(jobs).forEach(j=>j.events.forEach(e=>String(e.fac).split(/[\s,–-]+/).filter(Boolean).forEach(f=>{ (facJobs[f]=facJobs[f]||new Set()).add(j.id); })));
+  Object.values(jobs).forEach(j=>j.events.forEach(e=>String(e.fac).split(/[\s,–-]+/).filter(t=>/\d/.test(t)).forEach(f=>{ (facJobs[f]=facJobs[f]||new Set()).add(j.id); })));
   Object.values(jobs).forEach(j=>{
     j.events.sort((a,b)=>a.day.localeCompare(b.day));
     const ro=j.events.filter(e=>e.phase==='ROUGH'), fi=j.events.filter(e=>e.phase==='FINITION');
@@ -3172,7 +3187,7 @@ function cvBuildClients(events, registry, factures){
     j.status = j.last < today ? 'done' : (j.first <= today ? 'cours' : 'avenir');
     if(j.attente.length && (!reels.length || j.status==='done')) j.status = 'cours'; // en attente = encore à faire
     const fromPO = j.po ? Object.values(factures).filter(f=>f.po===j.po).map(f=>f.num) : [];
-    j.factures = [...new Set([...j.events.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(Boolean)), ...fromPO])].sort();
+    j.factures = [...new Set([...j.events.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(t=>/\d/.test(t))), ...fromPO])].sort();
     j.billed = j.factures.reduce((t,f)=>t+((factures[f]&&!factures[f].annulee&&factures[f].ht)||0),0);
     j.crew = [...new Set(j.events.flatMap(e=>e.crew))];
     j.address = (j.reg && [j.reg.adresse,j.reg.ville].filter(Boolean).join(', ')) || (j.events.find(e=>e.location)||{}).location || '';
@@ -3218,7 +3233,7 @@ function CvPhaseCell({job, phase}){
   const ev = job.events.filter(e=>e.phase===phase);
   if(!ev.length) return <span className="muted">—</span>;
   const d = phase==='ROUGH' ? ev[0].day : ev[ev.length-1].day;
-  const fx = [...new Set(ev.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(Boolean)))];
+  const fx = [...new Set(ev.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(t=>/\d/.test(t))))];
   const done = ev.some(e=>e.day<today);
   return <div style={{whiteSpace:'nowrap'}}>{cvFmtDay(d)}<div style={{fontSize:11.5,fontWeight:700}}>
     {fx.length ? <span className="muted">{fx.map(f=>'#'+f).join(' ')}</span>
@@ -3452,7 +3467,7 @@ function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, a
         <div>
           <div style={{fontSize:11,fontWeight:800,letterSpacing:'.05em',color: e.phase==='ROUGH'?'var(--warning)':e.phase==='FINITION'?'var(--success)':'var(--accent)'}}>{e.phase||'—'}</div>
           <div className="muted" style={{fontSize:12.5,display:'flex',flexWrap:'wrap',gap:'2px 12px'}}>
-            {e.as && <span>Appel {String(e.as).split(/[\s,–-]+/).filter(Boolean).map(n=>appels.parNumero[n]
+            {e.as && <span>Appel {String(e.as).split(/[\s,–-]+/).filter(t=>/\d/.test(t)).map(n=>appels.parNumero[n]
               ? <a key={n} href={photo(appels.parNumero[n])} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700,marginRight:4}}>{n} ↗</a>
               : <b key={n} style={{color:'var(--text)',marginRight:4}}>{n}</b>)}</span>}
             {e.ot && <span>OT {appels.parNumero[e.ot]
