@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v35';
+const APP_VERSION = 'v36';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1640,7 +1640,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   if(filtre) jobs = jobs.filter(x=>x.c.code===filtre);
   if(seulManque) jobs = jobs.filter(x=>x.s.manquants.length);
   const codes = [...new Set(Object.values(clients).map(c=>c.code))];
-  const groupes = [['cours','En cours'],['avenir','À venir'],['attente','En attente (pas encore cédulées)'],['done','Terminées (30 derniers jours)']];
+  const groupes = [['cours','En cours'],['avenir','À venir'],['done','Terminées (30 derniers jours)']];
   const Ligne = ({x})=>{ const {c,j,s}=x, k=c.code+j.id, o=ouvert===k;
     return <div className="opp-card" style={{padding:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:10,cursor:'pointer'}} onClick={()=>setOuvert(o?null:k)}>
@@ -2855,7 +2855,7 @@ function cvBuildClients(events, registry, factures){
     const base = reels.length ? reels : j.events;
     j.first = base[0].day; j.last = base[base.length-1].day;
     j.status = j.last < today ? 'done' : (j.first <= today ? 'cours' : 'avenir');
-    if(j.attente.length && (!reels.length || j.status==='done')) j.status = 'attente';
+    if(j.attente.length && (!reels.length || j.status==='done')) j.status = 'cours'; // en attente = encore à faire
     const fromPO = j.po ? Object.values(factures).filter(f=>f.po===j.po).map(f=>f.num) : [];
     j.factures = [...new Set([...j.events.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(Boolean)), ...fromPO])].sort();
     j.billed = j.factures.reduce((t,f)=>t+((factures[f]&&!factures[f].annulee&&factures[f].ht)||0),0);
@@ -3171,8 +3171,7 @@ function ClientDetailView({client, factures, appels, courriels, achats, facLigne
     [client.poTotal ? Math.round(client.poTotal).toLocaleString('fr-CA')+' $' : '—','en PO, avant taxes'],
     [client.billed ? Math.round(client.billed).toLocaleString('fr-CA')+' $' : '—','facturé, avant taxes'],
     [client.jobs.filter(j=>j.status==='done').length,'terminées'],
-    [client.jobs.filter(j=>j.status==='cours'||j.status==='avenir').length,'en cours ou à venir'],
-    [client.jobs.filter(j=>j.status==='attente').length,'en attente'],
+    [client.active,'en cours ou à venir'],
     [client.flags,'à vérifier']
   ];
   return <div>
@@ -3185,7 +3184,7 @@ function ClientDetailView({client, factures, appels, courriels, achats, facLigne
     <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1.2fr) minmax(0,1fr)':'1fr',gap:14,alignItems:'start'}}>
       <div className="card" style={{minWidth:0}}>
         <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
-          {[['all','Toutes'],['done','Terminées'],['cours','En cours'],['avenir','À venir'],['attente','En attente'],['flag','À vérifier'],['arch','Archivées']].map(([k,l])=>
+          {[['all','Toutes'],['done','Terminées'],['cours','En cours'],['avenir','À venir'],['flag','À vérifier'],['arch','Archivées']].map(([k,l])=>
             <button key={k} className={'btn btn-sm'+(filter===k?' btn-p':'')} onClick={()=>setFilter(k)}>{l}</button>)}
           <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Nom, PO, ville, facture…" style={{flex:'1 1 150px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
         </div>
@@ -3429,7 +3428,7 @@ function ClientsView({cfg, refreshKey, isDesktop}){
           <div className="t" style={{fontSize:15}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{c.label}
             {c.flags>0 && <span className="badge" style={{background:'rgba(248,81,73,0.12)',color:'var(--danger)',marginLeft:8}}>{c.flags} à vérifier</span>}</div>
           {c.contact && <div className="a">{c.contact}</div>}
-          <div className="a" style={{marginTop:6}}>{c.jobs.length} jobs · {c.active} à faire (en cours, à venir ou en attente){c.poTotal ? ' · '+Math.round(c.poTotal).toLocaleString('fr-CA')+' $ en PO' : ''}{c.billed ? ' · '+Math.round(c.billed).toLocaleString('fr-CA')+' $ facturé' : ''}</div>
+          <div className="a" style={{marginTop:6}}>{c.jobs.length} jobs · {c.active} en cours ou à venir{c.poTotal ? ' · '+Math.round(c.poTotal).toLocaleString('fr-CA')+' $ en PO' : ''}{c.billed ? ' · '+Math.round(c.billed).toLocaleString('fr-CA')+' $ facturé' : ''}</div>
           <div className="a">Dernière activité : {cvFmtDay(c.lastDay)}</div>
         </div>
         <button className="btn btn-sm" title={ouvert?'Cacher les jobs':'Voir les jobs'} onClick={()=>setDeplie(d=>({...d,[c.code]:!d[c.code]}))}>{ouvert?'▲':'▼'}</button>
