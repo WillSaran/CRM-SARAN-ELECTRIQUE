@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v57';
+const APP_VERSION = 'v60';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1878,7 +1878,10 @@ function ProjetsSuivi({cfg, refreshKey}){
         {s.E.map((e,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'22px 1fr auto',gap:6,padding:'5px 0',fontSize:13,alignItems:'start'}}>
           <span>{e.ok?'✅':'⬜'}</span>
           <div><b>{e.titre}</b>{e.manuel && <span className="muted" style={{fontSize:11.5}}> · coché à la main</span>}{!e.ok && <div style={{color:'var(--warning)',fontSize:12.5}}>{e.manque}</div>}
-            {!e.ok && (/^(Rough|Finition) planifi/.test(e.titre)
+            {!e.ok && /^OT du rough/.test(e.titre) && <div style={{marginTop:3,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+              <button className="btn btn-sm" title="Il n'y a pas d'OT pour cette job : l'étape devient faite" onClick={()=>basculerEtape(j.id, e.titre, true)}>Pas d'OT</button>
+              <span className="muted" style={{fontSize:12}}>ou les gars déposent la photo dans « B- REF OT » / « 1-PAD »</span></div>}
+            {!e.ok && !/^OT du rough/.test(e.titre) && (/^(Rough|Finition) planifi/.test(e.titre)
               ? <div style={{marginTop:3}}><CvAjouterPassage job={j} phaseDefaut={/^Rough/.test(e.titre)?'ROUGH':'FINITION'} libelle={'+ Planifier la '+(/^Rough/.test(e.titre)?'journée de rough':'journée de finition')} onDone={()=>setTick(t=>t+1)}/></div>
               : <div className="muted" style={{fontSize:12}}>Où : {e.ou}</div>)}</div>
           {!e.ok ? <button className="btn btn-sm" title="Marquer comme fait" style={{color:'var(--warning)',borderColor:'var(--warning)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, true)}>Non</button>
@@ -2157,7 +2160,7 @@ function useAdresses(cfg){
 }
 // Adresse d'une job dans Projets : affichée si elle existe ; sinon un champ (avec la proposition trouvée, s'il y en a une)
 // pour l'écrire dans les passages qui n'en ont pas.
-function CvAdresseJob({job, propositions, onDone}){
+function CvAdresseJob({job, propositions, onDone, onPasDAdresse}){
   const sans = job.events.filter(e=>!String(e.location||'').trim() && e.id && e.calId);
   const prop = (propositions||[]).find(a=>a.evs.some(x=>sans.some(e=>x.startsWith(e.id+'|'))));
   const [txt,setTxt]=useState(prop ? prop.adresse : '');
@@ -3258,6 +3261,11 @@ function useClientsData(cfg, refreshKey){
   return state;
 }
 
+// Mots significatifs d'un nom de job (pour savoir si deux noms parlent de la même job).
+function cvMemeJob(a, b){ const A=[...cvMotsNom(a)], B=[...cvMotsNom(b)]; if(!A.length || !B.length) return true;   // nom trop vague : on ne conclut pas
+  return A.some(x=>B.some(y=>x===y || (x.length>=5 && y.length>=5 && (x.includes(y) || y.includes(x))))); }
+function cvMotsNom(n){ return new Set(String(n||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().replace(/(\d)([A-Z])/g,'$1 $2').split(/[^A-Z0-9]+/)
+  .filter(m=>m.length>=4 && !/^(ROUGH|FINITION|FINALE|SERV|SERVICE|AJUSTEMENTS?|RAPUP|CUISINE|SALLE|BAIN|BORNE|EXTRA|MAISON|ENTREE|PHIL)$/.test(m))); }
 // Regroupe les événements en clients → jobs.
 function cvBuildClients(events, registry, factures){
   factures = factures || {};
@@ -3313,7 +3321,13 @@ function cvBuildClients(events, registry, factures){
     j.crew = [...new Set(j.events.flatMap(e=>e.crew))];
     j.address = (j.reg && [j.reg.adresse,j.reg.ville].filter(Boolean).join(', ')) || (j.events.find(e=>e.location)||{}).location || '';
     j.missing = j.events.filter(e=>!e.attente && e.day < today && !e.fac).length;
-    j.dupFac = j.factures.filter(f=>facJobs[f] && facJobs[f].size>1);
+    // Facture sur deux jobs : seulement si les jobs n'ont AUCUN mot de nom en commun
+    // (« CRS ROUGH AUBIN » et « CRS aubin », c'est la même job, écrite autrement).
+    j.dupAvec = {};
+    j.dupFac = j.factures.filter(f=>{ if(!facJobs[f] || facJobs[f].size<2) return false;
+      const autres = [...facJobs[f]].filter(id=>id!==j.id).map(id=>jobs[id]).filter(Boolean).filter(o=>!cvMemeJob(o.name, j.name));
+      if(autres.length) j.dupAvec[f] = autres.map(o=>(o.client!=='PART'?o.client+' ':'')+o.name);
+      return autres.length>0; });
     j.flag = j.missing>0 || j.dupFac.length>0;
   });
   const clients = {};
@@ -3674,8 +3688,9 @@ function ClientDetailView({client, factures, appels, courriels, achats, facLigne
 function cvAnomalies(factures, clients, appels){
   const out = [];
   const F = Object.values(factures).filter(f=>!f.annulee && !f.ok && f.ht!=null);
-  const lab = f => (f.client==='CRS' ? 'CRS '+(f.nom||f.po||'') : (f.nom || f.client || '')).trim();
-  // A) Même montant, ou une facture = la somme de deux autres, chez le même client.
+  const lab = f => (f.client==='CRS' ? 'CRS '+(f.nom||f.po||'') : (f.client ? f.client+' ' : '')+(f.nom||'')).trim();
+  const date = f => f.date ? ' du '+cvFmtDay(String(f.date).slice(0,10)) : '';
+  // A) Deux factures au même montant, ou une facture = la somme de deux autres, chez le même client / même PO.
   const groupes = {};
   F.filter(f=>f.ht>1).forEach(f=>{ const k = f.client==='CRS' ? 'CRS|'+(f.po||'') : (f.client||'?'); (groupes[k]=groupes[k]||[]).push(f); });
   const vus = new Set();
@@ -3683,26 +3698,30 @@ function cvAnomalies(factures, clients, appels){
     if(g.length<2 || g.length>40) return;
     g.forEach(a=>g.forEach(b=>{
       if(a.num<b.num && Math.abs(a.ht-b.ht)<0.01 && !vus.has(a.num+b.num)){ vus.add(a.num+b.num);
-        out.push({type:'double', cle:'double|'+a.num+'|'+b.num, titre:'Même montant deux fois', texte:'#'+a.num+' et #'+b.num+' : '+cvMoney(a.ht)+' chacune ('+lab(a)+'). Facturée deux fois ?', factures:[a,b]}); }
+        out.push({type:'double', cle:'double|'+a.num+'|'+b.num, titre:lab(a),
+          texte:'Les factures #'+a.num+date(a)+' et #'+b.num+date(b)+' ont exactement le même montant ('+cvMoney(a.ht)+').',
+          quoi:'Si c\'est la même chose facturée deux fois, annule celle en trop. Si ce sont deux travaux différents, « C\'est réglé ».', factures:[a,b]}); }
     }));
     g.forEach(a=>{ for(let i=0;i<g.length;i++) for(let j=i+1;j<g.length;j++){ const b=g[i], c=g[j];
       if(b===a||c===a) continue;
       if(Math.abs(a.ht-b.ht-c.ht)<0.02 && !vus.has('s'+a.num)){ vus.add('s'+a.num);
-        out.push({type:'double', cle:'remplace|'+a.num, titre:'Facture remplacée ?', texte:'#'+a.num+' ('+cvMoney(a.ht)+') = #'+b.num+' + #'+c.num+' ('+lab(a)+'). Si elle a été refaite, annule-la.', factures:[a]}); } } });
+        out.push({type:'double', cle:'remplace|'+a.num, titre:lab(a),
+          texte:'La facture #'+a.num+' ('+cvMoney(a.ht)+') donne le même total que #'+b.num+' + #'+c.num+' ensemble.',
+          quoi:'Si #'+a.num+' a été refaite en deux factures, annule #'+a.num+'. Sinon, « C\'est réglé ».', factures:[a]}); } } });
   });
-  // B) Factures à 0,01 $
-  F.filter(f=>f.ht<=0.01).forEach(f=>out.push({type:'zero', cle:'zero|'+f.num, titre:'Facture à 0,01 $', texte:'#'+f.num+' · '+lab(f)+(f.desc?' · '+f.desc:'')+'. Garantie ou service après-vente ?', factures:[f]}));
-  const today = cvDay(new Date().toISOString());
   Object.values(clients).forEach(c=>c.jobs.forEach(j=>{
-    // C) Facture inscrite sur deux jobs
-    j.dupFac.forEach(n=>out.push({type:'dup', cle:'dup|'+n+'|'+j.id, job:j, titre:'Facture sur deux jobs', texte:'#'+n+' est inscrite sur '+c.code+' '+j.name+' et sur une autre job.', client:c.code}));
+    // B) Une même facture écrite sur deux jobs différentes
+    j.dupFac.forEach(n=>{ if(String(c.code+' '+j.name) > String((j.dupAvec[n]||[''])[0])) return;   // une seule fois par paire
+      out.push({type:'dup', cle:'dup|'+n+'|'+j.id, job:j, titre:'Facture #'+n,
+        texte:'La facture #'+n+' est écrite sur deux jobs différentes : '+(c.code!=='PART'?c.code+' ':'')+j.name+' et '+(j.dupAvec[n]||[]).join(', ')+'.',
+        quoi:'Ouvre le passage qui n\'est pas le bon et corrige le numéro (✏️ Modifier dans Projets).', client:c.code}); });
     if(c.code==='PART') return;
-    // (Les passages faits sans facture ne sont pas ici : ce sont les factures manquantes, dans l'onglet Factures.)
-    // E) Facturé au-delà du PO (job terminée)
+    // C) Facturé plus que le PO (job terminée)
     if(j.status==='done' && j.reg && j.reg.ht>0 && j.billed>j.reg.ht*1.10)
-      out.push({type:'po', cle:'po|'+j.id+'|'+Math.round(j.billed), job:j, titre:'Au-delà du PO', texte:c.code+' '+j.name+' : '+cvMoney(j.billed)+' facturé sur un PO de '+cvMoney(j.reg.ht)+' (+'+Math.round((j.billed/j.reg.ht-1)*100)+' %)', client:c.code});
+      out.push({type:'po', cle:'po|'+j.id+'|'+Math.round(j.billed), job:j, titre:c.code+' '+j.name+(j.po?' · '+j.po:''),
+        texte:'Facturé '+cvMoney(j.billed)+' pour un PO de '+cvMoney(j.reg.ht)+' (+'+Math.round((j.billed/j.reg.ht-1)*100)+' %) — factures '+j.factures.map(n=>'#'+n).join(', ')+'.',
+        quoi:'Des extras ? Demande un PO révisé au contracteur. Si c\'est convenu, « C\'est réglé ».', client:c.code});
   }));
-  // (Les appels / OT papier pas encore traités ne sont pas une erreur : ils sont dans Factures → « Papiers à traiter ».)
   return out;
 }
 
@@ -3734,7 +3753,7 @@ function cvAnomaliesActives(liste, reglees, voirTerm){
   return liste.filter(a=>!(reglees||{})[a.cle] && (voirTerm || !a.job || a.job.status!=='done'));
 }
 
-const CV_ANOM_ORDRE = [['double','Factures en double'],['zero','Factures à 0,01 $'],['dup','Facture sur deux jobs'],['po','Au-delà du PO']];
+const CV_ANOM_ORDRE = [['double','Facturé deux fois ?'],['dup','Facture écrite sur la mauvaise job ?'],['po','Plus que le PO']];
 
 function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
   const [ouvert,setOuvert]=useState(null);
@@ -3768,7 +3787,7 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
   const groupes = CV_ANOM_ORDRE.map(([t,nom])=>[t,nom,liste.filter(a=>a.type===t)]).filter(g=>g[2].length);
   return <div className="card" style={{marginBottom:16,borderColor:'var(--warning)'}}>
     <div className="fh" style={{fontSize:15,marginBottom:2}}>À vérifier <span className="badge" style={{background:'rgba(210,153,34,0.15)',color:'var(--warning)'}}>{liste.length}</span></div>
-    <div className="muted" style={{fontSize:12.5,marginBottom:4}}>Ce qui ne balance pas entre tes factures, l'agenda et les PO. Règle-le ici, ou « C'est réglé » si c'est correct comme ça.</div>
+    <div className="muted" style={{fontSize:12.5,marginBottom:4}}>Seulement ce qui ressemble à une erreur d'argent : une job facturée deux fois, une facture sur la mauvaise job, ou plus que le PO. Pour chaque point, ce qu'il faut faire est écrit. Si c'est correct, « ✓ C'est réglé ».</div>
     {options}<div style={{height:8}}/>
     {msg && <div style={{fontSize:13,marginBottom:8,color:'var(--success)'}}>{msg}</div>}
     {groupes.map(([t,nom,items])=><div key={t} style={{borderTop:'1px solid var(--border)'}}>
@@ -3776,7 +3795,9 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
         <span>{ouvert===t?'▾':'▸'} {nom}</span><span className="muted">{items.length}</span>
       </div>
       {ouvert===t && items.map((a,k)=><div key={k} style={{padding:'6px 2px 10px 18px',fontSize:13}}>
+        <div style={{fontWeight:700}}>{a.titre}</div>
         <div>{a.texte}</div>
+        {a.quoi && <div className="muted" style={{fontSize:12.5,marginTop:2}}>👉 {a.quoi}</div>}
         <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:5}}>
           {(a.factures||[]).map(f=><React.Fragment key={f.num}>
             {f.pdf && <a className="btn btn-sm" href={'https://drive.google.com/file/d/'+f.pdf+'/view'} target="_blank" rel="noopener" style={{textDecoration:'none'}}>PDF #{f.num} ↗</a>}
