@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v45';
+const APP_VERSION = 'v46';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -561,12 +561,35 @@ function useIsDesktop(){
 }
 
 // ── Google API loading ───────────────────────────────────────────────────
+// Google Sheets limite à 60 lectures par minute. Si on dépasse (erreur 429 « Quota exceeded »),
+// on attend et on réessaie tout seul (3 s, 10 s, 25 s) au lieu d'afficher une erreur.
+function avecReessaiSheets(){
+  const sp = window.gapi.client.sheets && window.gapi.client.sheets.spreadsheets; if(!sp || sp.__reessai) return;
+  const envelopper = (obj, nom)=>{ const f = obj[nom]; if(typeof f!=='function') return;
+    obj[nom] = function(params){
+      const essai = async (n)=>{
+        try{ return await f.call(obj, params); }
+        catch(e){
+          const code = e && (e.status || (e.result && e.result.error && e.result.error.code));
+          const quota = code===429 || /quota/i.test(JSON.stringify((e && e.result) || '')) ;
+          if(quota && n<3){ await new Promise(r=>setTimeout(r, [3000,10000,25000][n])); return essai(n+1); }
+          throw e;
+        }
+      };
+      return essai(0);
+    };
+  };
+  ['get','batchUpdate'].forEach(n=>envelopper(sp, n));
+  ['get','batchGet','update','append','clear'].forEach(n=>envelopper(sp.values, n));
+  sp.__reessai = true;
+}
 let tokenClient=null;
 function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
 async function initGoogle(cfg){
   await loadScript('https://apis.google.com/js/api.js');
   await new Promise(res=>window.gapi.load('client',res));
   await window.gapi.client.init({apiKey:cfg.apiKey, discoveryDocs:DISCOVERY});
+  avecReessaiSheets();
   await loadScript('https://accounts.google.com/gsi/client');
   return new Promise((resolve)=>{
     tokenClient = google.accounts.oauth2.initTokenClient({
@@ -1978,10 +2001,10 @@ function DashboardRappelsCard({data, onNavigate}){
 function useAdresses(cfg){
   const [etat,setEtat]=useState({liste:[], lu:false});
   const id = cfg.memoireJobsSpreadsheetId;
-  const lire = useCallback(async()=>{
+  const lire = useCallback(async(force)=>{
     if(!id) return;
     try{
-      const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Adresses!A1:J'});
+      const r = await lireCache(id, 'Adresses!A1:J', force);
       const liste = (r.result.values||[]).slice(1).map((v,i)=>({row:i+2, cle:v[0]||'', job:v[1]||'', date:v[2]||'', evs:(v[3]||'').split(';').filter(Boolean), adresse:v[4]||'', autres:(v[5]||'').split(' | ').filter(Boolean), source:v[6]||'', lien:v[7]||'', statut:v[8]||''}));
       setEtat({liste, lu:true});
     }catch(e){ setEtat({liste:[], lu:true}); }
@@ -2885,8 +2908,12 @@ const CV_CACHE = {};
 function useClientsData(cfg, refreshKey){
   const cle = [cfg.calendarIds, cfg.memoireJobsSpreadsheetId, cfg.memoireFacturesSpreadsheetId, cfg.memoireAppelsSpreadsheetId, cfg.memoireAchatsSpreadsheetId].join('|');
   const [state,setState]=useState(()=> CV_CACHE[cle] ? {...CV_CACHE[cle], loading:false, maj:true} : {loading:true, err:'', events:[], registry:[], factures:{}, appels:{}});
+  // « force » change seulement avec ⟳ Refresh ou après une modification (tick) — pas en changeant d'onglet.
+  const force = (String(refreshKey).includes('|') ? String(refreshKey) : refreshKey+'|0').replace(/\|[a-z]?/,'|').replace(/\|$/,'|0');
   useEffect(()=>{
     let alive=true;
+    const c = CV_CACHE[cle];
+    if(c && c.force===force && Date.now()-c.t < 120000){ setState({...c, loading:false, maj:false}); return; }   // lu il y a moins de 2 min
     (async()=>{
       setState(s=> CV_CACHE[cle] ? {...s, maj:true} : {...s,loading:true,err:''});
       try{
@@ -2957,7 +2984,7 @@ function useClientsData(cfg, refreshKey){
           client:g(r,'cli'), tel:g(r,'tel'), courriel:g(r,'mail'), projet:g(r,'proj'), note:g(r,'note')
         })).filter(r=>!/^fusionn/i.test(cvNorm(r.statut)));
         Object.defineProperty(registry,'__colStatut',{value: ix.st>=0 ? ix.st : Math.max(head.length, 12), enumerable:false});
-        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent};
+        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent, t:Date.now(), force};
         if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent});
       }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}, appels:{}}); }
     })();
@@ -3469,13 +3496,22 @@ function cvLundi(d){ const x=new Date(d); x.setHours(12,0,0,0); x.setDate(x.getD
 function cvHeure(iso){ const m=String(iso||'').match(/T(\d{2}):(\d{2})/); return m ? (+m[1])+' h'+(m[2]!=='00'?' '+m[2]:'') : ''; }
 // Commandes de stock : « placée » ou non, par passage (onglet « Commandes » du registre des jobs, partagé entre appareils).
 // Étapes cochées à la main dans Projets : onglet « Etapes » du registre des jobs (Job | Étape | Statut | Le).
+// Petites lectures partagées entre les onglets (Commandes, Etapes, Adresses) : gardées 2 min.
+const LECT_CACHE = {};
+async function lireCache(id, range, force){
+  const k = id+'|'+range, c = LECT_CACHE[k];
+  if(!force && c && Date.now()-c.t < 120000) return c.r;
+  const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range});
+  LECT_CACHE[k] = {t:Date.now(), r};
+  return r;
+}
 function useEtapesManuelles(cfg){
   const [etat,setEtat]=useState({map:{}, rows:{}, lu:false});
   const id = cfg.memoireJobsSpreadsheetId;
-  const lire = useCallback(async()=>{
+  const lire = useCallback(async(force)=>{
     if(!id) return;
     try{
-      const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Etapes!A1:D'});
+      const r = await lireCache(id, 'Etapes!A1:D', force);
       const map={}, rows={}; (r.result.values||[]).slice(1).forEach((row,i)=>{ if(!row[0]) return; const k=row[0]+'|'+row[1]; rows[k]=i+2; if(row[2]==='Fait') map[k]=true; });
       setEtat({map, rows, lu:true, existe:true});
     }catch(e){ setEtat({map:{}, rows:{}, lu:true, existe:false}); }
@@ -3487,7 +3523,7 @@ function useEtapesManuelles(cfg){
     try{
       if(!etat.existe) await ensureSheetsExist(id, [{name:'Etapes', headers:['Job','Étape','Statut','Le']}]);
       if(etat.rows[k]) await sheetsUpdateRow(id, 'Etapes', etat.rows[k], ligne); else await sheetsAppendRow(id, 'Etapes', ligne);
-      await lire();
+      await lire(true);
     }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); lire(); }
   };
   return [etat.map, basculer];
@@ -3496,10 +3532,10 @@ function useEtapesManuelles(cfg){
 function useCommandes(cfg){
   const [etat,setEtat]=useState({map:{}, pret:false});
   const id = cfg.memoireJobsSpreadsheetId;
-  const lire = useCallback(async()=>{
+  const lire = useCallback(async(force)=>{
     if(!id) return;
     try{
-      const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Commandes!A1:G'});
+      const r = await lireCache(id, 'Commandes!A1:G', force);
       const map={}; (r.result.values||[]).slice(1).forEach((row,i)=>{ if(row[0]) map[row[0]]={row:i+2, statut:row[3]||'', quand:row[4]||'', note:row[6]||''}; });
       setEtat({map, pret:true});
     }catch(e){ setEtat({map:{}, pret:true}); }
@@ -3518,7 +3554,7 @@ function useCommandes(cfg){
         const desc = (ev.result.description||'').replace(/\n?📦 Note commande :.*$/m,'');
         await window.gapi.client.calendar.events.patch({calendarId:info.calId, eventId:info.eventId, resource:{description:(desc ? desc+'\n' : '')+'📦 Note commande : '+note}});
       }
-      await lire();
+      await lire(true);
     }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); lire(); }
   };
   return [etat.map, enregistrer];
