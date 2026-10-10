@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v52';
+const APP_VERSION = 'v53';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2187,6 +2187,8 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const [manuels] = useEtapesManuelles(cfg);
   const [adresses, deciderAdresse, nbSansAdresse] = useAdresses(cfg);
   const [reglés] = useCourrielsReglés(cfg);
+  const [reglees] = useVerifsReglees(cfg);
+  const [voirTermDash] = useVoirTerminees();
   const [suivi,setSuivi]=useState(null);
   useEffect(()=>{ if(!cfg.suiviTravauxSpreadsheetId) return; let ok=true;
     getAllSuiviTravaux(cfg.suiviTravauxSpreadsheetId).then(r=>{ if(ok) setSuivi(r); }).catch(()=>{ if(ok) setSuivi([]); });
@@ -2205,7 +2207,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   // À facturer : le Sheet Suivi Travaux (même source que l'onglet Factures).
   const aFacturer = (suivi||[]).filter(r=>r.factureManquante).sort((a,b)=>((a.dateObj||0)-(b.dateObj||0)));
   const sansFac = aFacturer.filter(r=>r.statutFacture==='manquant').length;
-  const anomalies = cvAnomalies(factures, clients, ap);
+  const anomalies = cvAnomaliesActives(cvAnomalies(factures, clients, ap), reglees, voirTermDash);
   const passages = d => tous.flatMap(x=>x.j.events.filter(e=>!e.attente && e.day===d).map(e=>({...x, e}))).sort((a,b)=>String(a.e.start).localeCompare(String(b.e.start)));
   const auj = passages(today), dem = passages(demain);
   const aCommander = tous.flatMap(x=>x.j.events.filter(e=>!e.attente && e.day>=today && e.day<=dans14 && !CMD_FAIT.includes((cmds[e.id]||{}).statut)).map(e=>({...x, e}))).sort((a,b)=>a.e.day.localeCompare(b.e.day));
@@ -3565,30 +3567,58 @@ function cvAnomalies(factures, clients, appels){
     if(g.length<2 || g.length>40) return;
     g.forEach(a=>g.forEach(b=>{
       if(a.num<b.num && Math.abs(a.ht-b.ht)<0.01 && !vus.has(a.num+b.num)){ vus.add(a.num+b.num);
-        out.push({type:'double', titre:'Même montant deux fois', texte:'#'+a.num+' et #'+b.num+' : '+cvMoney(a.ht)+' chacune ('+lab(a)+'). Facturée deux fois ?', factures:[a,b]}); }
+        out.push({type:'double', cle:'double|'+a.num+'|'+b.num, titre:'Même montant deux fois', texte:'#'+a.num+' et #'+b.num+' : '+cvMoney(a.ht)+' chacune ('+lab(a)+'). Facturée deux fois ?', factures:[a,b]}); }
     }));
     g.forEach(a=>{ for(let i=0;i<g.length;i++) for(let j=i+1;j<g.length;j++){ const b=g[i], c=g[j];
       if(b===a||c===a) continue;
       if(Math.abs(a.ht-b.ht-c.ht)<0.02 && !vus.has('s'+a.num)){ vus.add('s'+a.num);
-        out.push({type:'double', titre:'Facture remplacée ?', texte:'#'+a.num+' ('+cvMoney(a.ht)+') = #'+b.num+' + #'+c.num+' ('+lab(a)+'). Si elle a été refaite, annule-la.', factures:[a]}); } } });
+        out.push({type:'double', cle:'remplace|'+a.num, titre:'Facture remplacée ?', texte:'#'+a.num+' ('+cvMoney(a.ht)+') = #'+b.num+' + #'+c.num+' ('+lab(a)+'). Si elle a été refaite, annule-la.', factures:[a]}); } } });
   });
   // B) Factures à 0,01 $
-  F.filter(f=>f.ht<=0.01).forEach(f=>out.push({type:'zero', titre:'Facture à 0,01 $', texte:'#'+f.num+' · '+lab(f)+(f.desc?' · '+f.desc:'')+'. Garantie ou service après-vente ?', factures:[f]}));
+  F.filter(f=>f.ht<=0.01).forEach(f=>out.push({type:'zero', cle:'zero|'+f.num, titre:'Facture à 0,01 $', texte:'#'+f.num+' · '+lab(f)+(f.desc?' · '+f.desc:'')+'. Garantie ou service après-vente ?', factures:[f]}));
   const today = cvDay(new Date().toISOString());
   Object.values(clients).forEach(c=>c.jobs.forEach(j=>{
     // C) Facture inscrite sur deux jobs
-    j.dupFac.forEach(n=>out.push({type:'dup', titre:'Facture sur deux jobs', texte:'#'+n+' est inscrite sur '+c.code+' '+j.name+' et sur une autre job.', client:c.code}));
+    j.dupFac.forEach(n=>out.push({type:'dup', cle:'dup|'+n+'|'+j.id, job:j, titre:'Facture sur deux jobs', texte:'#'+n+' est inscrite sur '+c.code+' '+j.name+' et sur une autre job.', client:c.code}));
     if(c.code==='PART') return;
     // D) Passages faits sans facture
     const sans = j.events.filter(e=>!e.attente && e.day<today && !e.fac);
-    if(sans.length) out.push({type:'nofac', titre:'Passage sans facture', texte:c.code+' '+j.name+' : '+sans.map(e=>cvFmtDay(e.day)+(e.phase?' ('+e.phase.toLowerCase()+')':'')).join(', '), client:c.code});
+    if(sans.length) out.push({type:'nofac', cle:'nofac|'+j.id+'|'+sans.map(e=>e.day).join(','), job:j, titre:'Passage sans facture', texte:c.code+' '+j.name+' : '+sans.map(e=>cvFmtDay(e.day)+(e.phase?' ('+e.phase.toLowerCase()+')':'')).join(', '), client:c.code});
     // E) Facturé au-delà du PO (job terminée)
     if(j.status==='done' && j.reg && j.reg.ht>0 && j.billed>j.reg.ht*1.10)
-      out.push({type:'po', titre:'Au-delà du PO', texte:c.code+' '+j.name+' : '+cvMoney(j.billed)+' facturé sur un PO de '+cvMoney(j.reg.ht)+' (+'+Math.round((j.billed/j.reg.ht-1)*100)+' %)', client:c.code});
+      out.push({type:'po', cle:'po|'+j.id+'|'+Math.round(j.billed), job:j, titre:'Au-delà du PO', texte:c.code+' '+j.name+' : '+cvMoney(j.billed)+' facturé sur un PO de '+cvMoney(j.reg.ht)+' (+'+Math.round((j.billed/j.reg.ht-1)*100)+' %)', client:c.code});
   }));
   // F) Appels de service papier que le rangement n'a pas pu classer
-  ((appels&&appels.liste)||[]).filter(a=>/^averifier/.test(cvNorm(a.statut))).forEach(a=>out.push({type:'appel', titre:'Appel papier à classer', texte:(a.as?'Appel '+a.as:'OT '+a.ot)+' · '+a.nom+' : '+a.statut, lien:'https://drive.google.com/file/d/'+a.id+'/view'}));
+  ((appels&&appels.liste)||[]).filter(a=>/^averifier/.test(cvNorm(a.statut))).forEach(a=>out.push({type:'appel', cle:'appel|'+a.id, titre:'Appel papier à classer', texte:(a.as?'Appel '+a.as:'OT '+a.ot)+' · '+a.nom+' : '+a.statut, lien:'https://drive.google.com/file/d/'+a.id+'/view'}));
   return out;
+}
+
+// Vérifications réglées à la main (« C'est réglé ») : onglet « Verifications » du registre des jobs (Clé | Statut | Le).
+function useVerifsReglees(cfg){
+  const [etat,setEtat]=useState({map:{}, rows:{}, existe:false});
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async(force)=>{
+    if(!id) return;
+    try{ const r = await lireCache(id, 'Verifications!A1:C', force);
+      const map={}, rows={}; (r.result.values||[]).slice(1).forEach((v,i)=>{ if(!v[0]) return; rows[v[0]]=i+2; if(v[1]) map[v[0]]=v[2]||true; });
+      setEtat({map, rows, existe:true});
+    }catch(e){ setEtat({map:{}, rows:{}, existe:false}); }
+  },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const marquer = async (cle, regle)=>{
+    setEtat(s=>{ const map={...s.map}; if(regle) map[cle]=new Date().toLocaleDateString('fr-CA'); else delete map[cle]; return {...s, map}; });
+    try{
+      if(!etat.existe) await ensureSheetsExist(id, [{name:'Verifications', headers:['Clé','Statut','Le']}]);
+      const ligne=[cle, regle?'Réglé':'', new Date().toLocaleDateString('fr-CA')];
+      if(etat.rows[cle]) await sheetsUpdateRow(id, 'Verifications', etat.rows[cle], ligne); else await sheetsAppendRow(id, 'Verifications', ligne);
+      await lire(true);
+    }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); lire(true); }
+  };
+  return [etat.map, marquer];
+}
+// Ce qui reste à vérifier : sans les réglées, et sans les jobs terminées si la case « Terminées » est décochée.
+function cvAnomaliesActives(liste, reglees, voirTerm){
+  return liste.filter(a=>!(reglees||{})[a.cle] && (voirTerm || !a.job || a.job.status!=='done'));
 }
 
 const CV_ANOM_ORDRE = [['double','Factures en double'],['zero','Factures à 0,01 $'],['dup','Facture sur deux jobs'],['nofac','Passages sans facture'],['appel','Appels papier à classer'],['po','Au-delà du PO']];
@@ -3598,8 +3628,18 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
   const [busy,setBusy]=useState('');
   const [confirme,setConfirme]=useState('');
   const [msg,setMsg]=useState('');
-  const liste = useMemo(()=>cvAnomalies(factures, clients, appels),[factures, clients, appels]);
-  if(!liste.length) return <div className="card" style={{marginBottom:16,fontSize:13}}>✅ Rien à vérifier : factures, agenda et PO concordent.</div>;
+  const tout = useMemo(()=>cvAnomalies(factures, clients, appels),[factures, clients, appels]);
+  const [reglees, marquerRegle] = useVerifsReglees(cfg);
+  const [voirTerm, setVoirTerm] = useVoirTerminees();
+  const [voirReglees, setVoirReglees] = useState(false);
+  const nbReglees = tout.filter(a=>reglees[a.cle]).length;
+  const nbTerm = tout.filter(a=>!reglees[a.cle] && a.job && a.job.status==='done').length;
+  const liste = voirReglees ? tout.filter(a=>reglees[a.cle]) : cvAnomaliesActives(tout, reglees, voirTerm);
+  const options = <div style={{display:'flex',gap:12,flexWrap:'wrap',marginTop:6}}>
+    <CaseTerminees v={voirTerm} set={setVoirTerm} n={nbTerm}/>
+    {nbReglees>0 && <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13}}><input type="checkbox" checked={voirReglees} onChange={e=>setVoirReglees(e.target.checked)}/> Réglées ({nbReglees})</label>}
+  </div>;
+  if(!liste.length) return <div className="card" style={{marginBottom:16,fontSize:13}}>{voirReglees ? 'Aucune vérification réglée.' : '✅ Rien à vérifier : factures, agenda et PO concordent.'}{options}</div>;
   const col = factures.__statutCol, lettre = String.fromCharCode(65+col);
   const marquer = async (f, statut)=>{
     setBusy(f.num+statut); setMsg('');
@@ -3615,7 +3655,8 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
   const groupes = CV_ANOM_ORDRE.map(([t,nom])=>[t,nom,liste.filter(a=>a.type===t)]).filter(g=>g[2].length);
   return <div className="card" style={{marginBottom:16,borderColor:'var(--warning)'}}>
     <div className="fh" style={{fontSize:15,marginBottom:2}}>À vérifier <span className="badge" style={{background:'rgba(210,153,34,0.15)',color:'var(--warning)'}}>{liste.length}</span></div>
-    <div className="muted" style={{fontSize:12.5,marginBottom:8}}>Ce qui ne balance pas entre tes factures, l'agenda et les PO. Règle-le ici : c'est écrit dans le registre.</div>
+    <div className="muted" style={{fontSize:12.5,marginBottom:4}}>Ce qui ne balance pas entre tes factures, l'agenda et les PO. Règle-le ici, ou « C'est réglé » si c'est correct comme ça.</div>
+    {options}<div style={{height:8}}/>
     {msg && <div style={{fontSize:13,marginBottom:8,color:'var(--success)'}}>{msg}</div>}
     {groupes.map(([t,nom,items])=><div key={t} style={{borderTop:'1px solid var(--border)'}}>
       <div onClick={()=>setOuvert(ouvert===t?null:t)} style={{display:'flex',justifyContent:'space-between',padding:'8px 2px',cursor:'pointer',fontSize:13.5,fontWeight:700}}>
@@ -3630,7 +3671,8 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
               ? <button className="btn btn-sm btn-danger" disabled={!!busy} onClick={()=>marquer(f,'Annulée')}>{busy===f.num+'Annulée'?'…':'Confirmer : annuler #'+f.num}</button>
               : <button className="btn btn-sm" disabled={!!busy} onClick={()=>setConfirme(f.num)}>Annuler #{f.num}</button>}
           </React.Fragment>)}
-          {a.factures && <button className="btn btn-sm btn-s" disabled={!!busy} onClick={()=>a.factures.forEach(f=>marquer(f,'OK'))}>C'est correct</button>}
+          {voirReglees ? <button className="btn btn-sm" onClick={()=>marquerRegle(a.cle,false)}>↩ Remettre à vérifier</button>
+            : <button className="btn btn-sm btn-s" onClick={()=>marquerRegle(a.cle,true)}>✓ C'est réglé</button>}
           {a.client && <button className="btn btn-sm" onClick={()=>onOpen(a.client)}>Ouvrir le client</button>}
           {a.lien && <a className="btn btn-sm" href={a.lien} target="_blank" rel="noopener" style={{textDecoration:'none'}}>Voir l'appel ↗</a>}
         </div>
