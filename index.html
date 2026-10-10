@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v65';
+const APP_VERSION = 'v66';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1860,7 +1860,9 @@ function ProjetsSuivi({cfg, refreshKey}){
         <div>
           <div className="t" style={{fontSize:14.5}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{j.name}{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}</div>
           <div className="a">Prochaine étape : <b>{s.etape}</b>{s.prochain && s.prochain.crew.length ? ' · '+s.prochain.crew.join(', ') : ''}</div>
-          <div style={{display:'flex',gap:3,marginTop:6}}>{s.E.map((e,i)=><span key={i} title={e.titre} style={{width:16,height:6,borderRadius:3,background:e.ok?'var(--success)':'var(--warning)'}}/>)}</div>
+          <div style={{display:'flex',gap:3,marginTop:6}}>{s.E.map((e,i)=><span key={i} title={e.titre+(e.manuel?' — OK donné à la main (absent / pas nécessaire)':'')} style={{width:16,height:8,borderRadius:3,background:e.manuel
+  ? 'linear-gradient(35deg, transparent 42%, #f85149 42%, #f85149 58%, transparent 58%), linear-gradient(-35deg, transparent 42%, #f85149 42%, #f85149 58%, transparent 58%), var(--success)'
+  : e.ok?'var(--success)':'var(--warning)'}}/>)}</div>
         </div>
         <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
           <span style={{marginRight:8,fontSize:14}}>
@@ -1875,7 +1877,7 @@ function ProjetsSuivi({cfg, refreshKey}){
       </div>
       {o && <div style={{marginTop:10,borderTop:'1px solid var(--border)',paddingTop:8}}>
         {s.E.map((e,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'22px 1fr auto',gap:6,padding:'5px 0',fontSize:13,alignItems:'start'}}>
-          <span>{e.ok?'✅':'⬜'}</span>
+          <span>{e.manuel ? <span title="OK donné à la main (absent / pas nécessaire)" style={{display:'inline-block',width:17,height:17,borderRadius:4,background:'var(--success)',color:'#f85149',fontWeight:900,fontSize:13,lineHeight:'17px',textAlign:'center'}}>✕</span> : e.ok?'✅':'⬜'}</span>
           <div><b>{e.titre}</b>{e.manuel && <span className="muted" style={{fontSize:11.5}}> · coché à la main</span>}{!e.ok && <div style={{color:'var(--warning)',fontSize:12.5}}>{e.manque}</div>}
             {!e.ok && /^OT du rough/.test(e.titre) && <div style={{marginTop:3,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
               <button className="btn btn-sm" title="Il n'y a pas d'OT pour cette job : l'étape devient faite" onClick={()=>basculerEtape(j.id, e.titre, true)}>Pas d'OT</button>
