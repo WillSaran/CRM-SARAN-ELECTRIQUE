@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v70';
+const APP_VERSION = 'v71';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4210,6 +4210,7 @@ function App(){
   const [ready,setReady]=useState(false);
   const [authed,setAuthed]=useState(false);
   const [nav,setNav]=useState('dashboard');
+  const [navKey,setNavKey]=useState(0);   // recliquer sur l'onglet du menu = revenir à son accueil (ex. tous les clients)
   const [initErr,setInitErr]=useState('');
   const [show,toastNode]=useToast();
   const [refreshKey,setRefreshKey]=useState(0);
@@ -4322,20 +4323,20 @@ function App(){
     </div>}
     <div className="shell">
       <div className="nav" style={(isDesktop && navCollapsed) ? {width:0,minWidth:0,padding:0,overflow:'hidden',border:'none'} : null}>
-        {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id?' active':'')} onClick={()=>setNav(n.id)}>{n.label}</div>)}
+        {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id?' active':'')} onClick={()=>{ if(nav===n.id) setNavKey(k=>k+1); setNav(n.id); }}>{n.label}</div>)}
       </div>
       <div className="main" style={(nav==='agenda' && isDesktop) ? {maxWidth:'none',width:'100%'} : null}>
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
-        {nav==='clients' && <ClientsView cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
+        {nav==='clients' && <ClientsView key={'c'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
         {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey}/>}
-        {nav==='fournisseurs' && <FournisseursView cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
+        {nav==='fournisseurs' && <FournisseursView key={'f'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
-        {nav==='projets' && <ProjetsView data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
+        {nav==='projets' && <ProjetsView key={'p'+navKey} data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='agenda' && <AgendaView cfg={effectiveCfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
         {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
-        {nav==='factures' && <FacturesView cfg={cfg} refreshKey={refreshKey}/>}
+        {nav==='factures' && <FacturesView key={'x'+navKey} cfg={cfg} refreshKey={refreshKey}/>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='soumissions' && <SoumissionsView data={data}/>}
         {nav==='stock' && <StockView data={data}/>}
