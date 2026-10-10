@@ -140,9 +140,11 @@ function loadCfg(){
 }
 function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
-const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.readonly';
+// Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
+const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v69';
+const APP_VERSION = 'v72';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2943,6 +2945,42 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
 
 // ── UI: Factures — LECTURE SEULE depuis "SUIVI TRAVAUX SARAN ÉLECTRIQUE" ──
 // Un appel de service sans facture associée = "facture manquante".
+// Lit le dossier PAD (Drive) et regroupe les fichiers par passage : « AP_1274_CRS finition Gregoire.jpg », « OT_1745_… », « … - Tout.pdf ».
+let PAD_CACHE = null;
+async function lirePad(force){
+  if(!force && PAD_CACHE && Date.now()-PAD_CACHE.t < 120000) return PAD_CACHE.g;
+  const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+  const q = encodeURIComponent("'"+PAD_DOSSIER+"' in parents and trashed=false");
+  const r = await fetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id,name,createdTime,webViewLink)&pageSize=300&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=createdTime desc', {headers:{Authorization:'Bearer '+tok}});
+  if(!r.ok) throw new Error(r.status===403||r.status===401 ? 'acces' : 'Drive '+r.status);
+  const files = (await r.json()).files || [];
+  const g = {};
+  files.forEach(f=>{
+    const base = f.name.replace(/\.[a-z0-9]{2,5}$/i,'');
+    const m = base.match(/^(AP|OT)[\s_-]*(\d+)[\s_-]+(.+)$/i);
+    const titre = (m ? m[3] : base.replace(/\s*-\s*Tout$/i,'')).trim();
+    const k = cvNorm(titre);
+    const x = g[k] || (g[k] = {titre, cle:k, ap:[], ot:[], fichiers:[], depose:f.createdTime});
+    if(m && m[1].toUpperCase()==='AP' && !x.ap.includes(m[2])) x.ap.push(m[2]);
+    if(m && m[1].toUpperCase()==='OT' && !x.ot.includes(m[2])) x.ot.push(m[2]);
+    x.fichiers.push({nom:f.name, lien:f.webViewLink || 'https://drive.google.com/file/d/'+f.id+'/view'});
+    if(f.createdTime < x.depose) x.depose = f.createdTime;
+  });
+  const liste = Object.values(g).sort((a,b)=>String(a.depose).localeCompare(String(b.depose)));
+  PAD_CACHE = {t:Date.now(), g:liste};
+  return liste;
+}
+// Le papier PAD qui correspond à une ligne du Suivi (même titre d'événement).
+function padMots(t){ return String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().split(/[^A-Z0-9]+/).filter(m=>m.length>=3); }
+function padPourLigne(pad, r){
+  const k = cvNorm(r.projet); if(!k) return null;
+  const mr = new Set(padMots(r.projet));
+  return (pad||[]).find(p=>{ if(p.cle===k) return true;
+    const mp = padMots(p.titre); if(mp.length<2 && (mp[0]||'').length<5) return false;
+    return mp.length>0 && mp.every(m=>mr.has(m));              // tous les mots du nom du papier sont dans le titre du Suivi
+  }) || null;
+}
+
 // Mode tableur : les onglets du Sheet Suivi Travaux, cases Appel (K) / OT (L) / Facture (M) modifiables.
 // Chaque case enregistrée va dans le Sheet ET dans la description de l'événement (comme ton script).
 async function suiviEcrireCellule(spreadsheetId, r, col, val){
@@ -3023,13 +3061,11 @@ function FacturesView({cfg, refreshKey}){
   const [tick,setTick]=useState(0);
   const id = cfg.suiviTravauxSpreadsheetId;
   // Papiers déposés par les gars (appels de service / OT) que l'adjointe n'a pas encore traités : registre des appels de La mémoire.
+  // Papiers déposés dans le dossier partagé « 1-PAD SERVICE À TRAITER » (lu en direct dans le Drive).
   const [papiers,setPapiers]=useState([]);
-  useEffect(()=>{ const ap = cfg.memoireAppelsSpreadsheetId; if(!ap) return; let ok=true;
-    lireCache(ap, 'A1:Z', refreshKey>0).then(r=>{ if(!ok) return; const v=r.result.values||[]; const h=(v[0]||[]).map(x=>cvNorm(x)), c=re=>h.findIndex(x=>re.test(x));
-      const ix={as:c(/^appel/),ot:c(/^ordre/),po:c(/^po$/),nom:c(/^fichier$/),id:c(/^fichierid/),st:c(/^statut/),date:c(/^date|^recu|^ajout/)};
-      const g=(row,k)=> ix[k]>=0 ? String(row[ix[k]]||'').trim() : '';
-      setPapiers(v.slice(1).map(row=>({as:g(row,'as'), ot:g(row,'ot'), po:g(row,'po'), nom:g(row,'nom'), id:g(row,'id'), statut:g(row,'st'), date:g(row,'date')})).filter(a=>a.id && /^averifier|^atraiter|^enattente/.test(cvNorm(a.statut))));
-    }).catch(()=>{}); return ()=>{ ok=false; }; },[cfg.memoireAppelsSpreadsheetId, refreshKey]);
+  const [padErr,setPadErr]=useState('');
+  useEffect(()=>{ let ok=true; lirePad(refreshKey>0).then(g=>{ if(ok){ setPapiers(g); setPadErr(''); } })
+    .catch(e=>{ if(ok) setPadErr(e.message==='acces' ? 'acces' : apiErrMsg(e)); }); return ()=>{ ok=false; }; },[refreshKey, tick]);
   useEffect(()=>{
     if(!id){ setLoading(false); return; }
     let cancelled=false;
@@ -3082,13 +3118,19 @@ function FacturesView({cfg, refreshKey}){
       </div>
       {vue==='tableur' ? <SuiviTableur rows={rows} id={id} onChanged={()=>setTick(t=>t+1)}/> :
       vue==='papiers' ? <div className="card">
-        <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Appels de service et OT papier déposés dans le Drive par les gars, pas encore traités (inscrits au Suivi Travaux et facturés). Ce n'est pas une erreur : ils partent d'ici tout seuls quand ils sont traités.</div>
-        {!papiers.length && <div className="muted" style={{fontSize:13}}>✅ Aucun papier en attente.</div>}
-        {papiers.map((a,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:10,padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
-          <div style={{minWidth:0}}><b style={{color:'var(--accent)'}}>{a.as ? 'AP '+a.as : a.ot ? 'OT '+a.ot : 'Papier'}</b> <span className="muted">· {a.nom}</span>
-            <div className="muted" style={{fontSize:12}}>{a.statut.replace(/^à vérifier\s*:?\s*/i,'')}{a.po ? ' · '+a.po : ''}{a.date ? ' · '+a.date : ''}</div></div>
-          <a className="btn btn-sm" href={'https://drive.google.com/file/d/'+a.id+'/view'} target="_blank" rel="noopener" style={{textDecoration:'none',alignSelf:'center'}}>Voir ↗</a>
-        </div>)}
+        <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Ce qui est dans le dossier partagé <a href={'https://drive.google.com/drive/folders/'+PAD_DOSSIER} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>1-PAD SERVICE À TRAITER ↗</a> : papiers déposés par les gars, pas encore traités. Ce n'est pas une erreur. Pour chacun : où il en est dans le Suivi Travaux.</div>
+        {padErr==='acces' && <div style={{fontSize:13,color:'var(--warning)',marginBottom:6}}>Le CRM n'a pas encore accès au Drive : déconnecte-toi puis reconnecte-toi (Google va demander d'autoriser la lecture du Drive).</div>}
+        {padErr && padErr!=='acces' && <div style={{fontSize:13,color:'var(--danger)'}}>Lecture du dossier impossible : {padErr}</div>}
+        {!padErr && !papiers.length && <div className="muted" style={{fontSize:13}}>✅ Aucun papier en attente.</div>}
+        {papiers.map((p,i)=>{ const lignes = rows.filter(r=>padPourLigne([p], r)); const l = lignes.sort((a,b)=>(b.dateObj||0)-(a.dateObj||0))[0];
+          return <div key={i} style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+          <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
+            <div style={{minWidth:0}}><b>{p.titre}</b>{p.ap.length>0 && <b style={{color:'var(--accent)'}}> · AP {p.ap.join(', ')}</b>}{p.ot.length>0 && <b style={{color:'var(--accent)'}}> · OT {p.ot.join(', ')}</b>}
+              <div className="muted" style={{fontSize:12}}>Déposé le {cvFmtDay(String(p.depose).slice(0,10))} · {l ? (l.statutFacture==='complet' ? '✅ facture '+l.facture+' inscrite — le papier peut sortir du dossier' : l.appelService && l.statutFacture!=='annule' ? 'appel '+l.appelService+' inscrit au Suivi, facture à faire' : 'pas encore inscrit au Suivi ('+l.date+')') : 'ligne du Suivi introuvable (titre différent ?)'}</div></div>
+            <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>{p.fichiers.map((f,k)=><a key={k} className="btn btn-sm" href={f.lien} target="_blank" rel="noopener" style={{textDecoration:'none'}} title={f.nom}>{/^AP/i.test(f.nom)?'AP':/^OT/i.test(f.nom)?'OT':'PDF'} ↗</a>)}</div>
+          </div>
+          {l && !l.appelService && p.ap.length>0 && <button className="btn btn-sm btn-p" style={{marginTop:5}} onClick={async()=>{ try{ await suiviEcrireCellule(id, l, 'K', p.ap.join(', ')); if(p.ot.length && !l.ordreTravail) await suiviEcrireCellule(id, l, 'L', p.ot.join(', ')); setTick(t=>t+1); }catch(e){ alert('Impossible : '+apiErrMsg(e)); } }}>Inscrire AP {p.ap.join(', ')}{p.ot.length && !l.ordreTravail ? ' + OT '+p.ot.join(', ') : ''} au Suivi</button>}
+        </div>; })}
       </div> :
       <div className="card">
         {!liste.length && <div className="muted" style={{fontSize:13}}>{vue==='afacturer' ? '✅ Tout est facturé.' : 'Rien ici.'}</div>}
@@ -3105,6 +3147,7 @@ function FacturesView({cfg, refreshKey}){
               </div>
             </div>
             <div style={{marginTop:5}}>
+              {(()=>{ const p = r.statutFacture==='manquant' && padPourLigne(papiers, r); return p ? <span style={{fontSize:12,marginRight:8,color:'var(--accent)'}}>📄 Papier reçu{p.ap.length ? ' : AP '+p.ap.join(', ') : ''}{p.ot.length ? ' · OT '+p.ot.join(', ') : ''} — à inscrire</span> : null; })()}
               {(r.statutFacture==='manquant' || r.statutFacture==='en_traitement') && r.estPasseOuAujourdhui &&
                 <button className="btn btn-sm" disabled={busy===k} title="Met « ** » dans les colonnes K et M du Sheet" onClick={()=>marquer(r, true)}>{busy===k?'…':'✕ Pas à facturer'}</button>}
               {r.statutFacture==='annule' && <button className="btn btn-sm" disabled={busy===k} onClick={()=>marquer(r, false)}>{busy===k?'…':'↩ Remettre à facturer'}</button>}
@@ -3185,7 +3228,7 @@ function StockView({data}){
 //  - le registre « La mémoire — Jobs » (montant du PO, client, dossier Drive), rempli par La mémoire.
 const CLIENT_CODES = {
   CRS:'Cuisines Rive-Sud', PAY:'Payne Construction', PY:'Payne Construction', ASC:'Ascension', SAR:'Saran Construction',
-  GOU:'Goulet', '5PIL':'Cinq Piliers', BOM:'Beaumont', JOY:'JOY', GGP:'GGP', RROY:'RROY'
+  GOU:'Goulet', '5PIL':'Cinq Piliers', BOM:'Bomont', JOY:'JOY', GGP:'GGP', RROY:'RROY'
 };
 const CLIENT_CONTACT = {CRS:'Jonathan Asselin', PAY:'Danny', ASC:'Cédric Gagnon'};
 const CREW_INITIALS = {PB:'Philippe Bernier', MC:'Maude Charest', AU:'Adèle Underhill', DW:'Daniel Wenning', BP:'Brandon Pereira', AD:'AD (ancien employé)'};
@@ -4167,6 +4210,7 @@ function App(){
   const [ready,setReady]=useState(false);
   const [authed,setAuthed]=useState(false);
   const [nav,setNav]=useState('dashboard');
+  const [navKey,setNavKey]=useState(0);   // recliquer sur l'onglet du menu = revenir à son accueil (ex. tous les clients)
   const [initErr,setInitErr]=useState('');
   const [show,toastNode]=useToast();
   const [refreshKey,setRefreshKey]=useState(0);
@@ -4279,20 +4323,20 @@ function App(){
     </div>}
     <div className="shell">
       <div className="nav" style={(isDesktop && navCollapsed) ? {width:0,minWidth:0,padding:0,overflow:'hidden',border:'none'} : null}>
-        {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id?' active':'')} onClick={()=>setNav(n.id)}>{n.label}</div>)}
+        {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id?' active':'')} onClick={()=>{ if(nav===n.id) setNavKey(k=>k+1); setNav(n.id); }}>{n.label}</div>)}
       </div>
       <div className="main" style={(nav==='agenda' && isDesktop) ? {maxWidth:'none',width:'100%'} : null}>
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
-        {nav==='clients' && <ClientsView cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
+        {nav==='clients' && <ClientsView key={'c'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
         {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey}/>}
-        {nav==='fournisseurs' && <FournisseursView cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
+        {nav==='fournisseurs' && <FournisseursView key={'f'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
-        {nav==='projets' && <ProjetsView data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
+        {nav==='projets' && <ProjetsView key={'p'+navKey} data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='agenda' && <AgendaView cfg={effectiveCfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
         {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
-        {nav==='factures' && <FacturesView cfg={cfg} refreshKey={refreshKey}/>}
+        {nav==='factures' && <FacturesView key={'x'+navKey} cfg={cfg} refreshKey={refreshKey}/>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='soumissions' && <SoumissionsView data={data}/>}
         {nav==='stock' && <StockView data={data}/>}
