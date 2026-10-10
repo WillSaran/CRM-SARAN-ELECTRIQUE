@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v30';
+const APP_VERSION = 'v32';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1502,6 +1502,19 @@ function CvArticles({a}){
   </div>;
 }
 
+// Jobs d'un client : liste en ordre alphabétique, avec recherche.
+function CvListeJobs({jobs, onChoix}){
+  const [q,setQ]=useState('');
+  const liste = jobs.slice().sort((a,b)=>a.label.localeCompare(b.label,'fr')).filter(j=>!q || cvNorm(j.label).includes(cvNorm(q)));
+  return <div style={{marginTop:5,paddingLeft:8,borderLeft:'2px solid var(--accent)'}}>
+    <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder={'Chercher parmi '+jobs.length+' jobs…'} style={{width:'100%',boxSizing:'border-box',marginBottom:4}}/>
+    <select size={Math.min(8, Math.max(2, liste.length))} style={{width:'100%'}} onChange={e=>e.target.value && onChoix(e.target.value)}>
+      {liste.map(j=><option key={j.cle} value={j.cle}>{j.label}</option>)}
+    </select>
+    {!liste.length && <div className="muted" style={{fontSize:12}}>Aucune job ne correspond.</div>}
+  </div>;
+}
+
 // Choix de destination : inventaire, shop, camions, puis contracteur → job, ou ton propre texte.
 function CvChoixJob({clients, propose, onChoix}){
   const [groupe,setGroupe]=useState('');
@@ -1519,9 +1532,7 @@ function CvChoixJob({clients, propose, onChoix}){
     <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5}}>
       {groupes.map(c=>pill(c.code==='PART'?'Particuliers':c.code, ()=>setGroupe(groupe===c.code?'':c.code), groupe===c.code?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null))}
     </div>
-    {g && <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,paddingLeft:8,borderLeft:'2px solid var(--accent)'}}>
-      {g.jobs.filter(j=>j.last>=today).map(j=>pill(j.name+(j.po?' · '+j.po:''), ()=>onChoix(cvJobCle(g,j))))}
-    </div>}
+    {g && <CvListeJobs key={g.code} jobs={g.jobs.filter(j=>j.last>=today).map(j=>({cle:cvJobCle(g,j), label:j.name+(j.po?' · '+j.po:'')+' · '+cvFmtDay(j.last)}))} onChoix={onChoix}/>}
     {autre!==null && <div style={{display:'flex',gap:5,marginTop:5}}>
       <input value={autre} onChange={e=>setAutre(e.target.value)} placeholder="Ex. : Outils, Bureau, Job Rejean Roy…" style={{flex:1}}/>
       <button className="btn btn-sm btn-p" disabled={!autre.trim()} onClick={()=>onChoix(autre.trim())}>OK</button>
@@ -1609,7 +1620,8 @@ function ProjetsView(props){
 }
 
 function ProjetsSuivi({cfg, refreshKey}){
-  const {loading, err, events, registry, factures, appels, courriels} = useClientsData(cfg, refreshKey);
+  const [tick,setTick]=useState(0);
+  const {loading, err, events, registry, factures, appels, courriels} = useClientsData(cfg, refreshKey+'|p'+tick);
   const [commandes] = useCommandes(cfg);
   const [filtre,setFiltre]=useState('');
   const [seulManque,setSeulManque]=useState(false);
@@ -1649,6 +1661,7 @@ function ProjetsSuivi({cfg, refreshKey}){
           <span>{e.ok?'✅':'⬜'}</span>
           <div><b>{e.titre}</b>{!e.ok && <div style={{color:'var(--warning)',fontSize:12.5}}>{e.manque}</div>}{!e.ok && <div className="muted" style={{fontSize:12}}>Où : {e.ou}</div>}</div>
         </div>)}
+        <div style={{marginTop:8}}><CvCreerNoJob cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/></div>
         <div className="fh" style={{fontSize:13,margin:'8px 0 4px'}}>Passages</div>
         {j.events.map((e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
           <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b> <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span>
@@ -2670,14 +2683,19 @@ function cvSuivi(desc, label){
   const v = m ? m[1].trim() : '';
   return /\d/.test(v) ? v.replace(/[^\d\-– ,]/g,'').trim() : '';
 }
+// Numéros de job : P0xxxx (PO de CRS) ou nos propres numéros « PAY-012 », « ASC-004 », « PART-031 ».
+const CV_NOJOB_RE = /\b(PAY|PY|ASC|SAR|GOU|5PIL|BOM|JOY|GGP|RROY|PART|SE)\s?-\s?(\d{3})\b/i;
 function cvPO(text){
-  const m = String(text||'').match(/\bP[O0]?\s?0?(\d{4})\b/i);
+  const t = String(text||'');
+  const n = t.match(CV_NOJOB_RE);
+  if(n) return (n[1].toUpperCase()==='PY'?'PAY':n[1].toUpperCase())+'-'+n[2];
+  const m = t.match(/\bP[O0]?\s?0?(\d{4})\b/i);
   return m ? 'P0'+m[1] : '';
 }
 // Décortique le titre d'un événement : code client, phase, PO, initiales, nom.
 function cvParseEvent(e){
   const title = String(e.title||'').trim();
-  const toks = title.replace(/[()]/g,' ').split(/[\s\-–]+/).filter(Boolean);
+  const toks = title.replace(new RegExp(CV_NOJOB_RE.source,'ig'),' ').replace(/[()]/g,' ').split(/[\s\-–]+/).filter(Boolean);
   let code='', phase='', initials=[], nameParts=[];
   toks.forEach(t=>{
     const T=t.toUpperCase();
@@ -2804,8 +2822,9 @@ function cvBuildClients(events, registry, factures){
       j.events.push(p);
     } else {
       if(raw.calendarId !== CREW_CAL) return; // particuliers : seulement le calendrier de l'équipe
-      const k = cvNorm(p.location).slice(0,24) || p.key || cvNorm(p.title);
-      const j = getJob('PART|'+k, {client:'PART', po:'', name: p.name || p.title, reg:null});
+      const k = p.po || cvNorm(p.location).slice(0,24) || p.key || cvNorm(p.title);
+      const reg = p.po ? regByPO[p.po] : null;
+      const j = getJob('PART|'+k, {client:'PART', po:p.po||'', name: reg ? reg.nom : (p.name || p.title), reg});
       j.events.push(p);
     }
   });
@@ -2908,7 +2927,49 @@ function CvGauge({job}){
   </div>;
 }
 
-function ClientJobDetail({job, factures, appels, courriels, achats}){
+// Créer un numéro de job (« PAY-013 ») : inscrit au registre des jobs, puis ajouté au titre de tous les passages de la job.
+function cvProchainNo(code, registry, events){
+  const re = new RegExp('\\b'+code+'\\s?-\\s?(\\d{3})\\b','i');
+  const nums = [...registry.map(r=>r.po), ...events.map(e=>e.title)].map(t=>{ const m=String(t||'').match(re); return m?+m[1]:0; });
+  return code+'-'+String(Math.max(0,...nums)+1).padStart(3,'0');
+}
+function CvCreerNoJob({cfg, job, registry, events, onChanged}){
+  const code = job.client==='PART' ? 'PART' : job.client;
+  const [ouvert,setOuvert]=useState(false);
+  const [nom,setNom]=useState(job.name||'');
+  const [adresse,setAdresse]=useState(job.address||'');
+  const [etat,setEtat]=useState('');
+  if(job.po || code==='CRS') return null;
+  const no = cvProchainNo(code, registry||[], events||[]);
+  const creer = async ()=>{
+    setEtat('Inscription au registre…');
+    try{
+      await window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:cfg.memoireJobsSpreadsheetId, range:'A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS',
+        resource:{values:[[code, no, nom.trim(), adresse.trim(), '', '', '', '', '', '', '', 'Créé dans le CRM le '+new Date().toLocaleDateString('fr-CA')]]}});
+      let n=0;
+      for(const e of job.events){
+        if(!e.id || !e.calId || cvPO(e.title)) continue;
+        setEtat('Ajout du numéro aux passages… '+(++n)+'/'+job.events.length);
+        await window.gapi.client.calendar.events.patch({calendarId:e.calId, eventId:e.id, resource:{summary:e.title.trim()+' '+no}});
+      }
+      setEtat(''); setOuvert(false); onChanged && onChanged();
+    }catch(err){ setEtat('Erreur : '+apiErrMsg(err)); }
+  };
+  if(!ouvert) return <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>setOuvert(true)}>＋ Créer le no de job ({no})</button>;
+  return <div className="card" style={{padding:10,marginBottom:10,borderColor:'var(--accent)'}}>
+    <div style={{fontWeight:800,marginBottom:6}}>Nouveau numéro : <span style={{color:'var(--accent)'}}>{no}</span></div>
+    <div className="field"><label>Nom de la job</label><input value={nom} onChange={e=>setNom(e.target.value)}/></div>
+    <div className="field"><label>Adresse</label><input value={adresse} onChange={e=>setAdresse(e.target.value)} placeholder="829 Riverside, Saint-Lambert"/></div>
+    <div className="muted" style={{fontSize:12,margin:'4px 0 8px'}}>Le numéro sera ajouté au titre des {job.events.length} passage{job.events.length>1?'s':''} de cette job dans l'agenda. Donne-le ensuite comme PO au comptoir et sur tes factures.</div>
+    <div style={{display:'flex',gap:6,alignItems:'center'}}>
+      <button className="btn btn-sm btn-p" disabled={!!etat || !nom.trim()} onClick={creer}>Créer {no}</button>
+      <button className="btn btn-sm" disabled={!!etat} onClick={()=>setOuvert(false)}>Annuler</button>
+      {etat && <span className="muted" style={{fontSize:12}}>{etat}</span>}
+    </div>
+  </div>;
+}
+
+function ClientJobDetail({job, factures, appels, courriels, achats, cfg, registry, events, onChanged}){
   appels = appels || {parNumero:{}, parFacture:{}};
   const photo = a => 'https://drive.google.com/file/d/'+a.id+'/view';
   if(!job) return <div className="card muted">Clique une job pour voir sa fiche.</div>;
@@ -2921,7 +2982,7 @@ function ClientJobDetail({job, factures, appels, courriels, achats}){
     <h2 className="fh" style={{margin:'8px 0 2px',fontSize:20}}>{job.name}</h2>
     {r.projet && <div className="muted" style={{fontSize:13}}>{r.projet}</div>}
     <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'5px 14px',margin:'12px 0'}}>
-      <Row k="PO">{job.po || 'Pas de PO'}</Row>
+      <Row k={job.client==='CRS'?'PO':'No de job'}>{job.po || (job.client==='CRS'?'Pas de PO':'Pas encore de numéro')}</Row>
       <Row k="Adresse">{job.address && <>{job.address} {maps && <a href={maps} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5}}>Maps ↗</a>}</>}</Row>
       <Row k="Client">{r.client}</Row>
       <Row k="Téléphone">{r.tel && <span style={{userSelect:'all'}}>{r.tel}</span>}</Row>
@@ -2929,6 +2990,7 @@ function ClientJobDetail({job, factures, appels, courriels, achats}){
       <Row k="Équipe">{job.crew.join(', ')}</Row>
       <Row k="Montant PO">{r.ht!=null && <>{cvMoney(r.ht)} avant taxes · {cvMoney(r.ht*1.14975)} taxes incluses</>}</Row>
     </div>
+    {cfg && <CvCreerNoJob cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/>}
     <CvGauge job={job}/>
     {(()=>{ const m=cvMateriel(job, achats); return m.liste.length ? <div style={{fontSize:13,margin:'0 0 10px'}}>
       <b>Matériel :</b> {cvMoney(m.total)} avant taxes ({m.liste.map(a=>a.fournisseur+' #'+a.num).join(', ')})
@@ -2980,7 +3042,7 @@ function ClientJobDetail({job, factures, appels, courriels, achats}){
   </div>;
 }
 
-function ClientDetailView({client, factures, appels, courriels, achats, onBack, isDesktop}){
+function ClientDetailView({client, factures, appels, courriels, achats, cfg, registry, events, onChanged, onBack, isDesktop}){
   const [filter,setFilter]=useState('all');
   const [q,setQ]=useState('');
   const [sel,setSel]=useState(null);
@@ -3031,7 +3093,7 @@ function ClientDetailView({client, factures, appels, courriels, achats, onBack, 
           </table>
         </div>
       </div>
-      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels} courriels={courriels} achats={achats}/></div>
+      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels} courriels={courriels} achats={achats} cfg={cfg} registry={registry} events={events} onChanged={onChanged}/></div>
     </div>
   </div>;
 }
@@ -3241,7 +3303,7 @@ function ClientsView({cfg, refreshKey, isDesktop}){
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les clients : {err}</div>;
   const avisLent = lent && lent.length ? <div className="card" style={{marginBottom:12,fontSize:13,borderColor:'var(--warning)'}}>⚠️ Trop long à lire : {lent.join(', ')}. Les données affichées sont incomplètes — essaie « Actualiser » ou reconnecte-toi.</div> : null;
-  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} courriels={courriels} achats={achats} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
+  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} courriels={courriels} achats={achats} cfg={cfg} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
   // Contracteurs et particuliers dans la même liste ; la flèche déplie les jobs du client.
   const tous = Object.values(clients).sort((a,b)=>(a.code==='PART')-(b.code==='PART') || b.jobs.length-a.jobs.length);
   const Card = ({c})=>{ const ouvert = deplie[c.code];
