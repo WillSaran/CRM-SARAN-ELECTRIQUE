@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v38';
+const APP_VERSION = 'v39';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1425,7 +1425,7 @@ function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errE
 // ProjectsFromCalendar + la fiche détail, pour que "événements associés à un
 // projet" et "projets par adresse" utilisent exactement les mêmes données.
 // ── Projets : le miroir de Clients, axé sur la gestion — étapes, ce qui manque et où le compléter ──
-function pjEtapes(job, appels, commandes, courriels){
+function pjEtapes(job, appels, commandes, courriels, manuels){
   const today = cvDay(new Date().toISOString());
   const r = job.reg || {}, pro = job.client!=='PART', ev = job.events.filter(e=>!e.attente), att = job.events.filter(e=>e.attente);
   const passes = ev.filter(e=>e.day<today), avenir = ev.filter(e=>e.day>=today);
@@ -1451,6 +1451,8 @@ function pjEtapes(job, appels, commandes, courriels){
   const aRepondre = fils.filter(f=>/toi de r/i.test(f.statut));
   if(fils.length) add(!aRepondre.length, 'Courriels répondus', aRepondre.map(f=>'« '+f.sujet+' » ('+cvFmtDay(f.dernier)+')').join(', ')+' attend ta réponse', 'Gmail — ouvre le fil dans la section Courriels plus bas');
   add(!sansFac.length, 'Appel ou facture inscrit à chaque passage fait', sansFac.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' sans numéro', 'Description de l\'événement : « Appel de service : … / Facture : … »', !passes.length);
+  // Étapes cochées à la main (onglet « Etapes » du registre des jobs).
+  E.forEach(x=>{ if(!x.ok && manuels && manuels[job.id+'|'+x.titre]){ x.ok=true; x.manuel=true; } });
   const actifs = E.filter(x=>!x.na);
   const manquants = actifs.filter(x=>!x.ok);
   const enAtt = att.length ? 'En attente'+(att[0].phase ? ' ('+att[0].phase.toLowerCase()+')' : '')+' — pas encore cédulée' : '';
@@ -1630,6 +1632,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   const [voirArch,setVoirArch]=useState(false);
   const [voirTerm,setVoirTerm]=useVoirTerminees();
   const [commandes] = useCommandes(cfg);
+  const [manuels, basculerEtape] = useEtapesManuelles(cfg);
   const [filtre,setFiltre]=useState('');
   const [seulManque,setSeulManque]=useState(false);
   const [ouvert,setOuvert]=useState(null);
@@ -1638,7 +1641,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des jobs…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les jobs : {err}</div>;
   const today = cvDay(new Date().toISOString()), recent = cvDay(new Date(Date.now()-30*864e5).toISOString());
-  let jobs = Object.values(clients).flatMap(c=>c.jobs.map(j=>({c, j, s:pjEtapes(j, ap, commandes, courriels)})))
+  let jobs = Object.values(clients).flatMap(c=>c.jobs.map(j=>({c, j, s:pjEtapes(j, ap, commandes, courriels, manuels)})))
     .filter(x=>x.j.status!=='done' || x.j.last>=recent || x.s.etape==='À facturer');
   const nbArch = jobs.filter(x=>(archives||{})[x.j.id]).length;
   jobs = jobs.filter(x=>voirArch ? (archives||{})[x.j.id] : !(archives||{})[x.j.id]);
@@ -1669,9 +1672,11 @@ function ProjetsSuivi({cfg, refreshKey}){
         </div>
       </div>
       {o && <div style={{marginTop:10,borderTop:'1px solid var(--border)',paddingTop:8}}>
-        {s.E.map((e,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'22px 1fr',gap:6,padding:'5px 0',fontSize:13}}>
+        {s.E.map((e,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'22px 1fr auto',gap:6,padding:'5px 0',fontSize:13,alignItems:'start'}}>
           <span>{e.ok?'✅':'⬜'}</span>
-          <div><b>{e.titre}</b>{!e.ok && <div style={{color:'var(--warning)',fontSize:12.5}}>{e.manque}</div>}{!e.ok && <div className="muted" style={{fontSize:12}}>Où : {e.ou}</div>}</div>
+          <div><b>{e.titre}</b>{e.manuel && <span className="muted" style={{fontSize:11.5}}> · coché à la main</span>}{!e.ok && <div style={{color:'var(--warning)',fontSize:12.5}}>{e.manque}</div>}{!e.ok && <div className="muted" style={{fontSize:12}}>Où : {e.ou}</div>}</div>
+          {!e.ok ? <button className="btn btn-sm" title="Marquer comme fait" style={{color:'var(--warning)',borderColor:'var(--warning)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, true)}>Non</button>
+            : e.manuel ? <button className="btn btn-sm" title="Décocher" style={{color:'var(--success)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, false)}>Oui ✓</button> : <span/>}
         </div>)}
         <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/><CvArchiver cfg={cfg} job={j} archives={archives} onChanged={()=>setTick(t=>t+1)}/></div>
         <div className="fh" style={{fontSize:13,margin:'8px 0 4px'}}>Passages</div>
@@ -3318,6 +3323,31 @@ function CvAnomalies({cfg, factures, clients, appels, onOpen, onChanged}){
 function cvLundi(d){ const x=new Date(d); x.setHours(12,0,0,0); x.setDate(x.getDate()-((x.getDay()+6)%7)); return x; }
 function cvHeure(iso){ const m=String(iso||'').match(/T(\d{2}):(\d{2})/); return m ? (+m[1])+' h'+(m[2]!=='00'?' '+m[2]:'') : ''; }
 // Commandes de stock : « placée » ou non, par passage (onglet « Commandes » du registre des jobs, partagé entre appareils).
+// Étapes cochées à la main dans Projets : onglet « Etapes » du registre des jobs (Job | Étape | Statut | Le).
+function useEtapesManuelles(cfg){
+  const [etat,setEtat]=useState({map:{}, rows:{}, lu:false});
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async()=>{
+    if(!id) return;
+    try{
+      const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Etapes!A1:D'});
+      const map={}, rows={}; (r.result.values||[]).slice(1).forEach((row,i)=>{ if(!row[0]) return; const k=row[0]+'|'+row[1]; rows[k]=i+2; if(row[2]==='Fait') map[k]=true; });
+      setEtat({map, rows, lu:true, existe:true});
+    }catch(e){ setEtat({map:{}, rows:{}, lu:true, existe:false}); }
+  },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const basculer = async (jobId, titre, fait)=>{
+    const k = jobId+'|'+titre, ligne=[jobId, titre, fait?'Fait':'', new Date().toLocaleString('fr-CA')];
+    setEtat(s=>{ const map={...s.map}; if(fait) map[k]=true; else delete map[k]; return {...s, map}; });
+    try{
+      if(!etat.existe) await ensureSheetsExist(id, [{name:'Etapes', headers:['Job','Étape','Statut','Le']}]);
+      if(etat.rows[k]) await sheetsUpdateRow(id, 'Etapes', etat.rows[k], ligne); else await sheetsAppendRow(id, 'Etapes', ligne);
+      await lire();
+    }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); lire(); }
+  };
+  return [etat.map, basculer];
+}
+
 function useCommandes(cfg){
   const [etat,setEtat]=useState({map:{}, pret:false});
   const id = cfg.memoireJobsSpreadsheetId;
