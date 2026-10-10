@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v39';
+const APP_VERSION = 'v41';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1547,9 +1547,33 @@ function CvChoixJob({clients, propose, onChoix}){
   </div>;
 }
 
+// Soumissions, relevés de compte et confirmations reçus des fournisseurs.
+function CvDocuments({docs, type, setType, fournisseur}){
+  const [q,setQ]=useState('');
+  const [tout,setTout]=useState(false);
+  const types = [['Soumission','Soumissions'],['Relevé','Relevés de compte'],['Confirmation','Confirmations']];
+  const liste = docs.filter(d=>d.type===type && (!q || cvNorm([d.fournisseur,d.num,d.ref,d.fichier].join(' ')).includes(cvNorm(q)))).sort((a,b)=>b.date.localeCompare(a.date));
+  return <div className="card" style={{marginBottom:16}}>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
+      {types.map(([k,l])=><button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>setType(k)}>{l} ({docs.filter(d=>d.type===k).length})</button>)}
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (no, référence, fournisseur)…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
+    </div>
+    {fournisseur && <div className="muted" style={{fontSize:12,marginBottom:4}}>Seulement {fournisseur} — reclique la tuile pour tout voir.</div>}
+    {!liste.length ? <div className="muted" style={{fontSize:13}}>Aucun document.</div>
+      : (tout ? liste : liste.slice(0,15)).map((d,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'7px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
+        <div><b>{d.fournisseur}</b>{d.num && <> #{d.num}</>} <span className="muted">· {cvFmtDay(d.date)}</span>{d.total!=null && <> · <b>{cvMoney(d.total)}</b></>}{d.ref && <span className="muted"> · réf. « {d.ref} »</span>}
+          {!d.num && !d.ref && <div className="muted" style={{fontSize:11.5}}>{d.fichier}</div>}</div>
+        {d.pdf && <a href={'https://drive.google.com/file/d/'+d.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5,whiteSpace:'nowrap'}}>Ouvrir ↗</a>}
+      </div>)}
+    {liste.length>15 && !tout && <button className="btn btn-sm" style={{marginTop:8}} onClick={()=>setTout(true)}>Voir les {liste.length}</button>}
+  </div>;
+}
+
 function FournisseursView({cfg, refreshKey, isDesktop}){
   const [tick,setTick]=useState(0);
-  const {loading, err, events, registry, factures, achats} = useClientsData(cfg, refreshKey+'|f'+tick);
+  const {loading, err, events, registry, factures, achats, documents} = useClientsData(cfg, refreshKey+'|f'+tick);
+  const [docType,setDocType]=useState('Soumission');
+  const [seulAAssocier,setSeulAAssocier]=useState(false);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   const [busy,setBusy]=useState('');
   const [ouvert,setOuvert]=useState(null);
@@ -1573,6 +1597,17 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
   const mois = today.slice(0,7);
   const parF = {}; A.forEach(a=>{ const f=parF[a.fournisseur]=parF[a.fournisseur]||{liste:[],mois:0}; f.liste.push(a); if(date(a).startsWith(mois)) f.mois+=a.st; });
   const parDest = {}; A.filter(a=>CV_DESTS.includes(a.job)).forEach(a=>{ parDest[a.job]=(parDest[a.job]||0)+a.st; });
+  // Vue détaillée : un fournisseur (toutes ses factures, à traiter une à une) ou une destination (camion, shop, inventaire).
+  const moisPasse = (()=>{ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1); return cvDay(d.toISOString()).slice(0,7); })();
+  const somme = l => l.reduce((t,a)=>t+(a.st||0),0);
+  const vue = !ouvert ? null : (()=>{
+    const dest = ouvert.startsWith('dest:') ? ouvert.slice(5) : '';
+    const liste = A.filter(a=> dest ? a.job===dest : a.fournisseur===ouvert).sort((x,y)=>date(y).localeCompare(date(x)));
+    const tuiles = [[cvMoney(somme(liste.filter(a=>date(a).startsWith(mois)))),'ce mois-ci'],[cvMoney(somme(liste.filter(a=>date(a).startsWith(moisPasse)))),'le mois passé'],[cvMoney(somme(liste)),'total, avant taxes'],[liste.length,'factures']];
+    if(!dest){ tuiles.push([liste.filter(a=>!a.job).length,'à associer']); tuiles.push([cvMoney(somme(liste.filter(a=>CV_DESTS.includes(a.job)))),'stock / camions / shop']); }
+    const parJob = dest ? null : Object.entries(liste.filter(a=>a.job).reduce((m,a)=>{ m[a.job]=(m[a.job]||0)+(a.st||0); return m; },{})).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    return {titre: dest ? ((dest==='Inventaire'?'📦 ':dest==='Shop'?'🏠 ':'🚚 ')+dest+' — factures envoyées ici') : ouvert+' — toutes les factures', fournisseur: dest?'':ouvert, liste, tuiles, parJob: parJob && parJob.length ? parJob : null};
+  })();
   const Facture = ({a, assoc})=>{ const d = detail===a.row;
     return <div style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setDetail(d?null:a.row)}>
@@ -1592,25 +1627,39 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Fournisseurs</h2>
     <div className="muted" style={{fontSize:13,marginBottom:12}}>Tes factures d'achat lues dans tes courriels. Clique une facture pour voir ses articles ; associe-la à une job, à l'inventaire, au shop ou à un camion.</div>
     <div style={{display:'grid',gridTemplateColumns:isDesktop?'repeat(auto-fit,minmax(150px,1fr))':'1fr 1fr',gap:10,marginBottom:16}}>
-      {Object.entries(parF).map(([f,v])=><div key={f} className="card" style={{padding:12,cursor:'pointer',borderColor:ouvert===f?'var(--accent)':undefined}} onClick={()=>setOuvert(ouvert===f?null:f)}>
-        <div className="muted" style={{fontSize:12}}>{f}</div>
+      {Object.entries(parF).map(([f,v])=>{ const n=v.liste.filter(a=>!a.job).length;
+        return <div key={f} className="card" style={{padding:12,cursor:'pointer',borderColor:ouvert===f?'var(--accent)':undefined}} onClick={()=>{ setOuvert(ouvert===f?null:f); setSeulAAssocier(false); }}>
+        <div className="muted" style={{fontSize:12}}>{f} ›</div>
         <div style={{fontSize:18,fontWeight:800}}>{cvMoney(v.mois)}</div>
-        <div className="muted" style={{fontSize:11.5}}>ce mois-ci · {v.liste.length} factures</div>
-      </div>)}
-      {CV_DESTS.filter(d=>parDest[d]).map(d=><div key={d} className="card" style={{padding:12}}>
-        <div className="muted" style={{fontSize:12}}>{d==='Inventaire'?'📦 ':d==='Shop'?'🏠 ':'🚚 '}{d}</div>
+        <div className="muted" style={{fontSize:11.5}}>ce mois-ci · {v.liste.length} factures{n ? <> · <span style={{color:'var(--warning)'}}>{n} à associer</span></> : ''}</div>
+      </div>; })}
+      {CV_DESTS.filter(d=>parDest[d]).map(d=><div key={d} className="card" style={{padding:12,cursor:'pointer',borderColor:ouvert==='dest:'+d?'var(--accent)':undefined}} onClick={()=>setOuvert(ouvert==='dest:'+d?null:'dest:'+d)}>
+        <div className="muted" style={{fontSize:12}}>{d==='Inventaire'?'📦 ':d==='Shop'?'🏠 ':'🚚 '}{d} ›</div>
         <div style={{fontSize:18,fontWeight:800}}>{cvMoney(parDest[d])}</div>
         <div className="muted" style={{fontSize:11.5}}>avant taxes</div>
       </div>)}
     </div>
-    <div className="card" style={{marginBottom:16,borderColor:aAssocier.length?'var(--warning)':undefined}}>
+    {vue && <div className="card" style={{marginBottom:16,borderColor:'var(--accent)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+        <div className="fh" style={{fontSize:16}}>{vue.titre}</div>
+        <button className="btn btn-sm" onClick={()=>setOuvert(null)}>✕ Fermer</button>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(110px,1fr))',gap:8,margin:'10px 0'}}>
+        {vue.tuiles.map(([n,l],i)=><div key={i} style={{background:'var(--bg3)',borderRadius:8,padding:'8px 10px'}}><div style={{fontWeight:800,fontSize:16}}>{n}</div><div className="muted" style={{fontSize:11.5}}>{l}</div></div>)}
+      </div>
+      {vue.fournisseur && <div style={{display:'flex',gap:6,marginBottom:6}}>
+        <button className={'btn btn-sm'+(!seulAAssocier?' btn-p':'')} onClick={()=>setSeulAAssocier(false)}>Toutes ({vue.liste.length})</button>
+        <button className={'btn btn-sm'+(seulAAssocier?' btn-p':'')} onClick={()=>setSeulAAssocier(true)}>À associer ({vue.liste.filter(a=>!a.job).length})</button>
+      </div>}
+      {vue.parJob && <div style={{fontSize:12.5,marginBottom:8}}>{vue.parJob.map(([j,t])=><div key={j} style={{display:'flex',justifyContent:'space-between',padding:'2px 0'}}><span>{j}</span><b>{cvMoney(t)}</b></div>)}</div>}
+      {(seulAAssocier ? vue.liste.filter(a=>!a.job) : vue.liste).map(a=><Facture key={a.row} a={a} assoc={!a.job}/>)}
+      {!vue.liste.length && <div className="muted" style={{fontSize:13}}>Aucune facture.</div>}
+    </div>}
+    {!vue && <div className="card" style={{marginBottom:16,borderColor:aAssocier.length?'var(--warning)':undefined}}>
       <div className="fh" style={{fontSize:15}}>À associer {aAssocier.length>0 && <span className="badge" style={{background:'rgba(210,153,34,0.15)',color:'var(--warning)'}}>{aAssocier.length}</span>}</div>
       {aAssocier.length ? aAssocier.slice(0,30).map(a=><Facture key={a.row} a={a} assoc/>) : <div className="muted" style={{fontSize:13}}>✅ Toutes les factures sont associées.</div>}
-    </div>
-    {ouvert && parF[ouvert] && <div className="card">
-      <div className="fh" style={{fontSize:15,marginBottom:6}}>{ouvert} — toutes les factures</div>
-      {parF[ouvert].liste.sort((x,y)=>date(y).localeCompare(date(x))).map(a=><Facture key={a.row} a={a}/>)}
     </div>}
+    <CvDocuments docs={(documents||[]).filter(d=>!vue || !vue.fournisseur || d.fournisseur===vue.fournisseur)} type={docType} setType={setDocType} fournisseur={vue && vue.fournisseur}/>
     {!A.length && <div className="card muted">Aucun achat encore lu. Le script « achats » remplit ce registre à midi et à minuit.</div>}
   </div>;
 }
@@ -2759,7 +2808,7 @@ function useClientsData(cfg, refreshKey){
         const readSheet = (id, nom, range) => id
           ? delai(Promise.resolve(window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:range||'A1:Z'})).then(r=>r.result.values||[], ()=>[]), nom, [])
           : Promise.resolve([]);
-        const [events, regRows, facRows, apRows, coRows, acRows, liRows, flRows, arRows] = await Promise.all([
+        const [events, regRows, facRows, apRows, coRows, acRows, liRows, flRows, arRows, doRows] = await Promise.all([
           delai(listCalendarEventsRange(calIds, min.toISOString(), max.toISOString()), 'agenda', []),
           readSheet(cfg.memoireJobsSpreadsheetId, 'registre des jobs'),
           readSheet(cfg.memoireFacturesSpreadsheetId, 'registre des factures'),
@@ -2768,8 +2817,11 @@ function useClientsData(cfg, refreshKey){
           readSheet(cfg.memoireAchatsSpreadsheetId, 'achats', 'A1:L'),
           readSheet(cfg.memoireAchatsSpreadsheetId, 'articles', 'Lignes!A1:F'),
           readSheet(cfg.memoireFacturesSpreadsheetId, 'articles facturés', 'Lignes!A1:F'),
-          readSheet(cfg.memoireJobsSpreadsheetId, 'archives', 'Archives!A1:C')
+          readSheet(cfg.memoireJobsSpreadsheetId, 'archives', 'Archives!A1:C'),
+          readSheet(cfg.memoireAchatsSpreadsheetId, 'soumissions', 'Documents!A1:J')
         ]);
+        // Soumissions, relevés de compte, confirmations des fournisseurs (onglet « Documents » du registre des achats)
+        const documents = doRows.slice(1).filter(r=>r[0]).map(r=>({fournisseur:r[0], type:r[1]||'', num:r[2]||'', date:r[3]||'', ref:r[4]||'', total:cvNum(r[5]), pdf:r[6]||'', fichier:r[7]||''}));
         // Fils de courriels par PO (onglet « Courriels », rempli par Apps Script)
         const courriels = {};
         coRows.slice(1).forEach(r=>{ if(!r[0]) return; (courriels[r[0]]=courriels[r[0]]||[]).push({sujet:r[2]||'', premier:r[3]||'', dernier:r[4]||'', n:r[5]||'', de:r[6]||'', statut:r[7]||'', extrait:r[8]||'', lien:r[9]||''}); });
@@ -2812,8 +2864,8 @@ function useClientsData(cfg, refreshKey){
           client:g(r,'cli'), tel:g(r,'tel'), courriel:g(r,'mail'), projet:g(r,'proj'), note:g(r,'note')
         })).filter(r=>!/^fusionn/i.test(cvNorm(r.statut)));
         Object.defineProperty(registry,'__colStatut',{value: ix.st>=0 ? ix.st : Math.max(head.length, 12), enumerable:false});
-        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, lent};
-        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, lent});
+        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent};
+        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent});
       }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}, appels:{}}); }
     })();
     return ()=>{alive=false};
