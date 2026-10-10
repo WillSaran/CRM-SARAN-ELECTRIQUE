@@ -142,7 +142,7 @@ function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v33';
+const APP_VERSION = 'v34';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1621,7 +1621,8 @@ function ProjetsView(props){
 
 function ProjetsSuivi({cfg, refreshKey}){
   const [tick,setTick]=useState(0);
-  const {loading, err, events, registry, factures, appels, courriels} = useClientsData(cfg, refreshKey+'|p'+tick);
+  const {loading, err, events, registry, factures, appels, courriels, archives} = useClientsData(cfg, refreshKey+'|p'+tick);
+  const [voirArch,setVoirArch]=useState(false);
   const [commandes] = useCommandes(cfg);
   const [filtre,setFiltre]=useState('');
   const [seulManque,setSeulManque]=useState(false);
@@ -1633,6 +1634,8 @@ function ProjetsSuivi({cfg, refreshKey}){
   const today = cvDay(new Date().toISOString()), recent = cvDay(new Date(Date.now()-30*864e5).toISOString());
   let jobs = Object.values(clients).flatMap(c=>c.jobs.map(j=>({c, j, s:pjEtapes(j, ap, commandes, courriels)})))
     .filter(x=>x.j.status!=='done' || x.j.last>=recent || x.s.etape==='À facturer');
+  const nbArch = jobs.filter(x=>(archives||{})[x.j.id]).length;
+  jobs = jobs.filter(x=>voirArch ? (archives||{})[x.j.id] : !(archives||{})[x.j.id]);
   if(filtre) jobs = jobs.filter(x=>x.c.code===filtre);
   if(seulManque) jobs = jobs.filter(x=>x.s.manquants.length);
   const codes = [...new Set(Object.values(clients).map(c=>c.code))];
@@ -1661,7 +1664,7 @@ function ProjetsSuivi({cfg, refreshKey}){
           <span>{e.ok?'✅':'⬜'}</span>
           <div><b>{e.titre}</b>{!e.ok && <div style={{color:'var(--warning)',fontSize:12.5}}>{e.manque}</div>}{!e.ok && <div className="muted" style={{fontSize:12}}>Où : {e.ou}</div>}</div>
         </div>)}
-        <div style={{marginTop:8}}><CvCreerNoJob cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/></div>
+        <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/><CvArchiver cfg={cfg} job={j} archives={archives} onChanged={()=>setTick(t=>t+1)}/></div>
         <div className="fh" style={{fontSize:13,margin:'8px 0 4px'}}>Passages</div>
         {j.events.map((e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
           <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b> <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span>
@@ -1680,6 +1683,7 @@ function ProjetsSuivi({cfg, refreshKey}){
       <button className="btn btn-sm" style={!filtre?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>setFiltre('')}>Tous</button>
       {codes.map(cd=><button key={cd} className="btn btn-sm" style={filtre===cd?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>setFiltre(cd)}>{cd==='PART'?'Particuliers':cd}</button>)}
       <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,marginLeft:'auto'}}><input type="checkbox" checked={seulManque} onChange={e=>setSeulManque(e.target.checked)}/> Seulement ce qui manque</label>
+      <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13}}><input type="checkbox" checked={voirArch} onChange={e=>setVoirArch(e.target.checked)}/> Archivées{nbArch?' ('+nbArch+')':''}</label>
     </div>
     {groupes.map(([st,nom])=>{ const g=jobs.filter(x=>x.j.status===st).sort((a,b)=> st==='done' ? b.j.last.localeCompare(a.j.last) : ((a.s.prochain||{}).day||'').localeCompare((b.s.prochain||{}).day||''));
       return g.length ? <div key={st} style={{marginBottom:14}}><div className="pipe-col-h" style={{padding:'0 2px 8px'}}>{nom} · {g.length}</div>{g.map(x=><Ligne key={x.c.code+x.j.id} x={x}/>)}</div> : null; })}
@@ -2737,7 +2741,7 @@ function useClientsData(cfg, refreshKey){
         const readSheet = (id, nom, range) => id
           ? delai(Promise.resolve(window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:range||'A1:Z'})).then(r=>r.result.values||[], ()=>[]), nom, [])
           : Promise.resolve([]);
-        const [events, regRows, facRows, apRows, coRows, acRows, liRows, flRows] = await Promise.all([
+        const [events, regRows, facRows, apRows, coRows, acRows, liRows, flRows, arRows] = await Promise.all([
           delai(listCalendarEventsRange(calIds, min.toISOString(), max.toISOString()), 'agenda', []),
           readSheet(cfg.memoireJobsSpreadsheetId, 'registre des jobs'),
           readSheet(cfg.memoireFacturesSpreadsheetId, 'registre des factures'),
@@ -2745,13 +2749,15 @@ function useClientsData(cfg, refreshKey){
           readSheet(cfg.memoireJobsSpreadsheetId, 'courriels', 'Courriels!A1:J'),
           readSheet(cfg.memoireAchatsSpreadsheetId, 'achats', 'A1:L'),
           readSheet(cfg.memoireAchatsSpreadsheetId, 'articles', 'Lignes!A1:F'),
-          readSheet(cfg.memoireFacturesSpreadsheetId, 'articles facturés', 'Lignes!A1:F')
+          readSheet(cfg.memoireFacturesSpreadsheetId, 'articles facturés', 'Lignes!A1:F'),
+          readSheet(cfg.memoireJobsSpreadsheetId, 'archives', 'Archives!A1:C')
         ]);
         // Fils de courriels par PO (onglet « Courriels », rempli par Apps Script)
         const courriels = {};
         coRows.slice(1).forEach(r=>{ if(!r[0]) return; (courriels[r[0]]=courriels[r[0]]||[]).push({sujet:r[2]||'', premier:r[3]||'', dernier:r[4]||'', n:r[5]||'', de:r[6]||'', statut:r[7]||'', extrait:r[8]||'', lien:r[9]||''}); });
         Object.values(courriels).forEach(l=>l.sort((a,b)=>b.dernier.localeCompare(a.dernier)));
         // Achats fournisseurs (registre « La mémoire — Achats »)
+        const archives = {}; arRows.slice(1).forEach((r,i)=>{ if(r[0]) archives[r[0]]=i+2; });
         const facLignes = {}; flRows.slice(1).forEach(r=>{ if(r[0]) (facLignes[r[0]]=facLignes[r[0]]||[]).push({codes:r[1]||'', desc:r[2]||'', qte:cvNum(r[3])||0, prix:cvNum(r[4])||0, montant:cvNum(r[5])||0}); });
         const articles = {}; liRows.slice(1).forEach(r=>{ if(r[0]&&r[1]) (articles[r[0]+'|'+r[1]]=articles[r[0]+'|'+r[1]]||[]).push({code:r[2]||'', desc:r[3]||'', qte:cvNum(r[4])||0, montant:cvNum(r[5])||0}); });
         const achats = acRows.slice(1).map((r,i)=>({row:i+2, fournisseur:r[0]||'', num:r[1]||'', date:r[2]||'', ref:r[3]||'', st:cvNum(r[4])||0, total:cvNum(r[5])||0, pdf:r[6]||'', propose:r[7]||'', job:r[8]||'', part: r[9]!==undefined && r[9]!=='' ? cvNum(r[9]) : 100, statut:r[10]||'', recue:r[11]||''})).filter(a=>a.fournisseur).map(a=>({...a, articles: articles[a.fournisseur+'|'+a.num]||null}));
@@ -2780,15 +2786,16 @@ function useClientsData(cfg, refreshKey){
         Object.defineProperty(factures,'__statutHeader',{value: fx.st>=0, enumerable:false});
         const head=(regRows[0]||[]).map(h=>cvNorm(h));
         const col=(re)=>head.findIndex(h=>re.test(h));
-        const ix={code:col(/^code/),po:col(/^po$/),nom:col(/^nom/),adr:col(/^adresse/),ville:col(/^ville/),ht:col(/^montant/),dos:col(/^dossier/),cli:col(/^client/),tel:col(/^telephone/),mail:col(/^courriel/),proj:col(/^projet/),note:col(/^note/)};
+        const ix={code:col(/^code/),po:col(/^po$/),nom:col(/^nom/),adr:col(/^adresse/),ville:col(/^ville/),ht:col(/^montant/),dos:col(/^dossier/),cli:col(/^client/),tel:col(/^telephone/),mail:col(/^courriel/),proj:col(/^projet/),note:col(/^note/),st:col(/^statut/)};
         const g=(r,k)=> ix[k]>=0 ? (r[ix[k]]||'').trim() : '';
-        const registry = regRows.slice(1).filter(r=>g(r,'po')||g(r,'nom')).map(r=>({
+        const registry = regRows.slice(1).map((r,i)=>[r,i+2]).filter(([r])=>g(r,'po')||g(r,'nom')).map(([r,row])=>({row, statut: ix.st>=0 ? (r[ix.st]||'') : '',
           code:(g(r,'code')||'').toUpperCase(), po:g(r,'po'), nom:g(r,'nom'), key:cvNorm(g(r,'nom')),
           adresse:g(r,'adr'), ville:g(r,'ville'), ht:cvNum(g(r,'ht')), dossier:g(r,'dos'),
           client:g(r,'cli'), tel:g(r,'tel'), courriel:g(r,'mail'), projet:g(r,'proj'), note:g(r,'note')
-        }));
-        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, lent};
-        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, lent});
+        })).filter(r=>!/^fusionn/i.test(cvNorm(r.statut)));
+        Object.defineProperty(registry,'__colStatut',{value: ix.st>=0 ? ix.st : Math.max(head.length, 12), enumerable:false});
+        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, lent};
+        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, lent});
       }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}, appels:{}}); }
     })();
     return ()=>{alive=false};
@@ -2935,40 +2942,93 @@ function cvProchainNo(code, registry, events){
   const nums = [...registry.map(r=>r.po), ...events.map(e=>e.title)].map(t=>{ const m=String(t||'').match(re); return m?+m[1]:0; });
   return code+'-'+String(Math.max(0,...nums)+1).padStart(3,'0');
 }
+async function cvRenommerPassages(job, ancien, nouveau, setEtat){
+  let n=0;
+  for(const e of job.events){
+    if(!e.id || !e.calId) continue;
+    const t = ancien ? e.title.replace(new RegExp('\\b'+ancien.replace('-','\\s?-\\s?')+'\\b','i'), nouveau) : (cvPO(e.title) ? e.title : e.title.trim()+' '+nouveau);
+    if(t===e.title) continue;
+    setEtat && setEtat('Mise à jour des passages… '+(++n));
+    await window.gapi.client.calendar.events.patch({calendarId:e.calId, eventId:e.id, resource:{summary:t}});
+  }
+}
+// Numéro de job : créer, prendre un numéro existant (fusion de doublons), ou changer / fusionner un numéro.
 function CvCreerNoJob({cfg, job, registry, events, onChanged}){
   const code = job.client==='PART' ? 'PART' : job.client;
-  const [ouvert,setOuvert]=useState(false);
+  const [mode,setMode]=useState('');
   const [nom,setNom]=useState(job.name||'');
   const [adresse,setAdresse]=useState(job.address||'');
+  const [cible,setCible]=useState('');
   const [etat,setEtat]=useState('');
-  if(job.po || code==='CRS') return null;
-  const no = cvProchainNo(code, registry||[], events||[]);
-  const creer = async ()=>{
-    setEtat('Inscription au registre…');
-    try{
-      await window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:cfg.memoireJobsSpreadsheetId, range:'A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS',
-        resource:{values:[[code, no, nom.trim(), adresse.trim(), '', '', '', '', '', '', '', 'Créé dans le CRM le '+new Date().toLocaleDateString('fr-CA')]]}});
-      let n=0;
-      for(const e of job.events){
-        if(!e.id || !e.calId || cvPO(e.title)) continue;
-        setEtat('Ajout du numéro aux passages… '+(++n)+'/'+job.events.length);
-        await window.gapi.client.calendar.events.patch({calendarId:e.calId, eventId:e.id, resource:{summary:e.title.trim()+' '+no}});
-      }
-      setEtat(''); setOuvert(false); onChanged && onChanged();
-    }catch(err){ setEtat('Erreur : '+apiErrMsg(err)); }
+  if(code==='CRS') return null;
+  const reg = registry||[];
+  const existants = reg.filter(r=>r.code===code && r.po && r.po!==job.po).sort((a,b)=>a.nom.localeCompare(b.nom,'fr'));
+  const no = cvProchainNo(code, reg, events||[]);
+  const ecrireStatut = async (row, texte)=>{
+    const col = String.fromCharCode(65+reg.__colStatut);
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:cfg.memoireJobsSpreadsheetId, range:col+'1', valueInputOption:'RAW', resource:{values:[['Statut']]}});
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:cfg.memoireJobsSpreadsheetId, range:col+row, valueInputOption:'RAW', resource:{values:[[texte]]}});
   };
-  if(!ouvert) return <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>setOuvert(true)}>＋ Créer le no de job ({no})</button>;
+  const go = async fn=>{ try{ await fn(); setEtat(''); setMode(''); onChanged && onChanged(); }catch(err){ setEtat('Erreur : '+apiErrMsg(err)); } };
+  const creer = ()=>go(async()=>{
+    setEtat('Inscription au registre…');
+    await window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:cfg.memoireJobsSpreadsheetId, range:'A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS',
+      resource:{values:[[code, no, nom.trim(), adresse.trim(), '', '', '', '', '', '', '', 'Créé dans le CRM le '+new Date().toLocaleDateString('fr-CA')]]}});
+    await cvRenommerPassages(job, '', no, setEtat);
+  });
+  const utiliser = ()=>go(async()=>{
+    const ancienReg = job.po && reg.find(r=>r.po===job.po);
+    await cvRenommerPassages(job, job.po, cible, setEtat);
+    if(ancienReg) await ecrireStatut(ancienReg.row, 'Fusionné dans '+cible+' le '+new Date().toLocaleDateString('fr-CA'));
+  });
+  const Choix = <select value={cible} onChange={e=>setCible(e.target.value)} style={{width:'100%'}}>
+    <option value="">— Choisir le numéro —</option>
+    {existants.map(r=><option key={r.po} value={r.po}>{r.po} · {r.nom}{r.adresse?' · '+r.adresse:''}</option>)}
+  </select>;
+  if(!mode) return <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+    {!job.po && <button className="btn btn-sm" onClick={()=>setMode('creer')}>＋ Créer le no de job ({no})</button>}
+    {existants.length>0 && <button className="btn btn-sm" onClick={()=>setMode('utiliser')}>{job.po ? '🔗 Fusionner avec un autre no' : '🔗 Prendre un no existant'}</button>}
+  </div>;
   return <div className="card" style={{padding:10,marginBottom:10,borderColor:'var(--accent)'}}>
-    <div style={{fontWeight:800,marginBottom:6}}>Nouveau numéro : <span style={{color:'var(--accent)'}}>{no}</span></div>
-    <div className="field"><label>Nom de la job</label><input value={nom} onChange={e=>setNom(e.target.value)}/></div>
-    <div className="field"><label>Adresse</label><input value={adresse} onChange={e=>setAdresse(e.target.value)} placeholder="829 Riverside, Saint-Lambert"/></div>
-    <div className="muted" style={{fontSize:12,margin:'4px 0 8px'}}>Le numéro sera ajouté au titre des {job.events.length} passage{job.events.length>1?'s':''} de cette job dans l'agenda. Donne-le ensuite comme PO au comptoir et sur tes factures.</div>
+    {mode==='creer' ? <>
+      <div style={{fontWeight:800,marginBottom:6}}>Nouveau numéro : <span style={{color:'var(--accent)'}}>{no}</span></div>
+      <div className="field"><label>Nom de la job</label><input value={nom} onChange={e=>setNom(e.target.value)}/></div>
+      <div className="field"><label>Adresse</label><input value={adresse} onChange={e=>setAdresse(e.target.value)} placeholder="829 Riverside, Saint-Lambert"/></div>
+      <div className="muted" style={{fontSize:12,margin:'4px 0 8px'}}>Le numéro sera ajouté au titre des {job.events.length} passage{job.events.length>1?'s':''} de cette job dans l'agenda.</div>
+    </> : <>
+      <div style={{fontWeight:800,marginBottom:6}}>{job.po ? 'Fusionner '+job.po+' avec :' : 'Cette job est en fait :'}</div>
+      {Choix}
+      <div className="muted" style={{fontSize:12,margin:'6px 0 8px'}}>{job.po ? 'Le numéro '+job.po+' sera remplacé par celui choisi dans tous ses passages, et marqué « fusionné » au registre.' : 'Le numéro choisi sera ajouté à ses '+job.events.length+' passages : les deux jobs n\'en feront plus qu\'une.'}</div>
+    </>}
     <div style={{display:'flex',gap:6,alignItems:'center'}}>
-      <button className="btn btn-sm btn-p" disabled={!!etat || !nom.trim()} onClick={creer}>Créer {no}</button>
-      <button className="btn btn-sm" disabled={!!etat} onClick={()=>setOuvert(false)}>Annuler</button>
+      {mode==='creer'
+        ? <button className="btn btn-sm btn-p" disabled={!!etat || !nom.trim()} onClick={creer}>Créer {no}</button>
+        : <button className="btn btn-sm btn-p" disabled={!!etat || !cible} onClick={utiliser}>{job.po?'Fusionner':'Associer'}</button>}
+      <button className="btn btn-sm" disabled={!!etat} onClick={()=>setMode('')}>Annuler</button>
       {etat && <span className="muted" style={{fontSize:12}}>{etat}</span>}
     </div>
   </div>;
+}
+
+// Archiver une job : elle disparaît des listes (onglet « Archives » du registre des jobs).
+function CvArchiver({cfg, job, archives, onChanged}){
+  const [busy,setBusy]=useState(false);
+  const row = (archives||{})[job.id];
+  const basculer = async ()=>{
+    setBusy(true);
+    try{
+      const id = cfg.memoireJobsSpreadsheetId;
+      if(row) await window.gapi.client.sheets.spreadsheets.values.clear({spreadsheetId:id, range:'Archives!A'+row+':C'+row});
+      else {
+        try{ await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Archives!A1'}); }
+        catch(e){ await ensureSheetsExist(id, [{name:'Archives', headers:['Job','Nom','Archivée le']}]); }
+        await sheetsAppendRow(id, 'Archives', [job.id, (job.client!=='PART'?job.client+' ':'')+job.name, new Date().toLocaleDateString('fr-CA')]);
+      }
+      onChanged && onChanged();
+    }catch(e){ alert('Impossible : '+apiErrMsg(e)); }
+    setBusy(false);
+  };
+  return <button className="btn btn-sm" disabled={busy} onClick={basculer} style={{marginBottom:10}}>{busy?'…':row?'↩︎ Désarchiver':'🗄 Archiver'}</button>;
 }
 
 // Acheté (factures fournisseurs associées à la job) vs facturé (tes factures de la job), article par article.
@@ -3012,7 +3072,7 @@ function CvAcheteFacture({job, achats, facLignes}){
   </div>;
 }
 
-function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, cfg, registry, events, onChanged}){
+function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged}){
   appels = appels || {parNumero:{}, parFacture:{}};
   const photo = a => 'https://drive.google.com/file/d/'+a.id+'/view';
   if(!job) return <div className="card muted">Clique une job pour voir sa fiche.</div>;
@@ -3033,7 +3093,7 @@ function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, c
       <Row k="Équipe">{job.crew.join(', ')}</Row>
       <Row k="Montant PO">{r.ht!=null && <>{cvMoney(r.ht)} avant taxes · {cvMoney(r.ht*1.14975)} taxes incluses</>}</Row>
     </div>
-    {cfg && <CvCreerNoJob cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/>}
+    {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
     <CvGauge job={job}/>
     <CvAcheteFacture job={job} achats={achats} facLignes={facLignes}/>
     {(()=>{ const m=cvMateriel(job, achats); return m.liste.length ? <div style={{fontSize:13,margin:'0 0 10px'}}>
@@ -3086,12 +3146,13 @@ function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, c
   </div>;
 }
 
-function ClientDetailView({client, factures, appels, courriels, achats, facLignes, cfg, registry, events, onChanged, onBack, isDesktop}){
+function ClientDetailView({client, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged, onBack, isDesktop}){
   const [filter,setFilter]=useState('all');
   const [q,setQ]=useState('');
   const [sel,setSel]=useState(null);
   const detailRef=useRef(null);
-  const list = client.jobs.filter(j=>(filter==='all' || (filter==='flag'?j.flag:j.status===filter)) &&
+  const arch = j => !!(archives||{})[j.id];
+  const list = client.jobs.filter(j=>(filter==='arch' ? arch(j) : !arch(j)) && (filter==='all' || filter==='arch' || (filter==='flag'?j.flag:j.status===filter)) &&
     (!q || cvNorm([j.po,j.name,j.address,...j.factures].join(' ')).includes(cvNorm(q))));
   const job = client.jobs.find(j=>j.id===sel) || null;
   function pick(id){ setSel(id); if(!isDesktop) setTimeout(()=>detailRef.current && detailRef.current.scrollIntoView({behavior:'smooth'}),50); }
@@ -3113,7 +3174,7 @@ function ClientDetailView({client, factures, appels, courriels, achats, facLigne
     <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1.2fr) minmax(0,1fr)':'1fr',gap:14,alignItems:'start'}}>
       <div className="card" style={{minWidth:0}}>
         <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
-          {[['all','Toutes'],['done','Terminées'],['cours','En cours'],['avenir','À venir'],['flag','À vérifier']].map(([k,l])=>
+          {[['all','Toutes'],['done','Terminées'],['cours','En cours'],['avenir','À venir'],['flag','À vérifier'],['arch','Archivées']].map(([k,l])=>
             <button key={k} className={'btn btn-sm'+(filter===k?' btn-p':'')} onClick={()=>setFilter(k)}>{l}</button>)}
           <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Nom, PO, ville, facture…" style={{flex:'1 1 150px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
         </div>
@@ -3137,7 +3198,7 @@ function ClientDetailView({client, factures, appels, courriels, achats, facLigne
           </table>
         </div>
       </div>
-      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels} courriels={courriels} achats={achats} facLignes={facLignes} cfg={cfg} registry={registry} events={events} onChanged={onChanged}/></div>
+      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels} courriels={courriels} achats={achats} facLignes={facLignes} archives={archives} cfg={cfg} registry={registry} events={events} onChanged={onChanged}/></div>
     </div>
   </div>;
 }
@@ -3340,14 +3401,14 @@ function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande, isDes
 function ClientsView({cfg, refreshKey, isDesktop}){
   const [tick,setTick]=useState(0);
   const [deplie,setDeplie]=useState({});
-  const {loading, err, events, registry, factures, appels, courriels, achats, facLignes, lent} = useClientsData(cfg, refreshKey+'|'+tick);
+  const {loading, err, events, registry, factures, appels, courriels, achats, facLignes, archives, lent} = useClientsData(cfg, refreshKey+'|'+tick);
   const appelsOk = appels || {parNumero:{}, parFacture:{}, liste:[]};
   const [open,setOpen]=useState(null);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les clients : {err}</div>;
   const avisLent = lent && lent.length ? <div className="card" style={{marginBottom:12,fontSize:13,borderColor:'var(--warning)'}}>⚠️ Trop long à lire : {lent.join(', ')}. Les données affichées sont incomplètes — essaie « Actualiser » ou reconnecte-toi.</div> : null;
-  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} courriels={courriels} achats={achats} facLignes={facLignes} cfg={cfg} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
+  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} courriels={courriels} achats={achats} facLignes={facLignes} archives={archives} cfg={cfg} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
   // Contracteurs et particuliers dans la même liste ; la flèche déplie les jobs du client.
   const tous = Object.values(clients).sort((a,b)=>(a.code==='PART')-(b.code==='PART') || b.jobs.length-a.jobs.length);
   const Card = ({c})=>{ const ouvert = deplie[c.code];
