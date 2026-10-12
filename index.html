@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v84';
+const APP_VERSION = 'v85';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1593,6 +1593,7 @@ function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errE
 // ProjectsFromCalendar + la fiche détail, pour que "événements associés à un
 // projet" et "projets par adresse" utilisent exactement les mêmes données.
 // ── Projets : le miroir de Clients, axé sur la gestion — étapes, ce qui manque et où le compléter ──
+const PJ_GROUPES = [['dossier','Dossier','PO, adresse, plans, courriels'],['commande','Commande','stock des 2 prochaines semaines'],['papiers','Papiers','OT du rough, appel de service à chaque passage'],['facture','Facture','facture à chaque passage fait']];
 function pjEtapes(job, appels, commandes, courriels, manuels){
   const today = cvDay(new Date().toISOString());
   const r = job.reg || {}, pro = job.client!=='PART', ev = job.events.filter(e=>!e.attente), att = job.events.filter(e=>e.attente);
@@ -1612,15 +1613,23 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
   add(!coord.length, pro ? 'Adresse du chantier' : 'Coordonnées complètes', 'Il manque : '+coord.join(', '), pro ? 'Champ d\'adresse plus bas (ou l\'adresse dans l\'événement)' : 'Adresse dans l\'événement de l\'agenda', !pro && coord.length===3 && !!job.address);
   add(plans, 'Plans dans l\'événement', 'Aucun plan attaché aux passages', 'Ils s\'ajoutent tout seuls à la passe de 15 h / 3 h si le plan est dans le dossier ; sinon, attache-le à l\'événement', !pro);
   if(pro && ro.some(e=>e.day<today)) add(ots.length>0, 'OT du rough reçu (liste de stock pour la finition)', 'Le rough est fait mais aucun OT papier n\'est classé', 'Les gars doivent déposer la photo de l\'OT dans « B- REF OT » ou « 1-PAD »');
-  add(!cmdAPlacer.length, 'Commande de stock placée (cette semaine et la prochaine)', cmdAPlacer.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' : commande à placer', 'Agenda → Commandes de la semaine → ✅', !avenir.length);
+  add(!cmdAPlacer.length, 'Commande de stock placée (cette semaine et la prochaine)', cmdAPlacer.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' : commande à placer', 'Agenda → Commandes de la semaine → ✅', !avenir.some(e=>e.day<=cvFinSemaineProchaine()));   // gris tant que rien n'est prévu dans les 2 semaines
   // Une ligne par commande : les passages collés de la même phase (≤ 7 jours) ne font qu'une commande.
   E[E.length-1].cmd = avenir.filter(e=>e.day<=cvFinSemaineProchaine()).filter((e,i,L)=>!L.slice(0,i).some(o=>(o.phase||'')===(e.phase||'') && (new Date(e.day+'T12:00:00')-new Date(o.day+'T12:00:00'))<=7*864e5));
   const fils = (job.po && courriels && courriels[job.po]) || [];
   const aRepondre = fils.filter(f=>/toi de r/i.test(f.statut));
   if(fils.length) add(!aRepondre.length, 'Courriels répondus', aRepondre.map(f=>'« '+f.sujet+' » ('+cvFmtDay(f.dernier)+')').join(', ')+' attend ta réponse', 'Gmail — ouvre le fil dans la section Courriels plus bas');
-  add(!sansFac.length, 'Appel ou facture inscrit à chaque passage fait', sansFac.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' sans numéro', 'Description de l\'événement : « Appel de service : … / Facture : … »', !passes.length);
+  const sansAppel = passes.filter(e=>!e.as && !e.fac);
+  add(!sansAppel.length, 'Appel de service inscrit à chaque passage fait', sansAppel.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' sans appel', 'Bouton ✏️ Inscrire sous le passage (ou « Appel de service : … » dans l\'événement)', !passes.length);
+  E[E.length-1].ancien = 'Appel ou facture inscrit à chaque passage fait';
+  add(!sansFac.length, 'Facture inscrite à chaque passage fait', sansFac.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' sans facture', 'Bouton ✏️ Inscrire sous le passage (ou « Pas à facturer »)', !passes.length);
+  E[E.length-1].ancien = 'Appel ou facture inscrit à chaque passage fait';
   // Étapes cochées à la main (onglet « Etapes » du registre des jobs).
-  E.forEach(x=>{ if(!x.ok && manuels && manuels[job.id+'|'+x.titre]){ x.ok=true; x.manuel=true; } });
+  E.forEach(x=>{ if(!x.ok && manuels && (manuels[job.id+'|'+x.titre] || (x.ancien && manuels[job.id+'|'+x.ancien]))){ x.ok=true; x.manuel=true; } });
+  // Toujours les mêmes 4 rectangles : Dossier, Commande, Papiers, Facture (gris = pas encore rendu là).
+  E.forEach(x=>{ x.g = /^OT du rough|^Appel de service/.test(x.titre) ? 'papiers' : /^Commande/.test(x.titre) ? 'commande' : /^Facture/.test(x.titre) ? 'facture' : 'dossier'; });
+  const G = PJ_GROUPES.map(([k,label,desc])=>{ const L = E.filter(x=>x.g===k && !x.na);
+    return {k, label, desc, L, etat: !L.length ? 'na' : L.every(x=>x.ok) ? (L.some(x=>x.manuel) ? 'manuel' : 'ok') : 'manque'}; });
   const actifs = E.filter(x=>!x.na);
   const manquants = actifs.filter(x=>!x.ok);
   const enAtt = att.length ? 'En attente'+(att[0].phase ? ' ('+att[0].phase.toLowerCase()+')' : '')+' — pas encore cédulée' : '';
@@ -1631,7 +1640,7 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
   const vocal = ev.some(e=>e.attachments.some(a=>/^audio\//.test(a.mimeType||'') || /\.(m4a|mp3|wav|aac|ogg|caf)$/i.test(a.title||'') || /m[ée]mo vocal|vocal|voice/i.test(a.title||'')));
   const otFait = ots.length>0 || ev.some(e=>e.ot);
   const apFait = ev.some(e=>e.as) || (pro && (appels.liste||[]).some(a=>a.as && a.po && a.po===job.po));
-  return {E:actifs, manquants, etape, prochain, total:actifs.length, faits:actifs.length-manquants.length, vocal, otFait, apFait};
+  return {E:actifs, G, manquants, etape, prochain, total:actifs.length, faits:actifs.length-manquants.length, vocal, otFait, apFait};
 }
 
 // Fils de courriels d'une job : dates, qui a écrit en dernier, ce qui se passe.
@@ -1904,9 +1913,11 @@ function ProjetsSuivi({cfg, refreshKey}){
           <div className="t" style={{fontSize:14.5}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{j.name}{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}</div>
           <CvPhasesJob job={j} onDone={()=>setTick(t=>t+1)}/>
           <div className="a">Prochaine étape : <b>{s.etape}</b></div>
-          <div style={{display:'flex',gap:3,marginTop:6}}>{s.E.map((e,i)=><span key={i} title={e.titre+(e.manuel?' — OK donné à la main (absent / pas nécessaire)':'')} style={{width:16,height:8,borderRadius:3,background:e.manuel
-  ? 'linear-gradient(35deg, transparent 42%, #f85149 42%, #f85149 58%, transparent 58%), linear-gradient(-35deg, transparent 42%, #f85149 42%, #f85149 58%, transparent 58%), var(--success)'
-  : e.ok?'var(--success)':'var(--warning)'}}/>)}</div>
+          <div style={{display:'flex',gap:4,marginTop:6}}>{s.G.map(g=><span key={g.k} title={g.label+' — '+(g.L.length ? g.L.map(x=>(x.ok?'✓ ':'✗ ')+x.titre).join(' · ') : 'pas encore rendu là')} style={{display:'inline-flex',flexDirection:'column',alignItems:'center',gap:2}}>
+            <span style={{width:38,height:8,borderRadius:3,background: g.etat==='manuel'
+              ? 'linear-gradient(35deg, transparent 42%, #f85149 42%, #f85149 58%, transparent 58%), linear-gradient(-35deg, transparent 42%, #f85149 42%, #f85149 58%, transparent 58%), var(--success)'
+              : g.etat==='ok' ? 'var(--success)' : g.etat==='manque' ? 'var(--warning)' : 'var(--bg4)'}}/>
+            <span className="muted" style={{fontSize:9.5,lineHeight:1}}>{g.label}</span></span>)}</div>
           {s.prochain && s.prochain.crew.length>0 && <div className="muted" style={{fontSize:12,marginTop:3}}>👷 {s.prochain.crew.join(', ')}</div>}
         </div>
         <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
@@ -1921,7 +1932,9 @@ function ProjetsSuivi({cfg, refreshKey}){
         </div>
       </div>
       {o && <div style={{marginTop:10,borderTop:'1px solid var(--border)',paddingTop:8}}>
-        {s.E.map((e,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'22px 1fr auto',gap:6,padding:'5px 0',fontSize:13,alignItems:'start'}}>
+        {s.G.map(g=><React.Fragment key={g.k}>
+        <div style={{fontSize:12,fontWeight:800,letterSpacing:'.04em',textTransform:'uppercase',color:'var(--muted)',margin:'8px 0 2px'}}>{g.label}{!g.L.length && <span style={{fontWeight:400,textTransform:'none',letterSpacing:0}}> — pas encore rendu là</span>}</div>
+        {g.L.map((e,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'22px 1fr auto',gap:6,padding:'5px 0',fontSize:13,alignItems:'start'}}>
           <span>{e.manuel ? <span title="OK donné à la main (absent / pas nécessaire)" style={{display:'inline-block',width:17,height:17,borderRadius:4,background:'var(--success)',color:'#f85149',fontWeight:900,fontSize:13,lineHeight:'17px',textAlign:'center'}}>✕</span> : e.ok?'✅':'⬜'}</span>
           <div><b>{e.titre}</b>{e.manuel && <span className="muted" style={{fontSize:11.5}}> · coché à la main</span>}{!e.ok && <div style={{color:'var(--warning)',fontSize:12.5}}>{e.manque}</div>}
             {!e.ok && /^OT du rough/.test(e.titre) && <div style={{marginTop:3,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
@@ -1937,8 +1950,9 @@ function ProjetsSuivi({cfg, refreshKey}){
               <div className="muted" style={{fontSize:11.5}}>Même liste que Agenda → Commandes de la semaine : coché ici = coché là.</div></div>}
             {!e.ok && !/^OT du rough/.test(e.titre) && !(e.cmd && e.cmd.length) && <div className="muted" style={{fontSize:12}}>Où : {e.ou}</div>}</div>
           {!e.ok ? <button className="btn btn-sm" title="Marquer comme fait" style={{color:'var(--warning)',borderColor:'var(--warning)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, true)}>Non</button>
-            : e.manuel ? <button className="btn btn-sm" title="Décocher" style={{color:'var(--success)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, false)}>Oui ✓</button> : <span/>}
+            : e.manuel ? <button className="btn btn-sm" title="Décocher" style={{color:'var(--success)',fontWeight:700}} onClick={()=>basculerEtape(j.id, (e.ancien && (manuels||{})[j.id+'|'+e.ancien]) ? e.ancien : e.titre, false)}>Oui ✓</button> : <span/>}
         </div>)}
+        </React.Fragment>)}
         <CvAdresseJob job={j} propositions={propAdresses} onDone={()=>setTick(t=>t+1)}/>
         <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/><CvArchiver cfg={cfg} job={j} archives={archives} onChanged={()=>setTick(t=>t+1)}/></div>
         {c.code!=='PART' && <div style={{fontSize:12.5,margin:'6px 0'}}>👤 Contracteur : <b>{CLIENT_CODES[c.code]||c.code}</b>{CLIENT_CONTACT[c.code] ? ' — '+CLIENT_CONTACT[c.code] : ''}
