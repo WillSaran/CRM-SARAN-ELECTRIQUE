@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v88';
+const APP_VERSION = 'v89';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3566,9 +3566,9 @@ function cvBuildClients(events, registry, factures){
     const base = reels.length ? reels : j.events;
     j.first = base[0].day; j.last = base[base.length-1].day;
     j.status = j.last < today ? 'done' : (j.first <= today ? 'cours' : 'avenir');
-    if(j.attente.length && (!reels.length || j.status==='done')) j.status = 'cours'; // en attente = encore à faire
-    // Dans Clients : une job seulement « En attente » (aucun passage cédulé) s'affiche « À venir ».
-    j.etatClient = (j.attente.length && !reels.length) ? 'avenir' : j.status;
+    // Un passage dans l'agenda En Attente = encore à faire, pas encore cédulé : la job est « À venir » (partout).
+    if(j.attente.length && (!reels.length || j.status==='done')) j.status = 'avenir';
+    j.etatClient = j.status;
     const fromPO = j.po ? Object.values(factures).filter(f=>f.po===j.po).map(f=>f.num) : [];
     j.factures = [...new Set([...j.events.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(t=>/\d/.test(t))), ...fromPO])].sort();
     j.billed = j.factures.reduce((t,f)=>t+((factures[f]&&!factures[f].annulee&&factures[f].ht)||0),0);
