@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v85';
+const APP_VERSION = 'v86';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1619,23 +1619,34 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
   const fils = (job.po && courriels && courriels[job.po]) || [];
   const aRepondre = fils.filter(f=>/toi de r/i.test(f.statut));
   if(fils.length) add(!aRepondre.length, 'Courriels répondus', aRepondre.map(f=>'« '+f.sujet+' » ('+cvFmtDay(f.dernier)+')').join(', ')+' attend ta réponse', 'Gmail — ouvre le fil dans la section Courriels plus bas');
-  const sansAppel = passes.filter(e=>!e.as && !e.fac);
-  add(!sansAppel.length, 'Appel de service inscrit à chaque passage fait', sansAppel.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' sans appel', 'Bouton ✏️ Inscrire sous le passage (ou « Appel de service : … » dans l\'événement)', !passes.length);
+  // Appel de service : un par visite (les jours de suite d'une même phase comptent pour une).
+  const sansAppel = cvVisites(job).filter(v=>v.faite && !v.events.some(e=>e.as || e.fac));
+  add(!sansAppel.length, 'Appel de service inscrit à chaque visite faite', sansAppel.map(v=>v.label).join(', ')+' sans appel', 'Bouton ✏️ Inscrire sous le passage (ou « Appel de service : … » dans l\'événement)', !passes.length);
   E[E.length-1].ancien = 'Appel ou facture inscrit à chaque passage fait';
-  add(!sansFac.length, 'Facture inscrite à chaque passage fait', sansFac.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' sans facture', 'Bouton ✏️ Inscrire sous le passage (ou « Pas à facturer »)', !passes.length);
-  E[E.length-1].ancien = 'Appel ou facture inscrit à chaque passage fait';
+  if(manuels && manuels[job.id+'|Appel de service inscrit à chaque passage fait']) E[E.length-1].ancien = 'Appel de service inscrit à chaque passage fait';
+  // Facture : une par visite (rough, finition, service…) — chaque visite faite doit avoir sa facture (ou « pas à facturer »).
+  const visites = cvVisites(job);
+  visites.filter(v=>v.faite).forEach(v=>{
+    add(v.facturee, 'Facture — '+v.label, 'Visite faite, pas encore de facture', 'Bouton ✏️ Inscrire sous un passage de la visite (ou « Pas à facturer »)');
+    E[E.length-1].g = 'facture';
+  });
   // Étapes cochées à la main (onglet « Etapes » du registre des jobs).
   E.forEach(x=>{ if(!x.ok && manuels && (manuels[job.id+'|'+x.titre] || (x.ancien && manuels[job.id+'|'+x.ancien]))){ x.ok=true; x.manuel=true; } });
   // Toujours les mêmes 4 rectangles : Dossier, Commande, Papiers, Facture (gris = pas encore rendu là).
-  E.forEach(x=>{ x.g = /^OT du rough|^Appel de service/.test(x.titre) ? 'papiers' : /^Commande/.test(x.titre) ? 'commande' : /^Facture/.test(x.titre) ? 'facture' : 'dossier'; });
+  E.forEach(x=>{ x.g = x.g || (/^OT du rough|^Appel de service/.test(x.titre) ? 'papiers' : /^Commande/.test(x.titre) ? 'commande' : /^Facture/.test(x.titre) ? 'facture' : 'dossier'); });
   const G = PJ_GROUPES.map(([k,label,desc])=>{ const L = E.filter(x=>x.g===k && !x.na);
     return {k, label, desc, L, etat: !L.length ? 'na' : L.every(x=>x.ok) ? (L.some(x=>x.manuel) ? 'manuel' : 'ok') : 'manque'}; });
+  // Rectangle Facture découpé par visite : vert = facturée, orange = faite sans facture, gris = pas encore faite.
+  const gf = G.find(g=>g.k==='facture');
+  gf.segments = visites.map(v=>{ const st = E.find(x=>x.titre==='Facture — '+v.label);
+    return {label:v.label, etat: !v.faite ? 'na' : (st && st.ok) ? (st.manuel ? 'manuel' : 'ok') : 'manque'}; });
+  if(gf.segments.some(x=>x.etat==='na') && gf.etat==='ok') gf.etat = 'partiel';   // facturé jusqu'ici, mais il reste des visites
   const actifs = E.filter(x=>!x.na);
   const manquants = actifs.filter(x=>!x.ok);
   const enAtt = att.length ? 'En attente'+(att[0].phase ? ' ('+att[0].phase.toLowerCase()+')' : '')+' — pas encore cédulée' : '';
   const etape = !ev.length ? (enAtt || 'Rien de planifié')
     : prochain ? (prochain.phase ? prochain.phase.charAt(0)+prochain.phase.slice(1).toLowerCase() : 'Passage')+' le '+cvFmtDay(prochain.day)
-    : (sansFac.length ? 'À facturer' : (enAtt || 'Terminée'));
+    : (visites.some(v=>v.faite && !v.facturee) ? 'À facturer' : (enAtt || 'Terminée'));
   // Repères rapides : 🎤 mémo vocal attaché, 📝 OT fait, AP appel de service fait.
   const vocal = ev.some(e=>e.attachments.some(a=>/^audio\//.test(a.mimeType||'') || /\.(m4a|mp3|wav|aac|ogg|caf)$/i.test(a.title||'') || /m[ée]mo vocal|vocal|voice/i.test(a.title||'')));
   const otFait = ots.length>0 || ev.some(e=>e.ot);
@@ -1913,10 +1924,12 @@ function ProjetsSuivi({cfg, refreshKey}){
           <div className="t" style={{fontSize:14.5}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{j.name}{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}</div>
           <CvPhasesJob job={j} onDone={()=>setTick(t=>t+1)}/>
           <div className="a">Prochaine étape : <b>{s.etape}</b></div>
-          <div style={{display:'flex',gap:4,marginTop:6}}>{s.G.map(g=><span key={g.k} title={g.label+' — '+(g.L.length ? g.L.map(x=>(x.ok?'✓ ':'✗ ')+x.titre).join(' · ') : 'pas encore rendu là')} style={{display:'inline-flex',flexDirection:'column',alignItems:'center',gap:2}}>
-            <span style={{width:38,height:8,borderRadius:3,background: g.etat==='manuel'
+          <div style={{display:'flex',gap:4,marginTop:6}}>{s.G.map(g=><span key={g.k} title={g.label+' — '+(g.segments && g.segments.length ? g.segments.map(x=>(x.etat==='na'?'⏳ ':x.etat==='manque'?'✗ ':'✓ ')+x.label).join(' · ') : g.L.length ? g.L.map(x=>(x.ok?'✓ ':'✗ ')+x.titre).join(' · ') : 'pas encore rendu là')} style={{display:'inline-flex',flexDirection:'column',alignItems:'center',gap:2}}>
+            {(g.segments && g.segments.length>1)
+              ? <span style={{width:38,height:8,display:'flex',gap:1}}>{g.segments.map((x,i)=><span key={i} title={x.label} style={{flex:1,borderRadius:2,background: x.etat==='ok'||x.etat==='manuel' ? 'var(--success)' : x.etat==='manque' ? 'var(--warning)' : 'var(--bg4)'}}/>)}</span>
+              : <span style={{width:38,height:8,borderRadius:3,background: g.etat==='manuel'
               ? 'linear-gradient(35deg, transparent 42%, #f85149 42%, #f85149 58%, transparent 58%), linear-gradient(-35deg, transparent 42%, #f85149 42%, #f85149 58%, transparent 58%), var(--success)'
-              : g.etat==='ok' ? 'var(--success)' : g.etat==='manque' ? 'var(--warning)' : 'var(--bg4)'}}/>
+              : g.etat==='ok' ? 'var(--success)' : g.etat==='manque' ? 'var(--warning)' : 'var(--bg4)'}}/>}
             <span className="muted" style={{fontSize:9.5,lineHeight:1}}>{g.label}</span></span>)}</div>
           {s.prochain && s.prochain.crew.length>0 && <div className="muted" style={{fontSize:12,marginTop:3}}>👷 {s.prochain.crew.join(', ')}</div>}
         </div>
@@ -3558,7 +3571,7 @@ function cvBuildClients(events, registry, factures){
     j.billed = j.factures.reduce((t,f)=>t+((factures[f]&&!factures[f].annulee&&factures[f].ht)||0),0);
     j.crew = [...new Set(j.events.flatMap(e=>e.crew))];
     j.address = (j.reg && [j.reg.adresse,j.reg.ville].filter(Boolean).join(', ')) || (j.events.find(e=>e.location)||{}).location || '';
-    j.missing = j.events.filter(e=>!e.attente && e.day < today && !e.fac).length;
+    j.missing = cvVisites(j).filter(v=>v.faite && !v.facturee).length;   // une facture par visite
     // Facture sur deux jobs : seulement si les jobs n'ont AUCUN mot de nom en commun
     // (« CRS ROUGH AUBIN » et « CRS aubin », c'est la même job, écrite autrement).
     j.dupAvec = {};
@@ -3584,6 +3597,22 @@ function cvBuildClients(events, registry, factures){
   return clients;
 }
 
+// Visites d'une job : passages de la même phase collés (3 jours ou moins entre eux) = une visite = une facture.
+// Ex. rough lundi + mardi = 1 visite ; finition 3 semaines plus tard = 1 autre ; un service ensuite = 1 autre.
+function cvVisites(job){
+  const out = [];
+  job.events.filter(e=>!e.attente).slice().sort((a,b)=>a.day.localeCompare(b.day)).forEach(e=>{
+    const ph = e.phase || 'SERV';
+    const v = [...out].reverse().find(x=>x.phase===ph);
+    if(v && (new Date(e.day+'T12:00:00')-new Date(v.events[v.events.length-1].day+'T12:00:00')) <= 3*864e5) v.events.push(e);
+    else out.push({phase:ph, events:[e]});
+  });
+  const today = cvDay(new Date().toISOString());
+  out.forEach(v=>{ v.debut=v.events[0].day; v.fin=v.events[v.events.length-1].day; v.faite = v.debut < today;
+    v.fac = v.events.map(e=>e.fac).filter(Boolean); v.facturee = v.fac.length>0;
+    v.label = v.phase.charAt(0)+v.phase.slice(1).toLowerCase()+' ('+cvFmtDay(v.debut)+(v.fin!==v.debut?'–'+cvFmtDay(v.fin):'')+')'; });
+  return out;
+}
 // Ordres de travail d'une job : feuilles OT du registre (papier ou logiciel) rattachées à son PO,
 // plus les numéros d'OT inscrits dans le bloc Suivi de ses événements.
 function cvJobOTs(job, appels){
@@ -3865,7 +3894,8 @@ function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, a
 // sur une autre job (sauf celles marquées « C'est la même job »). Les jobs archivées ne comptent plus.
 function cvAVerifierJob(j, reglees){
   const today = cvDay(new Date().toISOString());
-  const passages = j.events.filter(e=>!e.attente && e.day < today && !e.fac);
+  // Une facture par visite : on montre le dernier passage de chaque visite pas encore facturée.
+  const passages = cvVisites(j).filter(v=>v.faite && !v.facturee).map(v=>v.events[v.events.length-1]);
   const dups = (j.dupFac||[]).filter(n=>!estRegleDup(reglees, n));
   return {passages, dups, n: passages.length + dups.length};
 }
