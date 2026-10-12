@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v82';
+const APP_VERSION = 'v83';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -560,6 +560,7 @@ async function majDescriptionSuivi(eventId, valeurs, calendarIdConnu){
       Object.entries(valeurs).forEach(([lab, val])=>{ if(val===undefined) return;
         const re = new RegExp('('+lab+'\\s*:)[^\\n<]*','i');
         if(re.test(d)) d = d.replace(re, '$1 '+val); else if(val) d = (d ? d+'\n' : '')+lab+' : '+val; });
+      d = cvComposerDescription(d);   // commande toujours en haut, infos du client toujours à la fin
       await window.gapi.client.calendar.events.patch({calendarId, eventId, resource:{description:d}});
       return true;
     }catch(e){ /* pas dans ce calendrier : on essaie le suivant */ }
@@ -1927,7 +1928,7 @@ function ProjetsSuivi({cfg, refreshKey}){
               <button className="btn btn-sm" title="Il n'y a pas d'OT pour cette job : l'étape devient faite" onClick={()=>basculerEtape(j.id, e.titre, true)}>Pas d'OT</button>
               <span className="muted" style={{fontSize:12}}>ou les gars déposent la photo dans « B- REF OT » / « 1-PAD »</span></div>}
             {e.cmd && e.cmd.length>0 && <div style={{marginTop:3,display:'grid',gap:4}}>
-              {e.cmd.map(ev=>{ const info = {day:ev.day, job:(c.code!=='PART'?c.code+' ':'')+j.name+(ev.phase?' '+ev.phase:''), ot:cvJobOTs(j, ap).map(o=>o.label).join(' '), eventId:ev.id, calId:ev.calId};
+              {e.cmd.map(ev=>{ const info = {day:ev.day, job:(c.code!=='PART'?c.code+' ':'')+j.name+(ev.phase?' '+ev.phase:''), ot:cvJobOTs(j, ap).map(o=>o.label).join(' '), eventId:ev.id, calId:ev.calId, ...cvClientInfo(j)};
                 const cmd = cvCmd(commandes, j, ev);
                 return <div key={cmd.cle} style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
                   <span style={{fontSize:12.5,minWidth:92,paddingTop:4}}>{cvFmtDay(ev.day)} {ev.phase ? ev.phase.toLowerCase() : ''}</span>
@@ -4171,7 +4172,25 @@ function useEtapesManuelles(cfg){
   return [etat.map, basculer];
 }
 
-let CMD_ENTETES_OK = false;   // titres « Fournisseur » et « Mode » ajoutés à l'onglet Commandes (une fois)
+let CMD_ENTETES_OK = false;
+// « Commande » en gras (lettres grasses Unicode : visibles partout — iPhone, Google Agenda, Sheet).
+const CMD_TITRE = '📦 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝗲';
+const RE_CMD_LIGNE = /^📦 (𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝗲|Commande) :/, RE_NOTE_LIGNE = /^📦 Note commande :/, RE_CLIENT_LIGNE = /^👤 Client :/;
+// Remet la description en ordre : commande (+ note) en premier, tout le reste au centre, client à la fin.
+// quoi.commande / quoi.note / quoi.client : undefined = garder ce qui est là, '' = enlever.
+// quoi.eviter : téléphone / courriel du client — s'ils sont déjà écrits au centre, on n'ajoute pas la ligne client.
+function cvComposerDescription(desc, quoi){
+  quoi = quoi || {};
+  const L = String(desc||'').split('\n');
+  let cmd = L.find(l=>RE_CMD_LIGNE.test(l)) || '', note = L.find(l=>RE_NOTE_LIGNE.test(l)) || '', client = L.find(l=>RE_CLIENT_LIGNE.test(l)) || '';
+  const milieu = L.filter(l=>!RE_CMD_LIGNE.test(l) && !RE_NOTE_LIGNE.test(l) && !RE_CLIENT_LIGNE.test(l)).join('\n').replace(/^\s+|\s+$/g,'').replace(/\n{3,}/g,'\n\n');
+  if(quoi.commande!==undefined) cmd = quoi.commande;
+  if(quoi.note!==undefined) note = quoi.note;
+  if(quoi.client!==undefined && !(quoi.eviter||[]).some(x=>x && milieu.includes(x))) client = quoi.client;
+  return [[cmd, note].filter(Boolean).join('\n'), milieu, client].filter(Boolean).join('\n\n');
+}
+// Infos du client d'une job (registre) pour la fin de la description.
+function cvClientInfo(j){ const r = (j && j.reg) || {}; return {client:[r.client, r.tel, r.courriel].filter(Boolean).join(' · '), eviter:[r.tel, r.courriel].filter(Boolean)}; }   // titres « Fournisseur » et « Mode » ajoutés à l'onglet Commandes (une fois)
 function useCommandes(cfg){
   const [etat,setEtat]=useState({map:{}, pret:false});
   const id = cfg.memoireJobsSpreadsheetId;
@@ -4197,18 +4216,16 @@ function useCommandes(cfg){
       if(!Object.keys(etat.map).length) await ensureSheetsExist(id, [{name:'Commandes', headers:['Clé','Date','Job','Statut','Mis à jour le','OT','Note','Fournisseur','Mode']}]);
       else if(!CMD_ENTETES_OK){ await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Commandes!H1:I1', valueInputOption:'RAW', resource:{values:[['Fournisseur','Mode']]}}); CMD_ENTETES_OK = true; }
       if(ex.row) await sheetsUpdateRow(id, 'Commandes', ex.row, ligne); else await sheetsAppendRow(id, 'Commandes', ligne);
-      if(note && info.eventId && info.calId){
-        const ev = await window.gapi.client.calendar.events.get({calendarId:info.calId, eventId:info.eventId});
-        const desc = (ev.result.description||'').replace(/\n?📦 Note commande :.*$/m,'');
-        await window.gapi.client.calendar.events.patch({calendarId:info.calId, eventId:info.eventId, resource:{description:(desc ? desc+'\n' : '')+'📦 Note commande : '+note}});
-      }
-      // Pour l'équipe : « 📦 Commande : Dubo — à aller chercher » dans l'événement (une seule ligne, remplacée ou enlevée).
-      if(statut && info.eventId && info.calId){
+      // Description de l'événement, dans cet ordre : en haut « 📦 Commande : Dubo — à aller chercher » (+ la note),
+      // au centre tout le reste (sans y toucher), à la fin les infos du client.
+      if((statut || note!==undefined) && info.eventId && info.calId){
         try{
           const ev = await window.gapi.client.calendar.events.get({calendarId:info.calId, eventId:info.eventId});
-          const avant = ev.result.description||'', desc = avant.replace(/\n?📦 Commande :.*$/m,'');
-          const txt = statut==='Placée' && (fournisseur || mode) ? '📦 Commande : '+[fournisseur, mode ? mode.toLowerCase() : ''].filter(Boolean).join(' — ') : '';
-          const apres = txt ? (desc ? desc+'\n' : '')+txt : desc;
+          const avant = ev.result.description||'';
+          const quoi = {client: info.client ? '👤 Client : '+info.client : undefined, eviter: info.eviter};
+          if(statut) quoi.commande = statut==='Placée' && (fournisseur || mode) ? CMD_TITRE+' : '+[fournisseur, mode ? mode.toLowerCase() : ''].filter(Boolean).join(' — ') : '';
+          if(note!==undefined && note!==null) quoi.note = note ? '📦 Note commande : '+note : '';
+          const apres = cvComposerDescription(avant, quoi);
           if(apres!==avant) await window.gapi.client.calendar.events.patch({calendarId:info.calId, eventId:info.eventId, resource:{description:apres}});
         }catch(e){ console.warn('Commande : description non mise à jour', e); }
       }
@@ -4278,7 +4295,7 @@ function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande, manue
   const aPlacer = items.filter(x=>!x.fait && x.e.day>=today).length;
   const fmtSem = d => d.toLocaleDateString('fr-CA',{day:'numeric',month:'long'});
   const dim = new Date(lundi); dim.setDate(dim.getDate()+6);
-  const info = x => ({day:x.e.day, job:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name+(x.e.phase?' '+x.e.phase:''), ot:x.ots.map(o=>o.label).join(' '), eventId:x.e.id, calId:x.e.calId});
+  const info = x => ({day:x.e.day, job:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name+(x.e.phase?' '+x.e.phase:''), ot:x.ots.map(o=>o.label).join(' '), eventId:x.e.id, calId:x.e.calId, ...cvClientInfo(x.j)});
   const vert = {background:'rgba(63,185,80,0.15)',color:'var(--success)',borderColor:'var(--success)',fontWeight:700};
   const Item = ({x})=>{ const {c,j,e,ots,cle,cmd,fait}=x;
     return <div style={{border:'1px solid var(--border2)',borderLeft:'3px solid '+(fait?'var(--success)':(e.day>=today?'var(--warning)':'var(--border2)')),borderRadius:8,padding:'6px 7px',marginBottom:6,fontSize:12}}>
