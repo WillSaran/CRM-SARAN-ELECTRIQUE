@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v91';
+const APP_VERSION = 'v92';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3860,7 +3860,7 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
       </div>; })}
     </div>}
     <CvCourriels liste={job.po ? (courriels||{})[job.po] : null}/>
-    {job.dupFac.filter(n=>!estRegleDup(reglees, n)).map(n=><CvDupJob key={n} job={job} n={n} facture={factures[n]} cfg={cfg} onRegle={()=>marquerRegle('dup|'+n, true)} onChanged={onChanged}/>)}
+    {job.dupFac.filter(n=>!estRegleDup(reglees, n)).map(n=><CvDupJob key={n} job={job} n={n} facture={factures[n]} cfg={cfg} clients={clients} onRegle={()=>marquerRegle('dup|'+n, true)} onChanged={onChanged}/>)}
     {cvJobOTs(job, appels).length>0 && <div style={{marginBottom:10,fontSize:13}}>
       <div className="fh" style={{fontSize:14,margin:'4px 0 4px'}}>Ordres de travail</div>
       <CvOTLinks ots={cvJobOTs(job, appels)}/>
@@ -3904,7 +3904,8 @@ function cvAVerifierJob(j, reglees){
 }
 function cvAVerifierClient(client, reglees, archives){
   const jobs = client.jobs.filter(j=>!(archives||{})[j.id]).map(j=>({job:j, ...cvAVerifierJob(j, reglees)})).filter(x=>x.n);
-  return {jobs, ids:new Set(jobs.map(x=>x.job.id)), n: jobs.reduce((t,x)=>t+x.n,0)};
+  // Une facture en double compte une fois, même si elle est sur deux jobs de ce client.
+  return {jobs, ids:new Set(jobs.map(x=>x.job.id)), n: jobs.reduce((t,x)=>t+x.passages.length,0) + new Set(jobs.flatMap(x=>x.dups)).size};
 }
 // En haut de la fiche d'un client : une barre « À vérifier » qui s'ouvre avec la flèche.
 // Chaque point se règle sur place ; il disparaît de la liste et le compteur descend jusqu'à zéro.
@@ -3957,7 +3958,8 @@ function CvAVerifierClient({av, cfg, factures, marquerRegle, onPick, onChanged, 
   const [grp,setGrp]=useState({fac:true, dup:true});
   if(!av.n) return <div className="card" style={{marginBottom:14,padding:'10px 14px',fontSize:13.5,borderColor:'var(--success)'}}>✅ Rien à vérifier pour ce client.</div>;
   const passages = av.jobs.flatMap(x=>x.passages.map(e=>({e, job:x.job}))).sort((a,b)=>a.e.day.localeCompare(b.e.day));
-  const dups = av.jobs.flatMap(x=>x.dups.map(n=>({n, job:x.job})));
+  // Une seule carte par numéro de facture (même s'il est sur deux jobs de ce client).
+  const dups = av.jobs.flatMap(x=>x.dups.map(n=>({n, job:x.job}))).filter((d,i,L)=>L.findIndex(o=>o.n===d.n)===i);
   const Barre = ({k, titre, nb}) => <div onClick={()=>setGrp(g=>({...g,[k]:!g[k]}))} style={{display:'flex',justifyContent:'space-between',padding:'8px 2px',cursor:'pointer',fontSize:13.5,fontWeight:700,borderTop:'1px solid var(--border)'}}>
     <span>{grp[k]?'▾':'▸'} {titre}</span><span className="muted">{nb}</span></div>;
   const NomJob = ({job}) => <span onClick={()=>onPick(job.id)} title="Ouvrir la fiche de la job" style={{cursor:'pointer',fontWeight:700,textDecoration:'underline dotted'}}>{job.name}</span>;
@@ -3977,9 +3979,8 @@ function CvAVerifierClient({av, cfg, factures, marquerRegle, onPick, onChanged, 
           {job.client==='PART' && <CvRattacherPO job={job} clients={clients} onDone={onChanged}/>}
         </div>)}</>}
       {dups.length>0 && <><Barre k="dup" titre="Facture écrite aussi sur une autre job" nb={dups.length}/>
-        {grp.dup && dups.map(({n,job})=><div key={job.id+'|'+n} style={{paddingLeft:18}}>
-          <div style={{fontSize:12.5,margin:'4px 0'}}><NomJob job={job}/></div>
-          <CvDupJob job={job} n={n} facture={factures[n]} cfg={cfg} onRegle={()=>marquerRegle('dup|'+n,true)} onChanged={onChanged}/>
+        {grp.dup && dups.map(({n,job})=><div key={n} style={{paddingLeft:18}}>
+          <CvDupJob job={job} n={n} facture={factures[n]} cfg={cfg} clients={clients} onRegle={()=>marquerRegle('dup|'+n,true)} onChanged={onChanged}/>
         </div>)}</>}
     </div>}
   </div>;
@@ -4126,22 +4127,30 @@ function cvAnomaliesActives(liste, reglees){
 }
 
 // Dans la fiche d'une job : « la facture #n est aussi écrite sur… » avec quoi faire, sur place.
-function CvDupJob({job, n, facture, cfg, onRegle, onChanged}){
-  const [corriger,setCorriger]=useState(false);
-  const autres = (job.dupAvec||{})[n] || [];
-  const ici = job.events.filter(e=>String(e.fac).split(/[\s,–-]+/).includes(n));
+// Facture écrite sur plus d'une job : montre TOUS les passages qui ont ce numéro (cette job ET les autres),
+// chacun avec son lien et « ✏️ Modifier », pour corriger celui qui n'est pas bon — ou « C'est la même job ».
+function CvDupJob({job, n, facture, cfg, clients, onRegle, onChanged}){
+  const aLeNo = e => String(e.fac||'').split(/[\s,–-]+/).includes(n);
+  const toutes = clients ? Object.values(clients).flatMap(c=>c.jobs) : [job];
+  const jobs = toutes.filter(j=>j.events.some(aLeNo)).sort((a,b)=>(a.id!==job.id)-(b.id!==job.id));
+  const passages = jobs.reduce((t,j)=>t+j.events.filter(aLeNo).length,0);
   return <div className="card" style={{borderColor:'var(--danger)',padding:10,fontSize:13,marginBottom:10}}>
-    <div><b>La facture #{n} est aussi écrite sur {autres.length ? autres.join(', ') : 'une autre job'}.</b></div>
-    {facture && <div className="muted" style={{fontSize:12.5,marginTop:2}}>Ce que dit la facture : {[facture.client, facture.nom, facture.desc].filter(Boolean).join(' · ')}{facture.ht!=null ? ' · '+cvMoney(facture.ht) : ''}
-      {facture.pdf && <> · <a href={'https://drive.google.com/file/d/'+facture.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>Voir le PDF ↗</a></>}</div>}
-    <div className="muted" style={{fontSize:12.5,marginTop:4}}>👉 Si c'est la même job écrite autrement : « C'est la même job ». Si le numéro n'est pas le bon ici : « Corriger ici ».</div>
-    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6}}>
-      <button className="btn btn-sm btn-s" onClick={onRegle}>✓ C'est la même job</button>
-      <button className="btn btn-sm" onClick={()=>setCorriger(!corriger)}>✏️ Corriger ici ({ici.length} passage{ici.length>1?'s':''})</button>
+    <div><b>La facture #{n} est écrite sur {jobs.length} jobs ({passages} passages) :</b></div>
+    {facture ? <div className="muted" style={{fontSize:12.5,marginTop:2}}>Ce que dit la facture : {[facture.client, facture.nom, facture.desc].filter(Boolean).join(' · ')}{facture.ht!=null ? ' · '+cvMoney(facture.ht) : ''}{facture.date ? ' · '+cvFmtDay(String(facture.date).slice(0,10)) : ''}
+      {facture.pdf && <> · <a href={'https://drive.google.com/file/d/'+facture.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>Voir le PDF ↗</a></>}</div>
+      : <div className="muted" style={{fontSize:12.5,marginTop:2}}>Facture pas encore dans le registre (pas de PDF).</div>}
+    <div style={{display:'grid',gap:8,margin:'8px 0'}}>
+      {jobs.map(j=><div key={j.id} style={{border:'1px solid var(--border2)',borderRadius:8,padding:'6px 8px'}}>
+        <div style={{fontWeight:700}}>{j.client!=='PART' ? j.client+' ' : ''}{j.name}{j.po ? <span className="muted" style={{fontWeight:400}}> · {j.po}</span> : ''}{j.address ? <span className="muted" style={{fontWeight:400}}> · {j.address}</span> : ''}
+          {j.id===job.id && <span className="badge" style={{marginLeft:6,fontSize:10.5}}>cette job</span>}</div>
+        {j.events.filter(aLeNo).map((e,i)=><div key={i} style={{paddingLeft:8,marginTop:3,fontSize:12.5}}>
+          <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b> <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span> « {e.title} »{e.as ? ' · appel '+e.as : ''} · facture {e.fac}
+          {e.lien && <> · <a href={e.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>événement ↗</a></>}
+          <CvInscrirePassage cfg={cfg} e={e} onDone={onChanged}/></div>)}
+      </div>)}
     </div>
-    {corriger && ici.map((e,i)=><div key={i} style={{paddingLeft:8,marginTop:4}}>{cvFmtDay(e.day)} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span> « {e.title} »{e.as ? ' · appel '+e.as : ''}
-      {e.lien && <> · <a href={e.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>ouvrir l'événement ↗</a></>}
-      <CvInscrirePassage cfg={cfg} e={e} onDone={onChanged}/></div>)}
+    <div className="muted" style={{fontSize:12.5}}>👉 Si c'est la même job écrite autrement : « C'est la même job ». Sinon, « ✏️ Modifier » le passage qui n'a pas le bon numéro.</div>
+    <div style={{marginTop:6}}><button className="btn btn-sm btn-s" onClick={onRegle}>✓ C'est la même job</button></div>
   </div>;
 }
 
