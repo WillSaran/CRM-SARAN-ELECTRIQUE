@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v92';
+const APP_VERSION = 'v93';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3296,29 +3296,191 @@ function FacturesView({cfg, refreshKey}){
   </div>;
 }
 
-// ── UI: Soumissions — section en construction, on y ajoutera la création/
-// l'envoi de soumissions plus tard. Pour l'instant: liste en lecture seule
-// de ce qui existe déjà dans l'onglet "Soumissions" du CRM.
-function SoumissionsView({data}){
-  const oppById = Object.fromEntries((data.opps||[]).map(o=>[o.id,o]));
-  const list = [...(data.soums||[])].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+// ── UI: Soumissions — 3 onglets :
+//   📝 À faire   : tes notes « Soumission … » à toi-même + demandes reçues (Payne, invitations…)
+//   📤 Envoyées  : tes devis « Ordre de travail #N » + tes courriels « Soumission » avec pièce jointe
+//   📥 Reçues    : soumissions de tes fournisseurs (La mémoire — Achats, onglet Documents)
+// Les 2 premiers viennent de l'onglet « Soumissions » du registre des jobs, rempli par soumissions.gs (La mémoire).
+// Colonnes : A Clé | B Type | C Date | D No | E Client | F Courriel | G Sujet | H Extrait | I Montant | J PDF | K Lien | L Réponse | M Statut | N Le | O Note
+// Le script remplit A–L ; le CRM écrit seulement M–O (statut, date, note) et les lignes ajoutées à la main (clé « M-… »).
+const SOUM_ONGLET_ENTETE = ['Clé','Type','Date','No','Client','Courriel','Sujet','Extrait','Montant','PDF','Lien','Réponse','Statut','Le','Note'];
+const SOUM_FINI = ['Faite','Annulée','Ignorée'];
+function soumJours(d){ if(!d) return null; const t=new Date(d+'T12:00:00'); return isNaN(t) ? null : Math.round((Date.now()-t)/864e5); }
+function useSoumissions(cfg, refreshKey){
+  const id = cfg.memoireJobsSpreadsheetId, idA = cfg.memoireAchatsSpreadsheetId;
+  const [etat,setEtat]=useState({lu:false, existe:false, liste:[], recues:[], err:''});
+  const lire = useCallback(async(force)=>{
+    if(!id){ setEtat(s=>({...s, lu:true, err:'Le registre des jobs n\'est pas configuré (Réglages).'})); return; }
+    let liste=[], existe=false, recues=[];
+    try{
+      const r = await lireCache(id, 'Soumissions!A1:O', force);
+      existe = true;
+      liste = (r.result.values||[]).slice(1).map((x,i)=>({row:i+2, cle:x[0]||'', type:x[1]||'', date:String(x[2]||'').slice(0,10), no:x[3]||'', client:x[4]||'', courriel:(x[5]||'').toLowerCase(),
+        sujet:x[6]||'', extrait:x[7]||'', montant:cvNum(x[8]), pdf:x[9]||'', lien:x[10]||'', reponse:x[11]||'', statut:x[12]||'', le:x[13]||'', note:x[14]||''})).filter(x=>x.cle);
+    }catch(e){ existe = false; }
+    try{
+      if(idA){ const d = await lireCache(idA, 'Documents!A1:J', force);
+        recues = (d.result.values||[]).slice(1).filter(r=>r[0] && r[1]==='Soumission').map(r=>({fournisseur:r[0], num:r[2]||'', date:r[3]||'', ref:r[4]||'', total:cvNum(r[5]), pdf:r[6]||'', fichier:r[7]||''})); }
+    }catch(e){}
+    setEtat({lu:true, existe, liste, recues, err:''});
+  },[id, idA]);
+  useEffect(()=>{ lire(); },[lire, refreshKey]);
+  // Statut / note d'une ligne (colonnes M–O seulement).
+  const marquer = async (s, statut, note)=>{
+    const le = new Date().toLocaleString('fr-CA');
+    setEtat(e=>({...e, liste:e.liste.map(x=>x.cle===s.cle ? {...x, statut, le, note: note ?? x.note} : x)}));
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!M'+s.row+':O'+s.row, valueInputOption:'RAW', resource:{values:[[statut, le, note ?? s.note]]}});
+  };
+  // Soumission à faire ajoutée à la main.
+  const ajouter = async (texte)=>{
+    if(!etat.existe) await ensureSheetsExist(id, [{name:'Soumissions', headers:SOUM_ONGLET_ENTETE}]);
+    const ligne = ['M-'+Date.now(), 'À faire', cvDay(new Date().toISOString()), '', texte, '', texte, '', '', '', '', '', '', '', ''];
+    await sheetsAppendRow(id, 'Soumissions', ligne);
+    await lire(true);
+  };
+  return {...etat, marquer, ajouter, relire:()=>lire(true)};
+}
+
+function SoumissionsView({cfg, data, toast, refreshKey}){
+  const S = useSoumissions(cfg, refreshKey);
+  const [onglet,setOnglet]=useState('afaire');
+  const [voirFinies,setVoirFinies]=useState(false);
+  const [filtre,setFiltre]=useState('attente');
+  const [q,setQ]=useState('');
+  const [nouveau,setNouveau]=useState(null);
+  const [occupe,setOccupe]=useState('');
+  const aFaire = S.liste.filter(s=>s.type==='À faire').sort((a,b)=>b.date.localeCompare(a.date));
+  const envoyees = S.liste.filter(s=>s.type==='Envoyée').sort((a,b)=>b.date.localeCompare(a.date) || (+b.no||0)-(+a.no||0));
+  const ouvertes = aFaire.filter(s=>!SOUM_FINI.includes(s.statut));
+  const etatEnv = s => s.statut==='Acceptée' ? 'acceptee' : s.statut==='Refusée' ? 'refusee' : 'attente';
+  const cherche = (txt)=> !q || cvNorm(txt).includes(cvNorm(q));
+  const action = async (s, statut, note)=>{
+    setOccupe(s.cle);
+    try{ await S.marquer(s, statut, note); toast && toast(statut ? 'Soumission : '+statut.toLowerCase() : 'Remise à faire'); }
+    catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); S.relire(); }
+    setOccupe('');
+  };
+  const lienGmail = s => s.lien && <a href={s.lien} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5,whiteSpace:'nowrap'}}>Courriel ↗</a>;
+  const lienPdf = id => id && <a href={'https://drive.google.com/file/d/'+id+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5,whiteSpace:'nowrap'}}>PDF ↗</a>;
+  const pill = (k, label, n, cur, set) => <button key={k} className={'btn btn-sm'+(cur===k?' btn-p':'')} onClick={()=>set(k)}>{label}{n!=null && <> ({n})</>}</button>;
+  const vieux = (data && data.soums) || [];
+
+  // Devis envoyés à la même personne après la demande : proposés (jamais cochés tout seuls).
+  const proposes = s => !s.courriel ? [] : envoyees.filter(e=>e.courriel===s.courriel && e.date>=s.date && e.no && !aFaire.some(x=>x!==s && x.note==='Devis #'+e.no)).slice(0,3);
+
+  const CarteAFaire = ({s})=>{
+    const j = soumJours(s.date), fini = SOUM_FINI.includes(s.statut);
+    return <div style={{padding:'10px 0',borderBottom:'1px solid var(--border)',opacity:fini?.6:1}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+        <div style={{minWidth:0,flex:'1 1 220px'}}>
+          <div style={{fontWeight:700,fontSize:14}}>{s.client || s.sujet}</div>
+          {s.client && s.sujet && s.sujet!==s.client && <div className="muted" style={{fontSize:12}}>{s.sujet}</div>}
+          <div className="muted" style={{fontSize:11.5}}>{cvFmtDay(s.date)}{j!=null && j>0 && <> · il y a {j} jour{j>1?'s':''}</>}{s.courriel && <> · {s.courriel}</>}{s.cle.startsWith('M-') && <> · ajoutée à la main</>}</div>
+        </div>
+        <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
+          {lienGmail(s)}
+          {!fini ? <>
+            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Faite')} style={{borderColor:'var(--green, #2e9e5b)',color:'var(--green, #2e9e5b)'}}>✓ Faite</button>
+            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, s.cle.startsWith('M-')?'Annulée':'Ignorée')} title="Annulée, ou ce n'était pas une soumission à faire">✕</button>
+          </> : <>
+            <span className="badge" style={{background:'var(--bg3)'}}>{s.statut}{s.note && ' · '+s.note}</span>
+            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'', '')}>↩</button>
+          </>}
+        </div>
+      </div>
+      {s.extrait && <div style={{fontSize:12.5,marginTop:4,whiteSpace:'pre-wrap',display:'-webkit-box',WebkitLineClamp:3,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{s.extrait}</div>}
+      {s.reponse && <div className="muted" style={{fontSize:11.5,marginTop:3}}>↪ {s.reponse}</div>}
+      {!fini && proposes(s).map(e=><div key={e.cle} style={{marginTop:6,fontSize:12.5,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',background:'var(--bg3)',padding:'5px 8px',borderRadius:8}}>
+        <span>📤 Devis <b>#{e.no}</b> envoyé à cette personne le {cvFmtDay(e.date)}{e.montant!=null && <> · {cvMoney(e.montant)}</>} — c'est celle-là ?</span>
+        <button className="btn btn-sm btn-p" disabled={occupe===s.cle} onClick={()=>action(s,'Faite','Devis #'+e.no)}>✓ Oui, faite</button>
+      </div>)}
+    </div>;
+  };
+
+  const CarteEnvoyee = ({s})=>{
+    const st = etatEnv(s);
+    return <div style={{padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+        <div style={{minWidth:0,flex:'1 1 220px'}}>
+          <div style={{fontSize:14}}>{s.no ? <b>#{s.no} </b> : null}<b>{s.client}</b>{s.montant!=null && <> · <b>{cvMoney(s.montant)}</b></>}</div>
+          {s.extrait && <div className="muted" style={{fontSize:12}}>{s.extrait.slice(0,140)}</div>}
+          <div className="muted" style={{fontSize:11.5}}>Envoyée le {cvFmtDay(s.date)}{s.courriel && <> · {s.courriel}</>}{st==='attente' && soumJours(s.date)>0 && <> · il y a {soumJours(s.date)} jours</>}</div>
+        </div>
+        <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
+          {lienPdf(s.pdf)}{lienGmail(s)}
+          {st==='attente' ? <>
+            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Acceptée')} style={{borderColor:'var(--green, #2e9e5b)',color:'var(--green, #2e9e5b)'}}>✓ Acceptée</button>
+            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Refusée')}>✕ Refusée</button>
+          </> : <>
+            <span className="badge" style={{background: st==='acceptee' ? 'var(--green, #2e9e5b)' : 'var(--bg3)', color: st==='acceptee' ? '#fff' : undefined}}>{s.statut}</span>
+            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'')}>↩</button>
+          </>}
+        </div>
+      </div>
+      {s.reponse && <div style={{fontSize:12.5,marginTop:4,color:'var(--accent)'}}>💬 Le client a répondu le {/^\d{4}-\d{2}-\d{2}/.test(s.reponse) ? cvFmtDay(s.reponse.slice(0,10))+s.reponse.slice(10) : s.reponse}</div>}
+    </div>;
+  };
+
+  const listeAFaire = (voirFinies ? aFaire : ouvertes).filter(s=>cherche([s.client,s.sujet,s.extrait,s.courriel].join(' ')));
+  const listeEnv = envoyees.filter(s=>(filtre==='tout' || etatEnv(s)===filtre) && cherche([s.no,s.client,s.extrait,s.courriel].join(' ')));
+  const recues = S.recues.filter(d=>cherche([d.fournisseur,d.num,d.ref,d.fichier].join(' '))).sort((a,b)=>b.date.localeCompare(a.date));
+  const nEnv = k => envoyees.filter(s=>etatEnv(s)===k).length;
+  const totalAttente = envoyees.filter(s=>etatEnv(s)==='attente').reduce((t,s)=>t+(s.montant||0),0);
+
   return <div>
-    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Soumissions</h2>
-    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Section en construction — la création et l'envoi de soumissions seront ajoutés ici bientôt. En attendant, voici ce qui existe déjà.</div>
-    <div className="card" style={{padding:0,overflowX:'auto'}}>
-      <table>
-        <thead><tr><th>Date</th><th>Projet / adresse</th><th>Total</th><th>Statut</th></tr></thead>
-        <tbody>
-          {list.map(s=><tr key={s.id}>
-            <td className="muted">{s.date}</td>
-            <td style={{fontWeight:600}}>{oppById[s.opportuniteId] ? (oppById[s.opportuniteId].titre || oppById[s.opportuniteId].adresse) : '—'}</td>
-            <td>{fmtMoney(s.total)}</td>
-            <td><span className="badge" style={{background:'var(--bg3)'}}>{s.statut}</span></td>
-          </tr>)}
-          {list.length===0 && <tr><td colSpan="4" className="muted" style={{padding:16}}>Aucune soumission pour l'instant.</td></tr>}
-        </tbody>
-      </table>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
+      <h2 className="fh" style={{margin:0,fontSize:20}}>Soumissions</h2>
+      <button className="btn btn-sm" onClick={()=>S.relire()}>⟳</button>
     </div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+      {pill('afaire','📝 À faire',ouvertes.length,onglet,setOnglet)}
+      {pill('envoyees','📤 Envoyées',envoyees.length,onglet,setOnglet)}
+      {pill('recues','📥 Reçues des fournisseurs',S.recues.length,onglet,setOnglet)}
+    </div>
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (client, adresse, numéro…)" style={{width:'100%',boxSizing:'border-box',marginBottom:10}}/>
+    {!S.lu && <div className="muted">Chargement…</div>}
+    {S.err && <div className="card" style={{color:'var(--red, #c0392b)'}}>{S.err}</div>}
+    {S.lu && !S.existe && onglet!=='recues' && <div className="card muted" style={{fontSize:12.5,marginBottom:10}}>L'onglet « Soumissions » du registre des jobs n'existe pas encore. Il sera rempli tout seul quand le script <b>soumissions.gs</b> sera installé dans La mémoire. Tu peux quand même en ajouter à la main.</div>}
+
+    {onglet==='afaire' && <div className="card">
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:4}}>
+        <button className="btn btn-sm btn-p" onClick={()=>setNouveau(nouveau===null?'':null)}>+ Ajouter</button>
+        <label className="muted" style={{fontSize:12,display:'flex',gap:4,alignItems:'center',marginLeft:'auto'}}><input type="checkbox" checked={voirFinies} onChange={e=>setVoirFinies(e.target.checked)}/> Voir les terminées ({aFaire.length-ouvertes.length})</label>
+      </div>
+      {nouveau!==null && <div style={{display:'flex',gap:6,margin:'6px 0'}}>
+        <input autoFocus value={nouveau} onChange={e=>setNouveau(e.target.value)} placeholder="Ex. : Borne — Jean Tremblay, 12 rue X" style={{flex:1}}
+          onKeyDown={e=>{ if(e.key==='Enter' && nouveau.trim()) e.currentTarget.nextSibling.click(); }}/>
+        <button className="btn btn-sm btn-p" disabled={!nouveau.trim() || occupe==='+'} onClick={async()=>{ setOccupe('+'); try{ await S.ajouter(nouveau.trim()); setNouveau(null); toast && toast('Soumission à faire ajoutée'); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOccupe(''); }}>OK</button>
+      </div>}
+      {listeAFaire.map(s=><CarteAFaire key={s.cle} s={s}/>)}
+      {S.lu && !listeAFaire.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>{ouvertes.length||q ? 'Aucune ne correspond.' : 'Rien à faire 👍'}</div>}
+    </div>}
+
+    {onglet==='envoyees' && <div className="card">
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:4}}>
+        {pill('attente','En attente',nEnv('attente'),filtre,setFiltre)}
+        {pill('acceptee','Acceptées',nEnv('acceptee'),filtre,setFiltre)}
+        {pill('refusee','Refusées',nEnv('refusee'),filtre,setFiltre)}
+        {pill('tout','Toutes',envoyees.length,filtre,setFiltre)}
+        {filtre==='attente' && totalAttente>0 && <span className="muted" style={{fontSize:12,marginLeft:'auto'}}>Total en attente : <b>{cvMoney(totalAttente)}</b></span>}
+      </div>
+      {listeEnv.map(s=><CarteEnvoyee key={s.cle} s={s}/>)}
+      {S.lu && !listeEnv.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>Aucune soumission ici.</div>}
+      {vieux.length>0 && filtre==='tout' && <div style={{marginTop:12}}>
+        <div className="muted" style={{fontSize:12,fontWeight:700}}>Anciennes soumissions du CRM</div>
+        {vieux.map(s=><div key={s.id} className="muted" style={{fontSize:12.5,padding:'4px 0'}}>{s.date} · {fmtMoney(s.total)} · {s.statut}</div>)}
+      </div>}
+    </div>}
+
+    {onglet==='recues' && <div className="card">
+      <div className="muted" style={{fontSize:11.5,marginBottom:4}}>Soumissions reçues de tes fournisseurs (lues par La mémoire — Achats).</div>
+      {recues.slice(0,60).map((d,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
+        <div><b>{d.fournisseur}</b>{d.num && <> #{d.num}</>} <span className="muted">· {cvFmtDay(d.date)}</span>{d.total!=null && <> · <b>{cvMoney(d.total)}</b></>}{d.ref && <span className="muted"> · réf. « {d.ref} »</span>}
+          {!d.num && !d.ref && <div className="muted" style={{fontSize:11.5}}>{d.fichier}</div>}</div>
+        {lienPdf(d.pdf)}
+      </div>)}
+      {S.lu && !recues.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>Aucune soumission de fournisseur.</div>}
+    </div>}
   </div>;
 }
 
@@ -4708,7 +4870,7 @@ function App(){
         {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
         {nav==='factures' && <FacturesView key={'x'+navKey} cfg={cfg} refreshKey={refreshKey}/>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
-        {nav==='soumissions' && <SoumissionsView data={data}/>}
+        {nav==='soumissions' && <SoumissionsView key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey}/>}
         {nav==='stock' && <StockView data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
       </div>
