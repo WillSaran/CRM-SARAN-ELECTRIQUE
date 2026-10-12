@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v86';
+const APP_VERSION = 'v87';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1593,7 +1593,8 @@ function ProjectsFromCalendar({filterC, data, toast, events, loadingEvents, errE
 // ProjectsFromCalendar + la fiche détail, pour que "événements associés à un
 // projet" et "projets par adresse" utilisent exactement les mêmes données.
 // ── Projets : le miroir de Clients, axé sur la gestion — étapes, ce qui manque et où le compléter ──
-const PJ_GROUPES = [['dossier','Dossier','PO, adresse, plans, courriels'],['commande','Commande','stock des 2 prochaines semaines'],['papiers','Papiers','OT du rough, appel de service à chaque passage'],['facture','Facture','facture à chaque passage fait']];
+// Les 4 rectangles de Projets : PO → Commande (OT = la liste de stock) → Appel de service → Facture.
+const PJ_GROUPES = [['po','PO','PO reçu, adresse, plans, courriels'],['commande','Commande','OT du rough (la liste) + commande placée'],['appel','Appel','appel de service à chaque visite faite'],['facture','Facture','une facture par visite (rough, finition, service)']];
 function pjEtapes(job, appels, commandes, courriels, manuels){
   const today = cvDay(new Date().toISOString());
   const r = job.reg || {}, pro = job.client!=='PART', ev = job.events.filter(e=>!e.attente), att = job.events.filter(e=>e.attente);
@@ -1633,7 +1634,7 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
   // Étapes cochées à la main (onglet « Etapes » du registre des jobs).
   E.forEach(x=>{ if(!x.ok && manuels && (manuels[job.id+'|'+x.titre] || (x.ancien && manuels[job.id+'|'+x.ancien]))){ x.ok=true; x.manuel=true; } });
   // Toujours les mêmes 4 rectangles : Dossier, Commande, Papiers, Facture (gris = pas encore rendu là).
-  E.forEach(x=>{ x.g = x.g || (/^OT du rough|^Appel de service/.test(x.titre) ? 'papiers' : /^Commande/.test(x.titre) ? 'commande' : /^Facture/.test(x.titre) ? 'facture' : 'dossier'); });
+  E.forEach(x=>{ x.g = x.g || (/^OT du rough|^Commande/.test(x.titre) ? 'commande' : /^Appel de service/.test(x.titre) ? 'appel' : /^Facture/.test(x.titre) ? 'facture' : 'po'); });
   const G = PJ_GROUPES.map(([k,label,desc])=>{ const L = E.filter(x=>x.g===k && !x.na);
     return {k, label, desc, L, etat: !L.length ? 'na' : L.every(x=>x.ok) ? (L.some(x=>x.manuel) ? 'manuel' : 'ok') : 'manque'}; });
   // Rectangle Facture découpé par visite : vert = facturée, orange = faite sans facture, gris = pas encore faite.
