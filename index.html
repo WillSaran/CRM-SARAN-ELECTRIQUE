@@ -3423,7 +3423,9 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
 
   const listeAFaire = (voirFinies ? aFaire : ouvertes).filter(s=>cherche([s.client,s.sujet,s.extrait,s.courriel].join(' ')));
   const listeEnv = envoyees.filter(s=>(filtre==='tout' || etatEnv(s)===filtre) && cherche([s.no,s.client,s.extrait,s.courriel].join(' ')));
-  const recues = S.recues.filter(d=>cherche([d.fournisseur,d.num,d.ref,d.fichier].join(' '))).sort((a,b)=>b.date.localeCompare(a.date));
+  // Reçues : documents des fournisseurs (Achats) + ce qu'Éclairage Saran envoie par courriel (lignes « Reçue »).
+  const recuesTout = [...S.recues, ...S.liste.filter(s=>s.type==='Reçue').map(s=>({fournisseur:s.client||'Éclairage Saran', num:'', date:s.date, ref:s.sujet, total:s.montant, pdf:s.pdf, fichier:s.extrait, lien:s.lien}))];
+  const recues = recuesTout.filter(d=>cherche([d.fournisseur,d.num,d.ref,d.fichier].join(' '))).sort((a,b)=>b.date.localeCompare(a.date));
   const nEnv = k => envoyees.filter(s=>etatEnv(s)===k).length;
   const totalAttente = envoyees.filter(s=>etatEnv(s)==='attente').reduce((t,s)=>t+(s.montant||0),0);
 
@@ -3435,7 +3437,7 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
       {pill('afaire','📝 À faire',ouvertes.length,onglet,setOnglet)}
       {pill('envoyees','📤 Envoyées',envoyees.length,onglet,setOnglet)}
-      {pill('recues','📥 Reçues des fournisseurs',S.recues.length,onglet,setOnglet)}
+      {pill('recues','📥 Reçues des fournisseurs',recuesTout.length,onglet,setOnglet)}
     </div>
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (client, adresse, numéro…)" style={{width:'100%',boxSizing:'border-box',marginBottom:10}}/>
     {!S.lu && <div className="muted">Chargement…</div>}
@@ -3477,7 +3479,7 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
       {recues.slice(0,60).map((d,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
         <div><b>{d.fournisseur}</b>{d.num && <> #{d.num}</>} <span className="muted">· {cvFmtDay(d.date)}</span>{d.total!=null && <> · <b>{cvMoney(d.total)}</b></>}{d.ref && <span className="muted"> · réf. « {d.ref} »</span>}
           {!d.num && !d.ref && <div className="muted" style={{fontSize:11.5}}>{d.fichier}</div>}</div>
-        {lienPdf(d.pdf)}
+        <span style={{display:'flex',gap:8}}>{lienPdf(d.pdf)}{d.lien && <a href={d.lien} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5,whiteSpace:'nowrap'}}>Courriel ↗</a>}</span>
       </div>)}
       {S.lu && !recues.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>Aucune soumission de fournisseur.</div>}
     </div>}
