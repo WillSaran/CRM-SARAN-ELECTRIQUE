@@ -1756,8 +1756,8 @@ function CvDocuments({docs, type, setType, fournisseur}){
     {fournisseur && <div className="muted" style={{fontSize:12,marginBottom:4}}>Seulement {fournisseur} — reclique la tuile pour tout voir.</div>}
     {!liste.length ? <div className="muted" style={{fontSize:13}}>Aucun document.</div>
       : (tout ? liste : liste.slice(0,15)).map((d,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'7px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
-        <div><b>{d.fournisseur}</b>{d.num && <> #{d.num}</>} <span className="muted">· {cvFmtDay(d.date)}</span>{d.total!=null && <> · <b>{cvMoney(d.total)}</b></>}{d.ref && <span className="muted"> · réf. « {d.ref} »</span>}
-          {!d.num && !d.ref && <div className="muted" style={{fontSize:11.5}}>{d.fichier}</div>}</div>
+        <div style={{minWidth:0,flex:'1 1 220px'}}><b>{d.fournisseur}</b>{d.num && <> #{d.num}</>} <span className="muted">· {cvFmtDay(d.date)}</span>{d.total!=null && <> · <b>{cvMoney(d.total)}</b></>}
+          {d.ref ? <div><SoumRef txt={d.ref}/></div> : <div className="muted" style={{fontSize:11.5}}>Sans référence{d.fichier ? ' · '+d.fichier : ''}</div>}</div>
         {d.pdf && <a href={'https://drive.google.com/file/d/'+d.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5,whiteSpace:'nowrap'}}>Ouvrir ↗</a>}
       </div>)}
     {liste.length>15 && !tout && <button className="btn btn-sm" style={{marginTop:8}} onClick={()=>setTout(true)}>Voir les {liste.length}</button>}
@@ -3341,6 +3341,9 @@ function useSoumissions(cfg, refreshKey){
   return {...etat, marquer, ajouter, relire:()=>lire(true)};
 }
 
+// Puce bien visible : la référence / le projet (ex. « DL-EC2 », « Cuisine Rive-Sud — Finition »).
+function SoumRef({txt}){ return txt ? <span style={{display:'inline-block',background:'var(--accent)',color:'#fff',borderRadius:6,padding:'1px 8px',fontSize:12,fontWeight:700,marginTop:3,maxWidth:'100%',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',verticalAlign:'middle'}}>📌 {txt}</span> : null; }
+
 function SoumissionsView({cfg, data, toast, refreshKey}){
   const S = useSoumissions(cfg, refreshKey);
   const [onglet,setOnglet]=useState('afaire');
@@ -3374,7 +3377,7 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
         <div style={{minWidth:0,flex:'1 1 220px'}}>
           <div style={{fontWeight:700,fontSize:14}}>{s.client || s.sujet}</div>
-          {s.client && s.sujet && s.sujet!==s.client && <div className="muted" style={{fontSize:12}}>{s.sujet}</div>}
+          {s.client && s.sujet && s.sujet!==s.client && !cvNorm(s.sujet).endsWith(cvNorm(s.client)) && <div><SoumRef txt={s.sujet.replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'')}/></div>}
           <div className="muted" style={{fontSize:11.5}}>{cvFmtDay(s.date)}{j!=null && j>0 && <> · il y a {j} jour{j>1?'s':''}</>}{s.courriel && <> · {s.courriel}</>}{s.cle.startsWith('M-') && <> · ajoutée à la main</>}</div>
         </div>
         <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
@@ -3403,7 +3406,7 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
         <div style={{minWidth:0,flex:'1 1 220px'}}>
           <div style={{fontSize:14}}>{s.no ? <b>#{s.no} </b> : null}<b>{s.client}</b>{s.montant!=null && <> · <b>{cvMoney(s.montant)}</b></>}</div>
-          {s.extrait && <div className="muted" style={{fontSize:12}}>{s.extrait.slice(0,140)}</div>}
+          {s.extrait ? <div><SoumRef txt={s.extrait.slice(0,120)}/></div> : (!s.no && s.sujet && <div className="muted" style={{fontSize:12}}>{s.sujet}</div>)}
           <div className="muted" style={{fontSize:11.5}}>Envoyée le {cvFmtDay(s.date)}{s.courriel && <> · {s.courriel}</>}{st==='attente' && soumJours(s.date)>0 && <> · il y a {soumJours(s.date)} jours</>}</div>
         </div>
         <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
@@ -3477,8 +3480,8 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
     {onglet==='recues' && <div className="card">
       <div className="muted" style={{fontSize:11.5,marginBottom:4}}>Soumissions reçues de tes fournisseurs (lues par La mémoire — Achats).</div>
       {recues.slice(0,60).map((d,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
-        <div><b>{d.fournisseur}</b>{d.num && <> #{d.num}</>} <span className="muted">· {cvFmtDay(d.date)}</span>{d.total!=null && <> · <b>{cvMoney(d.total)}</b></>}{d.ref && <span className="muted"> · réf. « {d.ref} »</span>}
-          {!d.num && !d.ref && <div className="muted" style={{fontSize:11.5}}>{d.fichier}</div>}</div>
+        <div style={{minWidth:0,flex:'1 1 220px'}}><b>{d.fournisseur}</b>{d.num && <> #{d.num}</>} <span className="muted">· {cvFmtDay(d.date)}</span>{d.total!=null && <> · <b>{cvMoney(d.total)}</b></>}
+          {d.ref ? <div><SoumRef txt={d.ref}/></div> : <div className="muted" style={{fontSize:11.5}}>Sans référence{d.fichier ? ' · '+d.fichier : ''}</div>}</div>
         <span style={{display:'flex',gap:8}}>{lienPdf(d.pdf)}{d.lien && <a href={d.lien} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5,whiteSpace:'nowrap'}}>Courriel ↗</a>}</span>
       </div>)}
       {S.lu && !recues.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>Aucune soumission de fournisseur.</div>}
