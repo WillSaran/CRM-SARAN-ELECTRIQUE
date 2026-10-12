@@ -3332,9 +3332,9 @@ function useSoumissions(cfg, refreshKey){
     await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!M'+s.row+':O'+s.row, valueInputOption:'RAW', resource:{values:[[statut, le, note ?? s.note]]}});
   };
   // Soumission à faire ajoutée à la main.
-  const ajouter = async (texte)=>{
+  const ajouter = async (texte, details)=>{
     if(!etat.existe) await ensureSheetsExist(id, [{name:'Soumissions', headers:SOUM_ONGLET_ENTETE}]);
-    const ligne = ['M-'+Date.now(), 'À faire', cvDay(new Date().toISOString()), '', texte, '', texte, '', '', '', '', '', '', '', ''];
+    const ligne = ['M-'+Date.now(), 'À faire', cvDay(new Date().toISOString()), '', texte, '', texte, details||'', '', '', '', '', '', '', ''];
     await sheetsAppendRow(id, 'Soumissions', ligne);
     await lire(true);
   };
@@ -3344,6 +3344,42 @@ function useSoumissions(cfg, refreshKey){
 // Puce bien visible : la référence / le projet (ex. « DL-EC2 », « Cuisine Rive-Sud — Finition »).
 function SoumRef({txt}){ return txt ? <span style={{display:'inline-block',background:'var(--accent)',color:'#fff',borderRadius:6,padding:'1px 8px',fontSize:12,fontWeight:700,marginTop:3,maxWidth:'100%',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',verticalAlign:'middle'}}>📌 {txt}</span> : null; }
 
+// Photos d'une note « Soumission … » (dossier Drive gardé par soumissions.gs en colonne J).
+const SOUM_PHOTOS = {};
+function SoumPhotos({dossier}){
+  const [fichiers,setFichiers]=useState(SOUM_PHOTOS[dossier]||null);
+  useEffect(()=>{
+    if(!dossier || SOUM_PHOTOS[dossier]) return;
+    let vivant=true;
+    (async()=>{ try{
+      const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+      const q = encodeURIComponent("'"+dossier+"' in parents and trashed=false");
+      const r = await fetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id,name,mimeType,thumbnailLink,webViewLink)&pageSize=50&supportsAllDrives=true&includeItemsFromAllDrives=true', {headers:{Authorization:'Bearer '+tok}});
+      const f = r.ok ? ((await r.json()).files||[]) : [];
+      SOUM_PHOTOS[dossier]=f; if(vivant) setFichiers(f);
+    }catch(e){ if(vivant) setFichiers([]); } })();
+    return ()=>{vivant=false};
+  },[dossier]);
+  if(!dossier) return null;
+  return <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginTop:6}}>
+    {(fichiers||[]).slice(0,8).map(f=><a key={f.id} href={f.webViewLink} target="_blank" rel="noopener" title={f.name}>
+      {f.thumbnailLink ? <img src={f.thumbnailLink} alt={f.name} referrerPolicy="no-referrer" style={{width:64,height:64,objectFit:'cover',borderRadius:6,border:'1px solid var(--border2)'}}/>
+        : <span className="badge" style={{background:'var(--bg3)'}}>📄 {f.name.slice(0,20)}</span>}
+    </a>)}
+    <a href={'https://drive.google.com/drive/folders/'+dossier} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5}}>📷 {fichiers ? fichiers.length+' fichier'+(fichiers.length>1?'s':'') : 'Photos'} ↗</a>
+  </div>;
+}
+// Texte d'une note : 3 lignes, puis « Voir tout ».
+function SoumNote({txt}){
+  const [ouvert,setOuvert]=useState(false);
+  if(!txt) return null;
+  const long = txt.length>220 || (txt.match(/\n/g)||[]).length>2;
+  return <div style={{marginTop:4}}>
+    <div style={{fontSize:12.5,whiteSpace:'pre-wrap',...(ouvert||!long ? {} : {display:'-webkit-box',WebkitLineClamp:3,WebkitBoxOrient:'vertical',overflow:'hidden'})}}>{txt}</div>
+    {long && <button className="btn btn-sm" style={{marginTop:3,fontSize:11.5,padding:'1px 8px'}} onClick={()=>setOuvert(!ouvert)}>{ouvert?'▴ Moins':'▾ Voir tout'}</button>}
+  </div>;
+}
+
 function SoumissionsView({cfg, data, toast, refreshKey}){
   const S = useSoumissions(cfg, refreshKey);
   const [onglet,setOnglet]=useState('afaire');
@@ -3351,6 +3387,7 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
   const [filtre,setFiltre]=useState('attente');
   const [q,setQ]=useState('');
   const [nouveau,setNouveau]=useState(null);
+  const [details,setDetails]=useState('');
   const [occupe,setOccupe]=useState('');
   const aFaire = S.liste.filter(s=>s.type==='À faire').sort((a,b)=>b.date.localeCompare(a.date));
   const envoyees = S.liste.filter(s=>s.type==='Envoyée').sort((a,b)=>b.date.localeCompare(a.date) || (+b.no||0)-(+a.no||0));
@@ -3391,7 +3428,8 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
           </>}
         </div>
       </div>
-      {s.extrait && <div style={{fontSize:12.5,marginTop:4,whiteSpace:'pre-wrap',display:'-webkit-box',WebkitLineClamp:3,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{s.extrait}</div>}
+      <SoumNote txt={s.extrait}/>
+      {s.pdf && <SoumPhotos dossier={s.pdf}/>}
       {s.reponse && <div className="muted" style={{fontSize:11.5,marginTop:3}}>↪ {s.reponse}</div>}
       {!fini && proposes(s).map(e=><div key={e.cle} style={{marginTop:6,fontSize:12.5,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',background:'var(--bg3)',padding:'5px 8px',borderRadius:8}}>
         <span>📤 Devis <b>#{e.no}</b> envoyé à cette personne le {cvFmtDay(e.date)}{e.montant!=null && <> · {cvMoney(e.montant)}</>} — c'est celle-là ?</span>
@@ -3452,10 +3490,14 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
         <button className="btn btn-sm btn-p" onClick={()=>setNouveau(nouveau===null?'':null)}>+ Ajouter</button>
         <label className="muted" style={{fontSize:12,display:'flex',gap:4,alignItems:'center',marginLeft:'auto'}}><input type="checkbox" checked={voirFinies} onChange={e=>setVoirFinies(e.target.checked)}/> Voir les terminées ({aFaire.length-ouvertes.length})</label>
       </div>
-      {nouveau!==null && <div style={{display:'flex',gap:6,margin:'6px 0'}}>
-        <input autoFocus value={nouveau} onChange={e=>setNouveau(e.target.value)} placeholder="Ex. : Borne — Jean Tremblay, 12 rue X" style={{flex:1}}
-          onKeyDown={e=>{ if(e.key==='Enter' && nouveau.trim()) e.currentTarget.nextSibling.click(); }}/>
-        <button className="btn btn-sm btn-p" disabled={!nouveau.trim() || occupe==='+'} onClick={async()=>{ setOccupe('+'); try{ await S.ajouter(nouveau.trim()); setNouveau(null); toast && toast('Soumission à faire ajoutée'); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOccupe(''); }}>OK</button>
+      {nouveau!==null && <div style={{margin:'6px 0',display:'grid',gap:6}}>
+        <input autoFocus value={nouveau} onChange={e=>setNouveau(e.target.value)} placeholder="Pour qui / où — ex. : Borne — Jean Tremblay, 12 rue X"/>
+        <textarea value={details} onChange={e=>setDetails(e.target.value)} rows={4} placeholder={"Ce qu'il faut faire et le stock nécessaire (une ligne par article)…"} style={{resize:'vertical',fontFamily:'inherit'}}/>
+        <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+          <button className="btn btn-sm btn-p" disabled={!nouveau.trim() || occupe==='+'} onClick={async()=>{ setOccupe('+'); try{ await S.ajouter(nouveau.trim(), details.trim()); setNouveau(null); setDetails(''); toast && toast('Soumission à faire ajoutée'); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOccupe(''); }}>Ajouter</button>
+          <button className="btn btn-sm" onClick={()=>{ setNouveau(null); setDetails(''); }}>Annuler</button>
+          <span className="muted" style={{fontSize:11.5}}>📷 Photos : envoie-toi un courriel « Soumission … » avec les photos — elles s'ajoutent ici toutes seules.</span>
+        </div>
       </div>}
       {listeAFaire.map(s=><CarteAFaire key={s.cle} s={s}/>)}
       {S.lu && !listeAFaire.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>{ouvertes.length||q ? 'Aucune ne correspond.' : 'Rien à faire 👍'}</div>}
