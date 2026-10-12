@@ -140,7 +140,7 @@ function loadCfg(){
 }
 function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
-const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.readonly';
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
@@ -742,12 +742,15 @@ async function initGoogle(cfg){
 // Le jeton Google dure 1 h. On garde son heure d'expiration (aussi dans sessionStorage, pour
 // qu'un rechargement de la page ne redemande pas la connexion tant qu'il est valide).
 let tokenExpire = 0;
+let tokenScopes = '';   // permissions accordées (pour savoir si on peut déposer des photos dans Drive)
+function peutDeposer(){ return /drive\.file|auth\/drive(\s|$)/.test(tokenScopes); }
 function requestToken(prompt){
   return new Promise((resolve,reject)=>{
     tokenClient.callback = (resp)=>{
       if(resp && resp.access_token){
         tokenExpire = Date.now() + (Number(resp.expires_in)||3600)*1000;
-        try{ sessionStorage.setItem('crm_tok', JSON.stringify({t:resp.access_token, e:tokenExpire})); }catch(e){}
+        if(resp.scope) tokenScopes = resp.scope;
+        try{ sessionStorage.setItem('crm_tok', JSON.stringify({t:resp.access_token, e:tokenExpire, s:tokenScopes})); }catch(e){}
         resolve(resp);
       } else { reject(resp); }
     };
@@ -758,7 +761,7 @@ function requestToken(prompt){
 function restoreToken(){
   try{
     const o = JSON.parse(sessionStorage.getItem('crm_tok')||'null');
-    if(o && o.t && o.e > Date.now()+60000){ window.gapi.client.setToken({access_token:o.t}); tokenExpire=o.e; return true; }
+    if(o && o.t && o.e > Date.now()+60000){ window.gapi.client.setToken({access_token:o.t}); tokenExpire=o.e; tokenScopes=o.s||''; return true; }
   }catch(e){}
   return false;
 }
@@ -3303,7 +3306,7 @@ function FacturesView({cfg, refreshKey}){
 // Les 2 premiers viennent de l'onglet « Soumissions » du registre des jobs, rempli par soumissions.gs (La mémoire).
 // Colonnes : A Clé | B Type | C Date | D No | E Client | F Courriel | G Sujet | H Extrait | I Montant | J PDF | K Lien | L Réponse | M Statut | N Le | O Note
 // Le script remplit A–L ; le CRM écrit seulement M–O (statut, date, note) et les lignes ajoutées à la main (clé « M-… »).
-const SOUM_ONGLET_ENTETE = ['Clé','Type','Date','No','Client','Courriel','Sujet','Extrait','Montant','PDF','Lien','Réponse','Statut','Le','Note'];
+const SOUM_ONGLET_ENTETE = ['Clé','Type','Date','No','Client','Courriel','Sujet','Extrait','Montant','PDF','Lien','Réponse','Statut','Le','Note','Photos'];
 const SOUM_FINI = ['Faite','Annulée','Ignorée'];
 function soumJours(d){ if(!d) return null; const t=new Date(d+'T12:00:00'); return isNaN(t) ? null : Math.round((Date.now()-t)/864e5); }
 function useSoumissions(cfg, refreshKey){
@@ -3313,10 +3316,10 @@ function useSoumissions(cfg, refreshKey){
     if(!id){ setEtat(s=>({...s, lu:true, err:'Le registre des jobs n\'est pas configuré (Réglages).'})); return; }
     let liste=[], existe=false, recues=[];
     try{
-      const r = await lireCache(id, 'Soumissions!A1:O', force);
+      const r = await lireCache(id, 'Soumissions!A1:P', force);
       existe = true;
       liste = (r.result.values||[]).slice(1).map((x,i)=>({row:i+2, cle:x[0]||'', type:x[1]||'', date:String(x[2]||'').slice(0,10), no:x[3]||'', client:x[4]||'', courriel:(x[5]||'').toLowerCase(),
-        sujet:x[6]||'', extrait:x[7]||'', montant:cvNum(x[8]), pdf:x[9]||'', lien:x[10]||'', reponse:x[11]||'', statut:x[12]||'', le:x[13]||'', note:x[14]||''})).filter(x=>x.cle);
+        sujet:x[6]||'', extrait:x[7]||'', montant:cvNum(x[8]), pdf:x[9]||'', lien:x[10]||'', reponse:x[11]||'', statut:x[12]||'', le:x[13]||'', note:x[14]||'', photos:x[15]||''})).filter(x=>x.cle);
     }catch(e){ existe = false; }
     try{
       if(idA){ const d = await lireCache(idA, 'Documents!A1:J', force);
@@ -3331,22 +3334,89 @@ function useSoumissions(cfg, refreshKey){
     setEtat(e=>({...e, liste:e.liste.map(x=>x.cle===s.cle ? {...x, statut, le, note: note ?? x.note} : x)}));
     await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!M'+s.row+':O'+s.row, valueInputOption:'RAW', resource:{values:[[statut, le, note ?? s.note]]}});
   };
+  // Dossier de photos créé par le CRM (colonne P).
+  const dossierPhotos = async (s, d)=>{
+    setEtat(e=>({...e, liste:e.liste.map(x=>x.cle===s.cle ? {...x, photos:d} : x)}));
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!P1', valueInputOption:'RAW', resource:{values:[['Photos']]}});
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!P'+s.row, valueInputOption:'RAW', resource:{values:[[d]]}});
+  };
   // Soumission à faire ajoutée à la main.
-  const ajouter = async (texte, details)=>{
+  const ajouter = async (texte, details, photos)=>{
     if(!etat.existe) await ensureSheetsExist(id, [{name:'Soumissions', headers:SOUM_ONGLET_ENTETE}]);
-    const ligne = ['M-'+Date.now(), 'À faire', cvDay(new Date().toISOString()), '', texte, '', texte, details||'', '', '', '', '', '', '', ''];
+    const ligne = ['M-'+Date.now(), 'À faire', cvDay(new Date().toISOString()), '', texte, '', texte, details||'', '', '', '', '', '', '', '', photos||''];
     await sheetsAppendRow(id, 'Soumissions', ligne);
     await lire(true);
   };
-  return {...etat, marquer, ajouter, relire:()=>lire(true)};
+  return {...etat, marquer, ajouter, dossierPhotos, relire:()=>lire(true)};
 }
 
 // Puce bien visible : la référence / le projet (ex. « DL-EC2 », « Cuisine Rive-Sud — Finition »).
 function SoumRef({txt}){ return txt ? <span style={{display:'inline-block',background:'var(--accent)',color:'#fff',borderRadius:6,padding:'1px 8px',fontSize:12,fontWeight:700,marginTop:3,maxWidth:'100%',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',verticalAlign:'middle'}}>📌 {txt}</span> : null; }
 
+// ── Dépôt de photos dans Drive (permission drive.file : le CRM ne voit/modifie que ce qu'il a créé lui-même).
+const PHOTOS_RACINE = 'Saran CRM — Photos soumissions';
+async function driveFetch(url, opts){
+  const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+  const r = await fetch(url, {...(opts||{}), headers:{...((opts&&opts.headers)||{}), Authorization:'Bearer '+tok}});
+  if(!r.ok){ const t = await r.text().catch(()=>''); throw new Error((r.status===403?'Permission Drive manquante — ':'Drive '+r.status+' ')+t.slice(0,120)); }
+  return r.json();
+}
+async function driveDossier(nom, parent){
+  const q = encodeURIComponent("name='"+nom.replace(/'/g,"\\'")+"' and mimeType='application/vnd.google-apps.folder' and trashed=false and '"+(parent||'root')+"' in parents");
+  const l = await driveFetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id)&pageSize=1');
+  if(l.files && l.files[0]) return l.files[0].id;
+  const c = await driveFetch('https://www.googleapis.com/drive/v3/files?fields=id', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name:nom, mimeType:'application/vnd.google-apps.folder', parents:[parent||'root']})});
+  return c.id;
+}
+// Réduit une photo (max 1600 px, JPEG) pour qu'elle monte vite du chantier ; sinon le fichier tel quel.
+async function reduirePhoto(f){
+  if(!/^image\/(jpeg|png|webp)/i.test(f.type)) return f;
+  try{
+    const img = await createImageBitmap(f);
+    const k = Math.min(1, 1600/Math.max(img.width, img.height));
+    if(k>=1 && f.size<1.5e6) return f;
+    const c = document.createElement('canvas'); c.width=Math.round(img.width*k); c.height=Math.round(img.height*k);
+    c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+    const b = await new Promise(r=>c.toBlob(r,'image/jpeg',0.82));
+    return b ? new File([b], f.name.replace(/\.\w+$/,'')+'.jpg', {type:'image/jpeg'}) : f;
+  }catch(e){ return f; }
+}
+async function driveDeposer(fichier, dossier){
+  const f = await reduirePhoto(fichier);
+  const limite = 'crm'+Date.now();
+  const corps = new Blob(['--'+limite+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify({name:f.name||'photo.jpg', parents:[dossier]})+
+    '\r\n--'+limite+'\r\nContent-Type: '+(f.type||'application/octet-stream')+'\r\n\r\n', f, '\r\n--'+limite+'--']);
+  return driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {method:'POST', headers:{'Content-Type':'multipart/related; boundary='+limite}, body:corps});
+}
+// Bouton « 📷 Photos » : choisit/prend des photos et les dépose dans le dossier de la soumission.
+// La 1re fois, Google demande la permission (bouton « Autoriser »), une seule fois.
+function SoumDeposer({titre, dossier, onDossier, toast, libelle}){
+  const [etat,setEtat]=useState('');
+  const [ok,setOk]=useState(peutDeposer());
+  const ref = useRef(null);
+  const autoriser = async()=>{ try{ await requestToken('consent'); setOk(peutDeposer()); if(!peutDeposer()) toast && toast('Permission refusée — coche « fichiers Drive » dans la fenêtre Google.'); }catch(e){ toast && toast('Connexion annulée'); } };
+  const deposer = async(files)=>{
+    if(!files || !files.length) return;
+    try{
+      let d = dossier;
+      if(!d){ setEtat('Dossier…'); d = await driveDossier(titre, await driveDossier(PHOTOS_RACINE)); await onDossier(d); }
+      for(let i=0;i<files.length;i++){ setEtat('Photo '+(i+1)+'/'+files.length+'…'); await driveDeposer(files[i], d); }
+      delete SOUM_PHOTOS[d];
+      toast && toast(files.length+' photo'+(files.length>1?'s':'')+' ajoutée'+(files.length>1?'s':''));
+      setEtat(''); onDossier(d, true);
+    }catch(e){ setEtat(''); toast && toast('Erreur photos : '+e.message); }
+  };
+  if(!ok) return <button className="btn btn-sm" onClick={autoriser} title="Une seule fois : permet au CRM de déposer des photos dans ton Drive">🔓 Autoriser les photos</button>;
+  return <>
+    <input ref={ref} type="file" accept="image/*,application/pdf" multiple style={{display:'none'}} onChange={e=>{ const f=[...e.target.files]; e.target.value=''; deposer(f); }}/>
+    <button className="btn btn-sm" disabled={!!etat} onClick={()=>ref.current && ref.current.click()}>{etat || libelle || '📷 Photos'}</button>
+  </>;
+}
+
 // Photos d'une note « Soumission … » (dossier Drive gardé par soumissions.gs en colonne J).
 const SOUM_PHOTOS = {};
-function SoumPhotos({dossier}){
+function SoumPhotos({dossier, tick}){
   const [fichiers,setFichiers]=useState(SOUM_PHOTOS[dossier]||null);
   useEffect(()=>{
     if(!dossier || SOUM_PHOTOS[dossier]) return;
@@ -3359,7 +3429,7 @@ function SoumPhotos({dossier}){
       SOUM_PHOTOS[dossier]=f; if(vivant) setFichiers(f);
     }catch(e){ if(vivant) setFichiers([]); } })();
     return ()=>{vivant=false};
-  },[dossier]);
+  },[dossier, tick]);
   if(!dossier) return null;
   return <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginTop:6}}>
     {(fichiers||[]).slice(0,8).map(f=><a key={f.id} href={f.webViewLink} target="_blank" rel="noopener" title={f.name}>
@@ -3388,6 +3458,9 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
   const [q,setQ]=useState('');
   const [nouveau,setNouveau]=useState(null);
   const [details,setDetails]=useState('');
+  const [fichiers,setFichiers]=useState([]);
+  const [tick,setTick]=useState(0);
+  const refFichiers = useRef(null);
   const [occupe,setOccupe]=useState('');
   const aFaire = S.liste.filter(s=>s.type==='À faire').sort((a,b)=>b.date.localeCompare(a.date));
   const envoyees = S.liste.filter(s=>s.type==='Envoyée').sort((a,b)=>b.date.localeCompare(a.date) || (+b.no||0)-(+a.no||0));
@@ -3430,6 +3503,9 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
       </div>
       <SoumNote txt={s.extrait}/>
       {s.pdf && <SoumPhotos dossier={s.pdf}/>}
+      {s.photos && <SoumPhotos dossier={s.photos} tick={tick}/>}
+      {!fini && <div style={{marginTop:6}}><SoumDeposer titre={(s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'} dossier={s.photos} toast={toast}
+        onDossier={async(d, fin)=>{ if(fin) setTick(t=>t+1); else await S.dossierPhotos(s, d); }}/></div>}
       {s.reponse && <div className="muted" style={{fontSize:11.5,marginTop:3}}>↪ {s.reponse}</div>}
       {!fini && proposes(s).map(e=><div key={e.cle} style={{marginTop:6,fontSize:12.5,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',background:'var(--bg3)',padding:'5px 8px',borderRadius:8}}>
         <span>📤 Devis <b>#{e.no}</b> envoyé à cette personne le {cvFmtDay(e.date)}{e.montant!=null && <> · {cvMoney(e.montant)}</>} — c'est celle-là ?</span>
@@ -3494,12 +3570,29 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
         <input autoFocus value={nouveau} onChange={e=>setNouveau(e.target.value)} placeholder="Pour qui / où — ex. : Borne — Jean Tremblay, 12 rue X"/>
         <textarea value={details} onChange={e=>setDetails(e.target.value)} rows={4} placeholder={"Ce qu'il faut faire et le stock nécessaire (une ligne par article)…"} style={{resize:'vertical',fontFamily:'inherit'}}/>
         <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-          <button className="btn btn-sm btn-p" disabled={!nouveau.trim() || occupe==='+'} onClick={async()=>{ setOccupe('+'); try{ await S.ajouter(nouveau.trim(), details.trim()); setNouveau(null); setDetails(''); toast && toast('Soumission à faire ajoutée'); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOccupe(''); }}>Ajouter</button>
-          <button className="btn btn-sm" onClick={()=>{ setNouveau(null); setDetails(''); }}>Annuler</button>
-          <span className="muted" style={{fontSize:11.5}}>📷 Photos : envoie-toi un courriel « Soumission … » avec les photos — elles s'ajoutent ici toutes seules.</span>
+          {peutDeposer() ? <>
+            <input ref={refFichiers} type="file" accept="image/*,application/pdf" multiple style={{display:'none'}} onChange={e=>{ setFichiers(f=>[...f, ...e.target.files]); e.target.value=''; }}/>
+            <button className="btn btn-sm" onClick={()=>refFichiers.current && refFichiers.current.click()}>📷 Photos{fichiers.length ? ' ('+fichiers.length+')' : ''}</button>
+            {fichiers.length>0 && <button className="btn btn-sm" onClick={()=>setFichiers([])} title="Enlever les photos choisies">✕</button>}
+          </> : <button className="btn btn-sm" title="Une seule fois : permet au CRM de déposer des photos dans ton Drive"
+              onClick={async()=>{ try{ await requestToken('consent'); }catch(e){} setTick(t=>t+1); if(!peutDeposer()) toast && toast('Permission refusée — coche « fichiers Drive » dans la fenêtre Google.'); }}>🔓 Autoriser les photos</button>}
+          <button className="btn btn-sm btn-p" disabled={!nouveau.trim() || occupe==='+'} onClick={async()=>{
+            setOccupe('+');
+            try{
+              let d = '';
+              if(fichiers.length){
+                d = await driveDossier(nouveau.trim().slice(0,60)+' ('+cvDay(new Date().toISOString())+')', await driveDossier(PHOTOS_RACINE));
+                for(let i=0;i<fichiers.length;i++){ toast && toast('Photo '+(i+1)+'/'+fichiers.length+'…'); await driveDeposer(fichiers[i], d); }
+              }
+              await S.ajouter(nouveau.trim(), details.trim(), d);
+              setNouveau(null); setDetails(''); setFichiers([]); toast && toast('Soumission à faire ajoutée');
+            }catch(e){ toast && toast('Erreur : '+(e.message||apiErrMsg(e))); }
+            setOccupe('');
+          }}>{occupe==='+' ? 'Ajout…' : 'Ajouter'}</button>
+          <button className="btn btn-sm" onClick={()=>{ setNouveau(null); setDetails(''); setFichiers([]); }}>Annuler</button>
         </div>
       </div>}
-      {listeAFaire.map(s=><CarteAFaire key={s.cle} s={s}/>)}
+      {listeAFaire.map(s=><React.Fragment key={s.cle}>{CarteAFaire({s})}</React.Fragment>)}
       {S.lu && !listeAFaire.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>{ouvertes.length||q ? 'Aucune ne correspond.' : 'Rien à faire 👍'}</div>}
     </div>}
 
@@ -3511,7 +3604,7 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
         {pill('tout','Toutes',envoyees.length,filtre,setFiltre)}
         {filtre==='attente' && totalAttente>0 && <span className="muted" style={{fontSize:12,marginLeft:'auto'}}>Total en attente : <b>{cvMoney(totalAttente)}</b></span>}
       </div>
-      {listeEnv.map(s=><CarteEnvoyee key={s.cle} s={s}/>)}
+      {listeEnv.map(s=><React.Fragment key={s.cle}>{CarteEnvoyee({s})}</React.Fragment>)}
       {S.lu && !listeEnv.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>Aucune soumission ici.</div>}
       {vieux.length>0 && filtre==='tout' && <div style={{marginTop:12}}>
         <div className="muted" style={{fontSize:12,fontWeight:700}}>Anciennes soumissions du CRM</div>
