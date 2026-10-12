@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v89';
+const APP_VERSION = 'v90';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3817,7 +3817,7 @@ function CvAcheteFacture({job, achats, facLignes}){
   </div>;
 }
 
-function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged}){
+function ClientJobDetail({job, clients, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged}){
   const [reglees, marquerRegle] = useVerifsReglees(cfg);
   appels = appels || {parNumero:{}, parFacture:{}};
   const photo = a => 'https://drive.google.com/file/d/'+a.id+'/view';
@@ -3839,7 +3839,7 @@ function ClientJobDetail({job, factures, appels, courriels, achats, facLignes, a
       <Row k="Équipe">{job.crew.join(', ')}</Row>
       <Row k="Montant PO">{r.ht!=null && <>{cvMoney(r.ht)} avant taxes · {cvMoney(r.ht*1.14975)} taxes incluses</>}</Row>
     </div>
-    {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
+    {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvRattacherPO job={job} clients={clients} onDone={onChanged}/><CvCreerNoJob cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
     <CvGauge job={job}/>
     <CvAcheteFacture job={job} achats={achats} facLignes={facLignes}/>
     {(()=>{ const m=cvMateriel(job, achats); return m.liste.length ? <div style={{fontSize:13,margin:'0 0 10px'}}>
@@ -3908,7 +3908,51 @@ function cvAVerifierClient(client, reglees, archives){
 }
 // En haut de la fiche d'un client : une barre « À vérifier » qui s'ouvre avec la flèche.
 // Chaque point se règle sur place ; il disparaît de la liste et le compteur descend jusqu'à zéro.
-function CvAVerifierClient({av, cfg, factures, marquerRegle, onPick, onChanged}){
+// Particulier qui est en fait une job de contracteur : « 🔗 Rajouter un PO » → choisir le contracteur, puis la job.
+// Le titre des événements devient « CODE PHASE NOM PO (initiales) » ; l'ancien titre est gardé dans la description.
+function CvRattacherPO({job, clients, onDone}){
+  const [ouvert,setOuvert]=useState(false);
+  const [code,setCode]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  if(!job || job.client!=='PART' || !clients) return null;
+  const contracteurs = Object.values(clients).filter(c=>c.code!=='PART').sort((a,b)=>a.label.localeCompare(b.label,'fr'));
+  const jobs = code && clients[code] ? clients[code].jobs.slice().sort((a,b)=>(!a.po)-(!b.po) || a.name.localeCompare(b.name,'fr')) : [];
+  const evs = job.events.filter(e=>e.id && e.calId);
+  const rattacher = async cible=>{
+    setBusy(true); setMsg('');
+    try{
+      let n = 0;
+      for(const e of evs){
+        const ini = String(e.title).split(/\s+/).filter(t=>CREW_INITIALS[t] && t===t.toUpperCase());
+        const titre = [code, e.phase || 'SERV', cible.name, cible.po, ...ini].filter(Boolean).join(' ');
+        const ev = await window.gapi.client.calendar.events.get({calendarId:e.calId, eventId:e.id});
+        const desc = cvComposerDescription((ev.result.description||'')+'\nAncien titre : '+e.title);
+        await window.gapi.client.calendar.events.patch({calendarId:e.calId, eventId:e.id, resource:{summary:titre, description:desc}});
+        n++;
+      }
+      setMsg('✅ '+n+' passage'+(n>1?'s':'')+' rattaché'+(n>1?'s':'')+' à '+code+' '+cible.name+(cible.po?' '+cible.po:'')+'.'); setOuvert(false); setCode('');
+      onDone && onDone();
+    }catch(err){ setMsg('Impossible : '+apiErrMsg(err)); }
+    setBusy(false);
+  };
+  if(!ouvert) return <span>{msg && <span style={{fontSize:12,marginRight:6}}>{msg}</span>}
+    <button className="btn btn-sm" title="C'est une job d'un contracteur : la rattacher à son PO" onClick={()=>setOuvert(true)}>🔗 Rajouter un PO</button></span>;
+  return <div style={{border:'1px solid var(--accent)',borderRadius:8,padding:8,margin:'6px 0',fontSize:12.5,display:'grid',gap:6}}>
+    <div><b>1. Le contracteur</b></div>
+    <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>{contracteurs.map(c=><button key={c.code} className="btn btn-sm" style={code===c.code?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setCode(c.code)}>{c.code} <span className="muted" style={{fontSize:11}}>{c.label!==c.code?c.label:''}</span></button>)}</div>
+    {code && <><div><b>2. La job</b> <span className="muted">({jobs.length})</span></div>
+      <div style={{display:'grid',gap:3,maxHeight:220,overflowY:'auto'}}>
+        {jobs.map(cj=><button key={cj.id} className="btn btn-sm" disabled={busy} style={{textAlign:'left',justifyContent:'flex-start'}} onClick={()=>rattacher(cj)}>
+          <b>{cj.name}</b>{cj.po ? <span className="muted"> · {cj.po}</span> : <span className="muted"> · sans PO</span>}<span className="muted"> · {cvFmtDay(cj.first)}</span></button>)}
+        {!jobs.length && <span className="muted">Aucune job pour ce contracteur.</span>}
+      </div></>}
+    <div className="muted" style={{fontSize:11.5}}>Change le titre de {evs.length} passage{evs.length>1?'s':''} dans l'agenda (l'ancien titre reste dans la description).</div>
+    <div><button className="btn btn-sm" disabled={busy} onClick={()=>{ setOuvert(false); setCode(''); }}>{busy?'…':'Annuler'}</button></div>
+  </div>;
+}
+
+function CvAVerifierClient({av, cfg, factures, marquerRegle, onPick, onChanged, clients}){
   const [ouvert,setOuvert]=useState(false);
   const [grp,setGrp]=useState({fac:true, dup:true});
   if(!av.n) return <div className="card" style={{marginBottom:14,padding:'10px 14px',fontSize:13.5,borderColor:'var(--success)'}}>✅ Rien à vérifier pour ce client.</div>;
@@ -3930,6 +3974,7 @@ function CvAVerifierClient({av, cfg, factures, marquerRegle, onPick, onChanged})
             {e.as && e.as!=='**' ? <span className="muted"> · appel {e.as} — facture à venir</span> : <span style={{color:'var(--danger)'}}> · aucun appel</span>}
             {e.lien && <> · <a href={e.lien} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12}}>événement ↗</a></>}</div>
           <CvInscrirePassage cfg={cfg} e={e} onDone={onChanged}/>
+          {job.client==='PART' && <div style={{marginTop:3}}><CvRattacherPO job={job} clients={clients} onDone={onChanged}/></div>}
         </div>)}</>}
       {dups.length>0 && <><Barre k="dup" titre="Facture écrite aussi sur une autre job" nb={dups.length}/>
         {grp.dup && dups.map(({n,job})=><div key={job.id+'|'+n} style={{paddingLeft:18}}>
@@ -3940,7 +3985,7 @@ function CvAVerifierClient({av, cfg, factures, marquerRegle, onPick, onChanged})
   </div>;
 }
 
-function ClientDetailView({client, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged, onBack, isDesktop}){
+function ClientDetailView({client, clients, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged, onBack, isDesktop}){
   const [filter,setFilter]=useState('all');
   const [q,setQ]=useState('');
   const [sel,setSel]=useState(null);
@@ -3970,7 +4015,7 @@ function ClientDetailView({client, factures, appels, courriels, achats, facLigne
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:10,marginBottom:14}}>
       {tiles.map(([n,l],i)=><div key={i} className="card" style={{padding:12}}><div className="fh" style={{fontSize:22}}>{n}</div><div className="muted" style={{fontSize:12}}>{l}</div></div>)}
     </div>
-    <CvAVerifierClient av={av} cfg={cfg} factures={factures} marquerRegle={marquerRegle} onPick={pick} onChanged={onChanged}/>
+    <CvAVerifierClient av={av} cfg={cfg} factures={factures} marquerRegle={marquerRegle} onPick={pick} onChanged={onChanged} clients={clients}/>
     <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1.2fr) minmax(0,1fr)':'1fr',gap:14,alignItems:'start'}}>
       <div className="card" style={{minWidth:0}}>
         <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
@@ -3999,7 +4044,7 @@ function ClientDetailView({client, factures, appels, courriels, achats, facLigne
           </table>
         </div>
       </div>
-      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} factures={factures} appels={appels} courriels={courriels} achats={achats} facLignes={facLignes} archives={archives} cfg={cfg} registry={registry} events={events} onChanged={onChanged}/></div>
+      <div ref={detailRef} style={{minWidth:0}}><ClientJobDetail job={job} clients={clients} factures={factures} appels={appels} courriels={courriels} achats={achats} facLignes={facLignes} archives={archives} cfg={cfg} registry={registry} events={events} onChanged={onChanged}/></div>
     </div>
   </div>;
 }
@@ -4432,7 +4477,7 @@ function ClientsView({cfg, refreshKey, isDesktop}){
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les clients : {err}</div>;
   const avisLent = lent && lent.length ? <div className="card" style={{marginBottom:12,fontSize:13,borderColor:'var(--warning)'}}>⚠️ Trop long à lire : {lent.join(', ')}. Les données affichées sont incomplètes — essaie « Actualiser » ou reconnecte-toi.</div> : null;
-  if(open && clients[open]) return <ClientDetailView client={clients[open]} factures={factures} appels={appels} courriels={courriels} achats={achats} facLignes={facLignes} archives={archives} cfg={cfg} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
+  if(open && clients[open]) return <ClientDetailView client={clients[open]} clients={clients} factures={factures} appels={appels} courriels={courriels} achats={achats} facLignes={facLignes} archives={archives} cfg={cfg} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)} onBack={()=>setOpen(null)} isDesktop={isDesktop}/>;
   // Contracteurs et particuliers dans la même liste ; la flèche déplie les jobs du client.
   const tous = Object.values(clients).sort((a,b)=>(a.code==='PART')-(b.code==='PART') || b.jobs.length-a.jobs.length);
   const Card = ({c})=>{ const ouvert = deplie[c.code]; const nbAV = cvAVerifierClient(c, reglees, archives).n;
