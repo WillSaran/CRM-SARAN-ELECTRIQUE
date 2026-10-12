@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v83';
+const APP_VERSION = 'v84';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4176,18 +4176,36 @@ let CMD_ENTETES_OK = false;
 // « Commande » en gras (lettres grasses Unicode : visibles partout — iPhone, Google Agenda, Sheet).
 const CMD_TITRE = '📦 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝗲';
 const RE_CMD_LIGNE = /^📦 (𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝗲|Commande) :/, RE_NOTE_LIGNE = /^📦 Note commande :/, RE_CLIENT_LIGNE = /^👤 Client :/;
-// Remet la description en ordre : commande (+ note) en premier, tout le reste au centre, client à la fin.
-// quoi.commande / quoi.note / quoi.client : undefined = garder ce qui est là, '' = enlever.
-// quoi.eviter : téléphone / courriel du client — s'ils sont déjà écrits au centre, on n'ajoute pas la ligne client.
+// Remet la description d'un événement en ordre :
+//   1. 📦 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝗲 : Dubo + Shop — à aller chercher
+//   2. Appel de service / Ordre de travail / Facture (bloc « Suivi », comme avant)
+//   3. la description des travaux (tout le reste, sans y toucher)
+//   4. 📋 Liste de commande (s'il y en a une)
+//   5. 👤 Client : nom · téléphone · courriel
+// quoi.commande / quoi.liste / quoi.client : undefined = garder ce qui est là, '' = enlever.
+// quoi.eviter : téléphone / courriel du client — s'ils sont déjà écrits dans les travaux, on n'ajoute pas la ligne client.
+const RE_KLM_LIGNE = /^(Appel de service|Ordre de travail|Facture)\s*:/i, RE_LISTE_LIGNE = /^📋 Liste de commande/;
 function cvComposerDescription(desc, quoi){
   quoi = quoi || {};
-  const L = String(desc||'').split('\n');
-  let cmd = L.find(l=>RE_CMD_LIGNE.test(l)) || '', note = L.find(l=>RE_NOTE_LIGNE.test(l)) || '', client = L.find(l=>RE_CLIENT_LIGNE.test(l)) || '';
-  const milieu = L.filter(l=>!RE_CMD_LIGNE.test(l) && !RE_NOTE_LIGNE.test(l) && !RE_CLIENT_LIGNE.test(l)).join('\n').replace(/^\s+|\s+$/g,'').replace(/\n{3,}/g,'\n\n');
+  let t = String(desc||'');
+  let suivi = '';
+  const i = t.indexOf('── Suivi ──'), k = t.indexOf('── ↑ ──');
+  if(i>=0 && k>i){ suivi = t.slice(i, k+'── ↑ ──'.length); t = t.slice(0,i)+'\n'+t.slice(k+'── ↑ ──'.length); }
+  let L = t.split('\n');
+  const klm = L.filter(l=>RE_KLM_LIGNE.test(l.trim()));               // appel / OT / facture écrits hors du bloc
+  L = L.filter(l=>!RE_KLM_LIGNE.test(l.trim()));
+  let cmd = L.find(l=>RE_CMD_LIGNE.test(l)) || '', client = L.find(l=>RE_CLIENT_LIGNE.test(l)) || '', liste = '';
+  const li = L.findIndex(l=>RE_LISTE_LIGNE.test(l));
+  if(li>=0){ let fin = L.findIndex((l,x)=>x>li && (RE_CLIENT_LIGNE.test(l) || RE_CMD_LIGNE.test(l))); if(fin<0) fin = L.length;
+    liste = L.slice(li, fin).join('\n').trim(); L = L.slice(0,li).concat(L.slice(fin)); }
+  const vieilleNote = L.find(l=>RE_NOTE_LIGNE.test(l));                // ancien format « 📦 Note commande : … »
+  if(vieilleNote && !liste) liste = '📋 Liste de commande :\n'+vieilleNote.replace(RE_NOTE_LIGNE,'').trim();
+  L = L.filter(l=>!RE_CMD_LIGNE.test(l) && !RE_NOTE_LIGNE.test(l) && !RE_CLIENT_LIGNE.test(l));
+  const travaux = L.join('\n').replace(/^\s+|\s+$/g,'').replace(/\n{3,}/g,'\n\n');
   if(quoi.commande!==undefined) cmd = quoi.commande;
-  if(quoi.note!==undefined) note = quoi.note;
-  if(quoi.client!==undefined && !(quoi.eviter||[]).some(x=>x && milieu.includes(x))) client = quoi.client;
-  return [[cmd, note].filter(Boolean).join('\n'), milieu, client].filter(Boolean).join('\n\n');
+  if(quoi.liste!==undefined) liste = quoi.liste ? '📋 Liste de commande :\n'+quoi.liste : '';
+  if(quoi.client!==undefined && !(quoi.eviter||[]).some(x=>x && travaux.includes(x))) client = quoi.client;
+  return [cmd, suivi || klm.join('\n'), travaux, liste, client].filter(Boolean).join('\n\n');
 }
 // Infos du client d'une job (registre) pour la fin de la description.
 function cvClientInfo(j){ const r = (j && j.reg) || {}; return {client:[r.client, r.tel, r.courriel].filter(Boolean).join(' · '), eviter:[r.tel, r.courriel].filter(Boolean)}; }   // titres « Fournisseur » et « Mode » ajoutés à l'onglet Commandes (une fois)
@@ -4224,7 +4242,7 @@ function useCommandes(cfg){
           const avant = ev.result.description||'';
           const quoi = {client: info.client ? '👤 Client : '+info.client : undefined, eviter: info.eviter};
           if(statut) quoi.commande = statut==='Placée' && (fournisseur || mode) ? CMD_TITRE+' : '+[fournisseur, mode ? mode.toLowerCase() : ''].filter(Boolean).join(' — ') : '';
-          if(note!==undefined && note!==null) quoi.note = note ? '📦 Note commande : '+note : '';
+          if(note!==undefined && note!==null) quoi.liste = note || '';
           const apres = cvComposerDescription(avant, quoi);
           if(apres!==avant) await window.gapi.client.calendar.events.patch({calendarId:info.calId, eventId:info.eventId, resource:{description:apres}});
         }catch(e){ console.warn('Commande : description non mise à jour', e); }
@@ -4307,13 +4325,13 @@ function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande, manue
       {ots.length>0 && <div style={{marginTop:3}}>{e.phase==='FINITION' && !fait && <div style={{fontSize:11,fontWeight:700,color:'var(--success)'}}>📋 Commander avec l'OT :</div>}<CvOTLinks ots={ots}/></div>}
       {!ots.length && c.code!=='PART' && e.phase==='FINITION' && !fait && <div style={{marginTop:3,fontSize:11,color:'var(--warning)',fontWeight:700}}>
         {(manuels||{})[j.id+'|OT du rough reçu (liste de stock pour la finition)'] ? 'Pas d\'OT pour cette job — commande à l\'estime' : '⚠️ Pas d\'OT reçu — commande à l\'estime (ou demande l\'OT aux gars)'}</div>}
-      {cmd.note && <div style={{marginTop:3,fontSize:11.5}}>📦 {cmd.note}</div>}
+      {cmd.note && <div style={{marginTop:3,fontSize:11.5,whiteSpace:'pre-line'}}>📋 {cmd.note}</div>}
       {onCommande && <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:5}}>
         <CvBoutonsCommande cmd={cmd} info={info(x)} onCommande={onCommande}/>
-        <button className="btn btn-sm" title="Ajouter une note (va aussi dans la description de l'événement)" onClick={()=>{ setNoteDe(cle); setNoteTxt(cmd.note||''); }}>📝</button>
+        <button className="btn btn-sm" title="Liste de commande (va aussi dans l'événement, juste avant les infos du client)" onClick={()=>{ setNoteDe(cle); setNoteTxt(cmd.note||''); }}>📋</button>
       </div>}
       {noteDe===cle && <div style={{marginTop:5}}>
-        <textarea value={noteTxt} onChange={ev=>setNoteTxt(ev.target.value)} rows={2} placeholder="Ex. : J'ai 10 gradateurs à la shop" style={{width:'100%',fontSize:12,boxSizing:'border-box'}}/>
+        <textarea value={noteTxt} onChange={ev=>setNoteTxt(ev.target.value)} rows={4} placeholder={"Liste de commande, une ligne par article. Ex. :\n10 gradateurs\n2 boîtes 4x4"} style={{width:'100%',fontSize:12,boxSizing:'border-box'}}/>
         <div style={{display:'flex',gap:4,marginTop:3}}>
           <button className="btn btn-sm btn-p" onClick={()=>{ onCommande(cle, info(x), null, noteTxt.trim()); setNoteDe(null); }}>Enregistrer</button>
           <button className="btn btn-sm" onClick={()=>setNoteDe(null)}>Annuler</button>
