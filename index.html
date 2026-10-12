@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v77';
+const APP_VERSION = 'v78';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -585,9 +585,12 @@ async function inscrirePassage(cfg, e, v){
 // Ajouter un passage (rough, finition, service…) à une job, directement dans l'agenda.
 const cvEquipe = ()=>Object.entries(CREW_COLORS).map(([colorId, nom])=>({colorId, nom, ini:(Object.entries(CREW_INITIALS).find(([,n])=>n===nom)||[''])[0]}));
 function cvSamediProchain(){ const d=new Date(); d.setDate(d.getDate()+((6-d.getDay()+7)%7||7)); return localDateStr(d); }
+// Heures au quart d'heure, de 5 h à 21 h. Journée standard : 7 h à 15 h 30 (30 min de dîner).
+const PASSAGE_HEURES = (()=>{ const L=[]; for(let h=5; h<=21; h++) for(const m of ['00','15','30','45']) L.push(String(h).padStart(2,'0')+':'+m); return L; })();
+function passageHeure(h){ const [a,b]=h.split(':'); return (+a)+' h'+(b!=='00'?' '+b:''); }
 function CvAjouterPassage({job, phaseDefaut, libelle, onDone}){
   const [ouvert,setOuvert]=useState(false);
-  const [f,setF]=useState({phase:phaseDefaut||'FINITION', date:'', debut:'07:00', fin:'', journee:false, qui:'', attente:false});
+  const [f,setF]=useState({phase:phaseDefaut||'FINITION', date:'', debut:'07:00', fin:'15:30', journee:false, qui:'', attente:false});
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState('');
   const pro = job.client!=='PART';
@@ -598,7 +601,7 @@ function CvAjouterPassage({job, phaseDefaut, libelle, onDone}){
     try{
       const date = f.attente ? (f.date || cvSamediProchain()) : f.date;
       const lendemain = (()=>{ const d=new Date(date+'T12:00:00'); d.setDate(d.getDate()+1); return localDateStr(d); })();
-      const fin = (f.fin && f.fin>f.debut) ? f.fin : (()=>{ const [h,m]=f.debut.split(':').map(Number); return String(Math.min(h+8,23)).padStart(2,'0')+':'+String(m).padStart(2,'0'); })();
+      const fin = (f.fin && f.fin>f.debut) ? f.fin : PASSAGE_HEURES[Math.min(Math.max(PASSAGE_HEURES.indexOf(f.debut),0)+34, PASSAGE_HEURES.length-1)];
       const quand = (!f.attente && !f.journee && f.debut) ? {start:{dateTime:date+'T'+f.debut+':00', timeZone:'America/Toronto'}, end:{dateTime:date+'T'+fin+':00', timeZone:'America/Toronto'}}
         : {start:{date}, end:{date:lendemain}};
       const resource = {summary:titre, location:job.address||'', ...quand};
@@ -625,7 +628,11 @@ function CvAjouterPassage({job, phaseDefaut, libelle, onDone}){
         <span className="muted" style={{width:42}}>Heure</span>
         <button className="btn btn-sm" style={!f.journee?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setF({...f,journee:false})}>À une heure</button>
         <button className="btn btn-sm" style={f.journee?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setF({...f,journee:true})}>Toute la journée</button>
-        {!f.journee && <input type="time" value={f.debut} onChange={e=>setF({...f,debut:e.target.value||'07:00'})} onClick={e=>{ try{ e.target.showPicker && e.target.showPicker(); }catch(x){} }} style={{padding:'5px 8px'}}/>}
+        {!f.journee && <><select value={f.debut} onChange={e=>{ const d=e.target.value; setF({...f, debut:d, fin: f.fin>d ? f.fin : PASSAGE_HEURES[Math.min(PASSAGE_HEURES.indexOf(d)+34, PASSAGE_HEURES.length-1)]}); }} style={{padding:'5px 8px'}}>
+            {PASSAGE_HEURES.map(h=><option key={h} value={h}>{passageHeure(h)}</option>)}</select>
+          <span className="muted">à</span>
+          <select value={f.fin} onChange={e=>setF({...f,fin:e.target.value})} style={{padding:'5px 8px'}}>
+            {PASSAGE_HEURES.filter(h=>h>f.debut).map(h=><option key={h} value={h}>{passageHeure(h)}</option>)}</select></>}
       </div>
     </>}
     <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
