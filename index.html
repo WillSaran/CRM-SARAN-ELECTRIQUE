@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v81';
+const APP_VERSION = 'v82';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4220,7 +4220,7 @@ function useCommandes(cfg){
 
 const CMD_FAIT = ['Placée','Rien à commander'];
 const CMD_FOURNISSEURS = ['Dubo','Lumen','Shop'];   // un ou plusieurs (ex. Dubo + Shop)
-const CMD_MODES = ['Livraison','À aller chercher'];
+const CMD_MODES = ['À aller chercher'];   // pas de livraison des fournisseurs pour l'instant : Dubo / Lumen = à aller chercher
 // Une seule commande pour les passages collés d'une même job et même phase (ex. rough sur 2 jours) :
 // si un passage de la même phase à 7 jours ou moins est réglé, celui-ci l'est aussi (via).
 function cvCmd(commandes, job, e){
@@ -4250,15 +4250,15 @@ function CvBoutonsCommande({cmd, info, onCommande}){
     return <span style={{display:'inline-flex',flexDirection:'column',gap:4}}>
       <span style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}><span className="muted" style={{fontSize:11.5}}>Où (un ou plusieurs) :</span>
         {CMD_FOURNISSEURS.map(f=><button key={f} className="btn btn-sm" style={choix.f.includes(f)?sel:null} onClick={()=>bascule(f)}>{choix.f.includes(f)?'✓ ':''}{f==='Shop'?'🏠 Stock de la shop':f}</button>)}</span>
-      {fournisseurs.length>0 && <span style={{display:'flex',gap:4,flexWrap:'wrap'}}>{CMD_MODES.map(m=><button key={m} className="btn btn-sm" style={choix.mode===m?sel:null} onClick={()=>setChoix({...choix, mode:choix.mode===m?'':m})}>{m==='Livraison'?'🚚 Livraison':'🏃 À aller chercher'}</button>)}</span>}
+      {fournisseurs.length>0 && <span className="muted" style={{fontSize:11.5}}>🏃 {fournisseurs.join(' et ')} : à aller chercher</span>}
       <span style={{display:'flex',gap:4}}>
-        <button className="btn btn-sm btn-p" disabled={!choix.f.length} onClick={()=>{ onCommande(cmd.cle, info, 'Placée', undefined, {fournisseur:CMD_FOURNISSEURS.filter(f=>choix.f.includes(f)).join(' + '), mode:fournisseurs.length ? (choix.mode||'') : ''}); setChoix(null); }}>✓ Enregistrer</button>
+        <button className="btn btn-sm btn-p" disabled={!choix.f.length} onClick={()=>{ onCommande(cmd.cle, info, 'Placée', undefined, {fournisseur:CMD_FOURNISSEURS.filter(f=>choix.f.includes(f)).join(' + '), mode:fournisseurs.length ? 'À aller chercher' : ''}); setChoix(null); }}>✓ Enregistrer</button>
         <button className="btn btn-sm" onClick={()=>setChoix(null)}>Annuler</button>
       </span>
     </span>;
   }
   return <span style={{display:'inline-flex',gap:4,flexWrap:'wrap'}}>
-    <button className="btn btn-sm" title="Commande placée : Dubo, Lumen et/ou stock de la shop ; livraison ou à aller chercher" onClick={()=>setChoix({f:[], mode:''})}>✅ Placée…</button>
+    <button className="btn btn-sm" title="Commande placée : Dubo, Lumen et/ou stock de la shop" onClick={()=>setChoix({f:[], mode:''})}>✅ Placée…</button>
     <button className="btn btn-sm" title="Pas besoin de commande (stock déjà là)" onClick={()=>onCommande(cmd.cle, info, 'Rien à commander')}>✓ Pas besoin</button>
   </span>;
 }
