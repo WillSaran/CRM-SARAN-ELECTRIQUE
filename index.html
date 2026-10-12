@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v93';
+const APP_VERSION = 'v94';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1760,7 +1760,8 @@ function CvDocuments({docs, type, setType, fournisseur}){
     {!liste.length ? <div className="muted" style={{fontSize:13}}>Aucun document.</div>
       : (tout ? liste : liste.slice(0,15)).map((d,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'7px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
         <div style={{minWidth:0,flex:'1 1 220px'}}><b>{d.fournisseur}</b>{d.num && <> #{d.num}</>} <span className="muted">· {cvFmtDay(d.date)}</span>{d.total!=null && <> · <b>{cvMoney(d.total)}</b></>}
-          {d.ref ? <div><SoumRef txt={d.ref}/></div> : <div className="muted" style={{fontSize:11.5}}>Sans référence{d.fichier ? ' · '+d.fichier : ''}</div>}</div>
+          {soumRefOk(d.ref) ? <div><SoumRef txt={'Réf. '+d.ref}/></div> : <div className="muted" style={{fontSize:11.5}}>Référence pas encore lue</div>}
+          {d.articles && <div style={{fontSize:12,marginTop:2}}>{d.articles}</div>}</div>
         {d.pdf && <a href={'https://drive.google.com/file/d/'+d.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5,whiteSpace:'nowrap'}}>Ouvrir ↗</a>}
       </div>)}
     {liste.length>15 && !tout && <button className="btn btn-sm" style={{marginTop:8}} onClick={()=>setTout(true)}>Voir les {liste.length}</button>}
@@ -3322,8 +3323,12 @@ function useSoumissions(cfg, refreshKey){
         sujet:x[6]||'', extrait:x[7]||'', montant:cvNum(x[8]), pdf:x[9]||'', lien:x[10]||'', reponse:x[11]||'', statut:x[12]||'', le:x[13]||'', note:x[14]||'', photos:x[15]||''})).filter(x=>x.cle);
     }catch(e){ existe = false; }
     try{
-      if(idA){ const d = await lireCache(idA, 'Documents!A1:J', force);
-        recues = (d.result.values||[]).slice(1).filter(r=>r[0] && r[1]==='Soumission').map(r=>({fournisseur:r[0], num:r[2]||'', date:r[3]||'', ref:r[4]||'', total:cvNum(r[5]), pdf:r[6]||'', fichier:r[7]||''})); }
+      if(idA){ const d = await lireCache(idA, 'Documents!A1:L', force);
+        const vus = new Set();
+        recues = (d.result.values||[]).slice(1)
+          .filter(r=>r[0] && r[1]==='Soumission' && !/gagnon/i.test(r[0]))          // Groupe Gagnon = portes et fenêtres (perso)
+          .filter(r=>{ const k = r[6] || (r[0]+'|'+r[2]+'|'+r[3]); if(vus.has(k)) return false; vus.add(k); return true; })
+          .map(r=>({fournisseur:r[0], num:r[2]||'', date:r[3]||'', ref:soumRefOk(r[4]||''), total:cvNum(r[5]), pdf:r[6]||'', fichier:r[7]||'', articles:r[11]||''})); }
     }catch(e){}
     setEtat({lu:true, existe, liste, recues, err:''});
   },[id, idA]);
@@ -3351,7 +3356,9 @@ function useSoumissions(cfg, refreshKey){
 }
 
 // Puce bien visible : la référence / le projet (ex. « DL-EC2 », « Cuisine Rive-Sud — Finition »).
-function SoumRef({txt}){ return txt ? <span style={{display:'inline-block',background:'var(--accent)',color:'#fff',borderRadius:6,padding:'1px 8px',fontSize:12,fontWeight:700,marginTop:3,maxWidth:'100%',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',verticalAlign:'middle'}}>📌 {txt}</span> : null; }
+function SoumRef({txt}){ return txt ? <span style={{display:'inline-block',background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:6,padding:'1px 8px',fontSize:12,fontWeight:600,marginTop:3,maxWidth:'100%',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',verticalAlign:'middle'}}>{txt}</span> : null; }
+// Une « référence » lue qui n'en est pas une (ex. « VENDU À: ») : on ne l'affiche pas.
+function soumRefOk(x){ return x && !/^(vendu|exp[ée]di|livr|factur|date|t[ée]l)|:\s*$/i.test(x) ? x : ''; }
 
 // ── Dépôt de photos dans Drive (permission drive.file : le CRM ne voit/modifie que ce qu'il a créé lui-même).
 const PHOTOS_RACINE = 'Saran CRM — Photos soumissions';
@@ -3454,18 +3461,20 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
   const S = useSoumissions(cfg, refreshKey);
   const [onglet,setOnglet]=useState('afaire');
   const [voirFinies,setVoirFinies]=useState(false);
-  const [filtre,setFiltre]=useState('attente');
+  const [filtre,setFiltre]=useState('');
   const [q,setQ]=useState('');
   const [nouveau,setNouveau]=useState(null);
   const [details,setDetails]=useState('');
   const [fichiers,setFichiers]=useState([]);
   const [tick,setTick]=useState(0);
+  const [ouverte,setOuverte]=useState('');
   const refFichiers = useRef(null);
   const [occupe,setOccupe]=useState('');
   const aFaire = S.liste.filter(s=>s.type==='À faire').sort((a,b)=>b.date.localeCompare(a.date));
   const envoyees = S.liste.filter(s=>s.type==='Envoyée').sort((a,b)=>b.date.localeCompare(a.date) || (+b.no||0)-(+a.no||0));
   const ouvertes = aFaire.filter(s=>!SOUM_FINI.includes(s.statut));
-  const etatEnv = s => s.statut==='Acceptée' ? 'acceptee' : s.statut==='Refusée' ? 'refusee' : 'attente';
+  // Envoyée : à classer (rien de coché) -> ⏳ en attente (on attend la réponse du client) -> acceptée ou refusée.
+  const etatEnv = s => s.statut==='Acceptée' ? 'acceptee' : s.statut==='Refusée' ? 'refusee' : s.statut==='En attente' ? 'attente' : 'aclasser';
   const cherche = (txt)=> !q || cvNorm(txt).includes(cvNorm(q));
   const action = async (s, statut, note)=>{
     setOccupe(s.cle);
@@ -3486,8 +3495,8 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
     return <div style={{padding:'10px 0',borderBottom:'1px solid var(--border)',opacity:fini?.6:1}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
         <div style={{minWidth:0,flex:'1 1 220px'}}>
-          <div style={{fontWeight:700,fontSize:14}}>{s.client || s.sujet}</div>
-          {s.client && s.sujet && s.sujet!==s.client && !cvNorm(s.sujet).endsWith(cvNorm(s.client)) && <div><SoumRef txt={s.sujet.replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'')}/></div>}
+          <div onClick={()=>setOuverte(o=>o===s.cle?'':s.cle)} style={{fontWeight:700,fontSize:14,cursor:'pointer'}}>{ouverte===s.cle?'▾ ':'▸ '}{s.client || s.sujet}</div>
+          {s.client && s.sujet && !cvNorm(s.sujet).includes(cvNorm(s.client)) && <div><SoumRef txt={s.sujet.replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'')}/></div>}
           <div className="muted" style={{fontSize:11.5}}>{cvFmtDay(s.date)}{j!=null && j>0 && <> · il y a {j} jour{j>1?'s':''}</>}{s.courriel && <> · {s.courriel}</>}{s.cle.startsWith('M-') && <> · ajoutée à la main</>}</div>
         </div>
         <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
@@ -3501,10 +3510,13 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
           </>}
         </div>
       </div>
+      {ouverte!==s.cle ? (s.extrait && <div className="muted" onClick={()=>setOuverte(s.cle)} style={{fontSize:12,marginTop:3,cursor:'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.extrait.split('\n')[0]}{(s.pdf||s.photos) ? '  · 📷' : ''}</div>) : <>
       <SoumNote txt={s.extrait}/>
       {s.pdf && <SoumPhotos dossier={s.pdf}/>}
       {s.photos && <SoumPhotos dossier={s.photos} tick={tick}/>}
-      {!fini && <div style={{marginTop:6}}><SoumDeposer titre={(s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'} dossier={s.photos} toast={toast}
+      {!s.extrait && !s.pdf && !s.photos && <div className="muted" style={{fontSize:12,marginTop:4}}>Pas de note. Ouvre le courriel ↗ ou ajoute des photos.</div>}
+      </>}
+      {!fini && ouverte===s.cle && <div style={{marginTop:6}}><SoumDeposer titre={(s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'} dossier={s.photos} toast={toast}
         onDossier={async(d, fin)=>{ if(fin) setTick(t=>t+1); else await S.dossierPhotos(s, d); }}/></div>}
       {s.reponse && <div className="muted" style={{fontSize:11.5,marginTop:3}}>↪ {s.reponse}</div>}
       {!fini && proposes(s).map(e=><div key={e.cle} style={{marginTop:6,fontSize:12.5,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',background:'var(--bg3)',padding:'5px 8px',borderRadius:8}}>
@@ -3521,16 +3533,18 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
         <div style={{minWidth:0,flex:'1 1 220px'}}>
           <div style={{fontSize:14}}>{s.no ? <b>#{s.no} </b> : null}<b>{s.client}</b>{s.montant!=null && <> · <b>{cvMoney(s.montant)}</b> <span className="muted" style={{fontSize:11}}>avant taxes</span></>}</div>
           {s.extrait ? <div><SoumRef txt={s.extrait.slice(0,120)}/></div> : (!s.no && s.sujet && <div className="muted" style={{fontSize:12}}>{s.sujet}</div>)}
-          <div className="muted" style={{fontSize:11.5}}>Envoyée le {cvFmtDay(s.date)}{s.courriel && <> · {s.courriel}</>}{st==='attente' && soumJours(s.date)>0 && <> · il y a {soumJours(s.date)} jours</>}</div>
+          <div className="muted" style={{fontSize:11.5}}>Envoyée le {cvFmtDay(s.date)}{s.courriel && <> · {s.courriel}</>}{(st==='attente'||st==='aclasser') && soumJours(s.date)>0 && <> · il y a {soumJours(s.date)} jours</>}</div>
         </div>
         <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
           {lienPdf(s.pdf)}{lienGmail(s)}
-          {st==='attente' ? <>
+          {st==='aclasser' && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'En attente')} title="Envoyée, j'attends la réponse du client">⏳ En attente</button>}
+          {(st==='aclasser' || st==='attente') ? <>
             <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Acceptée')} style={{borderColor:'var(--green, #2e9e5b)',color:'var(--green, #2e9e5b)'}}>✓ Acceptée</button>
             <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Refusée')}>✕ Refusée</button>
+            {st==='attente' && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'')} title="Remettre « à classer »">↩</button>}
           </> : <>
             <span className="badge" style={{background: st==='acceptee' ? 'var(--green, #2e9e5b)' : 'var(--bg3)', color: st==='acceptee' ? '#fff' : undefined}}>{s.statut}</span>
-            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'')}>↩</button>
+            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'En attente')} title="Remettre en attente">↩</button>
           </>}
         </div>
       </div>
@@ -3539,7 +3553,8 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
   };
 
   const listeAFaire = (voirFinies ? aFaire : ouvertes).filter(s=>cherche([s.client,s.sujet,s.extrait,s.courriel].join(' ')));
-  const listeEnv = envoyees.filter(s=>(filtre==='tout' || etatEnv(s)===filtre) && cherche([s.no,s.client,s.extrait,s.courriel].join(' ')));
+  const filtreEnv = filtre || (envoyees.some(s=>etatEnv(s)==='aclasser') ? 'aclasser' : 'attente');
+  const listeEnv = envoyees.filter(s=>(filtreEnv==='tout' || etatEnv(s)===filtreEnv) && cherche([s.no,s.client,s.extrait,s.courriel].join(' ')));
   // Reçues : documents des fournisseurs (Achats) + ce qu'Éclairage Saran envoie par courriel (lignes « Reçue »).
   const recuesTout = [...S.recues, ...S.liste.filter(s=>s.type==='Reçue').map(s=>({fournisseur:s.client||'Éclairage Saran', num:'', date:s.date, ref:s.sujet, total:s.montant, pdf:s.pdf, fichier:s.extrait, lien:s.lien}))];
   const recues = recuesTout.filter(d=>cherche([d.fournisseur,d.num,d.ref,d.fichier].join(' '))).sort((a,b)=>b.date.localeCompare(a.date));
@@ -3553,7 +3568,7 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
     </div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
       {pill('afaire','📝 À faire',ouvertes.length,onglet,setOnglet)}
-      {pill('envoyees','📤 Envoyées',envoyees.length,onglet,setOnglet)}
+      {pill('envoyees','📤 Envoyées',envoyees.filter(s=>['aclasser','attente'].includes(etatEnv(s))).length,onglet,setOnglet)}
       {pill('recues','📥 Reçues des fournisseurs',recuesTout.length,onglet,setOnglet)}
     </div>
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (client, adresse, numéro…)" style={{width:'100%',boxSizing:'border-box',marginBottom:10}}/>
@@ -3598,15 +3613,17 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
 
     {onglet==='envoyees' && <div className="card">
       <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:4}}>
-        {pill('attente','En attente',nEnv('attente'),filtre,setFiltre)}
-        {pill('acceptee','Acceptées',nEnv('acceptee'),filtre,setFiltre)}
-        {pill('refusee','Refusées',nEnv('refusee'),filtre,setFiltre)}
-        {pill('tout','Toutes',envoyees.length,filtre,setFiltre)}
-        {filtre==='attente' && totalAttente>0 && <span className="muted" style={{fontSize:12,marginLeft:'auto'}}>Total en attente : <b>{cvMoney(totalAttente)}</b> avant taxes</span>}
+        {pill('aclasser','📬 À classer',nEnv('aclasser'),filtreEnv,setFiltre)}
+        {pill('attente','⏳ En attente',nEnv('attente'),filtreEnv,setFiltre)}
+        {pill('acceptee','✓ Acceptées',nEnv('acceptee'),filtreEnv,setFiltre)}
+        {pill('refusee','✕ Refusées',nEnv('refusee'),filtreEnv,setFiltre)}
+        {pill('tout','Toutes',envoyees.length,filtreEnv,setFiltre)}
+        {filtreEnv==='attente' && totalAttente>0 && <span className="muted" style={{fontSize:12,marginLeft:'auto'}}>Total en attente : <b>{cvMoney(totalAttente)}</b> avant taxes</span>}
       </div>
       {listeEnv.map(s=><React.Fragment key={s.cle}>{CarteEnvoyee({s})}</React.Fragment>)}
       {S.lu && !listeEnv.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>Aucune soumission ici.</div>}
-      {vieux.length>0 && filtre==='tout' && <div style={{marginTop:12}}>
+      {filtreEnv==='aclasser' && listeEnv.length>0 && <div className="muted" style={{fontSize:11.5,margin:'4px 0'}}>Tes soumissions envoyées pas encore classées : mets-les ⏳ en attente si tu attends une réponse, ou ✓ / ✕ si c'est réglé.</div>}
+      {vieux.length>0 && filtreEnv==='tout' && <div style={{marginTop:12}}>
         <div className="muted" style={{fontSize:12,fontWeight:700}}>Anciennes soumissions du CRM</div>
         {vieux.map(s=><div key={s.id} className="muted" style={{fontSize:12.5,padding:'4px 0'}}>{s.date} · {fmtMoney(s.total)} · {s.statut}</div>)}
       </div>}
@@ -3616,7 +3633,8 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
       <div className="muted" style={{fontSize:11.5,marginBottom:4}}>Soumissions reçues de tes fournisseurs (lues par La mémoire — Achats).</div>
       {recues.slice(0,60).map((d,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
         <div style={{minWidth:0,flex:'1 1 220px'}}><b>{d.fournisseur}</b>{d.num && <> #{d.num}</>} <span className="muted">· {cvFmtDay(d.date)}</span>{d.total!=null && <> · <b>{cvMoney(d.total)}</b></>}
-          {d.ref ? <div><SoumRef txt={d.ref}/></div> : <div className="muted" style={{fontSize:11.5}}>Sans référence{d.fichier ? ' · '+d.fichier : ''}</div>}</div>
+          {soumRefOk(d.ref) ? <div><SoumRef txt={'Réf. '+d.ref}/></div> : <div className="muted" style={{fontSize:11.5}}>Référence pas encore lue</div>}
+          {d.articles && <div style={{fontSize:12,marginTop:2}}>{d.articles}</div>}</div>
         <span style={{display:'flex',gap:8}}>{lienPdf(d.pdf)}{d.lien && <a href={d.lien} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5,whiteSpace:'nowrap'}}>Courriel ↗</a>}</span>
       </div>)}
       {S.lu && !recues.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>Aucune soumission de fournisseur.</div>}
