@@ -144,7 +144,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v78';
+const APP_VERSION = 'v79';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1612,7 +1612,7 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
   add(plans, 'Plans dans l\'événement', 'Aucun plan attaché aux passages', 'Ils s\'ajoutent tout seuls à la passe de 15 h / 3 h si le plan est dans le dossier ; sinon, attache-le à l\'événement', !pro);
   if(pro && ro.some(e=>e.day<today)) add(ots.length>0, 'OT du rough reçu (liste de stock pour la finition)', 'Le rough est fait mais aucun OT papier n\'est classé', 'Les gars doivent déposer la photo de l\'OT dans « B- REF OT » ou « 1-PAD »');
   add(!cmdAPlacer.length, 'Commande de stock placée (cette semaine et la prochaine)', cmdAPlacer.map(e=>cvFmtDay(e.day)+(e.phase?' '+e.phase.toLowerCase():'')).join(', ')+' : commande à placer', 'Agenda → Commandes de la semaine → ✅', !avenir.length);
-  E[E.length-1].cmd = cmdAPlacer;
+  E[E.length-1].cmd = avenir.filter(e=>e.day<=cvFinSemaineProchaine());   // tous les passages des 2 semaines, placés ou non
   const fils = (job.po && courriels && courriels[job.po]) || [];
   const aRepondre = fils.filter(f=>/toi de r/i.test(f.statut));
   if(fils.length) add(!aRepondre.length, 'Courriels répondus', aRepondre.map(f=>'« '+f.sujet+' » ('+cvFmtDay(f.dernier)+')').join(', ')+' attend ta réponse', 'Gmail — ouvre le fil dans la section Courriels plus bas');
@@ -1925,15 +1925,17 @@ function ProjetsSuivi({cfg, refreshKey}){
             {!e.ok && /^OT du rough/.test(e.titre) && <div style={{marginTop:3,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
               <button className="btn btn-sm" title="Il n'y a pas d'OT pour cette job : l'étape devient faite" onClick={()=>basculerEtape(j.id, e.titre, true)}>Pas d'OT</button>
               <span className="muted" style={{fontSize:12}}>ou les gars déposent la photo dans « B- REF OT » / « 1-PAD »</span></div>}
-            {!e.ok && e.cmd && e.cmd.length>0 && <div style={{marginTop:3,display:'grid',gap:4}}>
+            {e.cmd && e.cmd.length>0 && <div style={{marginTop:3,display:'grid',gap:4}}>
               {e.cmd.map(ev=>{ const info = {day:ev.day, job:(c.code!=='PART'?c.code+' ':'')+j.name+(ev.phase?' '+ev.phase:''), ot:cvJobOTs(j, ap).map(o=>o.label).join(' '), eventId:ev.id, calId:ev.calId};
-                const cle = ev.id || (ev.day+'|'+j.id);
+                const cle = ev.id || (ev.day+'|'+j.id), st = ((commandes||{})[cle]||{}).statut || '', fait = CMD_FAIT.includes(st);
                 return <div key={cle} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-                  <span style={{fontSize:12.5}}>{cvFmtDay(ev.day)} {ev.phase ? ev.phase.toLowerCase() : ''}</span>
-                  <button className="btn btn-sm" title="Commande placée chez le fournisseur" onClick={()=>enregistrerCommande(cle, info, 'Placée')}>✅ Placée</button>
-                  <button className="btn btn-sm" title="Pas besoin de commande (stock déjà là) — l'étape devient verte" onClick={()=>enregistrerCommande(cle, info, 'Rien à commander')}>✓ Pas besoin</button>
+                  <span style={{fontSize:12.5,minWidth:92}}>{cvFmtDay(ev.day)} {ev.phase ? ev.phase.toLowerCase() : ''}</span>
+                  {fait
+                    ? <button className="btn btn-sm" style={{color:'var(--success)',borderColor:'var(--success)',fontWeight:700}} title="Cliquer pour remettre « à placer »" onClick={()=>enregistrerCommande(cle, info, 'À placer')}>{st==='Placée'?'✅ Placée':'✓ Pas besoin'} ↩</button>
+                    : <><button className="btn btn-sm" title="Commande placée chez le fournisseur" onClick={()=>enregistrerCommande(cle, info, 'Placée')}>✅ Placée</button>
+                      <button className="btn btn-sm" title="Pas besoin de commande (stock déjà là)" onClick={()=>enregistrerCommande(cle, info, 'Rien à commander')}>✓ Pas besoin</button></>}
                 </div>; })}
-              <div className="muted" style={{fontSize:11.5}}>Aussi dans Agenda → Commandes de la semaine.</div></div>}
+              <div className="muted" style={{fontSize:11.5}}>Même liste que Agenda → Commandes de la semaine : coché ici = coché là.</div></div>}
             {!e.ok && !/^OT du rough/.test(e.titre) && !(e.cmd && e.cmd.length) && <div className="muted" style={{fontSize:12}}>Où : {e.ou}</div>}</div>
           {!e.ok ? <button className="btn btn-sm" title="Marquer comme fait" style={{color:'var(--warning)',borderColor:'var(--warning)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, true)}>Non</button>
             : e.manuel ? <button className="btn btn-sm" title="Décocher" style={{color:'var(--success)',fontWeight:700}} onClick={()=>basculerEtape(j.id, e.titre, false)}>Oui ✓</button> : <span/>}
