@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v97';
+const APP_VERSION = 'v98';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3211,6 +3211,11 @@ function FacturesView({cfg, refreshKey}){
   // Papiers déposés dans le dossier partagé « 1-PAD SERVICE À TRAITER » (lu en direct dans le Drive).
   const [papiers,setPapiers]=useState([]);
   const [padErr,setPadErr]=useState('');
+  // Registre des appels (La mémoire) : papiers déjà traités par La mémoire mais pas encore inscrits au Suivi (ex. AP 1744 Curpas).
+  const [registre,setRegistre]=useState([]);
+  useEffect(()=>{ if(!cfg.memoireAppelsSpreadsheetId) return; let ok=true;
+    lireCache(cfg.memoireAppelsSpreadsheetId, 'A1:J', refreshKey>0 || tick>0).then(r=>{ if(ok) setRegistre((r.result.values||[]).slice(1).map(x=>({ap:(x[0]||'').trim(), facture:(x[1]||'').trim(), ot:(x[2]||'').trim(), po:(x[3]||'').trim(), client:x[4]||'', id:x[6]||''})).filter(x=>(x.ap||x.ot) && !x.facture)); }).catch(()=>{});
+    return ()=>{ ok=false; }; },[cfg.memoireAppelsSpreadsheetId, refreshKey, tick]);
   useEffect(()=>{ let ok=true; lirePad(refreshKey>0).then(g=>{ if(ok){ setPapiers(g); setPadErr(''); } })
     .catch(e=>{ if(ok) setPadErr(e.message==='acces' ? 'acces' : apiErrMsg(e)); }); return ()=>{ ok=false; }; },[refreshKey, tick]);
   useEffect(()=>{
@@ -3232,8 +3237,33 @@ function FacturesView({cfg, refreshKey}){
   const nom = c => c==='PARTICULIER' ? 'Particuliers' : c;
   const contracteurs = [...new Set(rows.map(r=>r.contracteur))].sort((a,b)=>(a==='PARTICULIER')-(b==='PARTICULIER') || a.localeCompare(b,'fr'));
   const base = rows.filter(r=>(!filterC || r.contracteur===filterC) && (!q || cvNorm([r.projet,r.adresse,r.appelService,r.facture,r.contracteur].join(' ')).includes(cvNorm(q))));
-  const manquantes = base.filter(r=>r.statutFacture==='manquant' && r.estPasseOuAujourdhui);
-  const traitement = base.filter(r=>r.statutFacture==='en_traitement' && r.estPasseOuAujourdhui);
+  // AP / OT du registre (sans facture, pas encore inscrits nulle part au Suivi) → le passage « rien d'inscrit » le plus récent de cette job.
+  const GENERIQUES = new Set(['CRS','SERV','SERVICE','FINITION','ROUGH','AJUST','AJUSTEMENT','AJUSTEMENTS','PART','PAY','PAYNE','ASC','SAR','GGP','BOM','GOU','JOY','RROY','5PIL','PREP','EXTRA','BORNE']);
+  const inscrits = new Set(rows.flatMap(r=>[r.appelService, r.ordreTravail]).flatMap(v=>String(v||'').split(/[\s,;]+/)).filter(Boolean));
+  const kLigne = r => r.onglet+'|'+r.ligne;
+  const recusParLigne = useMemo(()=>{
+    const m = {};
+    registre.filter(e=>!inscrits.has(e.ap||'#') && !inscrits.has(e.ot||'#')).forEach(e=>{
+      const mots = padMots(e.client).filter(w=>!GENERIQUES.has(w) && w.length>=4);
+      const po = e.po ? cvNorm(e.po) : '';
+      const c = rows.filter(r=>r.statutFacture==='manquant' && r.estPasseOuAujourdhui && (
+        (po && cvNorm(r.projet).includes(po)) || (mots.length>0 && (()=>{ const mr=new Set(padMots(r.projet)); return mots.every(w=>mr.has(w)); })())))
+        .sort((a,b)=>(b.dateObj||0)-(a.dateObj||0))[0];
+      if(c) (m[kLigne(c)] = m[kLigne(c)] || []).push(e);
+    });
+    return m;
+  },[registre, rows]);
+  const manquantes = base.filter(r=>r.statutFacture==='manquant' && r.estPasseOuAujourdhui && !recusParLigne[kLigne(r)]);
+  const traitement = base.filter(r=>r.estPasseOuAujourdhui && (r.statutFacture==='en_traitement' || (r.statutFacture==='manquant' && recusParLigne[kLigne(r)])));
+  // Même job, passages à 7 jours ou moins d'écart = une seule carte (un seul papier, une seule facture).
+  const cleJob = r => { const t = String(r.projet||r.adresse||'').toUpperCase();
+    const po = (t.match(/\bP0\d{4}\b/) || t.match(/\b[A-Z]{2,5}-\d{3,}\b/) || [])[0];
+    if(po) return r.contracteur+'|'+po;
+    return r.contracteur+'|'+padMots(t).filter(w=>!GENERIQUES.has(w) && !/^[A-Z]{2,3}$/.test(w)).join(' '); };
+  const grouper = l => { const tri = l.slice().sort((a,b)=>cleJob(a).localeCompare(cleJob(b)) || ((a.dateObj||0)-(b.dateObj||0)));
+    const out=[]; tri.forEach(r=>{ const g = out[out.length-1];
+      if(g && cleJob(g[0])===cleJob(r) && r.dateObj && g[g.length-1].dateObj && (r.dateObj-g[g.length-1].dateObj)<=7*864e5) g.push(r); else out.push([r]); });
+    return out.sort((a,b)=>((a[0].dateObj||0)-(b[0].dateObj||0))); };
   const annulees = base.filter(r=>r.statutFacture==='annule');
   const vieux = (a,b)=>((a.dateObj||0)-(b.dateObj||0));
   const recents = (a,b)=>((b.dateObj||0)-(a.dateObj||0));
@@ -3258,6 +3288,35 @@ function FacturesView({cfg, refreshKey}){
               {r.statutFacture==='annule' && <button className="btn btn-sm" disabled={busy===k} onClick={()=>marquer(r, false)}>{busy===k?'…':'↩ Remettre à facturer'}</button>}
             </div>
           </div>; };
+  const Groupe = g => { const r0 = g[0], k = kLigne(r0)+'|g', j = jours(r0);
+    const titres = [...new Set(g.map(r=>r.projet||r.adresse||'—'))];
+    const recus = g.flatMap(r=>recusParLigne[kLigne(r)]||[]);
+    const aps = [...new Set(recus.map(e=>e.ap).filter(Boolean))], ots = [...new Set(recus.map(e=>e.ot).filter(Boolean))];
+    const pad = g.some(r=>r.statutFacture==='manquant') && !recus.length && padPourLigne(papiers, r0);
+    const inscrire = async (ap, ot)=>{ setBusy(k); try{ for(const r of g){ if(ap && !r.appelService) await suiviEcrireCellule(id, r, 'K', ap); if(ot && !r.ordreTravail) await suiviEcrireCellule(id, r, 'L', ot); } setTick(t=>t+1); }catch(e){ alert('Impossible : '+apiErrMsg(e)); } setBusy(''); };
+    return <div key={k} style={{padding:'9px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
+        <div style={{minWidth:0}}>{titres.map((t,i)=><div key={i}><b>{t}</b></div>)}
+          {r0.adresse && <div className="muted" style={{fontSize:12}}>{r0.adresse}</div>}
+          {g.length>1 && <div style={{fontSize:12,marginTop:2,color:'var(--accent)'}}>🔗 {g.length} passages combinés : {g.map(r=>r.date).join(' + ')}</div>}
+          <div style={{fontSize:12.5,marginTop:2}}>
+            {recus.length ? <span style={{color:'var(--warning)',fontWeight:700}}>📄 {aps.length?'AP '+aps.join(', '):''}{ots.length?(aps.length?' · ':'')+'OT '+ots.join(', '):''} reçu — pas encore inscrit au Suivi</span> : <Statut r={g.find(r=>r.statutFacture==='en_traitement')||r0}/>}
+            {r0.ordreTravail ? <span className="muted"> · OT {r0.ordreTravail}</span> : ''}
+          </div>
+        </div>
+        <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
+          <div className="muted" style={{fontSize:12}}>{g.length>1 ? r0.date+' → '+g[g.length-1].date : r0.date}</div>
+          {j!=null && <div style={{fontSize:12,fontWeight:700,color:j>=14?'var(--danger)':j>=7?'var(--warning)':'var(--muted)'}}>il y a {j} j</div>}
+        </div>
+      </div>
+      <div style={{marginTop:5,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+        {recus.length>0 && <button className="btn btn-sm btn-p" disabled={busy===k} onClick={()=>inscrire(aps.join(', '), ots.join(', '))} title={g.length>1?'Inscrit le même papier sur les '+g.length+' passages':''}>✍ Inscrire {[aps.length?'AP '+aps.join(', '):'', ots.length?'OT '+ots.join(', '):''].filter(Boolean).join(' + ')} au Suivi{g.length>1?' ('+g.length+' passages)':''}</button>}
+        {recus.filter(e=>e.id).map(e=><a key={e.id} className="btn btn-sm" href={'https://drive.google.com/file/d/'+e.id+'/view'} target="_blank" rel="noopener" style={{textDecoration:'none'}}>{e.ap?'AP '+e.ap:'OT '+e.ot} ↗</a>)}
+        {pad && <><span style={{fontSize:12,color:'var(--accent)'}}>📄 Papier au PAD{pad.ap.length ? ' : AP '+pad.ap.join(', ') : ''}{pad.ot.length ? ' · OT '+pad.ot.join(', ') : ''}</span>
+          {pad.ap.length>0 && <button className="btn btn-sm btn-p" disabled={busy===k} onClick={()=>inscrire(pad.ap.join(', '), pad.ot.join(', '))}>✍ Inscrire au Suivi{g.length>1?' ('+g.length+' passages)':''}</button>}</>}
+        <button className="btn btn-sm" disabled={busy===k} title="Met « ** » dans les colonnes K et M du Sheet" onClick={async()=>{ for(const r of g) await marquer(r, true); }}>{busy===k?'…':'✕ Pas à facturer'}</button>
+      </div>
+    </div>; };
   // Dossier d'un particulier : le titre sans la phase ni les initiales des gars (« SERV Jean Tremblay JG » → « Jean Tremblay »).
   const dossierDe = r => { const t = String(r.projet||r.adresse||'—').replace(/^\s*((PART|ROUGH|FINITION|FIN|SERV|SERVICE|AJUST|RAPUP|PREP)\b\s*)+/i,'').replace(/(\s+[A-ZÉÈ]{2,3})+\s*$/,'').trim(); return t || (r.projet||'—'); };
   const Statut = ({r}) => r.statutFacture==='complet' ? <span style={{color:'var(--success)',fontWeight:700}}>Facture {r.facture}</span>
@@ -3305,13 +3364,13 @@ function FacturesView({cfg, refreshKey}){
         {vue!=='afacturer' && liste.slice(0,300).map(Ligne)}
         {vue==='afacturer' && [['manquant','🔴 Factures manquantes — rien d\'inscrit (ni appel ni facture)', manquantes],['traitement','🟠 En traitement — papier traité, appel inscrit, facture à faire', traitement]].map(([cle, titre, l])=>{
           if(!l.length) return null;
-          const groupes = contracteurs.map(c=>[c, l.filter(r=>r.contracteur===c).sort(vieux)]).filter(([,g])=>g.length);
+          const groupes = contracteurs.map(c=>[c, grouper(l.filter(r=>r.contracteur===c))]).filter(([,g])=>g.length);
           return <div key={cle} style={{marginBottom:14}}>
             <div className="fh" style={{fontSize:15,margin:'4px 0 6px',color:cle==='manquant'?'var(--danger)':'var(--warning)'}}>{titre} <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{l.length}</span></div>
             {groupes.map(([c,g])=><div key={c} style={{marginBottom:8}}>
               <div style={{fontWeight:700,fontSize:13.5,padding:'6px 8px',background:'var(--bg3)',borderRadius:6}}>{nom(c)} · {g.length}
-                {c==='PARTICULIER' && <span className="muted" style={{fontWeight:400,fontSize:12}}> ({[...new Set(g.map(dossierDe))].join(' · ')})</span>}</div>
-              {g.slice(0,150).map(Ligne)}
+                {c==='PARTICULIER' && <span className="muted" style={{fontWeight:400,fontSize:12}}> ({[...new Set(g.map(x=>dossierDe(x[0])))].join(' · ')})</span>}</div>
+              {g.slice(0,150).map(Groupe)}
             </div>)}
           </div>; })}
       </div>}
