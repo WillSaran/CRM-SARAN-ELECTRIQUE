@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v100';
+const APP_VERSION = 'v103';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1680,7 +1680,10 @@ function CvCourriels({liste}){
 // ── Fournisseurs : factures d'achat (Dubo, Lumen, Groupe Gagnon, Westburne), lien avec les jobs, stock ──
 function cvJobCle(c, j){ return (c.code!=='PART' ? c.code+' ' : '')+j.name+(j.po?' '+j.po:''); }
 // Matériel d'une job : sous-total des achats associés à la job.
-const CV_DESTS = ['Inventaire','Shop','Camion 7','Camion 14','Camion 25'];
+const CV_DESTS = ['Entrepôt','Shop','Camion 7','Camion 14','Camion 25'];
+// « Inventaire » s'appelle maintenant Entrepôt (code ENT) — les anciennes lignes « Inventaire » sont lues comme Entrepôt.
+function cvDest(j){ return /^inventaire$/i.test(String(j||'').trim()) ? 'Entrepôt' : (j||''); }
+const CV_DEST_REF = {'Entrepôt':'ENT'};   // référence écrite sur la commande au fournisseur
 function cvMateriel(job, achats){
   const l = (achats||[]).filter(a=>a.job && !CV_DESTS.includes(a.job) && ((job.po && a.job.includes(job.po)) || cvNorm(a.job).endsWith(cvNorm(job.name))));
   return {liste:l, total:l.reduce((t,a)=>t+a.st,0)};
@@ -1732,7 +1735,7 @@ function CvChoixJob({clients, propose, onChoix}){
   return <div style={{marginTop:6}}>
     <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
       {propose && pill('✓ '+propose, ()=>onChoix(propose), {background:'var(--accent)',color:'#fff',border:'none'})}
-      {CV_DESTS.map(d=>pill((d==='Inventaire'?'📦 ':d==='Shop'?'🏠 ':'🚚 ')+d, ()=>onChoix(d)))}
+      {CV_DESTS.map(d=>pill((d==='Entrepôt'?'📦 ':d==='Shop'?'🏠 ':'🚚 ')+d, ()=>onChoix(d)))}
       {pill('✏️ Autre…', ()=>setAutre(autre===null?'':null))}
     </div>
     <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5}}>
@@ -1806,7 +1809,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
     const tuiles = [[cvMoney(somme(liste.filter(a=>date(a).startsWith(mois)))),'ce mois-ci'],[cvMoney(somme(liste.filter(a=>date(a).startsWith(moisPasse)))),'le mois passé'],[cvMoney(somme(liste)),'total, avant taxes'],[liste.length,'factures']];
     if(!dest){ tuiles.push([liste.filter(a=>!a.job).length,'à associer']); tuiles.push([cvMoney(somme(liste.filter(a=>CV_DESTS.includes(a.job)))),'stock / camions / shop']); }
     const parJob = dest ? null : Object.entries(liste.filter(a=>a.job).reduce((m,a)=>{ m[a.job]=(m[a.job]||0)+(a.st||0); return m; },{})).sort((a,b)=>b[1]-a[1]).slice(0,8);
-    return {titre: dest ? ((dest==='Inventaire'?'📦 ':dest==='Shop'?'🏠 ':'🚚 ')+dest+' — factures envoyées ici') : ouvert+' — toutes les factures', fournisseur: dest?'':ouvert, liste, tuiles, parJob: parJob && parJob.length ? parJob : null};
+    return {titre: dest ? ((dest==='Entrepôt'?'📦 ':dest==='Shop'?'🏠 ':'🚚 ')+dest+' — factures envoyées ici') : ouvert+' — toutes les factures', fournisseur: dest?'':ouvert, liste, tuiles, parJob: parJob && parJob.length ? parJob : null};
   })();
   const Facture = ({a, assoc})=>{ const d = detail===a.row;
     return <div style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
@@ -1834,7 +1837,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
         <div className="muted" style={{fontSize:11.5}}>ce mois-ci · {v.liste.length} factures{n ? <> · <span style={{color:'var(--warning)'}}>{n} à associer</span></> : ''}</div>
       </div>; })}
       {CV_DESTS.filter(d=>parDest[d]).map(d=><div key={d} className="card" style={{padding:12,cursor:'pointer',borderColor:ouvert==='dest:'+d?'var(--accent)':undefined}} onClick={()=>setOuvert(ouvert==='dest:'+d?null:'dest:'+d)}>
-        <div className="muted" style={{fontSize:12}}>{d==='Inventaire'?'📦 ':d==='Shop'?'🏠 ':'🚚 '}{d} ›</div>
+        <div className="muted" style={{fontSize:12}}>{d==='Entrepôt'?'📦 ':d==='Shop'?'🏠 ':'🚚 '}{d} ›</div>
         <div style={{fontSize:18,fontWeight:800}}>{cvMoney(parDest[d])}</div>
         <div className="muted" style={{fontSize:11.5}}>avant taxes</div>
       </div>)}
@@ -2162,6 +2165,9 @@ function DashboardFacturesCard({cfg, refreshKey, onNavigate}){
 function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
   const [loading,setLoading]=useState(true);
   const [total,setTotal]=useState(0);
+  const [noms,setNoms]=useState([]);
+  const conf = useSemainesConfirmees(cfg, refreshKey);
+  const semPassee = (()=>{ const d=new Date(); d.setDate(d.getDate()-7); return getWeek(d); })();
   const [err,setErr]=useState(false);
   useEffect(()=>{
     if(!cfg.punchproSpreadsheetId){ setLoading(false); return; }
@@ -2174,6 +2180,9 @@ function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
         const table=heuresParEmployeSemaine(pts, week);
         const dateStrs=weekDatesArr(week).map(localDateStr);
         setTotal(emps.reduce((s,e)=>{ const row=table[e.nom]||{}; return s+dateStrs.reduce((a,d)=>a+(row[d]||0),0); },0));
+        // Employés qui ont travaillé la semaine passée : ceux qui doivent la confirmer
+        const tPassee=heuresParEmployeSemaine(pts, semPassee);
+        setNoms(emps.map(e=>e.nom).filter(n=>Object.values(tPassee[n]||{}).some(h=>h>0)));
       })
       .catch(()=>{ if(!cancelled) setErr(true); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
@@ -2182,6 +2191,9 @@ function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
   return <div className="card" style={{flex:'1 1 200px',minWidth:180,cursor:'pointer'}} onClick={()=>onNavigate('heures')}>
     <div style={{fontSize:26,fontWeight:800}}>{loading?'…':err?'—':fmtH(total)}</div>
     <div className="muted" style={{fontSize:12.5,marginTop:2}}>Heures d'équipe cette semaine</div>
+    {conf.pret && !conf.absent && noms.length>0 && (()=>{ const ok=noms.filter(n=>conf.de(semPassee, n)), manque=noms.filter(n=>!conf.de(semPassee, n));
+      return <div style={{fontSize:11.5,marginTop:3,color:manque.length?'var(--warning)':'var(--success)'}} title={manque.length?'Pas confirmée : '+manque.join(', '):''}>
+        ✓ Semaine passée : {ok.length}/{noms.length} confirmées{manque.length>0 && manque.length<=3 ? ' — manque '+manque.map(n=>n.split(' ')[0]).join(', ') : ''}</div>; })()}
   </div>;
 }
 function DashboardRappelsCard({data, onNavigate}){
@@ -2447,6 +2459,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const [reglees] = useVerifsReglees(cfg);
   const [voirTermDash] = useVoirTerminees();
   const soum = useSoumissions(cfg, refreshKey);
+  const [vueJour,setVueJour]=useState('auj');   // Aujourd'hui | Demain | Toute la semaine
   const [suivi,setSuivi]=useState(null);
   useEffect(()=>{ if(!cfg.suiviTravauxSpreadsheetId) return; let ok=true;
     getAllSuiviTravaux(cfg.suiviTravauxSpreadsheetId).then(r=>{ if(ok) setSuivi(r); }).catch(()=>{ if(ok) setSuivi([]); });
@@ -2468,6 +2481,10 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const anomalies = cvAnomaliesActives(cvAnomalies(factures, clients, ap), reglees);
   const passages = d => tous.flatMap(x=>x.j.events.filter(e=>!e.attente && e.day===d).map(e=>({...x, e}))).sort((a,b)=>String(a.e.start).localeCompare(String(b.e.start)));
   const auj = passages(today), dem = passages(demain);
+  const semaine = [0,1,2,3,4,5,6].flatMap(k=>passages(jour(k)));
+  const listeJour = vueJour==='auj' ? auj : vueJour==='dem' ? dem : semaine;
+  const commander = (ev, x) => { ev.stopPropagation(); BC_PREFILL = {id:x.e.id, day:x.e.day, title:x.e.title}; onNavigate('commandes'); };
+  const BoutonCmd = ({x}) => <button className="btn btn-sm btn-p" style={{marginLeft:6,padding:'2px 8px',fontSize:11.5}} onClick={ev=>commander(ev, x)}>📦 Commander</button>;
   const aCommander = tous.flatMap(x=>x.j.events.filter(e=>!e.attente && e.day>=today && e.day<=dans14 && !cvCmd(cmds, x.j, e).fait).map(e=>({...x, e}))).sort((a,b)=>a.e.day.localeCompare(b.e.day));
   const nomPO = po => { const x = tous.find(t=>t.j.po===po); return x ? (x.c.code!=='PART'?x.c.code+' ':'')+x.j.name : po; };
   const aRepondre = Object.entries(courriels||{}).flatMap(([po,l])=>l.filter(f=>/toi de r/i.test(f.statut) && !((reglés[f.lien||(po+'|'+f.sujet)]||{}).le >= String(f.dernier).slice(0,10))).map(f=>({...f, po}))).sort((a,b)=>String(a.dernier).localeCompare(String(b.dernier)));
@@ -2492,11 +2509,13 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const Rang = ({children, droite, go}) => <div onClick={()=>onNavigate(go)} style={{display:'flex',justifyContent:'space-between',gap:10,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
     <div style={{minWidth:0}}>{children}</div><div className="muted" style={{fontSize:12,whiteSpace:'nowrap'}}>{droite}</div>
   </div>;
-  const Journee = ({liste}) => liste.map((x,i)=>{ const c=(cmds[x.e.id]||{}).statut;
-    return <Rang key={i} go="projets" droite={<>{heure(x.e)}{c==='Placée'?' · ✅ commandé':c==='Rien à commander'?' · ✓ rien':' · 📦 à commander'}</>}>
+  const Journee = ({liste, jours}) => liste.map((x,i)=>{ const k=cvCmd(cmds, x.j, x.e), c=k.statut;
+    return <React.Fragment key={i}>
+    {jours && (i===0 || liste[i-1].e.day!==x.e.day) && <div style={{fontSize:12,fontWeight:700,color:'var(--muted)',marginTop:i?10:2,textTransform:'capitalize'}}>{new Date(x.e.day+'T12:00:00').toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})}</div>}
+    <Rang go="projets" droite={<>{heure(x.e)}{k.fait ? (c==='Rien à commander'?' · ✓ rien':' · ✅ commandé') : <BoutonCmd x={x}/>}</>}>
       <span style={{fontWeight:800,fontSize:11,color:'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}
       {x.e.crew.length>0 && <div className="muted" style={{fontSize:11.5}}>{x.e.crew.join(', ')}</div>}
-    </Rang>; });
+    </Rang></React.Fragment>; });
 
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:4}}>
@@ -2510,7 +2529,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
       <Tuile n={enCours.length} l="Jobs en cours" sub={aCompleter ? aCompleter+' étapes à compléter' : 'tout est complet'} go="projets"/>
       <Tuile n={suivi ? aFacturer.length : '…'} l="À facturer" sub={suivi ? (sansFac ? sansFac+" sans rien d'inscrit, "+(aFacturer.length-sansFac)+' facture à faire' : (aFacturer.length ? 'appels faits, factures à faire' : 'tout est facturé')) : 'Suivi Travaux'} alerte={aFacturer.length>0} go="factures"/>
       <Tuile n={anomalies.length} l="À vérifier" sub="factures, PO, appels" alerte={anomalies.length>0} go="clients"/>
-      <Tuile n={aCommander.length} l="Commandes à placer" sub={'cette semaine et la prochaine (jusqu\'au '+cvFmtDay(dans14)+')'} alerte={aCommander.some(x=>x.e.day<=jour(3))} go="agenda"/>
+      <Tuile n={aCommander.length} l="Commandes à placer" sub={'cette semaine et la prochaine (jusqu\'au '+cvFmtDay(dans14)+')'} alerte={aCommander.some(x=>x.e.day<=jour(3))} go="commandes"/>
       {(()=>{ const af = soum.liste.filter(x=>x.type==='À faire' && !SOUM_FINI.includes(x.statut));
         const att = soum.liste.filter(x=>x.type==='Envoyée' && !['Acceptée','Refusée'].includes(x.statut)).length;
         const vieille = af.reduce((m,x)=>Math.max(m, soumJours(x.date)||0),0);
@@ -2522,10 +2541,19 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
 
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,360px),1fr))',gap:14,alignItems:'start'}}>
       <div>
-        <Bloc titre="Aujourd'hui" n={auj.length} go="agenda" vide="Aucun passage aujourd'hui."><Journee liste={auj}/></Bloc>
-        <Bloc titre="Demain" n={dem.length} go="agenda" vide="Aucun passage demain."><Journee liste={dem}/></Bloc>
-        <Bloc titre="Commandes à placer" n={aCommander.length} go="agenda" vide="✅ Toutes les commandes de cette semaine et de la prochaine sont réglées.">
-          {aCommander.slice(0,8).map((x,i)=><Rang key={i} go="agenda" droite={cvFmtDay(x.e.day)}><span style={{fontWeight:800,fontSize:11,color:'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}</Rang>)}
+        <div className="card" style={{marginBottom:14}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:6}}>
+            <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+              {[['auj',"Aujourd'hui",auj.length],['dem','Demain',dem.length],['sem','Toute la semaine',semaine.length]].map(([k,l,n])=>
+                <button key={k} className={'btn btn-sm'+(vueJour===k?' btn-p':'')} onClick={()=>setVueJour(k)}>{l}{n>0 && <span style={{opacity:.75}}> · {n}</span>}</button>)}
+            </div>
+            <span style={{color:'var(--accent)',fontSize:12.5,cursor:'pointer'}} onClick={()=>onNavigate('agenda')}>Agenda ›</span>
+          </div>
+          {listeJour.length ? <Journee liste={listeJour} jours={vueJour==='sem'}/>
+            : <div className="muted" style={{fontSize:13}}>{vueJour==='auj' ? "Aucun passage aujourd'hui." : vueJour==='dem' ? 'Aucun passage demain.' : 'Aucun passage dans les 7 prochains jours.'}</div>}
+        </div>
+        <Bloc titre="Commandes à placer" n={aCommander.length} go="commandes" vide="✅ Toutes les commandes de cette semaine et de la prochaine sont réglées.">
+          {aCommander.slice(0,8).map((x,i)=><Rang key={i} go="commandes" droite={<>{cvFmtDay(x.e.day)}<BoutonCmd x={x}/></>}><span style={{fontWeight:800,fontSize:11,color:'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}</Rang>)}
         </Bloc>
       </div>
       <div>
@@ -2559,12 +2587,37 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
 }
 
 // ── UI: Heures employés — LECTURE SEULE depuis le Sheet PunchPro ─────────
+// Semaines confirmées (« Confirmer ma semaine » dans PunchPro → courriel → La mémoire, script semaines.gs)
+// Onglet « Semaines confirmées » du registre des jobs : Id, Semaine, Employé, Confirmée le, Total heures, Heures supp, Banque, Déplacement, Note, Lien.
+// Retourne {pret, absent, de(semaine, nom)} — de() donne la confirmation la plus récente de l'employé pour la semaine.
+function useSemainesConfirmees(cfg, refreshKey){
+  const [etat,setEtat]=useState({pret:false, absent:false, map:{}});
+  const id = cfg.memoireJobsSpreadsheetId;
+  useEffect(()=>{ if(!id) return; let ok=true;
+    lireCache(id, qSheet('Semaines confirmées')+'!A1:J', !!refreshKey).then(r=>{ if(!ok) return;
+      const map={}; (r.result.values||[]).slice(1).forEach(x=>{ if(!x[1]||!x[2]) return;
+        const k=x[1]+'|'+cvNorm(x[2]), c={semaine:x[1], employe:x[2], le:x[3]||'', total:cvNum(x[4]), supp:cvNum(x[5]), banque:cvNum(x[6]), dep:cvNum(x[7]), note:x[8]||'', lien:x[9]||''};
+        if(!map[k] || c.le>map[k].le) map[k]=c; });
+      setEtat({pret:true, absent:false, map}); }).catch(()=>{ if(ok) setEtat({pret:true, absent:true, map:{}}); });
+    return ()=>{ ok=false; }; },[id, refreshKey]);
+  return {...etat, de:(semaine, nom)=>etat.map[semaine+'|'+cvNorm(nom)]||null};
+}
+// Pastille ✓ : confirmée (avec la date) ; ⚠ si le total de PunchPro a changé depuis de plus de 15 min.
+function SemaineConfirmee({c, total}){
+  if(!c) return <span className="muted" style={{fontSize:12}}>pas confirmée</span>;
+  const ecart = c.total!=null && Math.abs((total||0)-c.total) > 0.25;
+  const quand = c.le ? new Date(c.le.replace(' ','T')).toLocaleDateString('fr-CA',{weekday:'short',day:'numeric',month:'short'}) : '';
+  return <a href={c.lien||undefined} target="_blank" rel="noopener" style={{textDecoration:'none',whiteSpace:'nowrap',fontSize:12.5,color:ecart?'var(--warning)':'var(--success)',fontWeight:700}}
+    title={'Confirmée le '+c.le+(c.total!=null?' — '+fmtH(c.total):'')+(c.supp?' (supp '+fmtH(c.supp)+')':'')+(c.note?' — '+c.note:'')}>
+    ✓ {quand}{ecart && <span style={{fontWeight:600}}> · ⚠ confirmé {fmtH(c.total)}, maintenant {fmtH(total)}</span>}</a>;
+}
 function HeuresView({cfg, refreshKey}){
   const [loading,setLoading]=useState(true);
   const [emps,setEmps]=useState([]);
   const [pts,setPts]=useState([]);
   const [err,setErr]=useState('');
   const [week,setWeek]=useState(()=>getWeek(new Date()));
+  const conf = useSemainesConfirmees(cfg, refreshKey);
 
   useEffect(()=>{
     if(!cfg.punchproSpreadsheetId) { setLoading(false); return; }
@@ -2586,6 +2639,7 @@ function HeuresView({cfg, refreshKey}){
   function thisWeek(){ setWeek(getWeek(new Date())); }
   const empsSorted = [...emps].sort((a,b)=>a.nom.localeCompare(b.nom));
   const grandTotal = empsSorted.reduce((s,e)=>{ const row=table[e.nom]||{}; return s+dateStrs.reduce((a,d)=>a+(row[d]||0),0); },0);
+  const nbConf = empsSorted.filter(e=>conf.de(week, e.nom)).length;
 
   return <div>
     <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Heures — employés (PunchPro)</h2>
@@ -2598,7 +2652,9 @@ function HeuresView({cfg, refreshKey}){
         <div style={{fontWeight:700}}>{weekRangeLabel(week)}</div>
         <button className="btn btn-sm" onClick={nextWeek}>Sem. suiv. →</button>
         <button className="btn btn-sm" onClick={thisWeek}>Cette semaine</button>
+        {conf.pret && !conf.absent && empsSorted.length>0 && <span style={{fontSize:13,fontWeight:700,color:nbConf===empsSorted.length?'var(--success)':'var(--muted)'}}>✓ {nbConf}/{empsSorted.length} semaines confirmées</span>}
       </div>
+      {conf.absent && <div className="muted" style={{fontSize:12,marginBottom:10}}>Les ✓ « semaine confirmée » apparaîtront quand le script semaines.gs de La mémoire aura rempli l'onglet « Semaines confirmées ».</div>}
       {loading ? <div className="muted">Chargement...</div> :
       <div className="card" style={{padding:0,overflowX:'auto'}}>
         <table>
@@ -2606,6 +2662,7 @@ function HeuresView({cfg, refreshKey}){
             <th>Employé</th>
             {joursLabel.map((j,i)=><th key={i}>{j} {dates[i].getDate()}</th>)}
             <th>Total</th>
+            <th>Confirmée</th>
           </tr></thead>
           <tbody>
             {empsSorted.map(e=>{
@@ -2615,9 +2672,10 @@ function HeuresView({cfg, refreshKey}){
                 <td><span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:e.couleur,marginRight:6}}></span>{e.nom}</td>
                 {dateStrs.map((d,i)=><td key={i}>{row[d]?fmtH(row[d]):'—'}</td>)}
                 <td style={{fontWeight:700,color:'var(--accent)'}}>{fmtH(total)}</td>
+                <td>{conf.absent ? '' : <SemaineConfirmee c={conf.de(week, e.nom)} total={total}/>}</td>
               </tr>;
             })}
-            {empsSorted.length===0 && <tr><td colSpan="9" className="muted" style={{padding:16}}>Aucun employé trouvé dans le Sheet PunchPro.</td></tr>}
+            {empsSorted.length===0 && <tr><td colSpan="10" className="muted" style={{padding:16}}>Aucun employé trouvé dans le Sheet PunchPro.</td></tr>}
           </tbody>
         </table>
       </div>}
@@ -4220,6 +4278,10 @@ function AppelServiceView({cfg, toast}){
 // (ligne 📦 Commande dans l'événement, liste avant les infos du client), comme les boutons de l'Agenda.
 const BC_ENTETE = ['Numéro','Date','Fournisseur','Courriel','Référence','Job','Passage','Employé','Mode','Pour le','Articles','Note','Statut','Lien événement'];
 const BC_COURRIELS = {Dubo:'stjean@dubo.qc.ca'};
+// Venu du Tableau de bord (📦 Commander sur un passage) : {id, day, title} — CommandesView ouvre le bon déjà rempli.
+let BC_PREFILL = null;
+// Référence = le titre de l'événement, sans les initiales de l'équipe (ex. « CRS FINITION CURPAS P03056 MC » → « CRS FINITION CURPAS P03056 »)
+function bcRefTitre(e){ return String(e.title||'').split(/\s+/).filter(t=>!(CREW_INITIALS[t] && t===t.toUpperCase())).join(' ').trim().toUpperCase(); }
 function bcCourriel(f){ try{ const m = JSON.parse(localStorage.getItem('bc_courriels')||'{}'); return m[f] || BC_COURRIELS[f] || ''; }catch(e){ return BC_COURRIELS[f]||''; } }
 function bcRetenirCourriel(f, c){ try{ const m = JSON.parse(localStorage.getItem('bc_courriels')||'{}'); m[f]=c; localStorage.setItem('bc_courriels', JSON.stringify(m)); }catch(e){} }
 
@@ -4256,9 +4318,15 @@ function CommandesView({cfg, toast, refreshKey}){
   const aVenir = useMemo(()=>Object.values(clients).flatMap(c=>c.jobs.flatMap(j=>j.events.filter(e=>!e.attente && e.day>=today && e.day<=fin).map(e=>({c, j, e, cmd:cvCmd(commandes, j, e)}))))
     .filter((x,i,L)=>!L.slice(0,i).some(y=>y.j===x.j && (y.e.phase||'')===(x.e.phase||'') && Math.abs(new Date(y.e.day)-new Date(x.e.day))<=3*864e5))
     .sort((a,b)=>a.e.day.localeCompare(b.e.day)),[clients, commandes, today, fin]);
-  const refDe = x => [x.c.code!=='PART'?x.c.code:'', x.e.phase||'', x.j.name, x.j.po||''].filter(Boolean).join(' ').toUpperCase();
+  const refDe = x => bcRefTitre(x.e) || [x.c.code!=='PART'?x.c.code:'', x.e.phase||'', x.j.name, x.j.po||''].filter(Boolean).join(' ').toUpperCase();
   const choisirPassage = x => { setBc(b=>({...b, ref:refDe(x), job:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name, passage:x, employe:(x.e.crew||[])[0]||b.employe, pour:x.e.day>today ? cvDay(new Date(new Date(x.e.day+'T12:00:00').getTime()-864e5).toISOString()) : today })); window.scrollTo(0,0); };
-  const choisirDest = d => setBc(b=>({...b, ref:d.toUpperCase(), job:d, passage:null}));
+  const choisirDest = d => setBc(b=>({...b, ref:CV_DEST_REF[d]||d.toUpperCase(), job:d, passage:null}));
+  // Arrivé du Tableau de bord avec un passage : on le retrouve dans l'agenda et on remplit le bon.
+  useEffect(()=>{ const p = BC_PREFILL; if(!p || !Object.keys(clients).length) return;
+    for(const c of Object.values(clients)) for(const j of c.jobs) for(const e of j.events)
+      if(p.id ? e.id===p.id : (e.day===p.day && e.title===p.title)){ BC_PREFILL = null; choisirPassage({c, j, e, cmd:cvCmd(commandes, j, e)}); return; }
+    if(!loading){ BC_PREFILL = null; toast && toast('Passage introuvable dans l\'agenda — choisis-le dans la liste'); }
+  },[clients, loading]);
   // Articles
   const qteDe = code => { const l = bc.lignes.find(l=>l.code===code); return l ? (cvNum(l.qte)||0) : 0; };
   const changerQte = (p, delta, valeur)=> setBc(x=>{
@@ -4523,7 +4591,7 @@ function useClientsData(cfg, refreshKey){
         const archives = {}; arRows.slice(1).forEach((r,i)=>{ if(r[0]) archives[r[0]]=i+2; });
         const facLignes = {}; flRows.slice(1).forEach(r=>{ if(r[0]) (facLignes[r[0]]=facLignes[r[0]]||[]).push({codes:r[1]||'', desc:r[2]||'', qte:cvNum(r[3])||0, prix:cvNum(r[4])||0, montant:cvNum(r[5])||0}); });
         const articles = {}; liRows.slice(1).forEach(r=>{ if(r[0]&&r[1]) (articles[r[0]+'|'+r[1]]=articles[r[0]+'|'+r[1]]||[]).push({code:r[2]||'', desc:r[3]||'', qte:cvNum(r[4])||0, montant:cvNum(r[5])||0}); });
-        const achats = acRows.slice(1).map((r,i)=>({row:i+2, fournisseur:r[0]||'', num:r[1]||'', date:r[2]||'', ref:r[3]||'', st:cvNum(r[4])||0, total:cvNum(r[5])||0, pdf:r[6]||'', propose:r[7]||'', job:r[8]||'', part: r[9]!==undefined && r[9]!=='' ? cvNum(r[9]) : 100, statut:r[10]||'', recue:r[11]||''})).filter(a=>a.fournisseur).map(a=>({...a, articles: articles[a.fournisseur+'|'+a.num]||null}));
+        const achats = acRows.slice(1).map((r,i)=>({row:i+2, fournisseur:r[0]||'', num:r[1]||'', date:r[2]||'', ref:r[3]||'', st:cvNum(r[4])||0, total:cvNum(r[5])||0, pdf:r[6]||'', propose:cvDest(r[7]), job:cvDest(r[8]), part: r[9]!==undefined && r[9]!=='' ? cvNum(r[9]) : 100, statut:r[10]||'', recue:r[11]||''})).filter(a=>a.fournisseur).map(a=>({...a, articles: articles[a.fournisseur+'|'+a.num]||null}));
         if(lent.length && alive) setState(s=>({...s, lent}));
         // Appels de service / OT papier : numéro -> photo, et facture -> appels
         const ah=(apRows[0]||[]).map(h=>cvNorm(h)), ac=re=>ah.findIndex(h=>re.test(h));
