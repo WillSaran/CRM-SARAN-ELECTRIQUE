@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v96';
+const APP_VERSION = 'v97';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3239,6 +3239,27 @@ function FacturesView({cfg, refreshKey}){
   const recents = (a,b)=>((b.dateObj||0)-(a.dateObj||0));
   const liste = vue==='afacturer' ? [...manquantes, ...traitement].sort(vieux) : vue==='annulees' ? annulees.slice().sort(recents) : base.slice().sort(recents);
   const jours = r => r.dateObj ? Math.floor((Date.now()-r.dateObj.getTime())/864e5) : null;
+  const Ligne = r => { const k=r.onglet+r.ligne, j=jours(r);
+          return <div key={k} style={{padding:'9px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+            <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
+              <div style={{minWidth:0}}><b style={{color:'var(--accent)'}}>{nom(r.contracteur)} </b><b>{r.projet||r.adresse||'—'}</b>
+                {r.projet && r.adresse && <div className="muted" style={{fontSize:12}}>{r.adresse}</div>}
+                <div style={{fontSize:12.5,marginTop:2}}><Statut r={r}/>{r.ordreTravail ? <span className="muted"> · OT {r.ordreTravail}</span> : ''}</div>
+              </div>
+              <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
+                <div className="muted" style={{fontSize:12}}>{r.date}</div>
+                {vue==='afacturer' && j!=null && <div style={{fontSize:12,fontWeight:700,color:j>=14?'var(--danger)':j>=7?'var(--warning)':'var(--muted)'}}>il y a {j} j</div>}
+              </div>
+            </div>
+            <div style={{marginTop:5}}>
+              {(()=>{ const p = r.statutFacture==='manquant' && padPourLigne(papiers, r); return p ? <span style={{fontSize:12,marginRight:8,color:'var(--accent)'}}>📄 Papier reçu{p.ap.length ? ' : AP '+p.ap.join(', ') : ''}{p.ot.length ? ' · OT '+p.ot.join(', ') : ''} — à inscrire</span> : null; })()}
+              {(r.statutFacture==='manquant' || r.statutFacture==='en_traitement') && r.estPasseOuAujourdhui &&
+                <button className="btn btn-sm" disabled={busy===k} title="Met « ** » dans les colonnes K et M du Sheet" onClick={()=>marquer(r, true)}>{busy===k?'…':'✕ Pas à facturer'}</button>}
+              {r.statutFacture==='annule' && <button className="btn btn-sm" disabled={busy===k} onClick={()=>marquer(r, false)}>{busy===k?'…':'↩ Remettre à facturer'}</button>}
+            </div>
+          </div>; };
+  // Dossier d'un particulier : le titre sans la phase ni les initiales des gars (« SERV Jean Tremblay JG » → « Jean Tremblay »).
+  const dossierDe = r => { const t = String(r.projet||r.adresse||'—').replace(/^\s*((PART|ROUGH|FINITION|FIN|SERV|SERVICE|AJUST|RAPUP|PREP)\b\s*)+/i,'').replace(/(\s+[A-ZÉÈ]{2,3})+\s*$/,'').trim(); return t || (r.projet||'—'); };
   const Statut = ({r}) => r.statutFacture==='complet' ? <span style={{color:'var(--success)',fontWeight:700}}>Facture {r.facture}</span>
     : r.statutFacture==='en_traitement' ? <span style={{color:'var(--warning)',fontWeight:700}}>Appel {r.appelService} — facture à faire</span>
     : r.statutFacture==='annule' ? <span className="muted" style={{fontWeight:700}}>{r.appelService==='-'||r.facture==='-' ? '- ' : '** '}Pas à facturer</span>
@@ -3281,24 +3302,17 @@ function FacturesView({cfg, refreshKey}){
       </div> :
       <div className="card">
         {!liste.length && <div className="muted" style={{fontSize:13}}>{vue==='afacturer' ? '✅ Tout est facturé.' : 'Rien ici.'}</div>}
-        {liste.slice(0,300).map(r=>{ const k=r.onglet+r.ligne, j=jours(r);
-          return <div key={k} style={{padding:'9px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
-            <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
-              <div style={{minWidth:0}}><b style={{color:'var(--accent)'}}>{nom(r.contracteur)} </b><b>{r.projet||r.adresse||'—'}</b>
-                {r.projet && r.adresse && <div className="muted" style={{fontSize:12}}>{r.adresse}</div>}
-                <div style={{fontSize:12.5,marginTop:2}}><Statut r={r}/>{r.ordreTravail ? <span className="muted"> · OT {r.ordreTravail}</span> : ''}</div>
-              </div>
-              <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
-                <div className="muted" style={{fontSize:12}}>{r.date}</div>
-                {vue==='afacturer' && j!=null && <div style={{fontSize:12,fontWeight:700,color:j>=14?'var(--danger)':j>=7?'var(--warning)':'var(--muted)'}}>il y a {j} j</div>}
-              </div>
-            </div>
-            <div style={{marginTop:5}}>
-              {(()=>{ const p = r.statutFacture==='manquant' && padPourLigne(papiers, r); return p ? <span style={{fontSize:12,marginRight:8,color:'var(--accent)'}}>📄 Papier reçu{p.ap.length ? ' : AP '+p.ap.join(', ') : ''}{p.ot.length ? ' · OT '+p.ot.join(', ') : ''} — à inscrire</span> : null; })()}
-              {(r.statutFacture==='manquant' || r.statutFacture==='en_traitement') && r.estPasseOuAujourdhui &&
-                <button className="btn btn-sm" disabled={busy===k} title="Met « ** » dans les colonnes K et M du Sheet" onClick={()=>marquer(r, true)}>{busy===k?'…':'✕ Pas à facturer'}</button>}
-              {r.statutFacture==='annule' && <button className="btn btn-sm" disabled={busy===k} onClick={()=>marquer(r, false)}>{busy===k?'…':'↩ Remettre à facturer'}</button>}
-            </div>
+        {vue!=='afacturer' && liste.slice(0,300).map(Ligne)}
+        {vue==='afacturer' && [['manquant','🔴 Factures manquantes — rien d\'inscrit (ni appel ni facture)', manquantes],['traitement','🟠 En traitement — papier traité, appel inscrit, facture à faire', traitement]].map(([cle, titre, l])=>{
+          if(!l.length) return null;
+          const groupes = contracteurs.map(c=>[c, l.filter(r=>r.contracteur===c).sort(vieux)]).filter(([,g])=>g.length);
+          return <div key={cle} style={{marginBottom:14}}>
+            <div className="fh" style={{fontSize:15,margin:'4px 0 6px',color:cle==='manquant'?'var(--danger)':'var(--warning)'}}>{titre} <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{l.length}</span></div>
+            {groupes.map(([c,g])=><div key={c} style={{marginBottom:8}}>
+              <div style={{fontWeight:700,fontSize:13.5,padding:'6px 8px',background:'var(--bg3)',borderRadius:6}}>{nom(c)} · {g.length}
+                {c==='PARTICULIER' && <span className="muted" style={{fontWeight:400,fontSize:12}}> ({[...new Set(g.map(dossierDe))].join(' · ')})</span>}</div>
+              {g.slice(0,150).map(Ligne)}
+            </div>)}
           </div>; })}
       </div>}
       <div className="muted" style={{fontSize:11.5,marginTop:8}}>Le Sheet est rempli à partir de l'agenda par ton script Suivi Travaux. Les numéros d'appel et de facture s'y inscrivent dans les colonnes K et M.</div>
