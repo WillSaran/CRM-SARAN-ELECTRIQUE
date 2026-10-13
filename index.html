@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v107';
+const APP_VERSION = 'v108';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3730,7 +3730,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
       type: s.typeProjet || i.type || soumTypeDevine([s.sujet, i.travaux || s.extrait].join(' '))}; };
   const preparer = s => { const i = infosDe(s), sujet = (s.sujet||'').replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'').replace(/^\s*soumission\s*[-:–]?\s*/i,'').replace(/^Contact depuis votre site\s*:\s*/i,'');
     DOC_PREFILL = {type:'Soumission', typeProjet:i.type, origine:s.cle, nom:i.nom, tel:i.tel, courriel:i.courriel, adresse:i.adresse,
-      titre: i.type ? i.type+(i.adresse ? ' — '+i.adresse.split(',')[0] : '') : sujet, travaux:i.travaux};
+      titre: i.type ? i.type+(i.adresse ? ' — '+i.adresse.split(',')[0] : '') : sujet, travaux:i.travaux, dossier:s.pdf||s.photos||''};
     setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); };
   const accuse = async s => { const i = infosDe(s); if(!i.courriel){ toast && toast('Pas de courriel pour ce client'); return; }
     const formulaire = /linkeo|contact depuis votre site/i.test(s.sujet+' '+s.courriel) || (s.infos && s.infos.formulaire);
@@ -3778,7 +3778,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
           </>}
         </div>
       </div>
-      {ouverte!==s.cle ? (s.extrait && <div className="muted" onClick={()=>setOuverte(s.cle)} style={{fontSize:12,marginTop:3,cursor:'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.extrait.split('\n')[0]}{(s.pdf||s.photos) ? '  · 📷' : ''}</div>) : <>
+      {ouverte!==s.cle ? (s.extrait && <div className="muted" onClick={()=>setOuverte(s.cle)} style={{fontSize:12,marginTop:3,cursor:'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.extrait.split('\n')[0]}{(s.pdf||s.photos) ? '  · 📎 PDF / photos' : ''}</div>) : <>
       <SoumNote txt={s.extrait}/>
       {s.pdf && <SoumPhotos dossier={s.pdf}/>}
       {s.photos && <SoumPhotos dossier={s.photos} tick={tick}/>}
@@ -4190,7 +4190,7 @@ function useDocumentsCrm(cfg){
   return {docs, lire};
 }
 
-function docVide(){ return {numero:'', type:'Soumission', typeProjet:'', origine:'', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
+function docVide(){ return {numero:'', type:'Soumission', typeProjet:'', origine:'', dossier:'', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
 
 // Calcul des montants d'un document (prix : ceux de la ligne, sinon mes prix / dernier facturé)
 function docCalcul(d, prixDe){
@@ -4344,6 +4344,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
       </div>
       <ChampAdresse value={d.adresse} onChange={a=>maj({adresse:a})} placeholder="Adresse"/>
       <textarea value={d.travaux} onChange={e=>maj({travaux:e.target.value})} rows={d.travaux && d.travaux.length>160 ? 5 : 2} placeholder="Travaux…" style={{resize:'vertical',fontFamily:'inherit'}}/>
+      {d.dossier && <div><span className="muted" style={{fontSize:12}}>PDF et photos du client :</span><SoumPhotos dossier={d.dossier}/></div>}
     </div>
 
     {d.type==='Soumission' && <div className="card" style={{marginBottom:10}}>
