@@ -132,6 +132,7 @@ const DEFAULT_CFG = {
   memoireFacturesSpreadsheetId: '1I6QfEObkpfrSAqz2vSO_XdCKABWYoe2e5TOG3so3Uks',
   memoireAppelsSpreadsheetId: '1FJvH7oh82oRlEAyg2ddHOrJEDc-NGI6849m7StONcD8',
   memoireAchatsSpreadsheetId: '1i6DNjPmxKRubA8IcSxNoC12SEwefVLcNF39F-dvEnmw',  // La mémoire — Achats (factures fournisseurs)
+  stockSpreadsheetId: '1SoCciTEXkvCu61oFg3UbyParAkoNJfu-GulAdJnB0d0',  // STOCK PUNCH PRO (catalogue de produits + appels de service, SANS prix)
   memoireMajUrl: 'https://script.google.com/a/macros/saranelectrique.com/s/AKfycbwimU1z8lsEwIaL7zIx6Nqf1m8xSrCTPpmTEtTYaVs5PMbPqxhz91VIkcbthP56ZmDubA/exec'  // adresse de l'application Web Apps Script (bouton « Mettre à jour »)
 };
 function loadCfg(){
@@ -144,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v94';
+const APP_VERSION = 'v95';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3457,7 +3458,7 @@ function SoumNote({txt}){
   </div>;
 }
 
-function SoumissionsView({cfg, data, toast, refreshKey}){
+function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const S = useSoumissions(cfg, refreshKey);
   const [onglet,setOnglet]=useState('afaire');
   const [voirFinies,setVoirFinies]=useState(false);
@@ -3502,6 +3503,7 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
         <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
           {lienGmail(s)}
           {!fini ? <>
+            {onNavigate && <button className="btn btn-sm" onClick={()=>{ DOC_PREFILL = {type:'Soumission', nom:s.client||'', courriel:s.courriel||'', titre:(s.sujet||'').replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'').replace(/^\s*soumission\s*[-:–]?\s*/i,''), travaux:s.extrait||''}; onNavigate('appel'); }} title="Ouvre l'appel de service avec ce client">📝 Faire la soumission</button>}
             <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Faite')} style={{borderColor:'var(--green, #2e9e5b)',color:'var(--green, #2e9e5b)'}}>✓ Faite</button>
             <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, s.cle.startsWith('M-')?'Annulée':'Ignorée')} title="Annulée, ou ce n'était pas une soumission à faire">✕</button>
           </> : <>
@@ -3638,6 +3640,351 @@ function SoumissionsView({cfg, data, toast, refreshKey}){
         <span style={{display:'flex',gap:8}}>{lienPdf(d.pdf)}{d.lien && <a href={d.lien} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5,whiteSpace:'nowrap'}}>Courriel ↗</a>}</span>
       </div>)}
       {S.lu && !recues.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>Aucune soumission de fournisseur.</div>}
+    </div>}
+  </div>;
+}
+
+// ── PRODUITS + APPEL DE SERVICE ─────────────────────────────────────────────
+// Catalogue : Sheet « STOCK PUNCH PRO » (un onglet par catégorie : FIL, BOÎTES, DÉCORA, CONDUIT, PANNEAUX,
+// CHAUFFAGE, DIVERS, Stock personnalisé) — les mêmes articles que le papier « Appel de service résidentiel ».
+// PRIX : jamais dans STOCK PUNCH PRO (les gars le voient dans PunchPro). Ils restent dans « La mémoire — Jobs » :
+//   onglet « Prix »          : Code | Prix | Mis à jour          (ton prix de vente, SA01/SA02 = taux horaires)
+//   onglet « Documents CRM » : Numéro | Type | Date | Client | Courriel | Titre | Sous-total | TPS | TVQ | Total | Données (JSON)
+// Un appel de service fait ici est aussi inscrit dans STOCK PUNCH PRO › « Appels de service » (sans aucun prix),
+// numéroté E-0001, E-0002… (onglet « Compteur », B1 = dernier numéro utilisé).
+const STOCK_HORS_CATALOGUE = ['Appels de service','Stock Camions','Compteur'];
+const DOC_TYPES = [['Soumission','📝 Soumission'],['Ordre de travail','🔧 Ordre de travail'],['Facture','🧾 Facture (brouillon)']];
+const TPS = 0.05, TVQ = 0.09975;
+const DOCS_ENTETE = ['Numéro','Type','Date','Client','Courriel','Titre','Sous-total','TPS','TVQ','Total','Données'];
+const qSheet = n => "'"+String(n).replace(/'/g,"''")+"'";
+const codeNorm = c => String(c||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+const arrondi = n => Math.round((Number(n)||0)*100)/100;
+
+function useCatalogue(cfg){
+  const [etat,setEtat]=useState({lu:false, produits:[], cats:[], prix:{}, facture:{}, cout:{}, err:''});
+  const idS = cfg.stockSpreadsheetId, idJ = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async(force)=>{
+    if(!idS){ setEtat(s=>({...s, lu:true, err:'Le Sheet STOCK PUNCH PRO n\'est pas configuré (Réglages).'})); return; }
+    try{
+      const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:idS, fields:'sheets.properties.title'});
+      const cats = (meta.result.sheets||[]).map(x=>x.properties.title).filter(t=>!STOCK_HORS_CATALOGUE.includes(t));
+      const vals = await sheetsBatchGet(idS, cats.map(c=>qSheet(c)+'!A1:E'));
+      const produits = [];
+      cats.forEach((c,i)=>(vals[i]||[]).slice(1).forEach(r=>{ if(r[0]) produits.push({cat:c, code:String(r[0]).trim(), desc:r[1]||'', unite:r[2]||'', notes: c==='Stock personnalisé' ? '' : (r[3]||'')}); }));
+      // Mes prix (CRM seulement)
+      const prix = {};
+      try{ const p = await lireCache(idJ, 'Prix!A1:C', force); (p.result.values||[]).slice(1).forEach((r,i)=>{ if(r[0]) prix[codeNorm(r[0])] = {prix:cvNum(r[1]), row:i+2, code:r[0]}; }); }catch(e){}
+      // Dernier prix facturé (registre des factures, onglet Lignes) et dernier coût fournisseur (Achats, onglet Lignes)
+      const facture = {}, cout = {};
+      try{ const f = await lireCache(cfg.memoireFacturesSpreadsheetId, 'Lignes!A1:F', force);
+        (f.result.values||[]).slice(1).forEach(r=>{ const k=codeNorm(String(r[1]||'').split(/[\s,]+/)[0]); const p=cvNum(r[4]); const n=Number(r[0])||0; if(k && p!=null && (!facture[k] || n>=facture[k].n)) facture[k]={prix:p, n}; }); }catch(e){}
+      try{ const a = await lireCache(cfg.memoireAchatsSpreadsheetId, 'Lignes!A1:F', force);
+        (a.result.values||[]).slice(1).forEach(r=>{ const k=codeNorm(r[2]); const q=cvNum(r[4])||0, m=cvNum(r[5]); const n=Number(r[1])||0; if(k && q>0 && m!=null && (!cout[k] || n>=cout[k].n)) cout[k]={prix:arrondi(m/q), n, fournisseur:r[0]}; }); }catch(e){}
+      setEtat({lu:true, produits, cats, prix, facture, cout, err:''});
+    }catch(e){ setEtat(s=>({...s, lu:true, err:apiErrMsg(e)})); }
+  },[idS, idJ, cfg.memoireFacturesSpreadsheetId, cfg.memoireAchatsSpreadsheetId]);
+  useEffect(()=>{ lire(); },[lire]);
+  // Coût fournisseur : code exact, ou code du fournisseur qui finit par ton code (LEV-T5325-W ↔ T5325-W).
+  const coutDe = code => { const k=codeNorm(code); if(!k) return null; if(etat.cout[k]) return etat.cout[k]; const c = Object.keys(etat.cout).find(x=>x.length>k.length && x.endsWith(k) && k.length>=5); return c ? etat.cout[c] : null; };
+  const factureDe = code => { const k=codeNorm(code); return k ? (etat.facture[k] || null) : null; };
+  // Prix suggéré : mon prix > dernier prix facturé
+  const prixDe = code => { const k=codeNorm(code); const p = etat.prix[k]; if(p && p.prix!=null) return p.prix; const f = factureDe(code); return f ? f.prix : null; };
+  const majPrix = async (code, valeur)=>{
+    const k = codeNorm(code), ex = etat.prix[k], le = new Date().toLocaleString('fr-CA');
+    setEtat(s=>({...s, prix:{...s.prix, [k]:{...(ex||{}), prix:cvNum(valeur), code}}}));
+    if(ex && ex.row) await sheetsUpdateRow(idJ, 'Prix', ex.row, [code, valeur, le]);
+    else { if(!Object.keys(etat.prix).length) await ensureSheetsExist(idJ, [{name:'Prix', headers:['Code','Prix','Mis à jour']}]); await sheetsAppendRow(idJ, 'Prix', [code, valeur, le]); await lire(true); }
+  };
+  const ajouterProduit = async (p)=>{
+    await sheetsAppendRow(idS, qSheet('Stock personnalisé'), [p.code, p.desc, p.unite||'un', 'CRM', cvDay(new Date().toISOString())]);
+    await lire(true);
+  };
+  return {...etat, lire, coutDe, factureDe, prixDe, majPrix, ajouterProduit};
+}
+
+function ProduitsView({cfg, toast}){
+  const C = useCatalogue(cfg);
+  const [cat,setCat]=useState('');
+  const [q,setQ]=useState('');
+  const [nouveau,setNouveau]=useState(null);
+  const liste = C.produits.filter(p=>(!cat || p.cat===cat) && (!q || cvNorm(p.code+' '+p.desc+' '+p.notes).includes(cvNorm(q))));
+  return <div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
+      <h2 className="fh" style={{margin:0,fontSize:20}}>Produits</h2>
+      <div style={{display:'flex',gap:6}}>
+        <button className="btn btn-sm" onClick={()=>setNouveau(nouveau?null:{code:'',desc:'',unite:'un'})}>+ Ajouter un produit</button>
+        <button className="btn btn-sm" onClick={()=>C.lire(true)}>⟳</button>
+      </div>
+    </div>
+    <div className="muted" style={{fontSize:11.5,marginBottom:8}}>Les articles de ton papier d'appel de service (Sheet STOCK PUNCH PRO). « Mon prix » est visible seulement ici — jamais dans PunchPro.</div>
+    {nouveau && <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        <input placeholder="Code (ex. BC1110)" value={nouveau.code} onChange={e=>setNouveau({...nouveau,code:e.target.value})} style={{flex:'1 1 120px'}}/>
+        <input placeholder="Description" value={nouveau.desc} onChange={e=>setNouveau({...nouveau,desc:e.target.value})} style={{flex:'3 1 220px'}}/>
+        <input placeholder="Unité" value={nouveau.unite} onChange={e=>setNouveau({...nouveau,unite:e.target.value})} style={{flex:'0 1 80px'}}/>
+      </div>
+      <div><button className="btn btn-sm btn-p" disabled={!nouveau.code.trim()} onClick={async()=>{ try{ await C.ajouterProduit({...nouveau, code:nouveau.code.trim()}); setNouveau(null); toast&&toast('Produit ajouté (Stock personnalisé)'); }catch(e){ toast&&toast('Erreur : '+apiErrMsg(e)); } }}>Ajouter</button></div>
+    </div>}
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+      <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>setCat('')}>Tous ({C.produits.length})</button>
+      {C.cats.map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(c)}>{c} ({C.produits.filter(p=>p.cat===c).length})</button>)}
+    </div>
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (code ou description)…" style={{width:'100%',boxSizing:'border-box',marginBottom:10}}/>
+    {!C.lu && <div className="muted">Chargement…</div>}
+    {C.err && <div className="card" style={{color:'var(--red, #c0392b)'}}>{C.err}</div>}
+    <div className="card" style={{padding:0,overflowX:'auto'}}>
+      <table>
+        <thead><tr><th>Code</th><th>Description</th><th>Unité</th><th style={{textAlign:'right'}}>Mon prix</th><th style={{textAlign:'right'}}>Dernier facturé</th><th style={{textAlign:'right'}}>Coût fournisseur</th></tr></thead>
+        <tbody>
+          {liste.map(p=>{ const f=C.factureDe(p.code), c=C.coutDe(p.code), mp=C.prix[codeNorm(p.code)];
+            return <tr key={p.cat+'|'+p.code}>
+              <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}</td>
+              <td>{p.desc}{p.notes && <span className="muted" style={{fontSize:11.5}}> · {p.notes}</span>}{!cat && <span className="muted" style={{fontSize:11}}> · {p.cat}</span>}</td>
+              <td className="muted">{p.unite}</td>
+              <td style={{textAlign:'right'}}><input defaultValue={mp && mp.prix!=null ? mp.prix : ''} placeholder={f ? String(f.prix) : '—'} inputMode="decimal"
+                onBlur={async e=>{ const v=e.target.value.trim().replace(',','.'); if(v===String(mp && mp.prix!=null ? mp.prix : '')) return; try{ await C.majPrix(p.code, v); toast&&toast('Prix enregistré : '+p.code); }catch(er){ toast&&toast('Erreur : '+apiErrMsg(er)); } }}
+                style={{width:80,textAlign:'right',padding:'3px 6px'}}/></td>
+              <td style={{textAlign:'right'}} className="muted">{f ? cvMoney(f.prix) : '—'}</td>
+              <td style={{textAlign:'right'}} className="muted" title={c ? c.fournisseur : ''}>{c ? cvMoney(c.prix) : '—'}</td>
+            </tr>; })}
+          {C.lu && !liste.length && <tr><td colSpan="6" className="muted" style={{padding:16}}>Aucun produit.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  </div>;
+}
+
+// Documents faits dans le CRM (La mémoire — Jobs › « Documents CRM »)
+function useDocumentsCrm(cfg){
+  const [docs,setDocs]=useState([]);
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async(force)=>{
+    try{ const r = await lireCache(id, "'Documents CRM'!A1:K", force);
+      setDocs((r.result.values||[]).slice(1).map((x,i)=>({row:i+2, numero:x[0], type:x[1], date:x[2], client:x[3], courriel:x[4], titre:x[5], st:cvNum(x[6]), total:cvNum(x[9]), donnees:x[10]})).filter(d=>d.numero).reverse()); }
+    catch(e){ setDocs([]); }
+  },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  return {docs, lire};
+}
+
+function docVide(){ return {numero:'', type:'Soumission', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
+
+// Calcul des montants d'un document (prix : ceux de la ligne, sinon mes prix / dernier facturé)
+function docCalcul(d, prixDe){
+  const h1 = d.jours.reduce((t,j)=>t+(cvNum(j.sa01)||0),0), h2 = d.jours.reduce((t,j)=>t+(cvNum(j.sa02)||0),0);
+  const px = (code, l) => l && l.prix!=='' && l.prix!=null ? (cvNum(l.prix)||0) : (prixDe(code)||0);
+  const mat = d.lignes.reduce((t,l)=>t+px(l.code,l)*(cvNum(l.qte)||0),0);
+  const mo = h1*(prixDe('SA01')||0) + h2*(prixDe('SA02')||0);
+  const depl = d.depl ? (prixDe('DEPL')||0) : 0, quin = d.quin ? (prixDe('QUIN')||0) : 0;
+  const st = cvNum(d.forfait)!=null && d.forfait!=='' ? cvNum(d.forfait) : mat+mo+depl+quin;
+  const tps = arrondi(st*TPS), tvq = arrondi(st*TVQ);
+  return {h1, h2, mat:arrondi(mat), mo:arrondi(mo), depl, quin, st:arrondi(st), tps, tvq, total:arrondi(st+tps+tvq), px};
+}
+
+// Version imprimable (« Enregistrer en PDF » dans la fenêtre d'impression). L'ordre de travail n'a jamais de prix.
+function docImprimer(d, calc){
+  const prix = d.type!=='Ordre de travail';
+  const esc = s => String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const m = n => (Number(n)||0).toLocaleString('fr-CA',{style:'currency',currency:'CAD'});
+  const titre = (d.type==='Facture' ? 'FACTURE (BROUILLON)' : d.type.toUpperCase())+' '+(d.numero||'');
+  const lignes = d.lignes.filter(l=>cvNum(l.qte)).map(l=>{ const p=calc.px(l.code,l); return '<tr><td>'+esc(l.code)+'</td><td>'+esc(l.desc)+'</td><td class="n">'+esc(l.qte)+' '+esc(l.unite||'')+'</td>'+(prix?'<td class="n">'+m(p)+'</td><td class="n">'+m(p*(cvNum(l.qte)||0))+'</td>':'')+'</tr>'; }).join('');
+  const heures = d.jours.filter(j=>j.date||j.sa01||j.sa02).map(j=>'<tr><td>'+esc(j.date)+'</td><td class="n">'+esc(j.sa01||0)+' h</td><td class="n">'+esc(j.sa02||0)+' h</td></tr>').join('');
+  const totaux = !prix ? '' : '<table class="tot">'+
+    (cvNum(d.forfait)!=null && d.forfait!=='' ? '<tr><td>Prix forfaitaire</td><td class="n">'+m(calc.st)+'</td></tr>' :
+      (calc.mo?'<tr><td>Main-d\'œuvre</td><td class="n">'+m(calc.mo)+'</td></tr>':'')+(calc.mat?'<tr><td>Matériel</td><td class="n">'+m(calc.mat)+'</td></tr>':'')+
+      (calc.depl?'<tr><td>Déplacement</td><td class="n">'+m(calc.depl)+'</td></tr>':'')+(calc.quin?'<tr><td>Quincaillerie</td><td class="n">'+m(calc.quin)+'</td></tr>':'')+
+      '<tr><td><b>Sous-total</b></td><td class="n"><b>'+m(calc.st)+'</b></td></tr>')+
+    '<tr><td>TPS (5 %)</td><td class="n">'+m(calc.tps)+'</td></tr><tr><td>TVQ (9,975 %)</td><td class="n">'+m(calc.tvq)+'</td></tr>'+
+    '<tr class="g"><td>Total</td><td class="n">'+m(calc.total)+'</td></tr></table>'+(d.type==='Soumission'?'<p class="petit">Cette soumission est valide pour une durée de 30 jours.</p>':'');
+  const html = '<!doctype html><html><head><meta charset="utf-8"><title>'+esc(titre)+'</title><style>'+
+    'body{font-family:Arial,sans-serif;color:#111;margin:28px;font-size:12.5px}h1{font-size:18px;margin:0}.ent{display:flex;justify-content:space-between;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:12px}'+
+    '.cl td{padding:2px 8px 2px 0;vertical-align:top}table{border-collapse:collapse;width:100%}.l th,.l td{border-bottom:1px solid #ccc;padding:5px 4px;text-align:left}.n{text-align:right;white-space:nowrap}'+
+    '.tot{width:280px;margin:12px 0 0 auto}.tot td{padding:3px 4px}.g td{font-weight:bold;font-size:14px;border-top:2px solid #111}.petit{font-size:11px;color:#555}h3{font-size:13px;margin:16px 0 6px}'+
+    '@media print{body{margin:12mm}}</style></head><body>'+
+    '<div class="ent"><div><h1>Saran Électrique inc.</h1>William Saran, Président<br>(438) 490-3412 · info@saranelectrique.com<br>Saint-Jean-sur-Richelieu, J3B 4J6</div>'+
+    '<div style="text-align:right"><h1>'+esc(titre)+'</h1>Date : '+esc((d.jours[0]&&d.jours[0].date)||cvDay(new Date().toISOString()))+'</div></div>'+
+    '<table class="cl"><tr><td><b>Client</b></td><td>'+esc(d.nom)+'</td><td><b>Téléphone</b></td><td>'+esc(d.tel)+'</td></tr><tr><td><b>Adresse</b></td><td>'+esc(d.adresse)+'</td><td><b>Courriel</b></td><td>'+esc(d.courriel)+'</td></tr>'+
+    (d.titre?'<tr><td><b>Projet</b></td><td colspan="3">'+esc(d.titre)+'</td></tr>':'')+(d.travaux?'<tr><td><b>Travaux</b></td><td colspan="3">'+esc(d.travaux).replace(/\n/g,'<br>')+'</td></tr>':'')+'</table>'+
+    (heures ? '<h3>Main-d\'œuvre</h3><table class="l"><tr><th>Date</th><th class="n">Compagnon (SA01)</th><th class="n">Apprenti (SA02)</th></tr>'+heures+'</table>' : '')+
+    (lignes ? '<h3>Matériel</h3><table class="l"><tr><th>Code</th><th>Description</th><th class="n">Qté</th>'+(prix?'<th class="n">Prix</th><th class="n">Total</th>':'')+'</tr>'+lignes+'</table>' : '')+
+    (!prix ? '<p>'+(d.depl?'☑':'☐')+' Déplacement &nbsp; '+(d.quin?'☑':'☐')+' Quincaillerie</p>' : '')+
+    totaux+(d.remarques?'<h3>Remarques</h3><p>'+esc(d.remarques).replace(/\n/g,'<br>')+'</p>':'')+
+    (d.type==='Ordre de travail'?'<p style="margin-top:30px">Signature du client : ______________________ &nbsp; Date : __________</p>':'')+
+    '<scr'+'ipt>window.onload=()=>setTimeout(()=>window.print(),300)</scr'+'ipt></body></html>';
+  const w = window.open('', '_blank');
+  if(!w) return false;
+  w.document.open(); w.document.write(html); w.document.close();
+  return true;
+}
+
+// Pré-remplissage quand on part d'une soumission « À faire » (bouton « 📝 Faire la soumission »).
+let DOC_PREFILL = null;
+function AppelServiceView({cfg, toast}){
+  const C = useCatalogue(cfg);
+  const D = useDocumentsCrm(cfg);
+  const [d,setD]=useState(()=>{ const p = DOC_PREFILL; DOC_PREFILL = null; return p ? {...docVide(), ...p} : docVide(); });
+  const [q,setQ]=useState('');
+  const [cat,setCat]=useState('');
+  const [occupe,setOccupe]=useState('');
+  const [taux,setTaux]=useState(false);
+  const maj = patch => setD(x=>({...x, ...patch}));
+  const calc = docCalcul(d, C.prixDe);
+  const prix = d.type!=='Ordre de travail';
+  const qteDe = code => { const l = d.lignes.find(l=>l.code===code); return l ? (cvNum(l.qte)||0) : 0; };
+  const changerQte = (p, delta, valeur)=> setD(x=>{
+    const ex = x.lignes.find(l=>l.code===p.code);
+    const qte = valeur!==undefined ? valeur : Math.max(0, (ex ? (cvNum(ex.qte)||0) : 0) + delta);
+    let lignes = ex ? x.lignes.map(l=>l.code===p.code ? {...l, qte} : l) : [...x.lignes, {code:p.code, desc:p.desc, unite:p.unite, qte, prix:''}];
+    if(valeur===undefined && !qte) lignes = lignes.filter(l=>l.code!==p.code);
+    return {...x, lignes};
+  });
+  const produits = C.produits.filter(p=>!['MAIN-ŒUVRE','FORFAIT','DÉPL STD','QUIN'].includes(p.code) && (!cat || p.cat===cat) && (!q || cvNorm(p.code+' '+p.desc).includes(cvNorm(q))));
+
+  // Prochain numéro E-0001… (STOCK PUNCH PRO › Compteur, B1 = dernier numéro utilisé)
+  const prochainNumero = async ()=>{
+    const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:cfg.stockSpreadsheetId, range:'Compteur!B1'});
+    const n = (Number(((r.result.values||[])[0]||[])[0])||0) + 1;
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:cfg.stockSpreadsheetId, range:'Compteur!B1', valueInputOption:'RAW', resource:{values:[[n]]}});
+    return 'E-'+String(n).padStart(4,'0');
+  };
+  const enregistrer = async ()=>{
+    setOccupe('save');
+    try{
+      const numero = d.numero || await prochainNumero();
+      const doc = {...d, numero};
+      const date = (doc.jours[0] && doc.jours[0].date) || cvDay(new Date().toISOString());
+      // 1) STOCK PUNCH PRO › Appels de service : AUCUN prix (les gars le voient)
+      const mat = JSON.stringify(doc.lignes.filter(l=>cvNum(l.qte)).map(l=>({code:l.code, desc:l.desc, qte:cvNum(l.qte), unite:l.unite})));
+      const ligneStock = [numero, date, 'William (CRM)', doc.titre, doc.adresse, doc.nom, doc.tel, doc.courriel, calc.h1||'', calc.h2||'', doc.type,
+        (doc.forfait!=='' && doc.forfait!=null) ? 'Oui' : '', doc.depl ? 'Oui' : '', doc.quin ? 'Oui' : '', mat, doc.remarques, 'Brouillon', new Date().toLocaleString('fr-CA')];
+      const st = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:cfg.stockSpreadsheetId, range:qSheet('Appels de service')+'!A1:A'});
+      const iS = (st.result.values||[]).findIndex(r=>r[0]===numero);
+      if(iS>0) await sheetsUpdateRow(cfg.stockSpreadsheetId, qSheet('Appels de service'), iS+1, ligneStock);
+      else await sheetsAppendRow(cfg.stockSpreadsheetId, qSheet('Appels de service'), ligneStock);
+      // 2) La mémoire — Jobs › Documents CRM : avec les prix (toi seulement)
+      const ligneDoc = [numero, doc.type, date, doc.nom, doc.courriel, doc.titre, prix?calc.st:'', prix?calc.tps:'', prix?calc.tvq:'', prix?calc.total:'', JSON.stringify(doc)];
+      const ex = D.docs.find(x=>x.numero===numero);
+      if(ex) await sheetsUpdateRow(cfg.memoireJobsSpreadsheetId, qSheet('Documents CRM'), ex.row, ligneDoc);
+      else { if(!D.docs.length) await ensureSheetsExist(cfg.memoireJobsSpreadsheetId, [{name:'Documents CRM', headers:DOCS_ENTETE}]); await sheetsAppendRow(cfg.memoireJobsSpreadsheetId, qSheet('Documents CRM'), ligneDoc); }
+      setD(doc); await D.lire(true);
+      toast && toast(doc.type+' '+numero+' enregistré'+(doc.type==='Facture'?' (brouillon à refaire dans ton logiciel)':''));
+      return doc;
+    }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); return null; }
+    finally{ setOccupe(''); }
+  };
+  const courriel = async ()=>{
+    const doc = d.numero ? d : await enregistrer(); if(!doc) return;
+    const sujet = doc.type+' '+doc.numero+(doc.titre?' — '+doc.titre:'')+' : Saran Électrique Inc.';
+    const corps = 'Bonjour'+(doc.nom?' '+doc.nom.split(' ')[0]:'')+',\n\nVoici '+(doc.type==='Soumission'?'notre soumission':doc.type==='Facture'?'votre facture':'l\'ordre de travail')+' '+doc.numero+(doc.titre?' pour '+doc.titre:'')+'.'+
+      (prix ? '\n\nMontant avant taxes : '+cvMoney(calc.st)+'\nTotal avec taxes : '+cvMoney(calc.total) : '')+
+      '\n\nLe document est en pièce jointe. N\'hésitez pas si vous avez des questions.\n\nCordialement,\n\nSaran Électrique inc.\nWilliam Saran, Président\n(438) 490-3412\ninfo@saranelectrique.com';
+    window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com&view=cm&fs=1&to='+encodeURIComponent(doc.courriel||'')+'&su='+encodeURIComponent(sujet)+'&body='+encodeURIComponent(corps), '_blank');
+    // Une soumission envoyée va dans Soumissions › Envoyées (à classer)
+    if(doc.type==='Soumission'){
+      try{
+        const deja = await lireCache(cfg.memoireJobsSpreadsheetId, 'Soumissions!A1:A', true);
+        if(!(deja.result.values||[]).some(r=>r[0]==='CRM-'+doc.numero)) await sheetsAppendRow(cfg.memoireJobsSpreadsheetId, 'Soumissions', ['CRM-'+doc.numero, 'Envoyée', cvDay(new Date().toISOString()), doc.numero, doc.nom, (doc.courriel||'').toLowerCase(), sujet, [doc.titre, doc.adresse].filter(Boolean).join(' — '), calc.st, '', '', '']);
+      }catch(e){}
+    }
+  };
+  const ouvrir = doc => { try{ setD({...docVide(), ...JSON.parse(doc.donnees||'{}')}); window.scrollTo(0,0); }catch(e){ toast && toast('Impossible d\'ouvrir ce document'); } };
+
+  const champ = (k, ph, extra) => <input value={d[k]} onChange={e=>maj({[k]:e.target.value})} placeholder={ph} style={{width:'100%',boxSizing:'border-box',...(extra||{})}}/>;
+  const choisies = d.lignes.filter(l=>cvNum(l.qte));
+  return <div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
+      <h2 className="fh" style={{margin:0,fontSize:20}}>Appel de service {d.numero && <span className="muted" style={{fontSize:15}}>{d.numero}</span>}</h2>
+      <button className="btn btn-sm" onClick={()=>{ if(!d.nom && !d.lignes.length || confirm('Commencer un nouveau document ? Ce qui n\'est pas enregistré sera perdu.')) setD(docVide()); }}>+ Nouveau</button>
+    </div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+      {DOC_TYPES.map(([k,l])=><button key={k} className={'btn btn-sm'+(d.type===k?' btn-p':'')} onClick={()=>maj({type:k})}>{l}</button>)}
+    </div>
+
+    <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:6}}>
+        {champ('nom','Nom du client')}{champ('tel','Téléphone')}{champ('courriel','Courriel')}{champ('titre','Titre du projet (ex. Borne Flo X3)')}
+      </div>
+      <ChampAdresse value={d.adresse} onChange={a=>maj({adresse:a})} placeholder="Adresse"/>
+      <textarea value={d.travaux} onChange={e=>maj({travaux:e.target.value})} rows={2} placeholder="Travaux…" style={{resize:'vertical',fontFamily:'inherit'}}/>
+    </div>
+
+    <div className="card" style={{marginBottom:10}}>
+      <div style={{fontWeight:700,marginBottom:6}}>Heures</div>
+      {d.jours.map((j,i)=><div key={i} style={{display:'flex',gap:6,alignItems:'center',marginBottom:4,flexWrap:'wrap'}}>
+        <input type="date" value={j.date} onChange={e=>maj({jours:d.jours.map((x,k)=>k===i?{...x,date:e.target.value}:x)})} style={{width:150}}/>
+        <label className="muted" style={{fontSize:12}}>SA01</label><input value={j.sa01} inputMode="decimal" onChange={e=>maj({jours:d.jours.map((x,k)=>k===i?{...x,sa01:e.target.value}:x)})} placeholder="h" style={{width:60}}/>
+        <label className="muted" style={{fontSize:12}}>SA02</label><input value={j.sa02} inputMode="decimal" onChange={e=>maj({jours:d.jours.map((x,k)=>k===i?{...x,sa02:e.target.value}:x)})} placeholder="h" style={{width:60}}/>
+        {d.jours.length>1 && <button className="btn btn-sm" onClick={()=>maj({jours:d.jours.filter((x,k)=>k!==i)})}>✕</button>}
+      </div>)}
+      <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginTop:6}}>
+        <button className="btn btn-sm" onClick={()=>maj({jours:[...d.jours,{date:'',sa01:'',sa02:''}]})}>+ Une date</button>
+        <label style={{display:'flex',gap:4,alignItems:'center',fontSize:13}}><input type="checkbox" checked={d.depl} onChange={e=>maj({depl:e.target.checked})}/> Déplacement</label>
+        <label style={{display:'flex',gap:4,alignItems:'center',fontSize:13}}><input type="checkbox" checked={d.quin} onChange={e=>maj({quin:e.target.checked})}/> Quincaillerie</label>
+        {prix && <label style={{display:'flex',gap:4,alignItems:'center',fontSize:13}}>Prix forfaitaire <input value={d.forfait} inputMode="decimal" onChange={e=>maj({forfait:e.target.value})} placeholder="$" style={{width:90}}/></label>}
+        {prix && <button className="btn btn-sm" onClick={()=>setTaux(!taux)}>⚙ Taux</button>}
+      </div>
+      {prix && taux && <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:8,padding:8,background:'var(--bg3)',borderRadius:8,fontSize:12.5}}>
+        {[['SA01','Compagnon ($/h)'],['SA02','Apprenti ($/h)'],['DEPL','Déplacement ($)'],['QUIN','Quincaillerie ($)']].map(([k,l])=><label key={k} style={{display:'flex',gap:4,alignItems:'center'}}>{l}
+          <input key={k+(C.prixDe(k)||'')} defaultValue={C.prixDe(k)!=null?C.prixDe(k):''} inputMode="decimal" style={{width:70}} onBlur={async e=>{ const v=e.target.value.trim().replace(',','.'); if(v===String(C.prixDe(k)!=null?C.prixDe(k):'')) return; try{ await C.majPrix(k, v); toast&&toast('Taux enregistré'); }catch(er){ toast&&toast('Erreur : '+apiErrMsg(er)); } }}/></label>)}
+        <span className="muted" style={{fontSize:11.5,width:'100%'}}>Gardés dans « La mémoire — Jobs › Prix » (toi seulement). Vide = prix de ta dernière facture.</span>
+      </div>}
+    </div>
+
+    <div className="card" style={{marginBottom:10}}>
+      <div style={{fontWeight:700,marginBottom:6}}>Matériel {choisies.length>0 && <span className="muted" style={{fontWeight:400}}>· {choisies.length} article{choisies.length>1?'s':''}</span>}</div>
+      {choisies.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
+        {choisies.map(l=><div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
+          <b style={{minWidth:90}}>{l.code}</b><span style={{flex:'1 1 140px'}}>{l.desc}</span>
+          <input value={l.qte} inputMode="decimal" onChange={e=>changerQte(l, 0, e.target.value)} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{l.unite}</span>
+          {prix && <input value={l.prix} inputMode="decimal" placeholder={C.prixDe(l.code)!=null ? String(C.prixDe(l.code)) : 'prix'} onChange={e=>setD(x=>({...x, lignes:x.lignes.map(y=>y.code===l.code?{...y,prix:e.target.value}:y)}))} style={{width:70,textAlign:'right'}} title="Prix unitaire (vide = ton prix habituel)"/>}
+          {prix && <span style={{width:80,textAlign:'right'}}>{cvMoney(calc.px(l.code,l)*(cvNum(l.qte)||0))}</span>}
+          <button className="btn btn-sm" onClick={()=>setD(x=>({...x, lignes:x.lignes.filter(y=>y.code!==l.code)}))}>✕</button>
+        </div>)}
+      </div>}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
+        <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>setCat('')}>Tous</button>
+        {C.cats.filter(c=>c!=='DIVERS').map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(c)}>{c}</button>)}
+      </div>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un article (code ou description)…" style={{width:'100%',boxSizing:'border-box',marginBottom:6}}/>
+      <div style={{maxHeight:360,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
+        {produits.map(p=>{ const n=qteDe(p.code); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:n?'var(--bg3)':undefined}}>
+          <b style={{minWidth:100}}>{p.code}</b><span style={{flex:1}} className={n?'':'muted'}>{p.desc}</span>
+          <button className="btn btn-sm" onClick={()=>changerQte(p,-1)} disabled={!n} style={{width:32}}>−</button>
+          <span style={{width:28,textAlign:'center',fontWeight:700}}>{n||''}</span>
+          <button className="btn btn-sm" onClick={()=>changerQte(p,1)} style={{width:32}}>+</button>
+        </div>; })}
+        {C.lu && !produits.length && <div className="muted" style={{padding:10,fontSize:13}}>Aucun article. Ajoute-le dans Produits.</div>}
+        {!C.lu && <div className="muted" style={{padding:10}}>Chargement…</div>}
+      </div>
+    </div>
+
+    <div className="card" style={{marginBottom:10}}>
+      <textarea value={d.remarques} onChange={e=>maj({remarques:e.target.value})} rows={2} placeholder="Remarques…" style={{width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
+      {prix && <div style={{marginTop:8,fontSize:13.5,display:'grid',gap:2,justifyItems:'end'}}>
+        {!(d.forfait!=='' && d.forfait!=null) && <>
+          {calc.mo>0 && <div>Main-d'œuvre ({calc.h1} h SA01{calc.h2?' + '+calc.h2+' h SA02':''}) : <b>{cvMoney(calc.mo)}</b></div>}
+          {(calc.h1+calc.h2)>0 && !calc.mo && <div className="muted" style={{fontSize:12}}>Entre tes taux horaires dans ⚙ Taux.</div>}
+          {calc.mat>0 && <div>Matériel : <b>{cvMoney(calc.mat)}</b></div>}
+          {calc.depl>0 && <div>Déplacement : <b>{cvMoney(calc.depl)}</b></div>}
+          {calc.quin>0 && <div>Quincaillerie : <b>{cvMoney(calc.quin)}</b></div>}
+        </>}
+        <div>Avant taxes : <b>{cvMoney(calc.st)}</b> <span className="muted">· TPS {cvMoney(calc.tps)} · TVQ {cvMoney(calc.tvq)}</span></div>
+        <div style={{fontSize:16}}>Total : <b>{cvMoney(calc.total)}</b></div>
+      </div>}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:10,justifyContent:'flex-end'}}>
+        <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={enregistrer}>{occupe==='save'?'Enregistrement…':'💾 Enregistrer'}</button>
+        <button className="btn btn-sm" disabled={!!occupe} onClick={async()=>{ const doc = d.numero ? d : await enregistrer(); if(doc && !docImprimer(doc, docCalcul(doc, C.prixDe))) toast && toast('Autorise les fenêtres pop-up pour imprimer'); }}>🖨️ PDF / Imprimer</button>
+        <button className="btn btn-sm" disabled={!!occupe} onClick={courriel}>📧 Courriel (Gmail)</button>
+      </div>
+      {d.type==='Facture' && <div className="muted" style={{fontSize:11.5,marginTop:6,textAlign:'right'}}>Facture = brouillon : rentre-la dans ton logiciel de facturation (numéro officiel).</div>}
+    </div>
+
+    {D.docs.length>0 && <div className="card">
+      <div style={{fontWeight:700,marginBottom:6}}>Derniers documents</div>
+      {D.docs.slice(0,15).map(x=><div key={x.numero} onClick={()=>ouvrir(x)} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
+        <span><b>{x.numero}</b> · {x.type} · {x.client||'—'}{x.titre && <span className="muted"> · {x.titre}</span>}</span>
+        <span className="muted">{cvFmtDay(x.date)}{x.total!=null && <> · {cvMoney(x.total)}</>}</span>
+      </div>)}
     </div>}
   </div>;
 }
@@ -4984,6 +5331,8 @@ function App(){
     {id:'contacts',label:'Contacts'},
     {id:'rappels',label:'Rappels & Suivi'},
     {id:'soumissions',label:'Soumissions'},
+    {id:'appel',label:'Appel de service'},
+    {id:'produits',label:'Produits'},
     {id:'stock',label:'Stock'},
     {id:'reglages',label:'Réglages'}
   ];
@@ -5028,7 +5377,9 @@ function App(){
         {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
         {nav==='factures' && <FacturesView key={'x'+navKey} cfg={cfg} refreshKey={refreshKey}/>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
-        {nav==='soumissions' && <SoumissionsView key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey}/>}
+        {nav==='soumissions' && <SoumissionsView key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
+        {nav==='appel' && <AppelServiceView key={'a'+navKey} cfg={effectiveCfg} toast={show}/>}
+        {nav==='produits' && <ProduitsView key={'pr'+navKey} cfg={effectiveCfg} toast={show}/>}
         {nav==='stock' && <StockView data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
       </div>
