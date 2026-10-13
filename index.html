@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v108';
+const APP_VERSION = 'v109';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -476,7 +476,10 @@ function couleurIdDe(hex){
   return best;
 }
 // Un événement SANS couleur prend la couleur de son agenda (comme dans Google Agenda) — avant, il tombait en gris / « Autres ».
-function couleurIdEvenement(e){ return (e && (e.colorId || couleurIdDe(e.calColor))) || ''; }
+// v109 : règle de William — dans l'agenda The Crew, une job sans couleur à elle est une job de BRANDON (Myrtille, 9).
+// (Google l'affiche dans la couleur de l'agenda, mais l'événement lui-même n'a pas de couleur : on l'attitre ici.)
+const COULEUR_DEFAUT_AGENDA = {'saranelectrique@gmail.com':'9'};
+function couleurIdEvenement(e){ return (e && (e.colorId || COULEUR_DEFAUT_AGENDA[e.calendarId||e.calId] || couleurIdDe(e.calColor))) || ''; }
 function eventColor(e){ const id = couleurIdEvenement(e); return (id && GCAL_COLOR_MAP[id]) || prefixColor(e?e.title:''); }
 // Texte lisible sur une couleur (blanc sur les couleurs foncées)
 function texteSur(hex){ const h=String(hex||''); if(!/^#[0-9a-f]{6}$/i.test(h)) return '#1d1d1d'; const [r,g,b]=[1,3,5].map(i=>parseInt(h.slice(i,i+2),16)); return (r*299+g*587+b*114)/1000 < 150 ? '#fff' : '#1d1d1d'; }
