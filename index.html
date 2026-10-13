@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v105';
+const APP_VERSION = 'v106';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3463,7 +3463,40 @@ function FacturesView({cfg, refreshKey}){
 // Les 2 premiers viennent de l'onglet « Soumissions » du registre des jobs, rempli par soumissions.gs (La mémoire).
 // Colonnes : A Clé | B Type | C Date | D No | E Client | F Courriel | G Sujet | H Extrait | I Montant | J PDF | K Lien | L Réponse | M Statut | N Le | O Note
 // Le script remplit A–L ; le CRM écrit seulement M–O (statut, date, note) et les lignes ajoutées à la main (clé « M-… »).
-const SOUM_ONGLET_ENTETE = ['Clé','Type','Date','No','Client','Courriel','Sujet','Extrait','Montant','PDF','Lien','Réponse','Statut','Le','Note','Photos'];
+const SOUM_ONGLET_ENTETE = ['Clé','Type','Date','No','Client','Courriel','Sujet','Extrait','Montant','PDF','Lien','Réponse','Statut','Le','Note','Photos','Infos demande','Type de projet','Accusé envoyé'];
+// Types de projet (William peut corriger celui deviné). Q = infos lues par soumissions.gs ; R et S = écrites par le CRM.
+const TYPES_PROJET = ['Borne de recharge','Panneau / entrée électrique','Prises et circuits','Éclairage','Chauffage / climatisation','Spa / piscine','Génératrice','Rénovation','Construction neuve','Commercial','Service / réparation','Autre'];
+function soumTypeDevine(t){
+  const x = cvNorm(t||'');
+  const r = [[/borne|recharge|vehiculeelectrique|flox|tesla|wallbox|grizzl/,'Borne de recharge'],[/panneau|entreeelectrique|200a|100a|400a|miseaniveau|compteur/,'Panneau / entrée électrique'],
+    [/thermopompe|chauffage|plinthe|climatis|airclim|convecteur|aerotherme/,'Chauffage / climatisation'],[/spa|piscine/,'Spa / piscine'],[/generatrice|generac|generateur/,'Génératrice'],
+    [/eclairage|luminaire|encastr|potlight|led|lumiere/,'Éclairage'],[/prise|circuit|1430|1450|240v|sortie/,'Prises et circuits'],
+    [/plans|constructionneuve|projet\d|batiment|multilog|unifamil/,'Construction neuve'],[/renovation|cuisine|soussol|salledebain|agrandiss/,'Rénovation'],[/commercial|commerce|local|restaurant|bureau/,'Commercial']];
+  const m = r.find(([re])=>re.test(x)); return m ? m[1] : '';
+}
+// Modèles de soumission rapide (ex. « Borne 48 A — 15 m ») : La mémoire — Jobs › « Modèles soumission » (avec prix : toi seulement).
+const MODELES_ENTETE = ['Nom','Type de projet','Données','Mis à jour'];
+function useModeles(cfg){
+  const [liste,setListe]=useState([]);
+  const [existe,setExiste]=useState(false);
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async(force)=>{
+    try{ const r = await lireCache(id, qSheet('Modèles soumission')+'!A1:D', force); setExiste(true);
+      setListe((r.result.values||[]).slice(1).map((x,i)=>{ let d={}; try{ d=JSON.parse(x[2]||'{}'); }catch(e){} return {row:i+2, nom:x[0]||'', type:x[1]||'', d}; }).filter(m=>m.nom)); }
+    catch(e){ setExiste(false); setListe([]); }
+  },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const garder = async (nom, type, doc)=>{
+    const d = {titre:doc.titre, travaux:doc.travaux, jours:doc.jours.map(j=>({sa01:j.sa01, sa02:j.sa02})), depl:doc.depl, quin:doc.quin, forfait:doc.forfait, lignes:doc.lignes.filter(l=>cvNum(l.qte)), remarques:doc.remarques};
+    const ligne = [nom, type||'', JSON.stringify(d), new Date().toLocaleString('fr-CA')];
+    const ex = liste.find(m=>cvNorm(m.nom)===cvNorm(nom));
+    if(ex) await sheetsUpdateRow(id, qSheet('Modèles soumission'), ex.row, ligne);
+    else { if(!existe) await ensureSheetsExist(id, [{name:'Modèles soumission', headers:MODELES_ENTETE}]); await sheetsAppendRow(id, qSheet('Modèles soumission'), ligne); }
+    await lire(true);
+  };
+  const enlever = async m => { await sheetsUpdateRow(id, qSheet('Modèles soumission'), m.row, ['','','','']); await lire(true); };
+  return {liste, garder, enlever};
+}
 const SOUM_FINI = ['Faite','Annulée','Ignorée'];
 function soumJours(d){ if(!d) return null; const t=new Date(d+'T12:00:00'); return isNaN(t) ? null : Math.round((Date.now()-t)/864e5); }
 function useSoumissions(cfg, refreshKey){
@@ -3473,10 +3506,10 @@ function useSoumissions(cfg, refreshKey){
     if(!id){ setEtat(s=>({...s, lu:true, err:'Le registre des jobs n\'est pas configuré (Réglages).'})); return; }
     let liste=[], existe=false, recues=[];
     try{
-      const r = await lireCache(id, 'Soumissions!A1:P', force);
+      const r = await lireCache(id, 'Soumissions!A1:S', force);
       existe = true;
       liste = (r.result.values||[]).slice(1).map((x,i)=>({row:i+2, cle:x[0]||'', type:x[1]||'', date:String(x[2]||'').slice(0,10), no:x[3]||'', client:x[4]||'', courriel:(x[5]||'').toLowerCase(),
-        sujet:x[6]||'', extrait:x[7]||'', montant:cvNum(x[8]), pdf:x[9]||'', lien:x[10]||'', reponse:x[11]||'', statut:x[12]||'', le:x[13]||'', note:x[14]||'', photos:x[15]||''})).filter(x=>x.cle);
+        sujet:x[6]||'', extrait:x[7]||'', montant:cvNum(x[8]), pdf:x[9]||'', lien:x[10]||'', reponse:x[11]||'', statut:x[12]||'', le:x[13]||'', note:x[14]||'', photos:x[15]||'', infos:(()=>{ try{ return x[16] ? JSON.parse(x[16]) : null; }catch(e){ return null; } })(), typeProjet:x[17]||'', accuse:x[18]||''})).filter(x=>x.cle);
     }catch(e){ existe = false; }
     try{
       if(idA){ const d = await lireCache(idA, 'Documents!A1:L', force);
@@ -3501,6 +3534,12 @@ function useSoumissions(cfg, refreshKey){
     await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!P1', valueInputOption:'RAW', resource:{values:[['Photos']]}});
     await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!P'+s.row, valueInputOption:'RAW', resource:{values:[[d]]}});
   };
+  // Type de projet choisi par William (R) et accusé de réception envoyé (S) : colonnes du CRM seulement.
+  const majCol = async (s, col, val, champ)=>{
+    setEtat(e=>({...e, liste:e.liste.map(x=>x.cle===s.cle ? {...x, [champ]:val} : x)}));
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!Q1:S1', valueInputOption:'RAW', resource:{values:[['Infos demande','Type de projet','Accusé envoyé']]}});
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!'+col+s.row, valueInputOption:'RAW', resource:{values:[[val]]}});
+  };
   // Soumission à faire ajoutée à la main.
   const ajouter = async (texte, details, photos)=>{
     if(!etat.existe) await ensureSheetsExist(id, [{name:'Soumissions', headers:SOUM_ONGLET_ENTETE}]);
@@ -3508,7 +3547,7 @@ function useSoumissions(cfg, refreshKey){
     await sheetsAppendRow(id, 'Soumissions', ligne);
     await lire(true);
   };
-  return {...etat, marquer, ajouter, dossierPhotos, relire:()=>lire(true)};
+  return {...etat, marquer, ajouter, dossierPhotos, majCol, relire:()=>lire(true)};
 }
 
 // Puce bien visible : la référence / le projet (ex. « DL-EC2 », « Cuisine Rive-Sud — Finition »).
@@ -3626,6 +3665,8 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const [ouverte,setOuverte]=useState('');
   const refFichiers = useRef(null);
   const [occupe,setOccupe]=useState('');
+  const [prepKey,setPrepKey]=useState(0);
+  const [filtreAF,setFiltreAF]=useState('');
   const aFaire = S.liste.filter(s=>s.type==='À faire').sort((a,b)=>b.date.localeCompare(a.date));
   const envoyees = S.liste.filter(s=>s.type==='Envoyée').sort((a,b)=>b.date.localeCompare(a.date) || (+b.no||0)-(+a.no||0));
   const ouvertes = aFaire.filter(s=>!SOUM_FINI.includes(s.statut));
@@ -3643,22 +3684,52 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const pill = (k, label, n, cur, set) => <button key={k} className={'btn btn-sm'+(cur===k?' btn-p':'')} onClick={()=>set(k)}>{label}{n!=null && <> ({n})</>}</button>;
   const vieux = (data && data.soums) || [];
 
+  // Infos d'une demande : lues par soumissions.gs (colonne Q), sinon ce qu'on a ; type = le tien (R), sinon deviné.
+  const infosDe = s => { const i = s.infos || {};
+    return {nom:i.nom || s.client || '', tel:i.tel || '', courriel:(i.courriel || s.courriel || '').toLowerCase(), adresse:i.adresse || '', travaux:i.travaux || s.extrait || '', demande:i.demande || '',
+      type: s.typeProjet || i.type || soumTypeDevine([s.sujet, i.travaux || s.extrait].join(' '))}; };
+  const preparer = s => { const i = infosDe(s), sujet = (s.sujet||'').replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'').replace(/^\s*soumission\s*[-:–]?\s*/i,'').replace(/^Contact depuis votre site\s*:\s*/i,'');
+    DOC_PREFILL = {type:'Soumission', typeProjet:i.type, origine:s.cle, nom:i.nom, tel:i.tel, courriel:i.courriel, adresse:i.adresse,
+      titre: i.type ? i.type+(i.adresse ? ' — '+i.adresse.split(',')[0] : '') : sujet, travaux:i.travaux};
+    setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); };
+  const accuse = async s => { const i = infosDe(s); if(!i.courriel){ toast && toast('Pas de courriel pour ce client'); return; }
+    const formulaire = /linkeo|contact depuis votre site/i.test(s.sujet+' '+s.courriel) || (s.infos && s.infos.formulaire);
+    const sujet = formulaire ? 'Votre demande de soumission — Saran Électrique' : 'Re: '+(s.sujet||'').replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'');
+    const corps = 'Bonjour'+(i.nom ? ' '+i.nom.split(' ')[0] : '')+',\n\nNous avons bien reçu votre demande de soumission et nous vous revenons très bientôt.\n\nCordialement,\n\nSaran Électrique inc.\nWilliam Saran, Président\n(438) 490-3412\ninfo@saranelectrique.com';
+    window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com&view=cm&fs=1&to='+encodeURIComponent(i.courriel)+'&su='+encodeURIComponent(sujet)+'&body='+encodeURIComponent(corps), '_blank');
+    try{ await S.majCol(s, 'S', cvDay(new Date().toISOString()), 'accuse'); }catch(e){} };
+  const choisirType = async (s, t) => { try{ await S.majCol(s, 'R', t, 'typeProjet'); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } };
+
   // Devis envoyés à la même personne après la demande : proposés (jamais cochés tout seuls).
   const proposes = s => !s.courriel ? [] : envoyees.filter(e=>e.courriel===s.courriel && e.date>=s.date && e.no && !aFaire.some(x=>x!==s && x.note==='Devis #'+e.no)).slice(0,3);
 
   const CarteAFaire = ({s})=>{
-    const j = soumJours(s.date), fini = SOUM_FINI.includes(s.statut);
+    const j = soumJours(s.date), fini = SOUM_FINI.includes(s.statut), i = infosDe(s), attente = s.statut==='En attente';
     return <div style={{padding:'10px 0',borderBottom:'1px solid var(--border)',opacity:fini?.6:1}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
         <div style={{minWidth:0,flex:'1 1 220px'}}>
           <div onClick={()=>setOuverte(o=>o===s.cle?'':s.cle)} style={{fontWeight:700,fontSize:14,cursor:'pointer'}}>{ouverte===s.cle?'▾ ':'▸ '}{s.client || s.sujet}</div>
           {s.client && s.sujet && !cvNorm(s.sujet).includes(cvNorm(s.client)) && <div><SoumRef txt={s.sujet.replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'')}/></div>}
-          <div className="muted" style={{fontSize:11.5}}>{cvFmtDay(s.date)}{j!=null && j>0 && <> · il y a {j} jour{j>1?'s':''}</>}{s.courriel && <> · {s.courriel}</>}{s.cle.startsWith('M-') && <> · ajoutée à la main</>}</div>
+          <div className="muted" style={{fontSize:11.5}}>{cvFmtDay(s.date)}{j!=null && j>0 && <> · il y a {j} jour{j>1?'s':''}</>}{s.cle.startsWith('M-') && <> · ajoutée à la main</>}</div>
+          {(i.tel || i.courriel || i.adresse) && <div style={{fontSize:12,marginTop:2,display:'flex',gap:10,flexWrap:'wrap'}}>
+            {i.tel && <a href={'tel:'+i.tel.replace(/[^\d+]/g,'')} style={{color:'var(--text)'}}>📞 {i.tel}</a>}
+            {i.courriel && <span>✉ {i.courriel}</span>}
+            {i.adresse && <span>📍 {i.adresse}</span>}
+          </div>}
+          {!fini && <div style={{marginTop:4,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+            <select value={i.type} onChange={e=>choisirType(s, e.target.value)} style={{fontSize:12,padding:'2px 4px'}} title={s.typeProjet ? 'Type choisi par toi' : 'Type deviné — change-le au besoin'}>
+              <option value="">Type de projet…</option>{TYPES_PROJET.map(t=><option key={t}>{t}</option>)}</select>
+            {i.type && !s.typeProjet && <span className="muted" style={{fontSize:11}}>(deviné)</span>}
+            {attente && <span className="badge" style={{background:'var(--bg3)'}}>⏳ En attente{s.note ? ' · '+s.note : ''}</span>}
+            {s.accuse && <span className="muted" style={{fontSize:11.5}}>✉ accusé envoyé le {cvFmtDay(s.accuse)}</span>}
+          </div>}
         </div>
         <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
           {lienGmail(s)}
           {!fini ? <>
-            {onNavigate && <button className="btn btn-sm" onClick={()=>{ DOC_PREFILL = {type:'Soumission', nom:s.client||'', courriel:s.courriel||'', titre:(s.sujet||'').replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'').replace(/^\s*soumission\s*[-:–]?\s*/i,''), travaux:s.extrait||''}; onNavigate('appel'); }} title="Ouvre l'appel de service avec ce client">📝 Faire la soumission</button>}
+            <button className="btn btn-sm btn-p" onClick={()=>preparer(s)} title="Ouvre la soumission déjà remplie (client, téléphone, courriel, adresse, travaux)">📝 Faire la soumission</button>
+            {i.courriel && !s.accuse && <button className="btn btn-sm" onClick={()=>accuse(s)} title="« Nous avons bien reçu votre demande… » — Gmail s'ouvre, tu n'as qu'à envoyer">✉️ Accusé de réception</button>}
+            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, attente ? '' : 'En attente', s.note)} title={attente ? 'Remettre à faire' : 'En attente (ex. visite à faire, info du client)'}>{attente ? '↩ Reprendre' : '⏳ En attente'}</button>
             <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Faite')} style={{borderColor:'var(--green, #2e9e5b)',color:'var(--green, #2e9e5b)'}}>✓ Faite</button>
             <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, s.cle.startsWith('M-')?'Annulée':'Ignorée')} title="Annulée, ou ce n'était pas une soumission à faire">✕</button>
           </> : <>
@@ -3709,7 +3780,9 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     </div>;
   };
 
-  const listeAFaire = (voirFinies ? aFaire : ouvertes).filter(s=>cherche([s.client,s.sujet,s.extrait,s.courriel].join(' ')));
+  const listeAFaire = (voirFinies ? aFaire : ouvertes).filter(s=>cherche([s.client,s.sujet,s.extrait,s.courriel,(s.infos||{}).adresse,(s.infos||{}).tel].join(' ')))
+    .filter(s=>!filtreAF || (filtreAF==='attente' ? s.statut==='En attente' : filtreAF==='nouvelles' ? s.statut!=='En attente' : infosDe(s).type===filtreAF));
+  const typesAF = [...new Set(ouvertes.map(s=>infosDe(s).type).filter(Boolean))];
   const filtreEnv = filtre || (envoyees.some(s=>etatEnv(s)==='aclasser') ? 'aclasser' : 'attente');
   const listeEnv = envoyees.filter(s=>(filtreEnv==='tout' || etatEnv(s)===filtreEnv) && cherche([s.no,s.client,s.extrait,s.courriel].join(' ')));
   // Reçues : documents des fournisseurs (Achats) + ce qu'Éclairage Saran envoie par courriel (lignes « Reçue »).
@@ -3727,8 +3800,13 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
       {pill('afaire','📝 À faire',ouvertes.length,onglet,setOnglet)}
       {pill('envoyees','📤 Envoyées',envoyees.filter(s=>['aclasser','attente'].includes(etatEnv(s))).length,onglet,setOnglet)}
       {pill('recues','📥 Reçues des fournisseurs',recuesTout.length,onglet,setOnglet)}
+      {pill('preparer','✏️ Préparer une soumission',null,onglet,k=>{ setOnglet(k); })}
     </div>
-    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (client, adresse, numéro…)" style={{width:'100%',boxSizing:'border-box',marginBottom:10}}/>
+    {onglet==='preparer' && <AppelServiceView key={'prep'+prepKey} cfg={cfg} toast={toast} mode="soumission" onEnvoye={doc=>{
+      const s = doc.origine && S.liste.find(x=>x.cle===doc.origine);
+      if(s) S.marquer(s, 'Faite', 'Soumission '+doc.numero).catch(()=>{});
+      setTimeout(()=>S.relire(), 1500); }}/>}
+    {onglet!=='preparer' && <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (client, adresse, numéro…)" style={{width:'100%',boxSizing:'border-box',marginBottom:10}}/>}
     {!S.lu && <div className="muted">Chargement…</div>}
     {S.err && <div className="card" style={{color:'var(--red, #c0392b)'}}>{S.err}</div>}
     {S.lu && !S.existe && onglet!=='recues' && <div className="card muted" style={{fontSize:12.5,marginBottom:10}}>L'onglet « Soumissions » du registre des jobs n'existe pas encore. Il sera rempli tout seul quand le script <b>soumissions.gs</b> sera installé dans La mémoire. Tu peux quand même en ajouter à la main.</div>}
@@ -3736,6 +3814,11 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     {onglet==='afaire' && <div className="card">
       <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:4}}>
         <button className="btn btn-sm btn-p" onClick={()=>setNouveau(nouveau===null?'':null)}>+ Ajouter</button>
+        <button className="btn btn-sm" onClick={()=>{ DOC_PREFILL = null; setPrepKey(k=>k+1); setOnglet('preparer'); }}>✏️ Nouvelle soumission</button>
+        {pill('','Toutes',null,filtreAF,setFiltreAF)}
+        {pill('nouvelles','Nouvelles',ouvertes.filter(s=>s.statut!=='En attente').length,filtreAF,setFiltreAF)}
+        {pill('attente','⏳ En attente',ouvertes.filter(s=>s.statut==='En attente').length,filtreAF,setFiltreAF)}
+        {typesAF.length>1 && <select value={TYPES_PROJET.includes(filtreAF)?filtreAF:''} onChange={e=>setFiltreAF(e.target.value)} style={{fontSize:12}}><option value="">Tous les types</option>{typesAF.map(t=><option key={t}>{t}</option>)}</select>}
         <label className="muted" style={{fontSize:12,display:'flex',gap:4,alignItems:'center',marginLeft:'auto'}}><input type="checkbox" checked={voirFinies} onChange={e=>setVoirFinies(e.target.checked)}/> Voir les terminées ({aFaire.length-ouvertes.length})</label>
       </div>
       {nouveau!==null && <div style={{margin:'6px 0',display:'grid',gap:6}}>
@@ -4067,7 +4150,7 @@ function useDocumentsCrm(cfg){
   return {docs, lire};
 }
 
-function docVide(){ return {numero:'', type:'Soumission', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
+function docVide(){ return {numero:'', type:'Soumission', typeProjet:'', origine:'', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
 
 // Calcul des montants d'un document (prix : ceux de la ligne, sinon mes prix / dernier facturé)
 function docCalcul(d, prixDe){
@@ -4119,9 +4202,13 @@ function docImprimer(d, calc){
 
 // Pré-remplissage quand on part d'une soumission « À faire » (bouton « 📝 Faire la soumission »).
 let DOC_PREFILL = null;
-function AppelServiceView({cfg, toast}){
+// mode « soumission » : même éditeur, dans l'onglet Soumissions (type Soumission seulement). onEnvoye(doc) : après le courriel.
+function AppelServiceView({cfg, toast, mode, onEnvoye}){
+  const soumMode = mode==='soumission';
   const C = useCatalogue(cfg);
   const D = useDocumentsCrm(cfg);
+  const M = useModeles(cfg);
+  const [nomModele,setNomModele]=useState(null);
   const [d,setD]=useState(()=>{ const p = DOC_PREFILL; DOC_PREFILL = null; return p ? {...docVide(), ...p} : docVide(); });
   const [q,setQ]=useState('');
   const [cat,setCat]=useState('');
@@ -4185,28 +4272,58 @@ function AppelServiceView({cfg, toast}){
         const deja = await lireCache(cfg.memoireJobsSpreadsheetId, 'Soumissions!A1:A', true);
         if(!(deja.result.values||[]).some(r=>r[0]==='CRM-'+doc.numero)) await sheetsAppendRow(cfg.memoireJobsSpreadsheetId, 'Soumissions', ['CRM-'+doc.numero, 'Envoyée', cvDay(new Date().toISOString()), doc.numero, doc.nom, (doc.courriel||'').toLowerCase(), sujet, [doc.titre, doc.adresse].filter(Boolean).join(' — '), calc.st, '', '', '']);
       }catch(e){}
+      onEnvoye && onEnvoye(doc);
     }
   };
+  // Modèle : remplit le titre / travaux (si vides), les heures, déplacement, quincaillerie, forfait et le matériel.
+  const appliquerModele = m => {
+    if(d.lignes.some(l=>cvNum(l.qte)) && !confirm('Remplacer le matériel et les heures par le modèle « '+m.nom+' » ?')) return;
+    const x = m.d || {}, jour0 = (d.jours[0] && d.jours[0].date) || cvDay(new Date().toISOString());
+    setD(o=>({...o, typeProjet: o.typeProjet || m.type, titre: o.titre || x.titre || '', travaux: o.travaux || x.travaux || '',
+      jours: (x.jours && x.jours.length ? x.jours : [{sa01:'',sa02:''}]).map((j,i)=>({date:(o.jours[i] && o.jours[i].date) || (i ? '' : jour0), sa01:j.sa01||'', sa02:j.sa02||''})),
+      depl:!!x.depl, quin:!!x.quin, forfait:x.forfait||'', lignes:(x.lignes||[]).map(l=>({...l})), remarques: o.remarques || x.remarques || ''}));
+    toast && toast('Modèle « '+m.nom+' » appliqué');
+  };
+  const modeles = [...M.liste].sort((a,b)=>((b.type && b.type===d.typeProjet)-(a.type && a.type===d.typeProjet)) || a.nom.localeCompare(b.nom));
   const ouvrir = doc => { try{ setD({...docVide(), ...JSON.parse(doc.donnees||'{}')}); window.scrollTo(0,0); }catch(e){ toast && toast('Impossible d\'ouvrir ce document'); } };
 
   const champ = (k, ph, extra) => <input value={d[k]} onChange={e=>maj({[k]:e.target.value})} placeholder={ph} style={{width:'100%',boxSizing:'border-box',...(extra||{})}}/>;
   const choisies = d.lignes.filter(l=>cvNum(l.qte));
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
-      <h2 className="fh" style={{margin:0,fontSize:20}}>Appel de service {d.numero && <span className="muted" style={{fontSize:15}}>{d.numero}</span>}</h2>
-      <button className="btn btn-sm" onClick={()=>{ if(!d.nom && !d.lignes.length || confirm('Commencer un nouveau document ? Ce qui n\'est pas enregistré sera perdu.')) setD(docVide()); }}>+ Nouveau</button>
+      <h2 className="fh" style={{margin:0,fontSize:soumMode?17:20}}>{soumMode ? 'Soumission' : 'Appel de service'} {d.numero && <span className="muted" style={{fontSize:15}}>{d.numero}</span>}</h2>
+      <button className="btn btn-sm" onClick={()=>{ if(!d.nom && !d.lignes.length || confirm('Commencer un nouveau document ? Ce qui n\'est pas enregistré sera perdu.')) setD(docVide()); }}>+ Nouvelle</button>
     </div>
-    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+    {!soumMode && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
       {DOC_TYPES.map(([k,l])=><button key={k} className={'btn btn-sm'+(d.type===k?' btn-p':'')} onClick={()=>maj({type:k})}>{l}</button>)}
-    </div>
+    </div>}
 
     <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:6}}>
         {champ('nom','Nom du client')}{champ('tel','Téléphone')}{champ('courriel','Courriel')}{champ('titre','Titre du projet (ex. Borne Flo X3)')}
       </div>
       <ChampAdresse value={d.adresse} onChange={a=>maj({adresse:a})} placeholder="Adresse"/>
-      <textarea value={d.travaux} onChange={e=>maj({travaux:e.target.value})} rows={2} placeholder="Travaux…" style={{resize:'vertical',fontFamily:'inherit'}}/>
+      <textarea value={d.travaux} onChange={e=>maj({travaux:e.target.value})} rows={d.travaux && d.travaux.length>160 ? 5 : 2} placeholder="Travaux…" style={{resize:'vertical',fontFamily:'inherit'}}/>
     </div>
+
+    {d.type==='Soumission' && <div className="card" style={{marginBottom:10}}>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginBottom:6}}>
+        <b style={{fontSize:13.5}}>⚡ Soumission rapide</b>
+        <select value={d.typeProjet} onChange={e=>maj({typeProjet:e.target.value})} style={{marginLeft:'auto'}}><option value="">Type de projet…</option>{TYPES_PROJET.map(t=><option key={t}>{t}</option>)}</select>
+      </div>
+      {modeles.length ? <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+        {modeles.map(m=><span key={m.row} style={{display:'inline-flex'}}>
+          <button className={'btn btn-sm'+(m.type && m.type===d.typeProjet?' btn-p':'')} title={(m.type?m.type+' · ':'')+((m.d.lignes||[]).length)+' article(s)'} onClick={()=>appliquerModele(m)}>{m.nom}</button>
+          <button className="btn btn-sm" title="Enlever ce modèle" style={{padding:'0 6px',opacity:.5}} onClick={async()=>{ if(!confirm('Enlever le modèle « '+m.nom+' » ?')) return; try{ await M.enlever(m); }catch(e){ toast&&toast('Erreur : '+apiErrMsg(e)); } }}>×</button>
+        </span>)}
+      </div> : <div className="muted" style={{fontSize:12}}>Pas encore de modèle. Prépare une soumission type (ex. une borne : heures, déplacement, fil, disjoncteur…), puis « Garder comme modèle ». La prochaine fois, un clic remplit tout.</div>}
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:8}}>
+        {nomModele===null ? <button className="btn btn-sm" disabled={!d.lignes.some(l=>cvNum(l.qte)) && !d.forfait && !d.jours.some(j=>cvNum(j.sa01))} onClick={()=>setNomModele(d.typeProjet ? d.typeProjet+(d.titre?' — '+d.titre:'') : d.titre||'')}>💾 Garder comme modèle</button>
+        : <><input autoFocus value={nomModele} onChange={e=>setNomModele(e.target.value)} placeholder="Nom du modèle (ex. Borne 48 A — 15 m)" style={{flex:'1 1 220px'}}/>
+          <button className="btn btn-sm btn-p" disabled={!nomModele.trim()} onClick={async()=>{ try{ await M.garder(nomModele.trim(), d.typeProjet, d); toast&&toast('Modèle gardé'); setNomModele(null); }catch(e){ toast&&toast('Erreur : '+apiErrMsg(e)); } }}>Garder</button>
+          <button className="btn btn-sm" onClick={()=>setNomModele(null)}>Annuler</button></>}
+      </div>
+    </div>}
 
     <div className="card" style={{marginBottom:10}}>
       <div style={{fontWeight:700,marginBottom:6}}>Heures</div>
@@ -4279,9 +4396,9 @@ function AppelServiceView({cfg, toast}){
       {d.type==='Facture' && <div className="muted" style={{fontSize:11.5,marginTop:6,textAlign:'right'}}>Facture = brouillon : rentre-la dans ton logiciel de facturation (numéro officiel).</div>}
     </div>
 
-    {D.docs.length>0 && <div className="card">
-      <div style={{fontWeight:700,marginBottom:6}}>Derniers documents</div>
-      {D.docs.slice(0,15).map(x=><div key={x.numero} onClick={()=>ouvrir(x)} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
+    {D.docs.some(x=>!soumMode || x.type==='Soumission') && <div className="card">
+      <div style={{fontWeight:700,marginBottom:6}}>{soumMode ? 'Dernières soumissions faites ici' : 'Derniers documents'}</div>
+      {D.docs.filter(x=>!soumMode || x.type==='Soumission').slice(0,15).map(x=><div key={x.numero} onClick={()=>ouvrir(x)} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
         <span><b>{x.numero}</b> · {x.type} · {x.client||'—'}{x.titre && <span className="muted"> · {x.titre}</span>}</span>
         <span className="muted">{cvFmtDay(x.date)}{x.total!=null && <> · {cvMoney(x.total)}</>}</span>
       </div>)}
