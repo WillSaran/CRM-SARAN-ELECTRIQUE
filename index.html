@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v106';
+const APP_VERSION = 'v108';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -303,17 +303,33 @@ async function getPunchProDataBatched(sid){
   const [empRows, ptRows] = await sheetsBatchGet(sid, ['Employés!A2:Z','Pointages!A2:Z']);
   return {emps: mapEmployeRows(empRows), pts: mapPointageRows(ptRows)};
 }
-// Heures par employé pour une semaine donnée: on additionne la colonne "heures"
-// des lignes 'out' et 'confirm' (les lignes 'in' n'ont pas de heures propres —
-// même convention que PunchPro, où le calcul final vient de la ligne de sortie).
+// Heures par employé pour une semaine donnée — MÊME calcul que PunchPro (combinePts), pour que le CRM
+// montre le même total que l'employé voit et confirme :
+//  - une ligne « confirm » compte ses heures (et « mange » le punch IN du même jour juste avant) ;
+//  - un punch IN compte avec le punch OUT qui le suit le même jour (heures du OUT, sinon la durée) ;
+//  - un OUT resté seul (ex. ancienne ligne après une modification : le IN est devenu « confirm ») ne compte PAS.
+// Avant, le CRM additionnait tous les OUT et confirm : une job modifiée comptait deux fois (ex. 57,5 h au lieu de 47 h).
 function heuresParEmployeSemaine(pointages, weekLabel){
   const dateStrs = weekDatesArr(weekLabel).map(localDateStr);
-  const map = {};
-  pointages.forEach(p=>{
-    if(p.type!=='out' && p.type!=='confirm') return;
-    if(!dateStrs.includes(p.date)) return;
-    if(!map[p.nom]) map[p.nom]={};
-    map[p.nom][p.date] = (map[p.nom][p.date]||0) + p.heures;
+  const map = {}, parNom = {};
+  pointages.forEach((p,i)=>{ if(p.nom && dateStrs.includes(p.date)) (parNom[p.nom]=parNom[p.nom]||[]).push({...p, _i:i}); });
+  const t = p => new Date(p.datetime).getTime() || 0;
+  const quart = h => Math.round((h||0)*4)/4;
+  Object.entries(parNom).forEach(([nom, pts])=>{
+    const tri = pts.sort((a,b)=>t(a)-t(b)), fait = new Set();
+    const ajoute = (d,h)=>{ if(!h) return; map[nom]=map[nom]||{}; map[nom][d]=(map[nom][d]||0)+h; };
+    tri.forEach(p=>{
+      if(fait.has(p._i)) return;
+      if(p.type==='confirm'){
+        fait.add(p._i);
+        const inn = tri.find(o=>o.type==='in' && !fait.has(o._i) && o.date===p.date && t(o)<t(p)); if(inn) fait.add(inn._i);
+        ajoute(p.date, quart(p.heures));
+      }else if(p.type==='in'){
+        fait.add(p._i);
+        const out = tri.find(o=>o.type==='out' && !fait.has(o._i) && o.date===p.date && t(o)>t(p));
+        if(out){ fait.add(out._i); ajoute(p.date, out.heures>0 ? quart(out.heures) : quart((t(out)-t(p))/36e5)); }
+      }
+    });
   });
   return map;
 }
@@ -321,6 +337,7 @@ function heuresParEmployeSemaine(pointages, weekLabel){
 // ── Lecture SEULE du Calendar PunchPro (jobs) ─────────────────────────────
 async function listCalendarEventsRange(calendarIds, timeMinISO, timeMaxISO){
   const all=[];
+  const calCouleurs = await couleursAgendas();
   // Les calendriers sont lus en parallèle (avant : un après l'autre, ce qui rendait l'onglet Clients lent).
   await Promise.all(calendarIds.map(async calId=>{
     try{
@@ -337,7 +354,7 @@ async function listCalendarEventsRange(calendarIds, timeMinISO, timeMaxISO){
             start:(e.start&&(e.start.dateTime||e.start.date))||'',
             end:(e.end&&(e.end.dateTime||e.end.date))||'',
             allDay:!(e.start&&e.start.dateTime), location:e.location||'', description:e.description||'',
-            colorId:e.colorId||'', calendarId:calId.trim(), attachments:e.attachments||[], htmlLink:e.htmlLink||''
+            colorId:e.colorId||'', calColor:calCouleurs[calId.trim()]||'', calendarId:calId.trim(), attachments:e.attachments||[], htmlLink:e.htmlLink||''
           });
         });
         pageToken = resp.result.nextPageToken;
@@ -441,14 +458,37 @@ function prefixColor(titleOrPrefix){
   const p = JOB_PREFIXES.includes(titleOrPrefix) || titleOrPrefix==='PARTICULIER' ? titleOrPrefix : getJobPrefix(titleOrPrefix);
   return PREFIX_COLORS[p] || '#2f80ed';
 }
-// Palette officielle des colorId d'événements Google Calendar (1-11) — ce sont
-// les VRAIES couleurs que Google/PunchPro assigne à chaque événement (souvent
-// une couleur par employé via hexToGcalColorId côté PunchPro).
+// Couleurs des événements (colorId 1-11) telles qu'affichées dans Google Agenda aujourd'hui — les MÊMES que PunchPro
+// (Brandon #3f51b5 Myrtille, Phil #8e24aa Raisin, Dan #e67c73 Flamant rose, Maude #f6c026 Banane).
+// Avant : l'ancienne palette de l'API (#5484ed, #dbadff…), plus pâle et différente de PunchPro.
 const GCAL_COLOR_MAP = {
-  '1':'#a4bdfc','2':'#7ae7bf','3':'#dbadff','4':'#ff887c','5':'#fbd75b',
-  '6':'#ffb878','7':'#46d6db','8':'#e1e1e1','9':'#5484ed','10':'#51b749','11':'#dc2127'
+  '1':'#7986cb','2':'#33b679','3':'#8e24aa','4':'#e67c73','5':'#f6c026',
+  '6':'#f5511d','7':'#039be5','8':'#616161','9':'#3f51b5','10':'#0b8043','11':'#d50000'
 };
-function eventColor(e){ return (e && e.colorId && GCAL_COLOR_MAP[e.colorId]) || prefixColor(e?e.title:''); }
+// Ancienne palette (encore renvoyée par l'API) : sert seulement à reconnaître une couleur.
+const GCAL_COLOR_ANCIENNE = {'1':'#a4bdfc','2':'#7ae7bf','3':'#dbadff','4':'#ff887c','5':'#fbd75b','6':'#ffb878','7':'#46d6db','8':'#e1e1e1','9':'#5484ed','10':'#51b749','11':'#dc2127'};
+// Couleur la plus proche (1-11) d'une couleur hex — ex. la couleur d'un agenda (The Crew en Myrtille → 9).
+function couleurIdDe(hex){
+  const h = String(hex||'').toLowerCase(); if(!/^#[0-9a-f]{6}$/.test(h)) return '';
+  const rgb = x => [1,3,5].map(i=>parseInt(x.slice(i,i+2),16)), a = rgb(h);
+  let best='', d=1e9;
+  [GCAL_COLOR_MAP, GCAL_COLOR_ANCIENNE].forEach(pal=>Object.entries(pal).forEach(([id,c])=>{ const b=rgb(c), x=(a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2; if(x<d){ d=x; best=id; } }));
+  return best;
+}
+// Un événement SANS couleur prend la couleur de son agenda (comme dans Google Agenda) — avant, il tombait en gris / « Autres ».
+function couleurIdEvenement(e){ return (e && (e.colorId || couleurIdDe(e.calColor))) || ''; }
+function eventColor(e){ const id = couleurIdEvenement(e); return (id && GCAL_COLOR_MAP[id]) || prefixColor(e?e.title:''); }
+// Texte lisible sur une couleur (blanc sur les couleurs foncées)
+function texteSur(hex){ const h=String(hex||''); if(!/^#[0-9a-f]{6}$/i.test(h)) return '#1d1d1d'; const [r,g,b]=[1,3,5].map(i=>parseInt(h.slice(i,i+2),16)); return (r*299+g*587+b*114)/1000 < 150 ? '#fff' : '#1d1d1d'; }
+// Couleur de chaque agenda (calendarList), lue une fois par session.
+let CAL_COULEURS = null;
+async function couleursAgendas(){
+  if(CAL_COULEURS) return CAL_COULEURS;
+  try{ const r = await window.gapi.client.calendar.calendarList.list({maxResults:250, fields:'items(id,backgroundColor)'});
+    CAL_COULEURS = {}; (r.result.items||[]).forEach(c=>{ CAL_COULEURS[c.id] = c.backgroundColor||''; }); }
+  catch(e){ return {}; }
+  return CAL_COULEURS;
+}
 
 // ── Lecture SEULE du Sheet "SUIVI TRAVAUX" (appels de service / factures) ─
 // Un onglet par contracteur, en-têtes légèrement variables selon l'onglet —
@@ -3095,7 +3135,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
           return <div key={i} onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }}
             style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+2, minWidth:0, minHeight:isDesktop?150:80,border:'1px solid var(--border)',borderRadius:6,padding:isDesktop?8:4,cursor:'pointer',opacity:inMonth?1:.4,background:dStr===todayStr?'rgba(47,128,237,.08)':'transparent',overflow:'hidden'}}>
             <div style={{fontSize:isDesktop?15:11,fontWeight:700,marginBottom:5}}>{d.getDate()}</div>
-            {dayEvents.slice(0,maxShow).map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',background:eventColor(e),color:'#1d1d1d',fontSize:isDesktop?11.5:9.5,padding:isDesktop?'3px 6px':'1px 4px',borderRadius:3,marginBottom:3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
+            {dayEvents.slice(0,maxShow).map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',background:eventColor(e),color:texteSur(eventColor(e)),fontSize:isDesktop?11.5:9.5,padding:isDesktop?'3px 6px':'1px 4px',borderRadius:3,marginBottom:3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
             {dayEvents.length>maxShow && <div className="muted" style={{fontSize:isDesktop?11:9.5}}>+{dayEvents.length-maxShow} de plus</div>}
           </div>;
         })}
@@ -3118,7 +3158,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
           const dStr = localDateStr(d);
           const adEvents = allDayForDay(dStr);
           return <div key={'a'+i} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
-            {adEvents.map(e=><div key={e.id} title={e.title} onClick={()=>setEditEvent(e)} style={{cursor:'pointer',background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
+            {adEvents.map(e=><div key={e.id} title={e.title} onClick={()=>setEditEvent(e)} style={{cursor:'pointer',background:eventColor(e),color:texteSur(eventColor(e)),fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
           </div>;
         })}
 
@@ -3145,7 +3185,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
                 onPointerDown={ev=>handleEventPointerDown(ev,e)}
                 onPointerMove={handleEventPointerMove}
                 onPointerUp={handleEventPointerUp}
-                style={{position:'absolute',top,height,left:'calc('+leftPct+'% + 2px)',width:'calc('+widthPct+'% - 4px)',background:eventColor(e),color:'#1d1d1d',fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'visible',boxShadow:'0 1px 3px rgba(0,0,0,.25)',cursor:'grab',touchAction:'none',userSelect:'none'}}>
+                style={{position:'absolute',top,height,left:'calc('+leftPct+'% + 2px)',width:'calc('+widthPct+'% - 4px)',background:eventColor(e),color:texteSur(eventColor(e)),fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'visible',boxShadow:'0 1px 3px rgba(0,0,0,.25)',cursor:'grab',touchAction:'none',userSelect:'none'}}>
                 <div style={{overflow:'hidden',height:'100%'}}>
                   <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
                   <div style={{opacity:.85}}>{start.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}–{end.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}</div>
@@ -3468,10 +3508,13 @@ const SOUM_ONGLET_ENTETE = ['Clé','Type','Date','No','Client','Courriel','Sujet
 const TYPES_PROJET = ['Borne de recharge','Panneau / entrée électrique','Prises et circuits','Éclairage','Chauffage / climatisation','Spa / piscine','Génératrice','Rénovation','Construction neuve','Commercial','Service / réparation','Autre'];
 function soumTypeDevine(t){
   const x = cvNorm(t||'');
-  const r = [[/borne|recharge|vehiculeelectrique|flox|tesla|wallbox|grizzl/,'Borne de recharge'],[/panneau|entreeelectrique|200a|100a|400a|miseaniveau|compteur/,'Panneau / entrée électrique'],
-    [/thermopompe|chauffage|plinthe|climatis|airclim|convecteur|aerotherme/,'Chauffage / climatisation'],[/spa|piscine/,'Spa / piscine'],[/generatrice|generac|generateur/,'Génératrice'],
-    [/eclairage|luminaire|encastr|potlight|led|lumiere/,'Éclairage'],[/prise|circuit|1430|1450|240v|sortie/,'Prises et circuits'],
-    [/plans|constructionneuve|projet\d|batiment|multilog|unifamil/,'Construction neuve'],[/renovation|cuisine|soussol|salledebain|agrandiss/,'Rénovation'],[/commercial|commerce|local|restaurant|bureau/,'Commercial']];
+  // Même ordre que soumissions.gs : le premier qui correspond gagne (une borne ou un spa parle souvent aussi du panneau).
+  const r = [[/borne|recharge|vehiculeelectrique|flox|tesla|wallbox|grizzl/,'Borne de recharge'],[/spa|piscine/,'Spa / piscine'],
+    [/thermopompe|chauffage|plinthe|calorifere|climatis|airclim|convecteur|aerotherme/,'Chauffage / climatisation'],[/generatrice|generac|generateur/,'Génératrice'],
+    [/plans|emispourconstruction|constructionneuve|chantier|multilog|unifamil|prixbudget|demandedeprix(pour)?(l)?electricite|projet\d{3}/,'Construction neuve'],
+    [/panneau|entreeelectrique|200a|100a|400a|miseaniveau|compteur/,'Panneau / entrée électrique'],[/localcommercial|commerce|restaurant|commercial/,'Commercial'],
+    [/eclairage|luminaire|plafonnier|encastr|potlight|led|lumiere/,'Éclairage'],[/prise|circuit|1430|1450|240v|sortie/,'Prises et circuits'],
+    [/renovation|renovons|cuisine|soussol|salledebain|agrandiss/,'Rénovation']];
   const m = r.find(([re])=>re.test(x)); return m ? m[1] : '';
 }
 // Modèles de soumission rapide (ex. « Borne 48 A — 15 m ») : La mémoire — Jobs › « Modèles soumission » (avec prix : toi seulement).
@@ -3690,7 +3733,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
       type: s.typeProjet || i.type || soumTypeDevine([s.sujet, i.travaux || s.extrait].join(' '))}; };
   const preparer = s => { const i = infosDe(s), sujet = (s.sujet||'').replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'').replace(/^\s*soumission\s*[-:–]?\s*/i,'').replace(/^Contact depuis votre site\s*:\s*/i,'');
     DOC_PREFILL = {type:'Soumission', typeProjet:i.type, origine:s.cle, nom:i.nom, tel:i.tel, courriel:i.courriel, adresse:i.adresse,
-      titre: i.type ? i.type+(i.adresse ? ' — '+i.adresse.split(',')[0] : '') : sujet, travaux:i.travaux};
+      titre: i.type ? i.type+(i.adresse ? ' — '+i.adresse.split(',')[0] : '') : sujet, travaux:i.travaux, dossier:s.pdf||s.photos||''};
     setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); };
   const accuse = async s => { const i = infosDe(s); if(!i.courriel){ toast && toast('Pas de courriel pour ce client'); return; }
     const formulaire = /linkeo|contact depuis votre site/i.test(s.sujet+' '+s.courriel) || (s.infos && s.infos.formulaire);
@@ -3738,7 +3781,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
           </>}
         </div>
       </div>
-      {ouverte!==s.cle ? (s.extrait && <div className="muted" onClick={()=>setOuverte(s.cle)} style={{fontSize:12,marginTop:3,cursor:'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.extrait.split('\n')[0]}{(s.pdf||s.photos) ? '  · 📷' : ''}</div>) : <>
+      {ouverte!==s.cle ? (s.extrait && <div className="muted" onClick={()=>setOuverte(s.cle)} style={{fontSize:12,marginTop:3,cursor:'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.extrait.split('\n')[0]}{(s.pdf||s.photos) ? '  · 📎 PDF / photos' : ''}</div>) : <>
       <SoumNote txt={s.extrait}/>
       {s.pdf && <SoumPhotos dossier={s.pdf}/>}
       {s.photos && <SoumPhotos dossier={s.photos} tick={tick}/>}
@@ -4150,7 +4193,7 @@ function useDocumentsCrm(cfg){
   return {docs, lire};
 }
 
-function docVide(){ return {numero:'', type:'Soumission', typeProjet:'', origine:'', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
+function docVide(){ return {numero:'', type:'Soumission', typeProjet:'', origine:'', dossier:'', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
 
 // Calcul des montants d'un document (prix : ceux de la ligne, sinon mes prix / dernier facturé)
 function docCalcul(d, prixDe){
@@ -4304,6 +4347,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
       </div>
       <ChampAdresse value={d.adresse} onChange={a=>maj({adresse:a})} placeholder="Adresse"/>
       <textarea value={d.travaux} onChange={e=>maj({travaux:e.target.value})} rows={d.travaux && d.travaux.length>160 ? 5 : 2} placeholder="Travaux…" style={{resize:'vertical',fontFamily:'inherit'}}/>
+      {d.dossier && <div><span className="muted" style={{fontSize:12}}>PDF et photos du client :</span><SoumPhotos dossier={d.dossier}/></div>}
     </div>
 
     {d.type==='Soumission' && <div className="card" style={{marginBottom:10}}>
@@ -4729,7 +4773,7 @@ const CREW_COLORS = {'3':'Philippe Bernier','4':'Daniel Wenning','5':'Maude Char
 // Équipes (camions) par couleur d'événement — ordre d'affichage au Tableau de bord : Dan (flamant rose), Brandon (myrtille), Phil (raisin), puis les autres.
 const EQUIPES_ORDRE = ['4','9','3','5'];
 const EQUIPE_SURNOM = {'Daniel Wenning':'Dan','Philippe Bernier':'Phil'};
-function equipeDe(e){ return e && CREW_COLORS[e.colorId] ? e.colorId : 'autre'; }
+function equipeDe(e){ const id = e && (e.couleurId || couleurIdEvenement(e)); return id && CREW_COLORS[id] ? id : 'autre'; }
 function equipeNom(k){ if(k==='autre') return 'Autres'; const n = CREW_COLORS[k]||''; return EQUIPE_SURNOM[n] || n.split(' ')[0]; }
 function equipeCouleur(k){ return k==='autre' ? 'var(--muted)' : (GCAL_COLOR_MAP[k]||'var(--muted)'); }
 function equipeRang(k){ const i = EQUIPES_ORDRE.indexOf(k); return i<0 ? (k==='autre' ? 99 : 50) : i; }
@@ -4782,7 +4826,7 @@ function cvParseEvent(e){
   return {
     code, phase: phase || (code?'SERV':''), po, name, key: cvNorm(name), crew:[...crew],
     as: cvSuivi(e.description,'Appel de service'), ot: cvSuivi(e.description,'Ordre de travail'), fac: cvSuivi(e.description,'Facture'),
-    attente: e.calendarId===EN_ATTENTE_CAL, id: e.id||'', calId: e.calendarId||'', day: cvDay(e.start), start: e.start||'', end: e.end||'', allDay: !!e.allDay, location: e.location||'', title, attachments: e.attachments||[], lien: e.htmlLink||'', colorId: e.colorId||''
+    attente: e.calendarId===EN_ATTENTE_CAL, id: e.id||'', calId: e.calendarId||'', day: cvDay(e.start), start: e.start||'', end: e.end||'', allDay: !!e.allDay, location: e.location||'', title, attachments: e.attachments||[], lien: e.htmlLink||'', colorId: e.colorId||'', calColor: e.calColor||'', couleurId: couleurIdEvenement(e)
   };
 }
 
