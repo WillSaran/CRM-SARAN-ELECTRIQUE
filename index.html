@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v101';
+const APP_VERSION = 'v102';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2162,6 +2162,9 @@ function DashboardFacturesCard({cfg, refreshKey, onNavigate}){
 function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
   const [loading,setLoading]=useState(true);
   const [total,setTotal]=useState(0);
+  const [noms,setNoms]=useState([]);
+  const conf = useSemainesConfirmees(cfg, refreshKey);
+  const semPassee = (()=>{ const d=new Date(); d.setDate(d.getDate()-7); return getWeek(d); })();
   const [err,setErr]=useState(false);
   useEffect(()=>{
     if(!cfg.punchproSpreadsheetId){ setLoading(false); return; }
@@ -2174,6 +2177,9 @@ function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
         const table=heuresParEmployeSemaine(pts, week);
         const dateStrs=weekDatesArr(week).map(localDateStr);
         setTotal(emps.reduce((s,e)=>{ const row=table[e.nom]||{}; return s+dateStrs.reduce((a,d)=>a+(row[d]||0),0); },0));
+        // Employés qui ont travaillé la semaine passée : ceux qui doivent la confirmer
+        const tPassee=heuresParEmployeSemaine(pts, semPassee);
+        setNoms(emps.map(e=>e.nom).filter(n=>Object.values(tPassee[n]||{}).some(h=>h>0)));
       })
       .catch(()=>{ if(!cancelled) setErr(true); })
       .finally(()=>{ if(!cancelled) setLoading(false); });
@@ -2182,6 +2188,9 @@ function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
   return <div className="card" style={{flex:'1 1 200px',minWidth:180,cursor:'pointer'}} onClick={()=>onNavigate('heures')}>
     <div style={{fontSize:26,fontWeight:800}}>{loading?'…':err?'—':fmtH(total)}</div>
     <div className="muted" style={{fontSize:12.5,marginTop:2}}>Heures d'équipe cette semaine</div>
+    {conf.pret && !conf.absent && noms.length>0 && (()=>{ const ok=noms.filter(n=>conf.de(semPassee, n)), manque=noms.filter(n=>!conf.de(semPassee, n));
+      return <div style={{fontSize:11.5,marginTop:3,color:manque.length?'var(--warning)':'var(--success)'}} title={manque.length?'Pas confirmée : '+manque.join(', '):''}>
+        ✓ Semaine passée : {ok.length}/{noms.length} confirmées{manque.length>0 && manque.length<=3 ? ' — manque '+manque.map(n=>n.split(' ')[0]).join(', ') : ''}</div>; })()}
   </div>;
 }
 function DashboardRappelsCard({data, onNavigate}){
@@ -2575,12 +2584,37 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
 }
 
 // ── UI: Heures employés — LECTURE SEULE depuis le Sheet PunchPro ─────────
+// Semaines confirmées (« Confirmer ma semaine » dans PunchPro → courriel → La mémoire, script semaines.gs)
+// Onglet « Semaines confirmées » du registre des jobs : Id, Semaine, Employé, Confirmée le, Total heures, Heures supp, Banque, Déplacement, Note, Lien.
+// Retourne {pret, absent, de(semaine, nom)} — de() donne la confirmation la plus récente de l'employé pour la semaine.
+function useSemainesConfirmees(cfg, refreshKey){
+  const [etat,setEtat]=useState({pret:false, absent:false, map:{}});
+  const id = cfg.memoireJobsSpreadsheetId;
+  useEffect(()=>{ if(!id) return; let ok=true;
+    lireCache(id, qSheet('Semaines confirmées')+'!A1:J', !!refreshKey).then(r=>{ if(!ok) return;
+      const map={}; (r.result.values||[]).slice(1).forEach(x=>{ if(!x[1]||!x[2]) return;
+        const k=x[1]+'|'+cvNorm(x[2]), c={semaine:x[1], employe:x[2], le:x[3]||'', total:cvNum(x[4]), supp:cvNum(x[5]), banque:cvNum(x[6]), dep:cvNum(x[7]), note:x[8]||'', lien:x[9]||''};
+        if(!map[k] || c.le>map[k].le) map[k]=c; });
+      setEtat({pret:true, absent:false, map}); }).catch(()=>{ if(ok) setEtat({pret:true, absent:true, map:{}}); });
+    return ()=>{ ok=false; }; },[id, refreshKey]);
+  return {...etat, de:(semaine, nom)=>etat.map[semaine+'|'+cvNorm(nom)]||null};
+}
+// Pastille ✓ : confirmée (avec la date) ; ⚠ si le total de PunchPro a changé depuis de plus de 15 min.
+function SemaineConfirmee({c, total}){
+  if(!c) return <span className="muted" style={{fontSize:12}}>pas confirmée</span>;
+  const ecart = c.total!=null && Math.abs((total||0)-c.total) > 0.25;
+  const quand = c.le ? new Date(c.le.replace(' ','T')).toLocaleDateString('fr-CA',{weekday:'short',day:'numeric',month:'short'}) : '';
+  return <a href={c.lien||undefined} target="_blank" rel="noopener" style={{textDecoration:'none',whiteSpace:'nowrap',fontSize:12.5,color:ecart?'var(--warning)':'var(--success)',fontWeight:700}}
+    title={'Confirmée le '+c.le+(c.total!=null?' — '+fmtH(c.total):'')+(c.supp?' (supp '+fmtH(c.supp)+')':'')+(c.note?' — '+c.note:'')}>
+    ✓ {quand}{ecart && <span style={{fontWeight:600}}> · ⚠ confirmé {fmtH(c.total)}, maintenant {fmtH(total)}</span>}</a>;
+}
 function HeuresView({cfg, refreshKey}){
   const [loading,setLoading]=useState(true);
   const [emps,setEmps]=useState([]);
   const [pts,setPts]=useState([]);
   const [err,setErr]=useState('');
   const [week,setWeek]=useState(()=>getWeek(new Date()));
+  const conf = useSemainesConfirmees(cfg, refreshKey);
 
   useEffect(()=>{
     if(!cfg.punchproSpreadsheetId) { setLoading(false); return; }
@@ -2602,6 +2636,7 @@ function HeuresView({cfg, refreshKey}){
   function thisWeek(){ setWeek(getWeek(new Date())); }
   const empsSorted = [...emps].sort((a,b)=>a.nom.localeCompare(b.nom));
   const grandTotal = empsSorted.reduce((s,e)=>{ const row=table[e.nom]||{}; return s+dateStrs.reduce((a,d)=>a+(row[d]||0),0); },0);
+  const nbConf = empsSorted.filter(e=>conf.de(week, e.nom)).length;
 
   return <div>
     <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Heures — employés (PunchPro)</h2>
@@ -2614,7 +2649,9 @@ function HeuresView({cfg, refreshKey}){
         <div style={{fontWeight:700}}>{weekRangeLabel(week)}</div>
         <button className="btn btn-sm" onClick={nextWeek}>Sem. suiv. →</button>
         <button className="btn btn-sm" onClick={thisWeek}>Cette semaine</button>
+        {conf.pret && !conf.absent && empsSorted.length>0 && <span style={{fontSize:13,fontWeight:700,color:nbConf===empsSorted.length?'var(--success)':'var(--muted)'}}>✓ {nbConf}/{empsSorted.length} semaines confirmées</span>}
       </div>
+      {conf.absent && <div className="muted" style={{fontSize:12,marginBottom:10}}>Les ✓ « semaine confirmée » apparaîtront quand le script semaines.gs de La mémoire aura rempli l'onglet « Semaines confirmées ».</div>}
       {loading ? <div className="muted">Chargement...</div> :
       <div className="card" style={{padding:0,overflowX:'auto'}}>
         <table>
@@ -2622,6 +2659,7 @@ function HeuresView({cfg, refreshKey}){
             <th>Employé</th>
             {joursLabel.map((j,i)=><th key={i}>{j} {dates[i].getDate()}</th>)}
             <th>Total</th>
+            <th>Confirmée</th>
           </tr></thead>
           <tbody>
             {empsSorted.map(e=>{
@@ -2631,9 +2669,10 @@ function HeuresView({cfg, refreshKey}){
                 <td><span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:e.couleur,marginRight:6}}></span>{e.nom}</td>
                 {dateStrs.map((d,i)=><td key={i}>{row[d]?fmtH(row[d]):'—'}</td>)}
                 <td style={{fontWeight:700,color:'var(--accent)'}}>{fmtH(total)}</td>
+                <td>{conf.absent ? '' : <SemaineConfirmee c={conf.de(week, e.nom)} total={total}/>}</td>
               </tr>;
             })}
-            {empsSorted.length===0 && <tr><td colSpan="9" className="muted" style={{padding:16}}>Aucun employé trouvé dans le Sheet PunchPro.</td></tr>}
+            {empsSorted.length===0 && <tr><td colSpan="10" className="muted" style={{padding:16}}>Aucun employé trouvé dans le Sheet PunchPro.</td></tr>}
           </tbody>
         </table>
       </div>}
