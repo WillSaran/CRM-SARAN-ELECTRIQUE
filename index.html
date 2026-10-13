@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v102';
+const APP_VERSION = 'v103';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1680,7 +1680,10 @@ function CvCourriels({liste}){
 // ── Fournisseurs : factures d'achat (Dubo, Lumen, Groupe Gagnon, Westburne), lien avec les jobs, stock ──
 function cvJobCle(c, j){ return (c.code!=='PART' ? c.code+' ' : '')+j.name+(j.po?' '+j.po:''); }
 // Matériel d'une job : sous-total des achats associés à la job.
-const CV_DESTS = ['Inventaire','Shop','Camion 7','Camion 14','Camion 25'];
+const CV_DESTS = ['Entrepôt','Shop','Camion 7','Camion 14','Camion 25'];
+// « Inventaire » s'appelle maintenant Entrepôt (code ENT) — les anciennes lignes « Inventaire » sont lues comme Entrepôt.
+function cvDest(j){ return /^inventaire$/i.test(String(j||'').trim()) ? 'Entrepôt' : (j||''); }
+const CV_DEST_REF = {'Entrepôt':'ENT'};   // référence écrite sur la commande au fournisseur
 function cvMateriel(job, achats){
   const l = (achats||[]).filter(a=>a.job && !CV_DESTS.includes(a.job) && ((job.po && a.job.includes(job.po)) || cvNorm(a.job).endsWith(cvNorm(job.name))));
   return {liste:l, total:l.reduce((t,a)=>t+a.st,0)};
@@ -1732,7 +1735,7 @@ function CvChoixJob({clients, propose, onChoix}){
   return <div style={{marginTop:6}}>
     <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
       {propose && pill('✓ '+propose, ()=>onChoix(propose), {background:'var(--accent)',color:'#fff',border:'none'})}
-      {CV_DESTS.map(d=>pill((d==='Inventaire'?'📦 ':d==='Shop'?'🏠 ':'🚚 ')+d, ()=>onChoix(d)))}
+      {CV_DESTS.map(d=>pill((d==='Entrepôt'?'📦 ':d==='Shop'?'🏠 ':'🚚 ')+d, ()=>onChoix(d)))}
       {pill('✏️ Autre…', ()=>setAutre(autre===null?'':null))}
     </div>
     <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5}}>
@@ -1806,7 +1809,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
     const tuiles = [[cvMoney(somme(liste.filter(a=>date(a).startsWith(mois)))),'ce mois-ci'],[cvMoney(somme(liste.filter(a=>date(a).startsWith(moisPasse)))),'le mois passé'],[cvMoney(somme(liste)),'total, avant taxes'],[liste.length,'factures']];
     if(!dest){ tuiles.push([liste.filter(a=>!a.job).length,'à associer']); tuiles.push([cvMoney(somme(liste.filter(a=>CV_DESTS.includes(a.job)))),'stock / camions / shop']); }
     const parJob = dest ? null : Object.entries(liste.filter(a=>a.job).reduce((m,a)=>{ m[a.job]=(m[a.job]||0)+(a.st||0); return m; },{})).sort((a,b)=>b[1]-a[1]).slice(0,8);
-    return {titre: dest ? ((dest==='Inventaire'?'📦 ':dest==='Shop'?'🏠 ':'🚚 ')+dest+' — factures envoyées ici') : ouvert+' — toutes les factures', fournisseur: dest?'':ouvert, liste, tuiles, parJob: parJob && parJob.length ? parJob : null};
+    return {titre: dest ? ((dest==='Entrepôt'?'📦 ':dest==='Shop'?'🏠 ':'🚚 ')+dest+' — factures envoyées ici') : ouvert+' — toutes les factures', fournisseur: dest?'':ouvert, liste, tuiles, parJob: parJob && parJob.length ? parJob : null};
   })();
   const Facture = ({a, assoc})=>{ const d = detail===a.row;
     return <div style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
@@ -1834,7 +1837,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
         <div className="muted" style={{fontSize:11.5}}>ce mois-ci · {v.liste.length} factures{n ? <> · <span style={{color:'var(--warning)'}}>{n} à associer</span></> : ''}</div>
       </div>; })}
       {CV_DESTS.filter(d=>parDest[d]).map(d=><div key={d} className="card" style={{padding:12,cursor:'pointer',borderColor:ouvert==='dest:'+d?'var(--accent)':undefined}} onClick={()=>setOuvert(ouvert==='dest:'+d?null:'dest:'+d)}>
-        <div className="muted" style={{fontSize:12}}>{d==='Inventaire'?'📦 ':d==='Shop'?'🏠 ':'🚚 '}{d} ›</div>
+        <div className="muted" style={{fontSize:12}}>{d==='Entrepôt'?'📦 ':d==='Shop'?'🏠 ':'🚚 '}{d} ›</div>
         <div style={{fontSize:18,fontWeight:800}}>{cvMoney(parDest[d])}</div>
         <div className="muted" style={{fontSize:11.5}}>avant taxes</div>
       </div>)}
@@ -4317,7 +4320,7 @@ function CommandesView({cfg, toast, refreshKey}){
     .sort((a,b)=>a.e.day.localeCompare(b.e.day)),[clients, commandes, today, fin]);
   const refDe = x => bcRefTitre(x.e) || [x.c.code!=='PART'?x.c.code:'', x.e.phase||'', x.j.name, x.j.po||''].filter(Boolean).join(' ').toUpperCase();
   const choisirPassage = x => { setBc(b=>({...b, ref:refDe(x), job:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name, passage:x, employe:(x.e.crew||[])[0]||b.employe, pour:x.e.day>today ? cvDay(new Date(new Date(x.e.day+'T12:00:00').getTime()-864e5).toISOString()) : today })); window.scrollTo(0,0); };
-  const choisirDest = d => setBc(b=>({...b, ref:d.toUpperCase(), job:d, passage:null}));
+  const choisirDest = d => setBc(b=>({...b, ref:CV_DEST_REF[d]||d.toUpperCase(), job:d, passage:null}));
   // Arrivé du Tableau de bord avec un passage : on le retrouve dans l'agenda et on remplit le bon.
   useEffect(()=>{ const p = BC_PREFILL; if(!p || !Object.keys(clients).length) return;
     for(const c of Object.values(clients)) for(const j of c.jobs) for(const e of j.events)
@@ -4588,7 +4591,7 @@ function useClientsData(cfg, refreshKey){
         const archives = {}; arRows.slice(1).forEach((r,i)=>{ if(r[0]) archives[r[0]]=i+2; });
         const facLignes = {}; flRows.slice(1).forEach(r=>{ if(r[0]) (facLignes[r[0]]=facLignes[r[0]]||[]).push({codes:r[1]||'', desc:r[2]||'', qte:cvNum(r[3])||0, prix:cvNum(r[4])||0, montant:cvNum(r[5])||0}); });
         const articles = {}; liRows.slice(1).forEach(r=>{ if(r[0]&&r[1]) (articles[r[0]+'|'+r[1]]=articles[r[0]+'|'+r[1]]||[]).push({code:r[2]||'', desc:r[3]||'', qte:cvNum(r[4])||0, montant:cvNum(r[5])||0}); });
-        const achats = acRows.slice(1).map((r,i)=>({row:i+2, fournisseur:r[0]||'', num:r[1]||'', date:r[2]||'', ref:r[3]||'', st:cvNum(r[4])||0, total:cvNum(r[5])||0, pdf:r[6]||'', propose:r[7]||'', job:r[8]||'', part: r[9]!==undefined && r[9]!=='' ? cvNum(r[9]) : 100, statut:r[10]||'', recue:r[11]||''})).filter(a=>a.fournisseur).map(a=>({...a, articles: articles[a.fournisseur+'|'+a.num]||null}));
+        const achats = acRows.slice(1).map((r,i)=>({row:i+2, fournisseur:r[0]||'', num:r[1]||'', date:r[2]||'', ref:r[3]||'', st:cvNum(r[4])||0, total:cvNum(r[5])||0, pdf:r[6]||'', propose:cvDest(r[7]), job:cvDest(r[8]), part: r[9]!==undefined && r[9]!=='' ? cvNum(r[9]) : 100, statut:r[10]||'', recue:r[11]||''})).filter(a=>a.fournisseur).map(a=>({...a, articles: articles[a.fournisseur+'|'+a.num]||null}));
         if(lent.length && alive) setState(s=>({...s, lent}));
         // Appels de service / OT papier : numéro -> photo, et facture -> appels
         const ah=(apRows[0]||[]).map(h=>cvNorm(h)), ac=re=>ah.findIndex(h=>re.test(h));
