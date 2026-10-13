@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v108';
+const APP_VERSION = 'v109';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -475,8 +475,9 @@ function couleurIdDe(hex){
   [GCAL_COLOR_MAP, GCAL_COLOR_ANCIENNE].forEach(pal=>Object.entries(pal).forEach(([id,c])=>{ const b=rgb(c), x=(a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2; if(x<d){ d=x; best=id; } }));
   return best;
 }
-// Un événement SANS couleur prend la couleur de son agenda (comme dans Google Agenda) — avant, il tombait en gris / « Autres ».
-function couleurIdEvenement(e){ return (e && (e.colorId || couleurIdDe(e.calColor))) || ''; }
+// v109 : règle de William — la couleur choisie sur l'événement = l'équipe. Un événement SANS couleur à lui est « à attitrer » :
+// rien n'est deviné d'après la couleur de l'agenda (Google l'affiche en Myrtille chez William, mais l'événement n'a pas de couleur).
+function couleurIdEvenement(e){ return (e && e.colorId) || ''; }
 function eventColor(e){ const id = couleurIdEvenement(e); return (id && GCAL_COLOR_MAP[id]) || prefixColor(e?e.title:''); }
 // Texte lisible sur une couleur (blanc sur les couleurs foncées)
 function texteSur(hex){ const h=String(hex||''); if(!/^#[0-9a-f]{6}$/i.test(h)) return '#1d1d1d'; const [r,g,b]=[1,3,5].map(i=>parseInt(h.slice(i,i+2),16)); return (r*299+g*587+b*114)/1000 < 150 ? '#fff' : '#1d1d1d'; }
@@ -2490,7 +2491,23 @@ function CourrielsView({cfg, refreshKey}){
 
 // ── UI: Tableau de bord — tout ce qui demande ton attention, tiré des mêmes données que
 // Clients, Projets, Agenda et Fournisseurs (La mémoire + agenda). Chaque bloc mène à sa section.
+// v109 : job sans couleur -> un clic sur l'équipe met SA couleur sur l'événement dans Google Agenda (ne change que la couleur).
+function AttitrerEquipe({ev, toast, onFait}){
+  const [enCours,setEnCours]=useState('');
+  if(!ev || !ev.id || !ev.calId) return null;
+  const choisir = async (k, clic) => { clic.stopPropagation(); if(enCours) return; setEnCours(k);
+    try{ await patchEventFull(ev.calId, ev.id, {colorId:k}); ev.colorId = k; ev.couleurId = k; toast && toast('✅ Attitrée à '+equipeNom(k)+' (couleur mise dans l\'agenda)'); onFait && onFait(); }
+    catch(e){ toast && toast('Erreur : '+((e && e.result && e.result.error && e.result.error.message) || e.message || e)); }
+    setEnCours(''); };
+  return <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:3}} onClick={c=>c.stopPropagation()}>
+    <span className="muted" style={{fontSize:11}}>À qui ?</span>
+    {EQUIPES_ORDRE.filter(k=>CREW_COLORS[k]).map(k=><button key={k} className="btn btn-sm" disabled={!!enCours} title={'Mettre la couleur de '+equipeNom(k)+' sur cet événement'}
+      style={{padding:'1px 8px',fontSize:11,background:GCAL_COLOR_MAP[k],color:texteSur(GCAL_COLOR_MAP[k]),border:'none'}} onClick={c=>choisir(k,c)}>{enCours===k?'…':equipeNom(k)}</button>)}
+  </div>;
+}
+
 function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
+  const [, setTicAttitre] = useState(0);
   const {loading, err, events, registry, factures, appels, courriels, achats, archives, lent} = useClientsData(cfg, refreshKey+'|d');
   const [commandes] = useCommandes(cfg);
   const [manuels] = useEtapesManuelles(cfg);
@@ -2565,6 +2582,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
     <Rang go="projets" couleur={equipeCouleur(eq)} droite={<>{heure(x.e)}{k.fait ? (c==='Rien à commander'?' · ✓ rien':' · ✅ commandé') : <BoutonCmd x={x}/>}</>}>
       <span style={{fontWeight:800,fontSize:11,color:'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}
       {x.e.crew.length>0 && <div className="muted" style={{fontSize:11.5}}>{x.e.crew.join(', ')}</div>}
+      {eq==='autre' && <AttitrerEquipe ev={x.e} toast={toast} onFait={()=>setTicAttitre(t=>t+1)}/>}
     </Rang></React.Fragment>; });
 
   return <div>
@@ -4774,7 +4792,7 @@ const CREW_COLORS = {'3':'Philippe Bernier','4':'Daniel Wenning','5':'Maude Char
 const EQUIPES_ORDRE = ['4','9','3','5'];
 const EQUIPE_SURNOM = {'Daniel Wenning':'Dan','Philippe Bernier':'Phil'};
 function equipeDe(e){ const id = e && (e.couleurId || couleurIdEvenement(e)); return id && CREW_COLORS[id] ? id : 'autre'; }
-function equipeNom(k){ if(k==='autre') return 'Autres'; const n = CREW_COLORS[k]||''; return EQUIPE_SURNOM[n] || n.split(' ')[0]; }
+function equipeNom(k){ if(k==='autre') return 'À attitrer'; const n = CREW_COLORS[k]||''; return EQUIPE_SURNOM[n] || n.split(' ')[0]; }
 function equipeCouleur(k){ return k==='autre' ? 'var(--muted)' : (GCAL_COLOR_MAP[k]||'var(--muted)'); }
 function equipeRang(k){ const i = EQUIPES_ORDRE.indexOf(k); return i<0 ? (k==='autre' ? 99 : 50) : i; }
 const PHASES = [['ROUGH','ROUGH'],['FINITION','FINITION'],['FINALE','FINITION'],['SERV','SERV'],['SERVICE','SERV'],['AJUSTEMENTS','AJUST'],['AJUSTEMENT','AJUST'],['RAPUP','RAPUP'],['DÉMO','DÉMO'],['DEMO','DÉMO']];
