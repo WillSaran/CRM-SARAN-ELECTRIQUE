@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v99';
+const APP_VERSION = 'v100';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4212,6 +4212,169 @@ function AppelServiceView({cfg, toast}){
   </div>;
 }
 
+// ── UI: COMMANDES — bons de commande aux fournisseurs (Dubo Saint-Jean, Lumen…) ────────────────
+// Choisis la job (passages des 2 prochaines semaines) ou Shop / Camion, qui va chercher, les articles du catalogue,
+// puis 📧 : Gmail s'ouvre avec la commande prête pour le comptoir. La référence (« CRS FINITION CURPAS P03056 »)
+// revient sur la facture du fournisseur, et La mémoire — Achats l'associe toute seule à la job.
+// Enregistré dans La mémoire — Jobs › « Bons de commande » (sans prix) ; la commande du passage passe à ✅ Placée
+// (ligne 📦 Commande dans l'événement, liste avant les infos du client), comme les boutons de l'Agenda.
+const BC_ENTETE = ['Numéro','Date','Fournisseur','Courriel','Référence','Job','Passage','Employé','Mode','Pour le','Articles','Note','Statut','Lien événement'];
+const BC_COURRIELS = {Dubo:'stjean@dubo.qc.ca'};
+function bcCourriel(f){ try{ const m = JSON.parse(localStorage.getItem('bc_courriels')||'{}'); return m[f] || BC_COURRIELS[f] || ''; }catch(e){ return BC_COURRIELS[f]||''; } }
+function bcRetenirCourriel(f, c){ try{ const m = JSON.parse(localStorage.getItem('bc_courriels')||'{}'); m[f]=c; localStorage.setItem('bc_courriels', JSON.stringify(m)); }catch(e){} }
+
+function useBonsCommande(cfg){
+  const [bons,setBons]=useState([]);
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async(force)=>{
+    try{ const r = await lireCache(id, qSheet('Bons de commande')+'!A1:N', force);
+      setBons((r.result.values||[]).slice(1).map((x,i)=>({row:i+2, numero:x[0], date:x[1], fournisseur:x[2], courriel:x[3], ref:x[4], job:x[5], passage:x[6], employe:x[7], mode:x[8], pour:x[9], articles:x[10], note:x[11], statut:x[12]||'', lien:x[13]||''})).filter(b=>b.numero).reverse()); }
+    catch(e){ setBons([]); }
+  },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const ajouter = async ligne => { if(!bons.length) await ensureSheetsExist(id, [{name:'Bons de commande', headers:BC_ENTETE}]); await sheetsAppendRow(id, qSheet('Bons de commande'), ligne); await lire(true); };
+  const statut = async (b, st) => { setBons(l=>l.map(x=>x.numero===b.numero?{...x,statut:st}:x));
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:qSheet('Bons de commande')+'!M'+b.row, valueInputOption:'RAW', resource:{values:[[st]]}}); };
+  return {bons, lire, ajouter, statut};
+}
+
+function bcVide(){ return {fournisseur:'Dubo', courriel:bcCourriel('Dubo'), ref:'', job:'', passage:null, employe:'', mode:'À aller chercher', pour:cvDay(new Date(Date.now()+864e5).toISOString()), lignes:[], libre:'', note:''}; }
+
+function CommandesView({cfg, toast, refreshKey}){
+  const {loading, events, registry, factures} = useClientsData(cfg, refreshKey+'|k');
+  const [commandes, enregistrerCommande] = useCommandes(cfg);
+  const C = useCatalogue(cfg);
+  const B = useBonsCommande(cfg);
+  const [bc,setBc]=useState(bcVide());
+  const [q,setQ]=useState('');
+  const [cat,setCat]=useState('');
+  const [occupe,setOccupe]=useState(false);
+  const maj = p => setBc(x=>({...x, ...p}));
+  const clients = useMemo(()=>cvBuildClients(events||[], registry||[], factures||{}),[events, registry, factures]);
+  const today = cvDay(new Date().toISOString()), fin = cvFinSemaineProchaine();
+  // Passages des 2 prochaines semaines, une ligne par visite (jours qui se suivent = une commande)
+  const aVenir = useMemo(()=>Object.values(clients).flatMap(c=>c.jobs.flatMap(j=>j.events.filter(e=>!e.attente && e.day>=today && e.day<=fin).map(e=>({c, j, e, cmd:cvCmd(commandes, j, e)}))))
+    .filter((x,i,L)=>!L.slice(0,i).some(y=>y.j===x.j && (y.e.phase||'')===(x.e.phase||'') && Math.abs(new Date(y.e.day)-new Date(x.e.day))<=3*864e5))
+    .sort((a,b)=>a.e.day.localeCompare(b.e.day)),[clients, commandes, today, fin]);
+  const refDe = x => [x.c.code!=='PART'?x.c.code:'', x.e.phase||'', x.j.name, x.j.po||''].filter(Boolean).join(' ').toUpperCase();
+  const choisirPassage = x => { setBc(b=>({...b, ref:refDe(x), job:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name, passage:x, employe:(x.e.crew||[])[0]||b.employe, pour:x.e.day>today ? cvDay(new Date(new Date(x.e.day+'T12:00:00').getTime()-864e5).toISOString()) : today })); window.scrollTo(0,0); };
+  const choisirDest = d => setBc(b=>({...b, ref:d.toUpperCase(), job:d, passage:null}));
+  // Articles
+  const qteDe = code => { const l = bc.lignes.find(l=>l.code===code); return l ? (cvNum(l.qte)||0) : 0; };
+  const changerQte = (p, delta, valeur)=> setBc(x=>{
+    const ex = x.lignes.find(l=>l.code===p.code);
+    const qte = valeur!==undefined ? valeur : Math.max(0, (ex ? (cvNum(ex.qte)||0) : 0) + delta);
+    let lignes = ex ? x.lignes.map(l=>l.code===p.code ? {...l, qte} : l) : [...x.lignes, {code:p.code, desc:p.desc, unite:p.unite, qte}];
+    if(valeur===undefined && !qte) lignes = lignes.filter(l=>l.code!==p.code);
+    return {...x, lignes};
+  });
+  // Code du fournisseur choisi (ex. LEV-T5325-W chez Dubo) quand on l'a déjà acheté là
+  const codeFourn = code => { const a = C.coutsDe(code).find(c=>c.fournisseur===bc.fournisseur); return a ? a.code : ''; };
+  const choisies = bc.lignes.filter(l=>cvNum(l.qte));
+  const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat) && (!q || cvNorm(p.code+' '+p.desc).includes(cvNorm(q))));
+  const texteArticles = () => [...choisies.map(l=>{ const cf = codeFourn(l.code); return '- '+l.qte+' '+(l.unite&&l.unite!=='un'?l.unite+' ':'')+'× '+l.code+(cf && codeNorm(cf)!==codeNorm(l.code)?' ('+cf+')':'')+' — '+l.desc; }),
+    ...bc.libre.split('\n').map(s=>s.trim()).filter(Boolean).map(s=>'- '+s)].join('\n');
+  const envoyer = async ()=>{
+    const articles = texteArticles();
+    if(!articles){ toast && toast('Ajoute au moins un article'); return; }
+    if(!bc.courriel){ toast && toast('Entre le courriel du fournisseur'); return; }
+    setOccupe(true);
+    try{
+      bcRetenirCourriel(bc.fournisseur, bc.courriel);
+      const numero = 'BC-'+String((B.bons.length||0)+1).padStart(4,'0');
+      const pourTxt = new Date(bc.pour+'T12:00:00').toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'});
+      const sujet = 'Commande '+numero+' — '+bc.ref+' — Saran Électrique';
+      const corps = 'Bonjour,\n\nVoici une commande pour Saran Électrique inc.\n\nRéférence : '+bc.ref+'\n'+
+        (bc.mode==='À aller chercher' ? 'À aller chercher le '+pourTxt+(bc.employe?' par '+bc.employe:'') : 'Livraison souhaitée le '+pourTxt)+'\n\n'+articles+
+        (bc.note ? '\n\nNote : '+bc.note : '')+'\n\nMerci de nous confirmer.\n\nWilliam Saran, Président\nSaran Électrique inc.\n(438) 490-3412\ninfo@saranelectrique.com';
+      window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com&view=cm&fs=1&to='+encodeURIComponent(bc.courriel)+'&su='+encodeURIComponent(sujet)+'&body='+encodeURIComponent(corps), '_blank');
+      const x = bc.passage;
+      await B.ajouter([numero, cvDay(new Date().toISOString()), bc.fournisseur, bc.courriel, bc.ref, bc.job, x ? x.e.day+' '+(x.e.phase||'') : '', bc.employe, bc.mode, bc.pour,
+        JSON.stringify(choisies.map(l=>({code:l.code, fournisseur:codeFourn(l.code), desc:l.desc, qte:cvNum(l.qte), unite:l.unite})).concat(bc.libre.split('\n').map(s=>s.trim()).filter(Boolean).map(s=>({desc:s})))), bc.note, 'Envoyée', x && x.e.lien || '']);
+      // Le passage : commande ✅ Placée (+ la liste dans l'événement, juste avant les infos du client)
+      if(x) await enregistrerCommande(x.cmd.cle, {day:x.e.day, job:bc.job+(x.e.phase?' '+x.e.phase:''), ot:'', eventId:x.e.id, calId:x.e.calId, ...cvClientInfo(x.j)}, 'Placée',
+        numero+' — '+bc.fournisseur+(bc.employe?' (va chercher : '+bc.employe+')':'')+'\n'+articles.replace(/^- /gm,''), {fournisseur:bc.fournisseur, mode:bc.mode});
+      toast && toast(numero+' prêt dans Gmail'+(x?' · passage marqué ✅ Placée':''));
+      setBc({...bcVide(), fournisseur:bc.fournisseur, courriel:bc.courriel});
+    }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
+    setOccupe(false);
+  };
+  const employes = [...new Set([...Object.values(CREW_INITIALS).filter(n=>!/ancien/i.test(n)), ...aVenir.flatMap(x=>x.e.crew||[])])];
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Commandes</h2>
+    <div className="muted" style={{fontSize:12,marginBottom:10}}>Prépare une commande pour un passage qui s'en vient, ou pour la shop / un camion. Gmail s'ouvre avec la commande prête ; le passage passe à ✅ Placée dans l'agenda. Aucun prix n'est envoyé ni gardé ici.</div>
+
+    <div className="card" style={{marginBottom:10}}>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
+        <b style={{fontSize:13}}>Fournisseur :</b>
+        {['Dubo','Lumen'].map(f=><button key={f} className={'btn btn-sm'+(bc.fournisseur===f?' btn-p':'')} onClick={()=>maj({fournisseur:f, courriel:bcCourriel(f)})}>{f}</button>)}
+        <input value={bc.courriel} onChange={e=>maj({courriel:e.target.value})} placeholder="courriel du comptoir" style={{flex:'1 1 200px'}}/>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:6}}>
+        <label style={{fontSize:12}}>Référence (revient sur la facture)<input value={bc.ref} onChange={e=>maj({ref:e.target.value.toUpperCase()})} placeholder="ex. CRS FINITION CURPAS P03056" style={{width:'100%',boxSizing:'border-box'}}/></label>
+        <label style={{fontSize:12}}>Qui va chercher<select value={bc.employe} onChange={e=>maj({employe:e.target.value})} style={{width:'100%'}}><option value="">—</option>{employes.map(n=><option key={n}>{n}</option>)}</select></label>
+        <label style={{fontSize:12}}>{bc.mode==='À aller chercher'?'Pour le':'Livraison le'}<input type="date" value={bc.pour} onChange={e=>maj({pour:e.target.value})} style={{width:'100%',boxSizing:'border-box'}}/></label>
+        <label style={{fontSize:12}}>Mode<select value={bc.mode} onChange={e=>maj({mode:e.target.value})} style={{width:'100%'}}><option>À aller chercher</option><option>Livraison</option></select></label>
+      </div>
+      {bc.passage ? <div style={{fontSize:12.5,marginTop:6,color:'var(--accent)'}}>📅 Pour le passage {cvFmtDay(bc.passage.e.day)} {bc.passage.e.phase} · {bc.job} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>maj({passage:null})}>✕</button></div>
+        : <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:6,alignItems:'center'}}><span className="muted" style={{fontSize:12}}>Ou pour :</span>{CV_DESTS.map(d=><button key={d} className={'btn btn-sm'+(bc.job===d?' btn-p':'')} onClick={()=>choisirDest(d)}>{d}</button>)}</div>}
+    </div>
+
+    <div className="card" style={{marginBottom:10}}>
+      <div style={{fontWeight:700,marginBottom:6}}>Articles {choisies.length>0 && <span className="muted" style={{fontWeight:400}}>· {choisies.length}</span>}</div>
+      {choisies.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
+        {choisies.map(l=><div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
+          <b style={{minWidth:90}}>{l.code}</b>{codeFourn(l.code) && codeNorm(codeFourn(l.code))!==codeNorm(l.code) && <span className="muted" style={{fontSize:11}}>{bc.fournisseur} : {codeFourn(l.code)}</span>}<span style={{flex:'1 1 140px'}}>{l.desc}</span>
+          <input value={l.qte} inputMode="decimal" onChange={e=>changerQte(l, 0, e.target.value)} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{l.unite}</span>
+          <button className="btn btn-sm" onClick={()=>setBc(x=>({...x, lignes:x.lignes.filter(y=>y.code!==l.code)}))}>✕</button>
+        </div>)}
+      </div>}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
+        <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>setCat('')}>Tous</button>
+        {C.cats.filter(c=>c!=='DIVERS').map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(c)}>{c}</button>)}
+      </div>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un article…" style={{width:'100%',boxSizing:'border-box',marginBottom:6}}/>
+      <div style={{maxHeight:320,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
+        {produits.map(p=>{ const n=qteDe(p.code); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:n?'var(--bg3)':undefined}}>
+          <b style={{minWidth:100}}>{p.code}</b><span style={{flex:1}} className={n?'':'muted'}>{p.desc}</span>
+          <button className="btn btn-sm" onClick={()=>changerQte(p,-1)} disabled={!n} style={{width:32}}>−</button>
+          <span style={{width:28,textAlign:'center',fontWeight:700}}>{n||''}</span>
+          <button className="btn btn-sm" onClick={()=>changerQte(p,1)} style={{width:32}}>+</button>
+        </div>; })}
+        {!C.lu && <div className="muted" style={{padding:10}}>Chargement…</div>}
+      </div>
+      <textarea value={bc.libre} onChange={e=>maj({libre:e.target.value})} rows={2} placeholder={"Autres articles, une ligne chacun (ex. 2 × boîte 4x4 profonde)"} style={{width:'100%',boxSizing:'border-box',marginTop:6,fontFamily:'inherit'}}/>
+      <input value={bc.note} onChange={e=>maj({note:e.target.value})} placeholder="Note au comptoir (optionnel)" style={{width:'100%',boxSizing:'border-box',marginTop:6}}/>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:6,marginTop:8}}>
+        <button className="btn btn-sm" onClick={()=>setBc({...bcVide(), fournisseur:bc.fournisseur, courriel:bc.courriel})}>Effacer</button>
+        <button className="btn btn-sm btn-p" disabled={occupe || !bc.ref} onClick={envoyer}>{occupe?'…':'📧 Envoyer à '+bc.fournisseur+' (Gmail)'}</button>
+      </div>
+    </div>
+
+    <div className="card" style={{marginBottom:10}}>
+      <div style={{fontWeight:700,marginBottom:6}}>📅 Passages à commander (jusqu'au {cvFmtDay(fin)})</div>
+      {loading && <div className="muted" style={{fontSize:13}}>Lecture de l'agenda…</div>}
+      {!loading && !aVenir.length && <div className="muted" style={{fontSize:13}}>Aucun passage prévu.</div>}
+      {aVenir.map((x,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap',opacity:x.cmd.fait?.55:1}}>
+        <div style={{minWidth:0}}><b>{cvFmtDay(x.e.day)}</b> <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{x.e.phase}</span> {x.c.code!=='PART'?x.c.code+' ':''}{x.j.name}{x.j.po && <span className="muted"> · {x.j.po}</span>}
+          {(x.e.crew||[]).length>0 && <span className="muted"> · {x.e.crew.join(', ')}</span>}</div>
+        {x.cmd.fait ? <span style={{color:'var(--success)',fontSize:12}}>{cvCmdTexte(x.cmd)}</span>
+          : <button className="btn btn-sm btn-p" onClick={()=>choisirPassage(x)}>📦 Commander</button>}
+      </div>)}
+    </div>
+
+    {B.bons.length>0 && <div className="card">
+      <div style={{fontWeight:700,marginBottom:6}}>Bons envoyés</div>
+      {B.bons.slice(0,30).map(b=>{ let n=0; try{ n=JSON.parse(b.articles||'[]').length; }catch(e){}
+        return <div key={b.numero} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
+          <div><b>{b.numero}</b> · {b.fournisseur} · <b>{b.ref}</b> <span className="muted">· {n} article{n>1?'s':''}{b.employe?' · '+b.employe:''} · pour le {cvFmtDay(b.pour)}</span></div>
+          <span style={{display:'flex',gap:4}}>{b.statut==='Ramassée' ? <span style={{color:'var(--success)',fontSize:12}}>✓ Ramassée</span>
+            : <button className="btn btn-sm" onClick={()=>B.statut(b,'Ramassée').catch(e=>toast&&toast('Erreur : '+apiErrMsg(e)))}>✓ Ramassée</button>}</span>
+        </div>; })}
+    </div>}
+  </div>;
+}
+
 // ── UI: Stock — section en construction, la gestion complète (inventaire,
 // commandes) sera ajoutée plus tard. En attendant: vue rapide du statut de
 // stock déjà suivi par projet (champ stockStatut, réglé depuis le Tableau de
@@ -5578,6 +5741,7 @@ function App(){
     {id:'rappels',label:'Rappels & Suivi'},
     {id:'soumissions',label:'Soumissions'},
     {id:'appel',label:'Appel de service'},
+    {id:'commandes',label:'Commandes'},
     {id:'produits',label:'Produits'},
     {id:'stock',label:'Stock'},
     {id:'reglages',label:'Réglages'}
@@ -5625,6 +5789,7 @@ function App(){
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='soumissions' && <SoumissionsView key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {nav==='appel' && <AppelServiceView key={'a'+navKey} cfg={effectiveCfg} toast={show}/>}
+        {nav==='commandes' && <CommandesView key={'bc'+navKey} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='produits' && <ProduitsView key={'pr'+navKey} cfg={effectiveCfg} toast={show}/>}
         {nav==='stock' && <StockView data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
