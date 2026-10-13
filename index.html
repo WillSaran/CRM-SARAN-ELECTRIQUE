@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v95';
+const APP_VERSION = 'v97';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2446,6 +2446,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const [reglés] = useCourrielsReglés(cfg);
   const [reglees] = useVerifsReglees(cfg);
   const [voirTermDash] = useVoirTerminees();
+  const soum = useSoumissions(cfg, refreshKey);
   const [suivi,setSuivi]=useState(null);
   useEffect(()=>{ if(!cfg.suiviTravauxSpreadsheetId) return; let ok=true;
     getAllSuiviTravaux(cfg.suiviTravauxSpreadsheetId).then(r=>{ if(ok) setSuivi(r); }).catch(()=>{ if(ok) setSuivi([]); });
@@ -2510,6 +2511,10 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
       <Tuile n={suivi ? aFacturer.length : '…'} l="À facturer" sub={suivi ? (sansFac ? sansFac+" sans rien d'inscrit, "+(aFacturer.length-sansFac)+' facture à faire' : (aFacturer.length ? 'appels faits, factures à faire' : 'tout est facturé')) : 'Suivi Travaux'} alerte={aFacturer.length>0} go="factures"/>
       <Tuile n={anomalies.length} l="À vérifier" sub="factures, PO, appels" alerte={anomalies.length>0} go="clients"/>
       <Tuile n={aCommander.length} l="Commandes à placer" sub={'cette semaine et la prochaine (jusqu\'au '+cvFmtDay(dans14)+')'} alerte={aCommander.some(x=>x.e.day<=jour(3))} go="agenda"/>
+      {(()=>{ const af = soum.liste.filter(x=>x.type==='À faire' && !SOUM_FINI.includes(x.statut));
+        const att = soum.liste.filter(x=>x.type==='Envoyée' && !['Acceptée','Refusée'].includes(x.statut)).length;
+        const vieille = af.reduce((m,x)=>Math.max(m, soumJours(x.date)||0),0);
+        return <Tuile n={soum.lu ? af.length : '…'} l="Soumissions à produire" sub={soum.lu ? (att ? att+' envoyée'+(att>1?'s':'')+' en attente de réponse' : (af.length && vieille>=7 ? 'la plus vieille : '+vieille+' jours' : 'notes et demandes reçues')) : 'Soumissions'} alerte={af.length>0} go="soumissions"/>; })()}
       <Tuile n={aRepondre.length} l="Courriels à répondre" sub={aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'le plus vieux : '+cvJoursDepuis(aRepondre[0].dernier)+' jours' : 'clients et contracteurs'} alerte={aRepondre.length>0} go="courriels"/>
       <Tuile n={aAssocier.length} l="Achats à associer" sub={cvMoney(achatsMois)+' achetés ce mois-ci'} go="fournisseurs"/>
       <DashboardHeuresCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
@@ -3234,6 +3239,27 @@ function FacturesView({cfg, refreshKey}){
   const recents = (a,b)=>((b.dateObj||0)-(a.dateObj||0));
   const liste = vue==='afacturer' ? [...manquantes, ...traitement].sort(vieux) : vue==='annulees' ? annulees.slice().sort(recents) : base.slice().sort(recents);
   const jours = r => r.dateObj ? Math.floor((Date.now()-r.dateObj.getTime())/864e5) : null;
+  const Ligne = r => { const k=r.onglet+r.ligne, j=jours(r);
+          return <div key={k} style={{padding:'9px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+            <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
+              <div style={{minWidth:0}}><b style={{color:'var(--accent)'}}>{nom(r.contracteur)} </b><b>{r.projet||r.adresse||'—'}</b>
+                {r.projet && r.adresse && <div className="muted" style={{fontSize:12}}>{r.adresse}</div>}
+                <div style={{fontSize:12.5,marginTop:2}}><Statut r={r}/>{r.ordreTravail ? <span className="muted"> · OT {r.ordreTravail}</span> : ''}</div>
+              </div>
+              <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
+                <div className="muted" style={{fontSize:12}}>{r.date}</div>
+                {vue==='afacturer' && j!=null && <div style={{fontSize:12,fontWeight:700,color:j>=14?'var(--danger)':j>=7?'var(--warning)':'var(--muted)'}}>il y a {j} j</div>}
+              </div>
+            </div>
+            <div style={{marginTop:5}}>
+              {(()=>{ const p = r.statutFacture==='manquant' && padPourLigne(papiers, r); return p ? <span style={{fontSize:12,marginRight:8,color:'var(--accent)'}}>📄 Papier reçu{p.ap.length ? ' : AP '+p.ap.join(', ') : ''}{p.ot.length ? ' · OT '+p.ot.join(', ') : ''} — à inscrire</span> : null; })()}
+              {(r.statutFacture==='manquant' || r.statutFacture==='en_traitement') && r.estPasseOuAujourdhui &&
+                <button className="btn btn-sm" disabled={busy===k} title="Met « ** » dans les colonnes K et M du Sheet" onClick={()=>marquer(r, true)}>{busy===k?'…':'✕ Pas à facturer'}</button>}
+              {r.statutFacture==='annule' && <button className="btn btn-sm" disabled={busy===k} onClick={()=>marquer(r, false)}>{busy===k?'…':'↩ Remettre à facturer'}</button>}
+            </div>
+          </div>; };
+  // Dossier d'un particulier : le titre sans la phase ni les initiales des gars (« SERV Jean Tremblay JG » → « Jean Tremblay »).
+  const dossierDe = r => { const t = String(r.projet||r.adresse||'—').replace(/^\s*((PART|ROUGH|FINITION|FIN|SERV|SERVICE|AJUST|RAPUP|PREP)\b\s*)+/i,'').replace(/(\s+[A-ZÉÈ]{2,3})+\s*$/,'').trim(); return t || (r.projet||'—'); };
   const Statut = ({r}) => r.statutFacture==='complet' ? <span style={{color:'var(--success)',fontWeight:700}}>Facture {r.facture}</span>
     : r.statutFacture==='en_traitement' ? <span style={{color:'var(--warning)',fontWeight:700}}>Appel {r.appelService} — facture à faire</span>
     : r.statutFacture==='annule' ? <span className="muted" style={{fontWeight:700}}>{r.appelService==='-'||r.facture==='-' ? '- ' : '** '}Pas à facturer</span>
@@ -3276,24 +3302,17 @@ function FacturesView({cfg, refreshKey}){
       </div> :
       <div className="card">
         {!liste.length && <div className="muted" style={{fontSize:13}}>{vue==='afacturer' ? '✅ Tout est facturé.' : 'Rien ici.'}</div>}
-        {liste.slice(0,300).map(r=>{ const k=r.onglet+r.ligne, j=jours(r);
-          return <div key={k} style={{padding:'9px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
-            <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
-              <div style={{minWidth:0}}><b style={{color:'var(--accent)'}}>{nom(r.contracteur)} </b><b>{r.projet||r.adresse||'—'}</b>
-                {r.projet && r.adresse && <div className="muted" style={{fontSize:12}}>{r.adresse}</div>}
-                <div style={{fontSize:12.5,marginTop:2}}><Statut r={r}/>{r.ordreTravail ? <span className="muted"> · OT {r.ordreTravail}</span> : ''}</div>
-              </div>
-              <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
-                <div className="muted" style={{fontSize:12}}>{r.date}</div>
-                {vue==='afacturer' && j!=null && <div style={{fontSize:12,fontWeight:700,color:j>=14?'var(--danger)':j>=7?'var(--warning)':'var(--muted)'}}>il y a {j} j</div>}
-              </div>
-            </div>
-            <div style={{marginTop:5}}>
-              {(()=>{ const p = r.statutFacture==='manquant' && padPourLigne(papiers, r); return p ? <span style={{fontSize:12,marginRight:8,color:'var(--accent)'}}>📄 Papier reçu{p.ap.length ? ' : AP '+p.ap.join(', ') : ''}{p.ot.length ? ' · OT '+p.ot.join(', ') : ''} — à inscrire</span> : null; })()}
-              {(r.statutFacture==='manquant' || r.statutFacture==='en_traitement') && r.estPasseOuAujourdhui &&
-                <button className="btn btn-sm" disabled={busy===k} title="Met « ** » dans les colonnes K et M du Sheet" onClick={()=>marquer(r, true)}>{busy===k?'…':'✕ Pas à facturer'}</button>}
-              {r.statutFacture==='annule' && <button className="btn btn-sm" disabled={busy===k} onClick={()=>marquer(r, false)}>{busy===k?'…':'↩ Remettre à facturer'}</button>}
-            </div>
+        {vue!=='afacturer' && liste.slice(0,300).map(Ligne)}
+        {vue==='afacturer' && [['manquant','🔴 Factures manquantes — rien d\'inscrit (ni appel ni facture)', manquantes],['traitement','🟠 En traitement — papier traité, appel inscrit, facture à faire', traitement]].map(([cle, titre, l])=>{
+          if(!l.length) return null;
+          const groupes = contracteurs.map(c=>[c, l.filter(r=>r.contracteur===c).sort(vieux)]).filter(([,g])=>g.length);
+          return <div key={cle} style={{marginBottom:14}}>
+            <div className="fh" style={{fontSize:15,margin:'4px 0 6px',color:cle==='manquant'?'var(--danger)':'var(--warning)'}}>{titre} <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{l.length}</span></div>
+            {groupes.map(([c,g])=><div key={c} style={{marginBottom:8}}>
+              <div style={{fontWeight:700,fontSize:13.5,padding:'6px 8px',background:'var(--bg3)',borderRadius:6}}>{nom(c)} · {g.length}
+                {c==='PARTICULIER' && <span className="muted" style={{fontWeight:400,fontSize:12}}> ({[...new Set(g.map(dossierDe))].join(' · ')})</span>}</div>
+              {g.slice(0,150).map(Ligne)}
+            </div>)}
           </div>; })}
       </div>}
       <div className="muted" style={{fontSize:11.5,marginTop:8}}>Le Sheet est rempli à partir de l'agenda par ton script Suivi Travaux. Les numéros d'appel et de facture s'y inscrivent dans les colonnes K et M.</div>
@@ -3660,8 +3679,22 @@ const qSheet = n => "'"+String(n).replace(/'/g,"''")+"'";
 const codeNorm = c => String(c||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
 const arrondi = n => Math.round((Number(n)||0)*100)/100;
 
+// Politique de prix (même grille que ton système comptable) : prix de vente = coût ÷ (1 − profit %).
+// Vérifié sur tes factures : GFTR2-W coût 15,94 $ → 35 % → 24,52 $ ; PJ262-W 0,84 $ → 50 % → 1,68 $.
+const POLITIQUE_BASE = [[1,50],[3,50],[5,50],[10,40],[25,35],[50,33],[100,33],[250,33],[500,33],[1000,25],[5000,25],[10000,22],[Infinity,20]];
+const PROFILS = ['Base','Profit 5%','Profit 10%','Profit 15%','Profit 20%','Profit 25%','Profit 30%','Profit 35%','Profit 40%','Profit 45%','Profit 50%'];
+function profitPct(cout, profil){
+  if(profil && profil!=='Base'){ const p = Number((profil.match(/\d+/)||[])[0]); if(p) return p; }
+  return (POLITIQUE_BASE.find(([max])=>cout < max)||[0,20])[1];
+}
+function prixPolitique(cout, profil){ if(cout==null || !(cout>0)) return null; return arrondi(cout / (1 - profitPct(cout, profil)/100)); }
+// Jetons d'un code de facture : « NMD2C14X150 NMD2C14 », « MO SA01 », « 125V T5825-W » (les 125V, 4-HOLES… ne sont pas des codes).
+const codeJetons = s => String(s||'').split(/[\s,]+/).map(codeNorm).filter(t=>t.length>=4 && !/^\d+(V|KA|W|A)$/.test(t) && !/HOLES$/.test(t) && !/^\d+$/.test(t));
+// Code fournisseur sans le préfixe de marque (LEV-T5325-W → T5325W, ABB-BC1110 → BC1110)
+const codeSansMarque = c => codeNorm(String(c||'').replace(/^[A-Z]{2,4}-(?=\S)/i,''));
+
 function useCatalogue(cfg){
-  const [etat,setEtat]=useState({lu:false, produits:[], cats:[], prix:{}, facture:{}, cout:{}, err:''});
+  const [etat,setEtat]=useState({lu:false, produits:[], cats:[], prix:{}, liens:{}, facture:{}, achats:[], profil:'Base', err:''});
   const idS = cfg.stockSpreadsheetId, idJ = cfg.memoireJobsSpreadsheetId;
   const lire = useCallback(async(force)=>{
     if(!idS){ setEtat(s=>({...s, lu:true, err:'Le Sheet STOCK PUNCH PRO n\'est pas configuré (Réglages).'})); return; }
@@ -3670,87 +3703,218 @@ function useCatalogue(cfg){
       const cats = (meta.result.sheets||[]).map(x=>x.properties.title).filter(t=>!STOCK_HORS_CATALOGUE.includes(t));
       const vals = await sheetsBatchGet(idS, cats.map(c=>qSheet(c)+'!A1:E'));
       const produits = [];
-      cats.forEach((c,i)=>(vals[i]||[]).slice(1).forEach(r=>{ if(r[0]) produits.push({cat:c, code:String(r[0]).trim(), desc:r[1]||'', unite:r[2]||'', notes: c==='Stock personnalisé' ? '' : (r[3]||'')}); }));
-      // Mes prix (CRM seulement)
-      const prix = {};
-      try{ const p = await lireCache(idJ, 'Prix!A1:C', force); (p.result.values||[]).slice(1).forEach((r,i)=>{ if(r[0]) prix[codeNorm(r[0])] = {prix:cvNum(r[1]), row:i+2, code:r[0]}; }); }catch(e){}
-      // Dernier prix facturé (registre des factures, onglet Lignes) et dernier coût fournisseur (Achats, onglet Lignes)
-      const facture = {}, cout = {};
+      cats.forEach((c,i)=>(vals[i]||[]).slice(1).forEach((r,k)=>{ if(r[0]) produits.push({cat:c, row:k+2, code:String(r[0]).trim(), desc:r[1]||'', unite:r[2]||'', notes: c==='Stock personnalisé' ? '' : (r[3]||'')}); }));
+      // Mes prix + réglages (onglet « Prix » : PROFIL = profil de profit) et correspondances fournisseur → produit
+      const prix = {}; let profil = 'Base';
+      try{ const p = await lireCache(idJ, 'Prix!A1:C', force); (p.result.values||[]).slice(1).forEach((r,i)=>{ if(!r[0]) return; if(r[0]==='PROFIL'){ profil = r[1]||'Base'; prix.PROFIL={row:i+2}; return; } prix[codeNorm(r[0])] = {prix:cvNum(r[1]), row:i+2, code:r[0]}; }); }catch(e){}
+      const liens = {};
+      try{ const l = await lireCache(idJ, 'Correspondances!A1:D', force); (l.result.values||[]).slice(1).forEach((r,i)=>{ if(r[0]) liens[codeNorm(r[0])] = {produit:r[2]||'', row:i+2, fournisseur:r[1]||''}; }); }catch(e){}
+      // Dernier prix facturé à tes clients : chaque jeton de la colonne Codes (registre des factures › Lignes)
+      const facture = {};
       try{ const f = await lireCache(cfg.memoireFacturesSpreadsheetId, 'Lignes!A1:F', force);
-        (f.result.values||[]).slice(1).forEach(r=>{ const k=codeNorm(String(r[1]||'').split(/[\s,]+/)[0]); const p=cvNum(r[4]); const n=Number(r[0])||0; if(k && p!=null && (!facture[k] || n>=facture[k].n)) facture[k]={prix:p, n}; }); }catch(e){}
-      try{ const a = await lireCache(cfg.memoireAchatsSpreadsheetId, 'Lignes!A1:F', force);
-        (a.result.values||[]).slice(1).forEach(r=>{ const k=codeNorm(r[2]); const q=cvNum(r[4])||0, m=cvNum(r[5]); const n=Number(r[1])||0; if(k && q>0 && m!=null && (!cout[k] || n>=cout[k].n)) cout[k]={prix:arrondi(m/q), n, fournisseur:r[0]}; }); }catch(e){}
-      setEtat({lu:true, produits, cats, prix, facture, cout, err:''});
+        (f.result.values||[]).slice(1).forEach(r=>{ const p=cvNum(r[4]); const n=Number(r[0])||0; if(p==null) return;
+          codeJetons(r[1]).forEach(k=>{ if(!facture[k] || n>=facture[k].n) facture[k]={prix:p, n}; }); }); }catch(e){}
+      // Achats (factures fournisseurs) : une ligne par article acheté, avec la date de la facture
+      let achats = [];
+      try{
+        const [ent, lig] = await sheetsBatchGet(cfg.memoireAchatsSpreadsheetId, ['A1:C', 'Lignes!A1:F']);
+        const dates = {}; (ent||[]).slice(1).forEach(r=>{ if(r[0]) dates[r[0]+'|'+r[1]] = r[2]||''; });
+        achats = (lig||[]).slice(1).map(r=>{ const q=cvNum(r[4])||0, m=cvNum(r[5]); return {fournisseur:r[0]||'', facture:r[1]||'', code:r[2]||'', desc:r[3]||'', qte:q, cout: q>0 && m!=null ? arrondi(m/q) : null, date:dates[(r[0]||'')+'|'+(r[1]||'')]||''}; })
+          .filter(a=>a.code && a.cout!=null && a.cout>0);
+      }catch(e){}
+      setEtat({lu:true, produits, cats, prix, liens, facture, achats, profil, err:''});
     }catch(e){ setEtat(s=>({...s, lu:true, err:apiErrMsg(e)})); }
   },[idS, idJ, cfg.memoireFacturesSpreadsheetId, cfg.memoireAchatsSpreadsheetId]);
   useEffect(()=>{ lire(); },[lire]);
-  // Coût fournisseur : code exact, ou code du fournisseur qui finit par ton code (LEV-T5325-W ↔ T5325-W).
-  const coutDe = code => { const k=codeNorm(code); if(!k) return null; if(etat.cout[k]) return etat.cout[k]; const c = Object.keys(etat.cout).find(x=>x.length>k.length && x.endsWith(k) && k.length>=5); return c ? etat.cout[c] : null; };
+
+  // Produit du catalogue pour un code fournisseur : lien confirmé, sinon code identique (sans la marque), sinon rien (« à confirmer »).
+  const parCode = useMemo(()=>{ const m={}; etat.produits.forEach(p=>{ m[codeNorm(p.code)] = p; }); return m; },[etat.produits]);
+  const produitDe = useCallback(codeF => {
+    const l = etat.liens[codeNorm(codeF)];
+    if(l) return l.produit ? (parCode[codeNorm(l.produit)] || {code:l.produit, desc:'', cat:''}) : null;   // lien vide = ignoré
+    const k1 = codeNorm(codeF), k2 = codeSansMarque(codeF);
+    return parCode[k1] || parCode[k2] || null;
+  },[etat.liens, parCode]);
+  // Achats de chaque produit, par fournisseur (le plus récent de chacun)
+  const achatsParProduit = useMemo(()=>{
+    const m = {};
+    etat.achats.forEach(a=>{ const p = produitDe(a.code); if(!p) return; const k = codeNorm(p.code);
+      const x = (m[k] = m[k] || {});
+      if(!x[a.fournisseur] || a.date > x[a.fournisseur].date || (a.date===x[a.fournisseur].date && a.facture > x[a.fournisseur].facture)) x[a.fournisseur] = a; });
+    return m;
+  },[etat.achats, produitDe]);
+  // Codes achetés qui ne sont reliés à aucun produit (ni ignorés) : « à confirmer »
+  const aConfirmer = useMemo(()=>{
+    const m = {};
+    etat.achats.forEach(a=>{ const k = codeNorm(a.code); if(etat.liens[k] || produitDe(a.code)) return;
+      const x = m[k] || (m[k] = {code:a.code, desc:a.desc, fournisseur:a.fournisseur, cout:a.cout, date:a.date, fois:0, total:0});
+      x.fois++; x.total += a.cout*a.qte; if(a.date > x.date){ x.date=a.date; x.cout=a.cout; x.fournisseur=a.fournisseur; } });
+    return Object.values(m).sort((a,b)=>b.fois-a.fois || b.total-a.total);
+  },[etat.achats, etat.liens, produitDe]);
+
+  const coutsDe = code => Object.values(achatsParProduit[codeNorm(code)] || {}).sort((a,b)=>b.date.localeCompare(a.date));
+  const coutDe = code => { const c = coutsDe(code)[0]; return c ? {prix:c.cout, fournisseur:c.fournisseur, date:c.date} : null; };
   const factureDe = code => { const k=codeNorm(code); return k ? (etat.facture[k] || null) : null; };
-  // Prix suggéré : mon prix > dernier prix facturé
-  const prixDe = code => { const k=codeNorm(code); const p = etat.prix[k]; if(p && p.prix!=null) return p.prix; const f = factureDe(code); return f ? f.prix : null; };
+  const suggereDe = code => { const c = coutDe(code); return c ? prixPolitique(c.prix, etat.profil) : null; };
+  // Prix utilisé : mon prix (écrit à la main) > politique appliquée au dernier coût > dernier prix facturé
+  const prixDe = code => { const k=codeNorm(code); const p = etat.prix[k]; if(p && p.prix!=null) return p.prix; const s = suggereDe(code); if(s!=null) return s; const f = factureDe(code); return f ? f.prix : null; };
+
+  const ecrirePrix = async (code, valeur, ligneEx)=>{
+    const le = new Date().toLocaleString('fr-CA');
+    if(ligneEx) await sheetsUpdateRow(idJ, 'Prix', ligneEx, [code, valeur, le]);
+    else { await ensurePrix(); await sheetsAppendRow(idJ, 'Prix', [code, valeur, le]); }
+  };
+  const ensurePrix = async ()=>{ if(!Object.keys(etat.prix).length) await ensureSheetsExist(idJ, [{name:'Prix', headers:['Code','Prix','Mis à jour']}]); };
   const majPrix = async (code, valeur)=>{
-    const k = codeNorm(code), ex = etat.prix[k], le = new Date().toLocaleString('fr-CA');
+    const k = codeNorm(code), ex = etat.prix[k];
     setEtat(s=>({...s, prix:{...s.prix, [k]:{...(ex||{}), prix:cvNum(valeur), code}}}));
-    if(ex && ex.row) await sheetsUpdateRow(idJ, 'Prix', ex.row, [code, valeur, le]);
-    else { if(!Object.keys(etat.prix).length) await ensureSheetsExist(idJ, [{name:'Prix', headers:['Code','Prix','Mis à jour']}]); await sheetsAppendRow(idJ, 'Prix', [code, valeur, le]); await lire(true); }
+    await ecrirePrix(code, valeur, ex && ex.row);
+    if(!ex) await lire(true);
+  };
+  const majProfil = async (profil)=>{
+    setEtat(s=>({...s, profil}));
+    await ecrirePrix('PROFIL', profil, etat.prix.PROFIL && etat.prix.PROFIL.row);
+    if(!etat.prix.PROFIL) await lire(true);
   };
   const ajouterProduit = async (p)=>{
     await sheetsAppendRow(idS, qSheet('Stock personnalisé'), [p.code, p.desc, p.unite||'un', 'CRM', cvDay(new Date().toISOString())]);
-    await lire(true);
   };
-  return {...etat, lire, coutDe, factureDe, prixDe, majPrix, ajouterProduit};
+  // Lien code fournisseur → produit (produit vide = ignorer ce code)
+  const lier = async (codeF, fournisseur, produit)=>{
+    const k = codeNorm(codeF), ex = etat.liens[k];
+    const ligne = [codeF, fournisseur||'', produit||'', new Date().toLocaleString('fr-CA')];
+    setEtat(s=>({...s, liens:{...s.liens, [k]:{produit:produit||'', row:ex&&ex.row, fournisseur}}}));
+    if(ex && ex.row) await sheetsUpdateRow(idJ, 'Correspondances', ex.row, ligne);
+    else { if(!Object.keys(etat.liens).length) await ensureSheetsExist(idJ, [{name:'Correspondances', headers:['Code fournisseur','Fournisseur','Code produit','Confirmé le']}]); await sheetsAppendRow(idJ, 'Correspondances', ligne); }
+  };
+  // Modifier un produit (code, description, unité) dans STOCK PUNCH PRO ; si le code change, ton prix et tes liens suivent.
+  const modifierProduit = async (p, n)=>{
+    const ligne = p.cat==='Stock personnalisé' ? [n.code, n.desc, n.unite] : [n.code, n.desc, n.unite, n.notes!==undefined ? n.notes : p.notes];
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:idS, range:qSheet(p.cat)+'!A'+p.row, valueInputOption:'RAW', resource:{values:[ligne]}});
+    if(codeNorm(n.code)!==codeNorm(p.code)){
+      const ex = etat.prix[codeNorm(p.code)];
+      if(ex && ex.row) await sheetsUpdateRow(idJ, 'Prix', ex.row, [n.code, ex.prix!=null?ex.prix:'', new Date().toLocaleString('fr-CA')]);
+      for(const [k,l] of Object.entries(etat.liens)) if(l.row && codeNorm(l.produit)===codeNorm(p.code))
+        await sheetsUpdateRow(idJ, 'Correspondances', l.row, [k, l.fournisseur||'', n.code, new Date().toLocaleString('fr-CA')]);
+    }
+  };
+  return {...etat, lire, coutDe, coutsDe, factureDe, suggereDe, prixDe, produitDe, aConfirmer, majPrix, majProfil, ajouterProduit, lier, modifierProduit};
+}
+
+// Choisir un produit du catalogue (pour lier un code fournisseur)
+function ChoixProduit({produits, onChoix, defaut}){
+  const [q,setQ]=useState(defaut||'');
+  const l = q.trim().length<2 ? [] : produits.filter(p=>cvNorm(p.code+' '+p.desc).includes(cvNorm(q))).slice(0,8);
+  return <div style={{marginTop:6}}>
+    <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher le produit (ex. prise 15A, BC1110)…" style={{width:'100%',boxSizing:'border-box'}}/>
+    {l.map(p=><div key={p.cat+p.code} onClick={()=>onChoix(p)} style={{padding:'5px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}><b>{p.code}</b> · {p.desc} <span className="muted" style={{fontSize:11}}>· {p.cat}</span></div>)}
+  </div>;
 }
 
 function ProduitsView({cfg, toast}){
   const C = useCatalogue(cfg);
+  const [vue,setVue]=useState('catalogue');
   const [cat,setCat]=useState('');
   const [q,setQ]=useState('');
   const [nouveau,setNouveau]=useState(null);
+  const [edit,setEdit]=useState(null);
+  const [lien,setLien]=useState('');
+  const err = e => toast && toast('Erreur : '+apiErrMsg(e));
   const liste = C.produits.filter(p=>(!cat || p.cat===cat) && (!q || cvNorm(p.code+' '+p.desc+' '+p.notes).includes(cvNorm(q))));
+  const aConf = C.aConfirmer.filter(a=>!q || cvNorm(a.code+' '+a.desc).includes(cvNorm(q)));
+  // Code générique proposé pour un nouveau produit : le code du fournisseur sans la marque (LEV-T5325-W → T5325-W)
+  const codeGenerique = c => String(c||'').replace(/^[A-Z]{2,4}-(?=\S)/i,'');
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
       <h2 className="fh" style={{margin:0,fontSize:20}}>Produits</h2>
-      <div style={{display:'flex',gap:6}}>
-        <button className="btn btn-sm" onClick={()=>setNouveau(nouveau?null:{code:'',desc:'',unite:'un'})}>+ Ajouter un produit</button>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+        <label className="muted" style={{fontSize:12}}>Profit :</label>
+        <select value={C.profil} onChange={async e=>{ try{ await C.majProfil(e.target.value); toast&&toast('Politique : '+e.target.value); }catch(er){ err(er); } }} style={{padding:'4px 6px'}}>
+          {PROFILS.map(p=><option key={p} value={p}>{p}</option>)}
+        </select>
+        <button className="btn btn-sm" onClick={()=>setNouveau(nouveau?null:{code:'',desc:'',unite:'un'})}>+ Ajouter</button>
         <button className="btn btn-sm" onClick={()=>C.lire(true)}>⟳</button>
       </div>
     </div>
-    <div className="muted" style={{fontSize:11.5,marginBottom:8}}>Les articles de ton papier d'appel de service (Sheet STOCK PUNCH PRO). « Mon prix » est visible seulement ici — jamais dans PunchPro.</div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+      <button className={'btn btn-sm'+(vue==='catalogue'?' btn-p':'')} onClick={()=>setVue('catalogue')}>📦 Catalogue ({C.produits.length})</button>
+      <button className={'btn btn-sm'+(vue==='confirmer'?' btn-p':'')} onClick={()=>setVue('confirmer')}>❓ À confirmer ({C.aConfirmer.length})</button>
+    </div>
+    <div className="muted" style={{fontSize:11.5,marginBottom:8}}>
+      {vue==='catalogue' ? <>Prix suggéré = ton dernier coût fournisseur ÷ (1 − profit %), grille « {C.profil} » de ton système comptable. « Mon prix » remplace le suggéré. Les prix ne sont jamais dans PunchPro.</>
+        : <>Articles achetés chez tes fournisseurs qui ne sont reliés à aucun produit. Relie-les à un produit (son coût servira au prix suggéré), crée un nouveau produit, ou ignore-les.</>}
+    </div>
     {nouveau && <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-        <input placeholder="Code (ex. BC1110)" value={nouveau.code} onChange={e=>setNouveau({...nouveau,code:e.target.value})} style={{flex:'1 1 120px'}}/>
-        <input placeholder="Description" value={nouveau.desc} onChange={e=>setNouveau({...nouveau,desc:e.target.value})} style={{flex:'3 1 220px'}}/>
+        <input placeholder="Code simple (ex. PRISE-15A)" value={nouveau.code} onChange={e=>setNouveau({...nouveau,code:e.target.value})} style={{flex:'1 1 120px'}}/>
+        <input placeholder="Description claire pour les gars" value={nouveau.desc} onChange={e=>setNouveau({...nouveau,desc:e.target.value})} style={{flex:'3 1 220px'}}/>
         <input placeholder="Unité" value={nouveau.unite} onChange={e=>setNouveau({...nouveau,unite:e.target.value})} style={{flex:'0 1 80px'}}/>
       </div>
-      <div><button className="btn btn-sm btn-p" disabled={!nouveau.code.trim()} onClick={async()=>{ try{ await C.ajouterProduit({...nouveau, code:nouveau.code.trim()}); setNouveau(null); toast&&toast('Produit ajouté (Stock personnalisé)'); }catch(e){ toast&&toast('Erreur : '+apiErrMsg(e)); } }}>Ajouter</button></div>
+      {nouveau.codeF && <div className="muted" style={{fontSize:12}}>Sera relié au code {nouveau.fournisseur} « {nouveau.codeF} ».</div>}
+      <div><button className="btn btn-sm btn-p" disabled={!nouveau.code.trim()} onClick={async()=>{ try{
+        await C.ajouterProduit({...nouveau, code:nouveau.code.trim()});
+        if(nouveau.codeF) await C.lier(nouveau.codeF, nouveau.fournisseur, nouveau.code.trim());
+        setNouveau(null); await C.lire(true); toast&&toast('Produit ajouté (Stock personnalisé)'); }catch(e){ err(e); } }}>Ajouter</button></div>
     </div>}
-    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
-      <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>setCat('')}>Tous ({C.produits.length})</button>
-      {C.cats.map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(c)}>{c} ({C.produits.filter(p=>p.cat===c).length})</button>)}
-    </div>
-    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (code ou description)…" style={{width:'100%',boxSizing:'border-box',marginBottom:10}}/>
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (code ou description)…" style={{width:'100%',boxSizing:'border-box',marginBottom:8}}/>
     {!C.lu && <div className="muted">Chargement…</div>}
     {C.err && <div className="card" style={{color:'var(--red, #c0392b)'}}>{C.err}</div>}
-    <div className="card" style={{padding:0,overflowX:'auto'}}>
-      <table>
-        <thead><tr><th>Code</th><th>Description</th><th>Unité</th><th style={{textAlign:'right'}}>Mon prix</th><th style={{textAlign:'right'}}>Dernier facturé</th><th style={{textAlign:'right'}}>Coût fournisseur</th></tr></thead>
-        <tbody>
-          {liste.map(p=>{ const f=C.factureDe(p.code), c=C.coutDe(p.code), mp=C.prix[codeNorm(p.code)];
-            return <tr key={p.cat+'|'+p.code}>
-              <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}</td>
-              <td>{p.desc}{p.notes && <span className="muted" style={{fontSize:11.5}}> · {p.notes}</span>}{!cat && <span className="muted" style={{fontSize:11}}> · {p.cat}</span>}</td>
-              <td className="muted">{p.unite}</td>
-              <td style={{textAlign:'right'}}><input defaultValue={mp && mp.prix!=null ? mp.prix : ''} placeholder={f ? String(f.prix) : '—'} inputMode="decimal"
-                onBlur={async e=>{ const v=e.target.value.trim().replace(',','.'); if(v===String(mp && mp.prix!=null ? mp.prix : '')) return; try{ await C.majPrix(p.code, v); toast&&toast('Prix enregistré : '+p.code); }catch(er){ toast&&toast('Erreur : '+apiErrMsg(er)); } }}
-                style={{width:80,textAlign:'right',padding:'3px 6px'}}/></td>
-              <td style={{textAlign:'right'}} className="muted">{f ? cvMoney(f.prix) : '—'}</td>
-              <td style={{textAlign:'right'}} className="muted" title={c ? c.fournisseur : ''}>{c ? cvMoney(c.prix) : '—'}</td>
-            </tr>; })}
-          {C.lu && !liste.length && <tr><td colSpan="6" className="muted" style={{padding:16}}>Aucun produit.</td></tr>}
-        </tbody>
-      </table>
-    </div>
+
+    {vue==='catalogue' && <>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+        <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>setCat('')}>Tous</button>
+        {C.cats.map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(c)}>{c} ({C.produits.filter(p=>p.cat===c).length})</button>)}
+      </div>
+      <div className="card" style={{padding:0,overflowX:'auto'}}>
+        <table>
+          <thead><tr><th>Code</th><th>Description</th><th>Coût fournisseur</th><th style={{textAlign:'right'}}>Suggéré</th><th style={{textAlign:'right'}}>Mon prix</th><th style={{textAlign:'right'}}>Dernier facturé</th><th></th></tr></thead>
+          <tbody>
+            {liste.map(p=>{ const k=p.cat+'|'+p.code, f=C.factureDe(p.code), couts=C.coutsDe(p.code), sug=C.suggereDe(p.code), mp=C.prix[codeNorm(p.code)];
+              if(edit && edit.k===k) return <tr key={k}><td colSpan="7">
+                <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+                  <input value={edit.code} onChange={e=>setEdit({...edit,code:e.target.value})} style={{flex:'1 1 110px'}} placeholder="Code"/>
+                  <input value={edit.desc} onChange={e=>setEdit({...edit,desc:e.target.value})} style={{flex:'3 1 220px'}} placeholder="Description"/>
+                  <input value={edit.unite} onChange={e=>setEdit({...edit,unite:e.target.value})} style={{flex:'0 1 70px'}} placeholder="Unité"/>
+                  <button className="btn btn-sm btn-p" disabled={!edit.code.trim()} onClick={async()=>{ try{ await C.modifierProduit(p, {...edit, code:edit.code.trim()}); setEdit(null); await C.lire(true); toast&&toast('Produit modifié (aussi dans PunchPro)'); }catch(e){ err(e); } }}>OK</button>
+                  <button className="btn btn-sm" onClick={()=>setEdit(null)}>Annuler</button>
+                </div>
+                {codeNorm(edit.code)!==codeNorm(p.code) && <div className="muted" style={{fontSize:11.5,marginTop:4}}>Le code change aussi dans STOCK PUNCH PRO (PunchPro) ; ton prix et tes liens fournisseurs suivent.</div>}
+              </td></tr>;
+              return <tr key={k}>
+                <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}</td>
+                <td>{p.desc}<span className="muted" style={{fontSize:11}}> · {p.unite}{p.notes ? ' · '+p.notes : ''}{!cat ? ' · '+p.cat : ''}</span></td>
+                <td className="muted" style={{fontSize:12,whiteSpace:'nowrap'}}>{couts.length ? couts.map(c=><div key={c.fournisseur} title={'Facture '+c.facture+' · '+c.date}>{c.fournisseur} {cvMoney(c.cout)} <span style={{fontSize:10.5}}>{cvFmtDay(c.date)}</span></div>) : '—'}</td>
+                <td style={{textAlign:'right'}}>{sug!=null ? cvMoney(sug) : '—'}</td>
+                <td style={{textAlign:'right'}}><input key={mp && mp.prix} defaultValue={mp && mp.prix!=null ? mp.prix : ''} placeholder={sug!=null ? String(sug) : (f ? String(f.prix) : '—')} inputMode="decimal"
+                  onBlur={async e=>{ const v=e.target.value.trim().replace(',','.'); if(v===String(mp && mp.prix!=null ? mp.prix : '')) return; try{ await C.majPrix(p.code, v); toast&&toast(v ? 'Prix enregistré : '+p.code : 'Prix suggéré utilisé : '+p.code); }catch(er){ err(er); } }}
+                  style={{width:78,textAlign:'right',padding:'3px 6px'}}/></td>
+                <td style={{textAlign:'right'}} className="muted">{f ? cvMoney(f.prix) : '—'}</td>
+                <td><button className="btn btn-sm" title="Modifier le code / la description" onClick={()=>setEdit({k, code:p.code, desc:p.desc, unite:p.unite})}>✏️</button></td>
+              </tr>; })}
+            {C.lu && !liste.length && <tr><td colSpan="7" className="muted" style={{padding:16}}>Aucun produit.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </>}
+
+    {vue==='confirmer' && <div className="card">
+      {aConf.slice(0,80).map(a=>{ const k=codeNorm(a.code); return <div key={k} style={{padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+          <div style={{minWidth:0,flex:'1 1 240px'}}>
+            <div style={{fontSize:13.5}}><b>{a.code}</b> <span className="muted" style={{fontSize:12}}>· {a.fournisseur} · {cvMoney(a.cout)} · acheté {a.fois} fois · {cvFmtDay(a.date)}</span></div>
+            <div style={{fontSize:12.5}}>{a.desc}</div>
+          </div>
+          <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
+            <button className="btn btn-sm btn-p" onClick={()=>setLien(lien===k?'':k)}>🔗 Relier</button>
+            <button className="btn btn-sm" onClick={()=>{ setNouveau({code:codeGenerique(a.code), desc:'', unite:'un', codeF:a.code, fournisseur:a.fournisseur}); window.scrollTo(0,0); }}>+ Nouveau produit</button>
+            <button className="btn btn-sm" title="Pas un produit à garder (ex. frais, article spécial)" onClick={async()=>{ try{ await C.lier(a.code, a.fournisseur, ''); toast&&toast('Ignoré : '+a.code); }catch(e){ err(e); } }}>✕</button>
+          </div>
+        </div>
+        {lien===k && <ChoixProduit produits={C.produits} onChoix={async p=>{ try{ await C.lier(a.code, a.fournisseur, p.code); setLien(''); toast&&toast(a.code+' → '+p.code); }catch(e){ err(e); } }}/>}
+      </div>; })}
+      {C.lu && !aConf.length && <div className="muted" style={{fontSize:13}}>Tout est relié 👍</div>}
+      {aConf.length>80 && <div className="muted" style={{fontSize:12,marginTop:6}}>+ {aConf.length-80} autres (cherche par code ou description).</div>}
+    </div>}
   </div>;
 }
 
