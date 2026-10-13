@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v104';
+const APP_VERSION = 'v105';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4304,6 +4304,103 @@ function bcRefTitre(e){ return String(e.title||'').split(/\s+/).filter(t=>!(CREW
 function bcCourriel(f){ try{ const m = JSON.parse(localStorage.getItem('bc_courriels')||'{}'); return m[f] || BC_COURRIELS[f] || ''; }catch(e){ return BC_COURRIELS[f]||''; } }
 function bcRetenirCourriel(f, c){ try{ const m = JSON.parse(localStorage.getItem('bc_courriels')||'{}'); m[f]=c; localStorage.setItem('bc_courriels', JSON.stringify(m)); }catch(e){} }
 
+// ── Commandes passées ailleurs : confirmations Lumen + tes courriels « Commande … » à Dubo ──────────────
+// Onglet « Commandes fournisseurs » du registre des jobs, rempli par commandes.gs (La mémoire), colonnes A à J.
+// Le CRM écrit seulement K (Job) et L (Attitrée le).
+function useCommandesFournisseurs(cfg, refreshKey){
+  const [etat,setEtat]=useState({pret:false, absent:false, liste:[]});
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async(force)=>{
+    if(!id) return;
+    try{ const r = await lireCache(id, qSheet('Commandes fournisseurs')+'!A1:L', force);
+      setEtat({pret:true, absent:false, liste:(r.result.values||[]).slice(1).map((x,i)=>({row:i+2, cle:x[0]||'', fournisseur:x[1]||'', source:x[2]||'', date:x[3]||'', no:x[4]||'', ref:x[5]||'',
+        articles:String(x[6]||'').split('\n').map(t=>t.trim()).filter(Boolean), st:cvNum(x[7]), ramassage:x[8]||'', lien:x[9]||'', job:cvDest(x[10]||''), le:x[11]||''})).filter(c=>c.cle)
+        .sort((a,b)=>b.date.localeCompare(a.date))}); }
+    catch(e){ setEtat({pret:true, absent:true, liste:[]}); }
+  },[id]);
+  useEffect(()=>{ lire(!!refreshKey); },[lire, refreshKey]);
+  const attitrer = async (c, job) => {
+    const le = job ? cvDay(new Date().toISOString()) : '';
+    setEtat(s=>({...s, liste:s.liste.map(x=>x.cle===c.cle?{...x, job, le}:x)}));
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:qSheet('Commandes fournisseurs')+'!K'+c.row+':L'+c.row, valueInputOption:'RAW', resource:{values:[[job, le]]}});
+  };
+  return {...etat, lire, attitrer};
+}
+// Job proposée d'après la référence : camion / entrepôt / shop, sinon le PO, sinon le nom d'une job active à ±30 jours. Une seule, sinon rien.
+function cmdProposer(ref, date, clients){
+  const r = String(ref||''); if(!r) return '';
+  const cam = r.match(/\bcamion\s*#?\s*0?(7|14|25)\b/i); if(cam) return 'Camion '+cam[1];
+  if(/\b(entrep[oô]t|ent|inventaire|stock)\b/i.test(r)) return 'Entrepôt';
+  if(/\b(shop|atelier)\b/i.test(r)) return 'Shop';
+  const po = cvPO(r), nr = cvNorm(r), t = date ? new Date(date+'T12:00:00').getTime() : null;
+  const parPO = [], parNom = [];
+  Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{
+    if(po && j.po===po) parPO.push(cvJobCle(c,j));
+    else if(cvNorm(j.name).length>=4 && nr.includes(cvNorm(j.name)) && (!t || j.events.some(e=>Math.abs(new Date(e.day+'T12:00:00').getTime()-t)<=30*864e5))) parNom.push(cvJobCle(c,j));
+  }));
+  const l = [...new Set(parPO.length ? parPO : parNom)];
+  return l.length===1 ? l[0] : '';
+}
+function cmdJobDe(label, clients){
+  for(const c of Object.values(clients||{})) for(const j of c.jobs) if(cvJobCle(c,j)===label) return {c, j};
+  return null;
+}
+function CmdFournisseurs({cfg, refreshKey, clients, commandes, enregistrerCommande, toast}){
+  const F = useCommandesFournisseurs(cfg, refreshKey);
+  const [ouverte,setOuverte]=useState('');
+  const [choix,setChoix]=useState('');
+  const [voirAttitrees,setVoirAttitrees]=useState(false);
+  if(!F.pret) return null;
+  if(F.absent) return <div className="card" style={{marginBottom:10}}>
+    <div style={{fontWeight:700,marginBottom:4}}>📥 Commandes passées ailleurs</div>
+    <div className="muted" style={{fontSize:12.5}}>Les confirmations de Lumen et tes courriels « Commande … » à Dubo apparaîtront ici quand le script commandes.gs de La mémoire aura rempli l'onglet « Commandes fournisseurs ».</div>
+  </div>;
+  const aAttitrer = F.liste.filter(c=>!c.job), attitrees = F.liste.filter(c=>c.job);
+  // Passage de la job attitrée, de la date de commande à 10 jours après, pas encore commandé → bouton « ✅ Placée »
+  const passageDe = c => { const x = cmdJobDe(c.job, clients); if(!x) return null;
+    const e = x.j.events.filter(e=>!e.attente && e.day>=c.date && e.day<=cvDay(new Date(new Date(c.date+'T12:00:00').getTime()+10*864e5).toISOString()))
+      .sort((a,b)=>a.day.localeCompare(b.day)).find(e=>!cvCmd(commandes, x.j, e).fait);
+    return e ? {...x, e} : null; };
+  const attitrer = async (c, job) => { setChoix(''); try{ await F.attitrer(c, job); toast && toast(job ? 'Attitrée à '+job : 'Retirée'); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); F.lire(true); } };
+  const placer = async (c, p) => {
+    try{ await enregistrerCommande(cvCmd(commandes, p.j, p.e).cle, {day:p.e.day, job:cvJobCle(p.c, p.j)+(p.e.phase?' '+p.e.phase:''), ot:'', eventId:p.e.id, calId:p.e.calId, ...cvClientInfo(p.j)}, 'Placée',
+        c.fournisseur+(c.no?' #'+c.no:'')+(c.ref?' — '+c.ref:'')+(c.articles.length?'\n'+c.articles.join('\n'):''), {fournisseur:c.fournisseur, mode:'À aller chercher'});
+      toast && toast('Passage du '+cvFmtDay(p.e.day)+' marqué ✅ Placée'); }
+    catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
+  };
+  const Carte = ({c}) => { const prop = !c.job && cmdProposer(c.ref, c.date, clients), p = c.job && !CV_DESTS.includes(c.job) ? passageDe(c) : null;
+    return <div style={{padding:'7px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'baseline'}}>
+        <div style={{minWidth:0,cursor:'pointer'}} onClick={()=>setOuverte(ouverte===c.cle?'':c.cle)}>
+          <b>{cvFmtDay(c.date)}</b> · {c.fournisseur}{c.no && <span className="muted"> #{c.no}</span>} · <b>« {c.ref||'sans référence'} »</b>
+          <span className="muted"> · {c.articles.length} article{c.articles.length>1?'s':''}{c.ramassage && c.ramassage!==c.date ? ' · ramassage '+cvFmtDay(c.ramassage) : ''}</span> <span className="muted" style={{fontSize:11}}>{ouverte===c.cle?'▾':'▸'}</span>
+        </div>
+        <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+          {c.job ? <><span style={{color:'var(--success)',fontWeight:700,fontSize:12.5}}>✓ {c.job}</span><button className="btn btn-sm" title="Changer" onClick={()=>setChoix(choix===c.cle?'':c.cle)}>↺</button></>
+            : <button className="btn btn-sm btn-p" onClick={()=>setChoix(choix===c.cle?'':c.cle)}>Attitrer…</button>}
+          {c.lien && <a href={c.lien} target="_blank" rel="noopener" style={{fontSize:12}}>courriel ›</a>}
+        </span>
+      </div>
+      {!c.job && prop && choix!==c.cle && <div style={{fontSize:12,marginTop:3}}>Proposée : <button className="btn btn-sm" style={{background:'var(--accent)',color:'#fff',border:'none'}} onClick={()=>attitrer(c, prop)}>✓ {prop}</button></div>}
+      {ouverte===c.cle && <div style={{fontSize:12,margin:'4px 0 2px',paddingLeft:8,borderLeft:'2px solid var(--border2)'}}>
+        {c.articles.length ? c.articles.map((a,i)=><div key={i}>{a}</div>) : <span className="muted">Aucun article lu.</span>}
+        <div className="muted" style={{marginTop:2}}>{c.source}</div></div>}
+      {choix===c.cle && <CvChoixJob clients={clients} propose={prop} onChoix={job=>attitrer(c, job)}/>}
+      {choix===c.cle && c.job && <button className="btn btn-sm" style={{marginTop:5}} onClick={()=>attitrer(c, '')}>Retirer l'attribution</button>}
+      {p && <div style={{fontSize:12,marginTop:4}}>Le passage du <b>{cvFmtDay(p.e.day)}</b>{p.e.phase?' ('+p.e.phase+')':''} n'est pas marqué commandé : <button className="btn btn-sm" onClick={()=>placer(c, p)}>📦 Marquer ✅ Placée</button></div>}
+    </div>; };
+  return <div className="card" style={{marginBottom:10}}>
+    <div style={{fontWeight:700,marginBottom:2}}>📥 Commandes passées ailleurs {aAttitrer.length>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--warning)'}}>{aAttitrer.length} à attitrer</span>}</div>
+    <div className="muted" style={{fontSize:12,marginBottom:6}}>Confirmations de Lumen et tes courriels « Commande … » à Dubo. Attitre-les à une job, à l'entrepôt, à la shop ou à un camion.</div>
+    {aAttitrer.length ? aAttitrer.slice(0,25).map(c=><React.Fragment key={c.cle}>{Carte({c})}</React.Fragment>) : <div className="muted" style={{fontSize:13}}>✅ Toutes les commandes sont attitrées.</div>}
+    {aAttitrer.length>25 && <div className="muted" style={{fontSize:12,marginTop:4}}>… et {aAttitrer.length-25} plus anciennes.</div>}
+    {attitrees.length>0 && <div style={{marginTop:8}}>
+      <span style={{color:'var(--accent)',fontSize:12.5,cursor:'pointer'}} onClick={()=>setVoirAttitrees(!voirAttitrees)}>{voirAttitrees?'▾':'▸'} Attitrées ({attitrees.length})</span>
+      {voirAttitrees && attitrees.slice(0,40).map(c=><React.Fragment key={c.cle}>{Carte({c})}</React.Fragment>)}
+    </div>}
+  </div>;
+}
+
 function useBonsCommande(cfg){
   const [bons,setBons]=useState([]);
   const id = cfg.memoireJobsSpreadsheetId;
@@ -4449,6 +4546,8 @@ function CommandesView({cfg, toast, refreshKey}){
           : <button className="btn btn-sm btn-p" onClick={()=>choisirPassage(x)}>📦 Commander</button>}
       </div>)}
     </div>
+
+    <CmdFournisseurs cfg={cfg} refreshKey={refreshKey} clients={clients} commandes={commandes} enregistrerCommande={enregistrerCommande} toast={toast}/>
 
     {B.bons.length>0 && <div className="card">
       <div style={{fontWeight:700,marginBottom:6}}>Bons envoyés</div>
