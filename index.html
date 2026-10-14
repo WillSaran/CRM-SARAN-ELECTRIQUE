@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v111';
+const APP_VERSION = 'v112';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4233,8 +4233,17 @@ function docCalcul(d, prixDe){
   return {h1, h2, mat:arrondi(mat), mo:arrondi(mo), depl, quin, st:arrondi(st), tps, tvq, total:arrondi(st+tps+tvq), px};
 }
 
+// v112 : page « Plan des travaux » (photos annotées, titre et notes), 2 par rangée
+function planHtml(d, plan, esc){
+  if(!plan.length) return '';
+  return '<div style="page-break-before:always"></div><h1 style="text-align:center;font-size:17px">PLAN DES TRAVAUX'+(d.titre?' — '+esc(d.titre).toUpperCase():'')+'</h1>'+
+    '<p style="text-align:center;margin:2px 0 12px">'+esc(d.adresse)+'</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'+
+    plan.map(p=>'<div style="border:1.5px solid #111;padding:8px;break-inside:avoid"><img src="'+p.src+'" style="width:100%;display:block"/>'+
+      (p.titre?'<div style="font-weight:bold;margin-top:6px">'+esc(p.titre)+'</div>':'')+
+      (p.notes?'<div style="margin-top:4px"><u>NOTES :</u><br>'+esc(p.notes).split('\n').filter(Boolean).map((l,i)=>(i+1)+'. '+l).join('<br>')+'</div>':'')+'</div>').join('')+'</div>';
+}
 // Version imprimable (« Enregistrer en PDF » dans la fenêtre d'impression). L'ordre de travail n'a jamais de prix.
-function docImprimer(d, calc){
+function docImprimer(d, calc, plan, w0){
   const prix = d.type!=='Ordre de travail';
   const forfait = cvNum(d.forfait)!=null && d.forfait!=='';   // v110 : prix forfaitaire = pas de prix par ligne (comme ton logiciel)
   const esc = s => String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -4263,8 +4272,9 @@ function docImprimer(d, calc){
     (!prix ? '<p>'+(d.depl?'☑':'☐')+' Déplacement &nbsp; '+(d.quin?'☑':'☐')+' Quincaillerie</p>' : '')+
     totaux+(d.remarques?'<h3>Remarques</h3><p>'+esc(d.remarques).replace(/\n/g,'<br>')+'</p>':'')+
     (d.type==='Ordre de travail'?'<p style="margin-top:30px">Signature du client : ______________________ &nbsp; Date : __________</p>':'')+
-    '<scr'+'ipt>window.onload=()=>setTimeout(()=>window.print(),300)</scr'+'ipt></body></html>';
-  const w = window.open('', '_blank');
+    planHtml(d, plan||[], esc)+
+    '<scr'+'ipt>window.onload=()=>setTimeout(()=>window.print(),600)</scr'+'ipt></body></html>';
+  const w = w0 || window.open('', '_blank');
   if(!w) return false;
   w.document.open(); w.document.write(html); w.document.close();
   return true;
@@ -4520,6 +4530,152 @@ function CalculRapide({C, d, setD, toast}){
   </div>;
 }
 
+// ===== v112 : PLAN DES TRAVAUX — photos annotées (comme la « demande de prix » de David Carter) =====
+// Prends une photo (panneau, chemin, emplacement de la borne…) ou un croquis, trace par-dessus (trait rouge = câble,
+// pointillé = encastré / sous terre, carré = borne / prise / panneau, flèche + étiquette), ajoute des notes.
+// L'image annotée va dans le dossier Drive de la soumission ; le PDF de la soumission (🖨️) ajoute une page « Plan des travaux ».
+const PLAN_COULEURS = [['#e00000','Rouge'],['#111111','Noir'],['#1a73e8','Bleu']];
+function planDessiner(ctx, W, formes){
+  const lw = Math.max(3, W*0.006);
+  formes.forEach(f=>{
+    ctx.save(); ctx.strokeStyle = f.c; ctx.fillStyle = f.c; ctx.lineWidth = lw; ctx.lineCap='round'; ctx.lineJoin='round';
+    if(f.t==='ligne' || f.t==='pointille'){ ctx.setLineDash(f.t==='pointille' ? [lw*2.2, lw*1.6] : []); ctx.beginPath(); ctx.moveTo(f.x1,f.y1); ctx.lineTo(f.x2,f.y2); ctx.stroke(); }
+    else if(f.t==='rect'){ ctx.strokeRect(Math.min(f.x1,f.x2), Math.min(f.y1,f.y2), Math.abs(f.x2-f.x1), Math.abs(f.y2-f.y1)); }
+    else if(f.t==='fleche'){ ctx.lineWidth = lw*0.6; ctx.beginPath(); ctx.moveTo(f.x1,f.y1); ctx.lineTo(f.x2,f.y2); ctx.stroke();
+      const a = Math.atan2(f.y2-f.y1, f.x2-f.x1), h = lw*4; ctx.beginPath(); ctx.moveTo(f.x2,f.y2);
+      ctx.lineTo(f.x2-h*Math.cos(a-0.45), f.y2-h*Math.sin(a-0.45)); ctx.lineTo(f.x2-h*Math.cos(a+0.45), f.y2-h*Math.sin(a+0.45)); ctx.closePath(); ctx.fill(); }
+    else if(f.t==='texte'){ const fs = Math.max(16, W*0.024); ctx.font = '600 '+fs+'px Arial, sans-serif';
+      const lignes = String(f.txt||'').split('\n'), larg = Math.max(...lignes.map(l=>ctx.measureText(l).width)), p = fs*0.45;
+      ctx.fillStyle = 'rgba(255,255,255,0.94)'; ctx.fillRect(f.x1-p, f.y1-fs-p*0.4, larg+2*p, lignes.length*fs*1.2+p);
+      ctx.fillStyle = '#111'; lignes.forEach((l,i)=>ctx.fillText(l, f.x1, f.y1+i*fs*1.2)); }
+    ctx.restore();
+  });
+}
+function PlanAnnoter({image, onSave, onClose}){
+  const ref = useRef(null), imgRef = useRef(null);
+  const [formes,setFormes]=useState([]);
+  const [outil,setOutil]=useState('ligne');
+  const [coul,setCoul]=useState('#e00000');
+  const [texte,setTexte]=useState('');
+  const [prete,setPrete]=useState(false);
+  const enCours = useRef(null);
+  // Image de fond (photo) ou feuille blanche quadrillée (croquis)
+  useEffect(()=>{ let vivant=true;
+    (async()=>{ const c = ref.current; if(!c) return;
+      if(image){ const im = new Image(); im.src = image; await im.decode().catch(()=>{}); if(!vivant) return;
+        const k = Math.min(1, 1600/Math.max(im.naturalWidth||1, im.naturalHeight||1)); c.width = Math.round((im.naturalWidth||1200)*k); c.height = Math.round((im.naturalHeight||900)*k); imgRef.current = im; }
+      else { c.width = 1400; c.height = 1000; imgRef.current = null; }
+      setPrete(true); })();
+    return ()=>{ vivant=false; }; },[image]);
+  const rendre = useCallback((extra)=>{ const c = ref.current; if(!c || !prete) return; const ctx = c.getContext('2d');
+    if(imgRef.current) ctx.drawImage(imgRef.current, 0, 0, c.width, c.height);
+    else { ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height); ctx.strokeStyle='#e6e6e6'; ctx.lineWidth=1; for(let x=0;x<c.width;x+=50){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,c.height); ctx.stroke(); } for(let y=0;y<c.height;y+=50){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(c.width,y); ctx.stroke(); } }
+    planDessiner(ctx, c.width, extra ? [...formes, extra] : formes); },[formes, prete]);
+  useEffect(()=>{ rendre(); },[rendre]);
+  const pos = e => { const c = ref.current, r = c.getBoundingClientRect(); return {x:(e.clientX-r.left)*c.width/r.width, y:(e.clientY-r.top)*c.height/r.height}; };
+  const bas = e => { e.preventDefault(); const p = pos(e);
+    if(outil==='texte'){ if(!texte.trim()) return; setFormes(f=>[...f, {t:'texte', c:'#111', x1:p.x, y1:p.y, txt:texte.trim()}]); setTexte(''); return; }
+    enCours.current = {t:outil, c:coul, x1:p.x, y1:p.y, x2:p.x, y2:p.y}; try{ e.target.setPointerCapture(e.pointerId); }catch(x){} };
+  const bouge = e => { if(!enCours.current) return; const p = pos(e); enCours.current = {...enCours.current, x2:p.x, y2:p.y}; rendre(enCours.current); };
+  const haut = () => { const f = enCours.current; enCours.current = null; if(f && Math.hypot(f.x2-f.x1, f.y2-f.y1) > 6) setFormes(x=>[...x, f]); else rendre(); };
+  const garder = () => ref.current.toBlob(b=>onSave(b), 'image/jpeg', 0.86);
+  const btn = (k, l) => <button key={k} className={'btn btn-sm'+(outil===k?' btn-p':'')} onClick={()=>setOutil(k)}>{l}</button>;
+  return <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',zIndex:1000,display:'flex',flexDirection:'column',padding:8,gap:6}}>
+    <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',background:'var(--bg2)',padding:6,borderRadius:8}}>
+      {btn('ligne','━ Câble')}{btn('pointille','┅ Encastré / sous terre')}{btn('rect','▢ Borne / prise / panneau')}{btn('fleche','➜ Flèche')}{btn('texte','T Étiquette')}
+      {outil==='texte' && <input autoFocus value={texte} onChange={e=>setTexte(e.target.value)} placeholder="Texte, puis touche la photo" style={{width:200}}/>}
+      {outil!=='texte' && PLAN_COULEURS.map(([c,n])=><button key={c} title={n} onClick={()=>setCoul(c)} style={{width:24,height:24,borderRadius:12,background:c,border:coul===c?'3px solid var(--accent)':'1px solid #999'}}/>)}
+      <button className="btn btn-sm" disabled={!formes.length} onClick={()=>setFormes(f=>f.slice(0,-1))}>↶ Annuler</button>
+      <span style={{marginLeft:'auto',display:'flex',gap:5}}><button className="btn btn-sm" onClick={onClose}>Fermer</button><button className="btn btn-sm btn-p" disabled={!prete} onClick={garder}>✓ Garder</button></span>
+    </div>
+    <div style={{flex:1,overflow:'auto',display:'flex',justifyContent:'center',alignItems:'flex-start'}}>
+      <canvas ref={ref} onPointerDown={bas} onPointerMove={bouge} onPointerUp={haut} onPointerCancel={haut} style={{maxWidth:'100%',maxHeight:'100%',touchAction:'none',background:'#fff',borderRadius:6,cursor:'crosshair'}}/>
+    </div>
+  </div>;
+}
+// Image d'un fichier Drive (avec ton accès) -> URL locale (pour l'afficher, l'annoter ou l'imprimer)
+const PLAN_IMG = {};
+async function planImage(id){
+  if(PLAN_IMG[id]) return PLAN_IMG[id];
+  const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+  const r = await fetch('https://www.googleapis.com/drive/v3/files/'+id+'?alt=media&supportsAllDrives=true', {headers:{Authorization:'Bearer '+tok}});
+  if(!r.ok) throw new Error('Drive '+r.status);
+  const b = await r.blob();
+  const url = await new Promise(res=>{ const fr = new FileReader(); fr.onload = ()=>res(fr.result); fr.readAsDataURL(b); });
+  return (PLAN_IMG[id] = url);
+}
+function PlanVignette({id}){
+  const [src,setSrc]=useState(PLAN_IMG[id]||'');
+  useEffect(()=>{ let v=true; if(!src) planImage(id).then(u=>{ if(v) setSrc(u); }).catch(()=>{}); return ()=>{v=false}; },[id]);
+  return src ? <img src={src} alt="" style={{width:110,height:82,objectFit:'cover',borderRadius:6,border:'1px solid var(--border2)'}}/> : <span className="muted" style={{width:110,fontSize:11}}>…</span>;
+}
+function PlanTravaux({d, setD, toast}){
+  const [annoter,setAnnoter]=useState(null);          // {image, index}
+  const [occupe,setOccupe]=useState('');
+  const [ok,setOk]=useState(peutDeposer());
+  const [dossierListe,setDossierListe]=useState(null);
+  const refPhoto = useRef(null);
+  const plan = d.plan || [];
+  const ouvrirFichier = f => { if(!f) return; const u = URL.createObjectURL(f); setAnnoter({image:u}); };
+  const garder = async blob => {
+    setOccupe('Envoi au Drive…');
+    try{
+      let dos = d.dossier;
+      if(!dos){ dos = await driveDossier((d.nom||'Client')+(d.adresse?' — '+d.adresse.split(',')[0]:''), await driveDossier(PHOTOS_RACINE)); setD(o=>({...o, dossier:dos})); }
+      const nom = 'Plan '+(plan.length+1)+' — '+(d.nom||'soumission')+'.jpg';
+      const r = await driveDeposer(new File([blob], nom, {type:'image/jpeg'}), dos);
+      PLAN_IMG[r.id] = await new Promise(res=>{ const fr = new FileReader(); fr.onload = ()=>res(fr.result); fr.readAsDataURL(blob); });
+      setD(o=>{ const p = [...(o.plan||[])]; const item = {id:r.id, titre:'', notes:''};
+        if(annoter && annoter.index!=null) p[annoter.index] = {...p[annoter.index], id:r.id}; else p.push(item); return {...o, plan:p}; });
+      setAnnoter(null); toast && toast('Image gardée dans le dossier Drive');
+    }catch(e){ toast && toast('Erreur : '+e.message); }
+    setOccupe('');
+  };
+  const majItem = (i, patch) => setD(o=>({...o, plan:(o.plan||[]).map((x,k)=>k===i?{...x,...patch}:x)}));
+  const depuisDossier = async () => {
+    if(dossierListe){ setDossierListe(null); return; }
+    try{ const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+      const q = encodeURIComponent("'"+d.dossier+"' in parents and trashed=false and mimeType contains 'image/'");
+      const r = await fetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id,name,thumbnailLink)&pageSize=50&supportsAllDrives=true&includeItemsFromAllDrives=true', {headers:{Authorization:'Bearer '+tok}});
+      setDossierListe(r.ok ? ((await r.json()).files||[]) : []); }catch(e){ setDossierListe([]); } };
+  if(!ok) return <div className="card" style={{marginBottom:10}}><b style={{fontSize:13.5}}>📐 Plan des travaux</b> <button className="btn btn-sm" onClick={async()=>{ try{ await requestToken('consent'); setOk(peutDeposer()); }catch(e){} }}>🔓 Autoriser les photos (une fois)</button></div>;
+  return <div className="card" style={{marginBottom:10}}>
+    <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+      <b style={{fontSize:13.5}}>📐 Plan des travaux</b><span className="muted" style={{fontSize:12}}>photos annotées — ajoutées au PDF (🖨️)</span>
+      <input ref={refPhoto} type="file" accept="image/*" capture="environment" style={{display:'none'}} onChange={e=>{ const f=e.target.files[0]; e.target.value=''; ouvrirFichier(f); }}/>
+      <span style={{marginLeft:'auto',display:'flex',gap:5,flexWrap:'wrap'}}>
+        <button className="btn btn-sm" disabled={!!occupe} onClick={()=>refPhoto.current && refPhoto.current.click()}>📷 Photo</button>
+        {d.dossier && <button className="btn btn-sm" disabled={!!occupe} onClick={depuisDossier}>🗂 Photos du client</button>}
+        <button className="btn btn-sm" disabled={!!occupe} onClick={()=>setAnnoter({image:null})}>✏️ Croquis</button>
+      </span>
+    </div>
+    {occupe && <div className="muted" style={{fontSize:12.5,marginTop:6}}>{occupe}</div>}
+    {dossierListe && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8}}>
+      {dossierListe.map(f=><img key={f.id} src={f.thumbnailLink} alt={f.name} referrerPolicy="no-referrer" title="Annoter cette photo" onClick={async()=>{ try{ setOccupe('Ouverture…'); setAnnoter({image: await planImage(f.id)}); setDossierListe(null); }catch(e){ toast && toast('Impossible d\'ouvrir : '+e.message); } setOccupe(''); }}
+        style={{width:72,height:72,objectFit:'cover',borderRadius:6,cursor:'pointer',border:'1px solid var(--border2)'}}/>)}
+      {!dossierListe.length && <span className="muted" style={{fontSize:12.5}}>Aucune photo dans le dossier.</span>}
+    </div>}
+    {plan.map((p,i)=><div key={p.id+i} style={{display:'flex',gap:8,marginTop:8,alignItems:'flex-start',flexWrap:'wrap'}}>
+      <PlanVignette id={p.id}/>
+      <div style={{flex:'1 1 220px',display:'grid',gap:4}}>
+        <input value={p.titre} onChange={e=>majItem(i,{titre:e.target.value})} placeholder="Titre (ex. ÉTENDUE DES TRAVAUX : déplacer la prise au garage)"/>
+        <textarea value={p.notes} onChange={e=>majItem(i,{notes:e.target.value})} rows={2} placeholder={'Notes (une par ligne)\nex. Tranchée de 500 mm et remblai par le propriétaire.'} style={{resize:'vertical',fontFamily:'inherit'}}/>
+      </div>
+      <div style={{display:'grid',gap:4}}>
+        <button className="btn btn-sm" title="Retracer" onClick={async()=>{ try{ setAnnoter({image: await planImage(p.id), index:i}); }catch(e){ toast && toast('Erreur : '+e.message); } }}>✏️</button>
+        <button className="btn btn-sm" title="Enlever du plan (l'image reste dans le Drive)" onClick={()=>setD(o=>({...o, plan:(o.plan||[]).filter((x,k)=>k!==i)}))}>✕</button>
+      </div>
+    </div>)}
+    {annoter && <PlanAnnoter image={annoter.image} onClose={()=>setAnnoter(null)} onSave={garder}/>}
+  </div>;
+}
+// Page « Plan des travaux » pour le PDF (images déjà chargées en data:)
+async function planPourImpression(doc){
+  const out = [];
+  for(const p of (doc.plan||[])){ try{ out.push({...p, src: await planImage(p.id)}); }catch(e){} }
+  return out;
+}
+
 // Pré-remplissage quand on part d'une soumission « À faire » (bouton « 📝 Faire la soumission »).
 let DOC_PREFILL = null;
 // mode « soumission » : même éditeur, dans l'onglet Soumissions (type Soumission seulement). onEnvoye(doc) : après le courriel.
@@ -4673,6 +4829,8 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
       </div>}
     </div>
 
+    {d.type!=='Facture' && <PlanTravaux d={d} setD={setD} toast={toast}/>}
+
     <div className="card" style={{marginBottom:10}}>
       <div style={{fontWeight:700,marginBottom:6}}>Matériel {choisies.length>0 && <span className="muted" style={{fontWeight:400}}>· {choisies.length} article{choisies.length>1?'s':''}</span>}</div>
       {choisies.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
@@ -4716,7 +4874,10 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
       </div>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:10,justifyContent:'flex-end'}}>
         <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={enregistrer}>{occupe==='save'?'Enregistrement…':'💾 Enregistrer'}</button>
-        <button className="btn btn-sm" disabled={!!occupe} onClick={async()=>{ const doc = d.numero ? d : await enregistrer(); if(doc && !docImprimer(doc, docCalcul(doc, C.prixDe))) toast && toast('Autorise les fenêtres pop-up pour imprimer'); }}>🖨️ PDF / Imprimer</button>
+        <button className="btn btn-sm" disabled={!!occupe} onClick={async()=>{ const w = window.open('', '_blank'); if(!w){ toast && toast('Autorise les fenêtres pop-up pour imprimer'); return; }
+          w.document.write('<p style="font-family:Arial">Préparation du PDF…</p>');
+          const doc = d.numero ? d : await enregistrer(); if(!doc){ w.close(); return; }
+          docImprimer(doc, docCalcul(doc, C.prixDe), await planPourImpression(doc), w); }}>🖨️ PDF / Imprimer</button>
         <button className="btn btn-sm" disabled={!!occupe} onClick={courriel}>📧 Courriel (Gmail)</button>
       </div>
       {d.type==='Facture' && <div className="muted" style={{fontSize:11.5,marginTop:6,textAlign:'right'}}>Facture = brouillon : rentre-la dans ton logiciel de facturation (numéro officiel).</div>}
