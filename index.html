@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v109';
+const APP_VERSION = 'v110';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4228,10 +4228,11 @@ function docCalcul(d, prixDe){
 // Version imprimable (« Enregistrer en PDF » dans la fenêtre d'impression). L'ordre de travail n'a jamais de prix.
 function docImprimer(d, calc){
   const prix = d.type!=='Ordre de travail';
+  const forfait = cvNum(d.forfait)!=null && d.forfait!=='';   // v110 : prix forfaitaire = pas de prix par ligne (comme ton logiciel)
   const esc = s => String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
   const m = n => (Number(n)||0).toLocaleString('fr-CA',{style:'currency',currency:'CAD'});
   const titre = (d.type==='Facture' ? 'FACTURE (BROUILLON)' : d.type.toUpperCase())+' '+(d.numero||'');
-  const lignes = d.lignes.filter(l=>cvNum(l.qte)).map(l=>{ const p=calc.px(l.code,l); return '<tr><td>'+esc(l.code)+'</td><td>'+esc(l.desc)+'</td><td class="n">'+esc(l.qte)+' '+esc(l.unite||'')+'</td>'+(prix?'<td class="n">'+m(p)+'</td><td class="n">'+m(p*(cvNum(l.qte)||0))+'</td>':'')+'</tr>'; }).join('');
+  const lignes = d.lignes.filter(l=>cvNum(l.qte)).map(l=>{ const p=calc.px(l.code,l); return '<tr><td>'+esc(l.code)+'</td><td>'+esc(l.desc)+'</td><td class="n">'+esc(l.qte)+' '+esc(l.unite||'')+'</td>'+(prix && !forfait?'<td class="n">'+m(p)+'</td><td class="n">'+m(p*(cvNum(l.qte)||0))+'</td>':'')+'</tr>'; }).join('');
   const heures = d.jours.filter(j=>j.date||j.sa01||j.sa02).map(j=>'<tr><td>'+esc(j.date)+'</td><td class="n">'+esc(j.sa01||0)+' h</td><td class="n">'+esc(j.sa02||0)+' h</td></tr>').join('');
   const totaux = !prix ? '' : '<table class="tot">'+
     (cvNum(d.forfait)!=null && d.forfait!=='' ? '<tr><td>Prix forfaitaire</td><td class="n">'+m(calc.st)+'</td></tr>' :
@@ -4250,7 +4251,7 @@ function docImprimer(d, calc){
     '<table class="cl"><tr><td><b>Client</b></td><td>'+esc(d.nom)+'</td><td><b>Téléphone</b></td><td>'+esc(d.tel)+'</td></tr><tr><td><b>Adresse</b></td><td>'+esc(d.adresse)+'</td><td><b>Courriel</b></td><td>'+esc(d.courriel)+'</td></tr>'+
     (d.titre?'<tr><td><b>Projet</b></td><td colspan="3">'+esc(d.titre)+'</td></tr>':'')+(d.travaux?'<tr><td><b>Travaux</b></td><td colspan="3">'+esc(d.travaux).replace(/\n/g,'<br>')+'</td></tr>':'')+'</table>'+
     (heures ? '<h3>Main-d\'œuvre</h3><table class="l"><tr><th>Date</th><th class="n">Compagnon (SA01)</th><th class="n">Apprenti (SA02)</th></tr>'+heures+'</table>' : '')+
-    (lignes ? '<h3>Matériel</h3><table class="l"><tr><th>Code</th><th>Description</th><th class="n">Qté</th>'+(prix?'<th class="n">Prix</th><th class="n">Total</th>':'')+'</tr>'+lignes+'</table>' : '')+
+    (lignes ? '<h3>Matériel</h3><table class="l"><tr><th>Code</th><th>Description</th><th class="n">Qté</th>'+(prix && !forfait?'<th class="n">Prix</th><th class="n">Total</th>':'')+'</tr>'+lignes+'</table>' : '')+
     (!prix ? '<p>'+(d.depl?'☑':'☐')+' Déplacement &nbsp; '+(d.quin?'☑':'☐')+' Quincaillerie</p>' : '')+
     totaux+(d.remarques?'<h3>Remarques</h3><p>'+esc(d.remarques).replace(/\n/g,'<br>')+'</p>':'')+
     (d.type==='Ordre de travail'?'<p style="margin-top:30px">Signature du client : ______________________ &nbsp; Date : __________</p>':'')+
@@ -4259,6 +4260,137 @@ function docImprimer(d, calc){
   if(!w) return false;
   w.document.open(); w.document.write(html); w.document.close();
   return true;
+}
+
+// ===== v110 : CALCULATEURS DE SOUMISSION RAPIDE (un par type de projet) =====
+// Chaque type pose ses questions (distance, panneau, parcours…) et remplit la soumission : titre, travaux, matériel,
+// heures et prix forfaitaire. AUCUN prix ici (le code est public) : les tarifs sont dans « La mémoire — Jobs › Prix »
+// (codes « BORNE-… », etc.), entrés une fois dans ⚙ Tarifs. Prochains types : entrée électrique, rough, finition,
+// cuisine, salle de bain, maison neuve, blocs — même moule.
+const piDe = m => Math.ceil((Number(m)||0)*3.281);
+const arr5 = n => Math.round(n/5)*5;
+const CALC_SOUMISSION = {
+  borne: {
+    nom:'🔌 Borne', typeProjet:'Borne de recharge',
+    tarifs:[['BORNE-BASE','Installation de base ($) — disjoncteur, raccordement, déplacement, quincaillerie, mise en service'],
+      ['BORNE-INCLUS-M','Mètres de câble inclus dans la base (m)'],['BORNE-M-INT','Câble intérieur additionnel ($/m)'],
+      ['BORNE-SORTIE','Sortie à l\'extérieur ($) — percer le mur / la fondation'],['BORNE-M-EXT','Extérieur en câble TECK/ACWU ($/m)'],
+      ['BORNE-M-TUYAU','Extérieur en tuyau PVC ($/m)'],['BORNE-M-SOUT','Souterrain — tranchée ($/m)'],['BORNE-BETON','Béton : percer, descendre au sol, remonter ($)'],
+      ['BORNE-ENTRETOIT','Passage par l\'entretoit ($)'],['BORNE-DCC','Contrôleur de charge DCC ($)'],['FLOX3','Borne FLO Maison X3 fournie ($)']],
+    defaut:{borne:'flox3', modele:'', prixBorne:'', amp:'60', panneau:'QO', lieu:'ext', parcours:'cable', dist:'', unite:'m', ext:'', sout:'', beton:false, entretoit:false, dcc:false, note:''},
+    // Devine ce qu'on peut à partir du texte de la demande (distance, intérieur/extérieur, FLO…)
+    deviner(txt){ const t=String(txt||''), v={};
+      const m=t.match(/(\d+(?:[.,]\d+)?)\s*(m\b|m[eè]tres?|pi\b|pieds?|')/i);
+      if(m){ v.dist=m[1].replace(',','.'); v.unite=/^m/i.test(m[2])?'m':'pi'; }
+      if(/ext[ée]rieur|dehors|all[ée]e|stationnement|entr[ée]e de cour/i.test(t)) v.lieu='ext'; else if(/garage|int[ée]rieur/i.test(t)) v.lieu='int';
+      if(/wallbox|pulsar|tesla|grizzl/i.test(t)) { v.borne='autre'; v.modele=(t.match(/(wallbox[^,.\n]{0,20}|tesla[^,.\n]{0,20}|grizzl[^,.\n]{0,20})/i)||[])[1]||''; }
+      if(/(j'ai|a d[ée]j[aà]|poss[eè]de).{0,25}borne/i.test(t)) v.borne='client';
+      return v; },
+    champs(v, maj){ const r = (k, opts) => <select value={v[k]} onChange={e=>maj({[k]:e.target.value})}>{opts.map(([a,b])=><option key={a} value={a}>{b}</option>)}</select>;
+      const n = (k, ph, w) => <input value={v[k]} inputMode="decimal" placeholder={ph} onChange={e=>maj({[k]:e.target.value})} style={{width:w||70}}/>;
+      const c = (k, l) => <label style={{display:'flex',gap:4,alignItems:'center',fontSize:13}}><input type="checkbox" checked={!!v[k]} onChange={e=>maj({[k]:e.target.checked})}/> {l}</label>;
+      const u = v.unite;
+      return <div style={{display:'grid',gap:8,fontSize:13}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Borne {r('borne',[['flox3','FLO Maison X3 (fournie)'],['autre','Autre borne (fournie)'],['client','Le client a sa borne']])}
+          {v.borne==='autre' && <>{<input value={v.modele} onChange={e=>maj({modele:e.target.value})} placeholder="Modèle" style={{width:140}}/>}{n('prixBorne','prix $',80)}</>}
+          {v.borne==='client' && <input value={v.modele} onChange={e=>maj({modele:e.target.value})} placeholder="Modèle (facultatif)" style={{width:150}}/>}</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Panneau {r('panneau',[['QO','Square D QO'],['HOM','Square D Homeline'],['BR','Eaton BR / CHOM'],['SIE','Siemens'],['AUTRE','Autre']])}
+          Disjoncteur {r('amp',[['60','2P 60 A (48 A de charge)'],['40','2P 40 A (32 A de charge)']])}
+          {c('dcc','Panneau juste : contrôleur de charge (DCC)')}</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Borne {r('lieu',[['ext','à l\'extérieur'],['int','à l\'intérieur (garage)']])}
+          Distance panneau → borne {n('dist', u)} {r('unite',[['m','m'],['pi','pi']])}</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Parcours {r('parcours',[['int','Par l\'intérieur'],['cable','Dehors en câble TECK/ACWU'],['tuyau','Dehors en tuyau PVC'],['entretoit','Par l\'entretoit']])}
+          {(v.parcours==='cable'||v.parcours==='tuyau') && <>dont dehors {n('ext',u)} · dont sous terre {n('sout',u)}</>}</div>
+        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}}>{c('beton','Béton / coin de maison : percer, descendre au sol, remonter à la borne')}{c('entretoit','Passage dans l\'entretoit')}</div>
+        <input value={v.note} onChange={e=>maj({note:e.target.value})} placeholder="Emplacement exact (ex. au bout du mur, près de l'allée)"/>
+      </div>; },
+    calculer(v, t){
+      const k = v.unite==='pi' ? 0.3048 : 1, m = x => Math.max(0, (cvNum(x)||0)*k);
+      const D = m(v.dist), dehors = (v.parcours==='cable'||v.parcours==='tuyau'), S = dehors ? Math.min(m(v.sout), D) : 0, E = dehors ? Math.min(Math.max(m(v.ext), S), D) : 0, I = Math.max(0, D-E);
+      const tuyau = v.parcours==='tuyau', amp = v.amp, six = amp==='60';
+      // --- Prix (tarifs de l'onglet Prix) ---
+      const manque = []; const T = key => { const x = t(key); if(x==null) manque.push(key); return x||0; };
+      const inclus = t('BORNE-INCLUS-M')!=null ? t('BORNE-INCLUS-M') : 0;
+      const intExtra = Math.max(0, I-inclus), reste = Math.max(0, inclus-I), extExtra = Math.max(0, (E-S)-reste);
+      let inst = T('BORNE-BASE') + (intExtra ? intExtra*T('BORNE-M-INT') : 0);
+      if(E>0 || (v.lieu==='ext' && v.parcours!=='entretoit')) inst += T('BORNE-SORTIE');
+      if(extExtra) inst += extExtra*T(tuyau?'BORNE-M-TUYAU':'BORNE-M-EXT');
+      if(S) inst += S*T('BORNE-M-SOUT');
+      if(v.beton) inst += T('BORNE-BETON');
+      if(v.entretoit || v.parcours==='entretoit') inst += T('BORNE-ENTRETOIT');
+      if(v.dcc) inst += T('BORNE-DCC');
+      inst = arr5(inst);
+      const nomBorne = v.borne==='flox3' ? 'FLO Maison X3' : (v.modele||'');
+      const pBorne = v.borne==='flox3' ? T('FLOX3') : v.borne==='autre' ? (cvNum(v.prixBorne)||0) : 0;
+      // --- Matériel (codes de ton logiciel ; quantités en pieds) ---
+      const L = []; const ajout = (code, desc, qte, unite) => { if(qte>0) L.push({code, desc, unite:unite||'un', qte:String(qte), prix:''}); };
+      const disj = {QO:'QO2', HOM:'HOM2', BR:'BR2', SIE:'SIEQ2'}[v.panneau];
+      ajout(disj ? disj+amp : 'DISJ-2P'+amp, 'Disjoncteur 2P '+amp+' A '+({QO:'Square D QO',HOM:'Square D Homeline',BR:'Eaton BR',SIE:'Siemens Q2',AUTRE:''}[v.panneau]||''), 1);
+      const nmd = six?'NMD2C6':'NMD2C8', teck = six?'CAB6TECK2C1KV':'CAB8TECK2C1KV', t90 = six?'T906BLK':'T908BLK';
+      if(v.parcours==='cable'){ ajout(teck, 'Câble TECK 2C #'+(six?6:8)+' 1 kV', piDe(D*1.1), 'pi'); ajout('CI2216','Connecteur 1 po 90°',2); ajout('RCS15-1','Sangle PVC 3/4 po',Math.ceil(E)+2); }
+      else { ajout(nmd, 'Fil NMD 2C #'+(six?6:8), piDe((v.parcours==='tuyau'?I:D)*1.1), 'pi'); ajout('CI73','Connecteur NMD 1 po',2); }
+      if(tuyau && E>0){ ajout('RC4001010','Conduit PVC rigide 1 po', piDe(E*1.1),'pi'); ajout(t90,'Fil T90 #'+(six?6:8)+' (×2 conducteurs)', 2*piDe(E*1.15),'pi'); ajout(six?'T908GRN':'T910GRN','Fil T90 de mise à la terre', piDe(E*1.15),'pi');
+        ajout('RJB664','Boîte de jonction PVC (passage intérieur → extérieur)',1); ajout('RSLB30S','LB PVC 1 po',1); ajout('RTA20','Adaptateur PVC 1 po',2); ajout('REE2090','Coude PVC 1 po 90°', S>0?2:1); ajout('RPS20','Sangle PVC 1 po', Math.ceil(E)+1); ajout('CI2708','Bague isolante 1 po',2); }
+      else if(E>0 || v.lieu==='ext') { ajout('RSLB30S','LB PVC 1 po',1); ajout('CI2708','Bague isolante 1 po',2); }
+      if(v.borne==='flox3') ajout('FLOX3','Borne FLO Maison X3, connecteur J1772',1);
+      else if(v.borne==='autre') ajout('BORNE','Borne '+(v.modele||'de recharge'),1);
+      if(v.dcc) ajout('DCC','Contrôleur de charge (DCC)',1);
+      // --- Heures (pour l'ordre de travail ; le prix, lui, est le forfait) ---
+      const h = Math.round((3 + (E>0?1:0) + S*0.3 + (v.beton?1:0) + ((v.entretoit||v.parcours==='entretoit')?1.5:0) + (v.dcc?1:0) + D*0.04)*2)/2;
+      // --- Texte pour le client ---
+      const dm = Math.round(D*10)/10, txt = [];
+      txt.push(v.borne==='client' ? 'Installation d\'une borne de recharge de niveau 2 (240 V) fournie par le client'+(v.modele?' ('+v.modele+')':'')+'.' : 'Fourniture et installation d\'une borne de recharge '+nomBorne+' (niveau 2, 240 V).');
+      txt.push('Emplacement : '+(v.lieu==='ext'?'à l\'extérieur':'à l\'intérieur (garage)')+(v.note?', '+v.note:'')+'.');
+      txt.push('Raccordement au panneau électrique avec un nouveau disjoncteur 2 pôles '+amp+' A.');
+      if(dm) txt.push('Câblage d\'environ '+dm+' m'+({int: v.lieu==='ext' ? ' par l\'intérieur jusqu\'au mur, puis sortie par le mur vers la borne' : ' par l\'intérieur', entretoit:' en passant par l\'entretoit', cable:', avec sortie par le mur et câble '+(six?'TECK':'TECK')+' fixé à l\'extérieur', tuyau:', avec sortie par le mur et conduit PVC rigide à l\'extérieur'}[v.parcours]||'')+'.');
+      if(S) txt.push('Section souterraine d\'environ '+(Math.round(S*10)/10)+' m (tranchée et câble ou conduit enterré).');
+      if(v.beton) txt.push('Perçage et fixation dans le béton (coin de maison / fondation) pour descendre au sol et remonter à la borne.');
+      if(v.dcc) txt.push('Contrôleur de charge (DCC) pour respecter la capacité du panneau électrique.');
+      txt.push('Inclus : matériel électrique, déplacement, mise en service et essai de la borne.');
+      const detail = pBorne ? 'Détail : borne '+nomBorne+' — '+cvMoney(pBorne)+' · câblage et installation — '+cvMoney(inst)+'.' : '';
+      const exclus = (S||v.beton) ? 'Ne comprend pas la réfection du béton, de l\'asphalte ou de l\'aménagement paysager.' : '';
+      return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(inst+pBorne), installation:inst, borne:pBorne,
+        titre: v.borne==='client' ? 'Installation borne de recharge' : 'Borne '+nomBorne, travaux: txt.join('\n'), remarques:[detail, exclus].filter(Boolean).join('\n'), lignes:L, heures:h};
+    }
+  },
+};
+
+function CalculRapide({C, d, setD, toast}){
+  const [type,setType]=useState('');
+  const [v,setV]=useState({});
+  const [tarifs,setTarifs]=useState(false);
+  const def = CALC_SOUMISSION[type];
+  const ouvrir = k => { const t = CALC_SOUMISSION[k]; setType(type===k?'':k); setV({...t.defaut, ...(t.deviner ? t.deviner([d.titre, d.travaux, d.remarques].join('\n')) : {})}); setTarifs(false); };
+  const t = code => { const x = C.prix[codeNorm(code)]; return x && x.prix!=null ? x.prix : (C.prixDe(code)!=null ? C.prixDe(code) : null); };
+  const r = def ? def.calculer(v, t) : null;
+  const remplir = () => {
+    if(d.lignes.some(l=>cvNum(l.qte)) && !confirm('Remplacer le matériel, les heures et le prix par le calcul ?')) return;
+    setD(o=>({...o, typeProjet:def.typeProjet, titre: o.titre || r.titre, travaux:r.travaux, remarques:r.remarques, forfait: r.forfait!=='' ? String(r.forfait) : o.forfait,
+      lignes:r.lignes, depl:true, quin:true, jours:[{...(o.jours[0]||{}), date:(o.jours[0]&&o.jours[0].date)||cvDay(new Date().toISOString()), sa01:String(r.heures), sa02:''}, ...o.jours.slice(1)]}));
+    toast && toast('Soumission remplie — vérifie et envoie');
+  };
+  return <div style={{marginTop:8}}>
+    <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
+      <span className="muted" style={{fontSize:12}}>Calculer :</span>
+      {Object.entries(CALC_SOUMISSION).map(([k,x])=><button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>ouvrir(k)}>{x.nom}</button>)}
+      <span className="muted" style={{fontSize:11.5}}>(entrée électrique, rough, finition, cuisine, salle de bain, maison neuve, blocs : à venir)</span>
+    </div>
+    {def && <div style={{marginTop:8,padding:10,background:'var(--bg3)',borderRadius:8}}>
+      {def.champs(v, patch=>setV(x=>({...x, ...patch})))}
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:10}}>
+        {r.manque.length ? <span style={{fontSize:12.5,color:'var(--warning)'}}>Il manque {r.manque.length} tarif{r.manque.length>1?'s':''} : ouvre ⚙ Tarifs.</span>
+          : <span style={{fontSize:13.5}}>Installation <b>{cvMoney(r.installation)}</b>{r.borne ? <> + borne <b>{cvMoney(r.borne)}</b></> : null} = <b style={{fontSize:15}}>{cvMoney(r.forfait)}</b> <span className="muted">avant taxes · {r.heures} h · {r.lignes.length} articles</span></span>}
+        <button className="btn btn-sm" onClick={()=>setTarifs(!tarifs)}>⚙ Tarifs</button>
+        <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={remplir}>Remplir la soumission</button>
+      </div>
+      {tarifs && <div style={{display:'grid',gap:4,marginTop:8,fontSize:12.5}}>
+        {def.tarifs.map(([k,l])=><label key={k} style={{display:'flex',gap:6,alignItems:'center',justifyContent:'space-between'}}><span>{l}</span>
+          <input key={k+(t(k)!=null?t(k):'')} defaultValue={t(k)!=null?t(k):''} inputMode="decimal" style={{width:80,textAlign:'right'}}
+            onBlur={async e=>{ const x=e.target.value.trim().replace(',','.'); if(x===String(t(k)!=null?t(k):'')) return; try{ await C.majPrix(k, x); toast&&toast('Tarif enregistré : '+k); }catch(er){ toast&&toast('Erreur : '+apiErrMsg(er)); } }}/></label>)}
+        <span className="muted" style={{fontSize:11.5}}>Gardés dans « La mémoire — Jobs › Prix » (toi seulement), jamais dans le code.</span>
+      </div>}
+    </div>}
+  </div>;
 }
 
 // Pré-remplissage quand on part d'une soumission « À faire » (bouton « 📝 Faire la soumission »).
@@ -4379,6 +4511,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
           <button className="btn btn-sm" title="Enlever ce modèle" style={{padding:'0 6px',opacity:.5}} onClick={async()=>{ if(!confirm('Enlever le modèle « '+m.nom+' » ?')) return; try{ await M.enlever(m); }catch(e){ toast&&toast('Erreur : '+apiErrMsg(e)); } }}>×</button>
         </span>)}
       </div> : <div className="muted" style={{fontSize:12}}>Pas encore de modèle. Prépare une soumission type (ex. une borne : heures, déplacement, fil, disjoncteur…), puis « Garder comme modèle ». La prochaine fois, un clic remplit tout.</div>}
+      <CalculRapide C={C} d={d} setD={setD} toast={toast}/>
       <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:8}}>
         {nomModele===null ? <button className="btn btn-sm" disabled={!d.lignes.some(l=>cvNum(l.qte)) && !d.forfait && !d.jours.some(j=>cvNum(j.sa01))} onClick={()=>setNomModele(d.typeProjet ? d.typeProjet+(d.titre?' — '+d.titre:'') : d.titre||'')}>💾 Garder comme modèle</button>
         : <><input autoFocus value={nomModele} onChange={e=>setNomModele(e.target.value)} placeholder="Nom du modèle (ex. Borne 48 A — 15 m)" style={{flex:'1 1 220px'}}/>
