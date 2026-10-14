@@ -4238,7 +4238,7 @@ function planHtml(d, plan, esc){
   if(!plan.length) return '';
   return '<div style="page-break-before:always"></div><h1 style="text-align:center;font-size:17px">PLAN DES TRAVAUX'+(d.titre?' — '+esc(d.titre).toUpperCase():'')+'</h1>'+
     '<p style="text-align:center;margin:2px 0 12px">'+esc(d.adresse)+'</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'+
-    plan.map(p=>'<div style="border:1.5px solid #111;padding:8px;break-inside:avoid"><img src="'+p.src+'" style="width:100%;display:block"/>'+
+    plan.map(p=>'<div style="border:1.5px solid #111;padding:8px;break-inside:avoid"><img src="'+p.src+'" style="width:100%;height:3.1in;object-fit:contain;display:block;background:#f4f4f4"/>'+
       (p.titre?'<div style="font-weight:bold;margin-top:6px">'+esc(p.titre)+'</div>':'')+
       (p.notes?'<div style="margin-top:4px"><u>NOTES :</u><br>'+esc(p.notes).split('\n').filter(Boolean).map((l,i)=>(i+1)+'. '+l).join('<br>')+'</div>':'')+'</div>').join('')+'</div>';
 }
@@ -4250,7 +4250,8 @@ function docImprimer(d, calc, plan, w0){
   const m = n => (Number(n)||0).toLocaleString('fr-CA',{style:'currency',currency:'CAD'});
   const titre = (d.type==='Facture' ? 'FACTURE (BROUILLON)' : d.type.toUpperCase())+' '+(d.numero||'');
   const lignes = d.lignes.filter(l=>cvNum(l.qte)).map(l=>{ const p=calc.px(l.code,l); return '<tr><td>'+esc(l.code)+'</td><td>'+esc(l.desc)+'</td><td class="n">'+esc(l.qte)+' '+esc(l.unite||'')+'</td>'+(prix && !forfait?'<td class="n">'+m(p)+'</td><td class="n">'+m(p*(cvNum(l.qte)||0))+'</td>':'')+'</tr>'; }).join('');
-  const heures = d.jours.filter(j=>j.date||j.sa01||j.sa02).map(j=>'<tr><td>'+esc(j.date)+'</td><td class="n">'+esc(j.sa01||0)+' h</td><td class="n">'+esc(j.sa02||0)+' h</td></tr>').join('');
+  // v112 : pas de tableau d'heures vide ; une soumission à prix forfaitaire ne montre pas les heures au client
+  const heures = (prix && forfait) ? '' : d.jours.filter(j=>(cvNum(j.sa01)||0)+(cvNum(j.sa02)||0)>0).map(j=>'<tr><td>'+esc(j.date)+'</td><td class="n">'+esc(j.sa01||0)+' h</td><td class="n">'+esc(j.sa02||0)+' h</td></tr>').join('');
   const totaux = !prix ? '' : '<table class="tot">'+
     (cvNum(d.forfait)!=null && d.forfait!=='' ? '<tr><td>Prix forfaitaire</td><td class="n">'+m(calc.st)+'</td></tr>' :
       (calc.mo?'<tr><td>Main-d\'œuvre</td><td class="n">'+m(calc.mo)+'</td></tr>':'')+(calc.mat?'<tr><td>Matériel</td><td class="n">'+m(calc.mat)+'</td></tr>':'')+
@@ -4263,7 +4264,7 @@ function docImprimer(d, calc, plan, w0){
     '.cl td{padding:2px 8px 2px 0;vertical-align:top}table{border-collapse:collapse;width:100%}.l th,.l td{border-bottom:1px solid #ccc;padding:5px 4px;text-align:left}.n{text-align:right;white-space:nowrap}'+
     '.tot{width:280px;margin:12px 0 0 auto}.tot td{padding:3px 4px}.g td{font-weight:bold;font-size:14px;border-top:2px solid #111}.petit{font-size:11px;color:#555}h3{font-size:13px;margin:16px 0 6px}'+
     '@media print{body{margin:12mm}}</style></head><body>'+
-    '<div class="ent"><div><h1>Saran Électrique inc.</h1>William Saran, Président<br>(438) 490-3412 · info@saranelectrique.com<br>Saint-Jean-sur-Richelieu, J3B 4J6</div>'+
+    '<div class="ent"><div><h1>Saran Électrique inc.</h1>William Saran, Président<br>582, boul. du Séminaire Nord, Saint-Jean-sur-Richelieu (Québec) J3B 7E3<br>(438) 490-3412 · info@saranelectrique.com · RBQ 5819-9274-01</div>'+
     '<div style="text-align:right"><h1>'+esc(titre)+'</h1>Date : '+esc((d.jours[0]&&d.jours[0].date)||cvDay(new Date().toISOString()))+'</div></div>'+
     '<table class="cl"><tr><td><b>Client</b></td><td>'+esc(d.nom)+'</td><td><b>Téléphone</b></td><td>'+esc(d.tel)+'</td></tr><tr><td><b>Adresse</b></td><td>'+esc(d.adresse)+'</td><td><b>Courriel</b></td><td>'+esc(d.courriel)+'</td></tr>'+
     (d.titre?'<tr><td><b>Projet</b></td><td colspan="3">'+esc(d.titre)+'</td></tr>':'')+(d.travaux?'<tr><td><b>Travaux</b></td><td colspan="3">'+esc(d.travaux).replace(/\n/g,'<br>')+'</td></tr>':'')+'</table>'+
