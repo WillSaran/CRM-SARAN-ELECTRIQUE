@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v112';
+const APP_VERSION = 'v113';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4243,7 +4243,7 @@ function planHtml(d, plan, esc){
       (p.notes?'<div style="margin-top:4px"><u>NOTES :</u><br>'+esc(p.notes).split('\n').filter(Boolean).map((l,i)=>(i+1)+'. '+l).join('<br>')+'</div>':'')+'</div>').join('')+'</div>';
 }
 // Version imprimable (« Enregistrer en PDF » dans la fenêtre d'impression). L'ordre de travail n'a jamais de prix.
-function docImprimer(d, calc, plan, w0){
+function docHtml(d, calc, plan, imprimer){
   const prix = d.type!=='Ordre de travail';
   const forfait = cvNum(d.forfait)!=null && d.forfait!=='';   // v110 : prix forfaitaire = pas de prix par ligne (comme ton logiciel)
   const esc = s => String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -4277,11 +4277,31 @@ function docImprimer(d, calc, plan, w0){
     totaux+(d.remarques?'<h3>Remarques</h3><p>'+esc(d.remarques).replace(/\n/g,'<br>')+'</p>':'')+
     (d.type==='Ordre de travail'?'<p style="margin-top:30px">Signature du client : ______________________ &nbsp; Date : __________</p>':'')+
     planHtml(d, plan||[], esc)+
-    '<scr'+'ipt>window.onload=()=>setTimeout(()=>window.print(),600)</scr'+'ipt></body></html>';
+    (imprimer ? '<scr'+'ipt>window.onload=()=>setTimeout(()=>window.print(),600)</scr'+'ipt>' : '')+'</body></html>';
+  return html;
+}
+// Ouvre la version imprimable (« Enregistrer en PDF »). w0 : fenêtre déjà ouverte (évite le blocage des pop-ups).
+function docImprimer(d, calc, plan, w0){
   const w = w0 || window.open('', '_blank');
   if(!w) return false;
-  w.document.open(); w.document.write(html); w.document.close();
+  w.document.open(); w.document.write(docHtml(d, calc, plan, true)); w.document.close();
   return true;
+}
+// v113 : aperçu du PDF dans le CRM — se met à jour pendant que tu modifies la soumission
+function ApercuPdf({d, prixDe, onImprimer, onFermer}){
+  const [html,setHtml]=useState('');
+  const cle = JSON.stringify(d);
+  useEffect(()=>{ let vivant=true;
+    const t = setTimeout(async()=>{ let plan=[]; try{ plan = await planPourImpression(d); }catch(e){}
+      if(vivant) setHtml(docHtml(d, docCalcul(d, prixDe), plan, false)); }, 500);
+    return ()=>{ vivant=false; clearTimeout(t); }; },[cle]);
+  return <div className="card" id="apercu-pdf" style={{marginBottom:10,padding:8}}>
+    <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginBottom:6}}>
+      <b style={{fontSize:13.5}}>👁 Aperçu du PDF</b><span className="muted" style={{fontSize:12}}>ce que le client va recevoir — modifie plus haut, l'aperçu suit</span>
+      <span style={{marginLeft:'auto',display:'flex',gap:5}}><button className="btn btn-sm btn-p" onClick={onImprimer}>🖨️ PDF / Imprimer</button><button className="btn btn-sm" onClick={onFermer}>Fermer</button></span>
+    </div>
+    {html ? <iframe title="Aperçu" srcDoc={html} style={{width:'100%',height:'78vh',border:'1px solid var(--border2)',borderRadius:6,background:'#fff'}}/> : <div className="muted" style={{padding:20}}>Préparation…</div>}
+  </div>;
 }
 
 // ===== v110 : CALCULATEURS DE SOUMISSION RAPIDE (un par type de projet) =====
@@ -4496,7 +4516,7 @@ async function soumAccepteeVersEnAttente(cfg, s, toast){
   }catch(e){ toast && toast('Agenda : '+apiErrMsg(e)); }
 }
 
-function CalculRapide({C, d, setD, toast}){
+function CalculRapide({C, d, setD, toast, onRempli}){
   const [type,setType]=useState('');
   const [v,setV]=useState({});
   const [tarifs,setTarifs]=useState(false);
@@ -4508,7 +4528,8 @@ function CalculRapide({C, d, setD, toast}){
     if(d.lignes.some(l=>cvNum(l.qte)) && !confirm('Remplacer le matériel, les heures et le prix par le calcul ?')) return;
     setD(o=>({...o, typeProjet:def.typeProjet, titre: o.titre || r.titre, travaux:r.travaux, remarques:r.remarques, forfait: r.forfait!=='' ? String(r.forfait) : o.forfait,
       lignes:r.lignes, depl:true, quin:true, jours:[{...(o.jours[0]||{}), date:(o.jours[0]&&o.jours[0].date)||cvDay(new Date().toISOString()), sa01:String(r.heures), sa02:''}, ...o.jours.slice(1)]}));
-    toast && toast('Soumission remplie — vérifie et envoie');
+    toast && toast('Soumission remplie — ajoute tes photos (📐 Plan) et vérifie l\'aperçu');
+    onRempli && onRempli();
   };
   return <div style={{marginTop:8}}>
     <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
@@ -4538,6 +4559,7 @@ function CalculRapide({C, d, setD, toast}){
 // Prends une photo (panneau, chemin, emplacement de la borne…) ou un croquis, trace par-dessus (trait rouge = câble,
 // pointillé = encastré / sous terre, carré = borne / prise / panneau, flèche + étiquette), ajoute des notes.
 // L'image annotée va dans le dossier Drive de la soumission ; le PDF de la soumission (🖨️) ajoute une page « Plan des travaux ».
+const PLAN_A_PHOTOGRAPHIER = {'Borne de recharge':['le panneau électrique','le chemin du câble (sortie, mur, tranchée)','l\'emplacement de la borne','au besoin, un 4e endroit du chemin'], 'Panneau / entrée électrique':['le panneau actuel','le mât / compteur','l\'emplacement du nouveau panneau'], 'Prises et circuits':['l\'emplacement actuel','le chemin','le nouvel emplacement']};
 const PLAN_COULEURS = [['#e00000','Rouge'],['#111111','Noir'],['#1a73e8','Bleu']];
 function planDessiner(ctx, W, formes){
   const lw = Math.max(3, W*0.006);
@@ -4653,6 +4675,7 @@ function PlanTravaux({d, setD, toast}){
         <button className="btn btn-sm" disabled={!!occupe} onClick={()=>setAnnoter({image:null})}>✏️ Croquis</button>
       </span>
     </div>
+    {!plan.length && PLAN_A_PHOTOGRAPHIER[d.typeProjet] && <div style={{fontSize:12.5,marginTop:6}}>📸 À photographier : {PLAN_A_PHOTOGRAPHIER[d.typeProjet].join(' · ')}</div>}
     {occupe && <div className="muted" style={{fontSize:12.5,marginTop:6}}>{occupe}</div>}
     {dossierListe && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8}}>
       {dossierListe.map(f=><img key={f.id} src={f.thumbnailLink} alt={f.name} referrerPolicy="no-referrer" title="Annoter cette photo" onClick={async()=>{ try{ setOccupe('Ouverture…'); setAnnoter({image: await planImage(f.id)}); setDossierListe(null); }catch(e){ toast && toast('Impossible d\'ouvrir : '+e.message); } setOccupe(''); }}
@@ -4694,6 +4717,13 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
   const [cat,setCat]=useState('');
   const [occupe,setOccupe]=useState('');
   const [taux,setTaux]=useState(false);
+  const [apercu,setApercu]=useState(false);
+  // 🖨️ : enregistre (numéro E-…) puis ouvre la version imprimable avec le plan des travaux
+  const imprimer = async()=>{ const w = window.open('', '_blank'); if(!w){ toast && toast('Autorise les fenêtres pop-up pour imprimer'); return; }
+    w.document.write('<p style="font-family:Arial">Préparation du PDF…</p>');
+    const doc = d.numero ? d : await enregistrer(); if(!doc){ w.close(); return; }
+    docImprimer(doc, docCalcul(doc, C.prixDe), await planPourImpression(doc), w); };
+  const voirApercu = () => { setApercu(true); setTimeout(()=>{ const el=document.getElementById('apercu-pdf'); el && el.scrollIntoView({behavior:'smooth'}); }, 80); };
   const maj = patch => setD(x=>({...x, ...patch}));
   const calc = docCalcul(d, C.prixDe);
   const prix = d.type!=='Ordre de travail';
@@ -4802,7 +4832,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
           <button className="btn btn-sm" title="Enlever ce modèle" style={{padding:'0 6px',opacity:.5}} onClick={async()=>{ if(!confirm('Enlever le modèle « '+m.nom+' » ?')) return; try{ await M.enlever(m); }catch(e){ toast&&toast('Erreur : '+apiErrMsg(e)); } }}>×</button>
         </span>)}
       </div> : <div className="muted" style={{fontSize:12}}>Pas encore de modèle. Prépare une soumission type (ex. une borne : heures, déplacement, fil, disjoncteur…), puis « Garder comme modèle ». La prochaine fois, un clic remplit tout.</div>}
-      <CalculRapide C={C} d={d} setD={setD} toast={toast}/>
+      <CalculRapide C={C} d={d} setD={setD} toast={toast} onRempli={voirApercu}/>
       <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:8}}>
         {nomModele===null ? <button className="btn btn-sm" disabled={!d.lignes.some(l=>cvNum(l.qte)) && !d.forfait && !d.jours.some(j=>cvNum(j.sa01))} onClick={()=>setNomModele(d.typeProjet ? d.typeProjet+(d.titre?' — '+d.titre:'') : d.titre||'')}>💾 Garder comme modèle</button>
         : <><input autoFocus value={nomModele} onChange={e=>setNomModele(e.target.value)} placeholder="Nom du modèle (ex. Borne 48 A — 15 m)" style={{flex:'1 1 220px'}}/>
@@ -4878,14 +4908,14 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
       </div>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:10,justifyContent:'flex-end'}}>
         <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={enregistrer}>{occupe==='save'?'Enregistrement…':'💾 Enregistrer'}</button>
-        <button className="btn btn-sm" disabled={!!occupe} onClick={async()=>{ const w = window.open('', '_blank'); if(!w){ toast && toast('Autorise les fenêtres pop-up pour imprimer'); return; }
-          w.document.write('<p style="font-family:Arial">Préparation du PDF…</p>');
-          const doc = d.numero ? d : await enregistrer(); if(!doc){ w.close(); return; }
-          docImprimer(doc, docCalcul(doc, C.prixDe), await planPourImpression(doc), w); }}>🖨️ PDF / Imprimer</button>
+        <button className="btn btn-sm" onClick={()=>apercu ? setApercu(false) : voirApercu()}>{apercu ? '🙈 Cacher l\'aperçu' : '👁 Aperçu PDF'}</button>
+        <button className="btn btn-sm" disabled={!!occupe} onClick={imprimer}>🖨️ PDF / Imprimer</button>
         <button className="btn btn-sm" disabled={!!occupe} onClick={courriel}>📧 Courriel (Gmail)</button>
       </div>
       {d.type==='Facture' && <div className="muted" style={{fontSize:11.5,marginTop:6,textAlign:'right'}}>Facture = brouillon : rentre-la dans ton logiciel de facturation (numéro officiel).</div>}
     </div>
+
+    {apercu && <ApercuPdf d={d} prixDe={C.prixDe} onImprimer={imprimer} onFermer={()=>setApercu(false)}/>}
 
     {D.docs.some(x=>!soumMode || x.type==='Soumission') && <div className="card">
       <div style={{fontWeight:700,marginBottom:6}}>{soumMode ? 'Dernières soumissions faites ici' : 'Derniers documents'}</div>
