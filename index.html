@@ -4249,7 +4249,10 @@ function docImprimer(d, calc, plan, w0){
   const esc = s => String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
   const m = n => (Number(n)||0).toLocaleString('fr-CA',{style:'currency',currency:'CAD'});
   const titre = (d.type==='Facture' ? 'FACTURE (BROUILLON)' : d.type.toUpperCase())+' '+(d.numero||'');
-  const lignes = d.lignes.filter(l=>cvNum(l.qte)).map(l=>{ const p=calc.px(l.code,l); return '<tr><td>'+esc(l.code)+'</td><td>'+esc(l.desc)+'</td><td class="n">'+esc(l.qte)+' '+esc(l.unite||'')+'</td>'+(prix && !forfait?'<td class="n">'+m(p)+'</td><td class="n">'+m(p*(cvNum(l.qte)||0))+'</td>':'')+'</tr>'; }).join('');
+  // v112 : prix forfaitaire -> la main-d'œuvre est une ligne à 1 unité (minimum appel de service, tout inclus)
+  const ligneMO = (prix && forfait && (calc.h1+calc.h2>0 || d.depl || d.quin) && !d.lignes.some(l=>/^SA0[12]$/i.test(l.code))) ?
+    '<tr><td>SA01</td><td>Main-d\'œuvre — minimum appel de service : main-d\'œuvre incluse, déplacement, quincaillerie et tout le reste</td><td class="n">1 un</td></tr>' : '';
+  const lignes = ligneMO + d.lignes.filter(l=>cvNum(l.qte)).map(l=>{ const p=calc.px(l.code,l); return '<tr><td>'+esc(l.code)+'</td><td>'+esc(l.desc)+'</td><td class="n">'+esc(l.qte)+' '+esc(l.unite||'')+'</td>'+(prix && !forfait?'<td class="n">'+m(p)+'</td><td class="n">'+m(p*(cvNum(l.qte)||0))+'</td>':'')+'</tr>'; }).join('');
   // v112 : pas de tableau d'heures vide ; une soumission à prix forfaitaire ne montre pas les heures au client
   const heures = (prix && forfait) ? '' : d.jours.filter(j=>(cvNum(j.sa01)||0)+(cvNum(j.sa02)||0)>0).map(j=>'<tr><td>'+esc(j.date)+'</td><td class="n">'+esc(j.sa01||0)+' h</td><td class="n">'+esc(j.sa02||0)+' h</td></tr>').join('');
   const totaux = !prix ? '' : '<table class="tot">'+
