@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v113';
+const APP_VERSION = 'v114';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4230,52 +4230,95 @@ function docCalcul(d, prixDe){
   const depl = d.depl ? (prixDe('DEPL')||0) : 0, quin = d.quin ? (prixDe('QUIN')||0) : 0;
   const st = cvNum(d.forfait)!=null && d.forfait!=='' ? cvNum(d.forfait) : mat+mo+depl+quin;
   const tps = arrondi(st*TPS), tvq = arrondi(st*TVQ);
-  return {h1, h2, mat:arrondi(mat), mo:arrondi(mo), depl, quin, st:arrondi(st), tps, tvq, total:arrondi(st+tps+tvq), px};
+  return {h1, h2, r1:prixDe('SA01')||0, r2:prixDe('SA02')||0, mat:arrondi(mat), mo:arrondi(mo), depl, quin, st:arrondi(st), tps, tvq, total:arrondi(st+tps+tvq), px};
 }
 
 // v112 : page « Plan des travaux » (photos annotées, titre et notes), 2 par rangée
 function planHtml(d, plan, esc){
   if(!plan.length) return '';
   return '<div style="page-break-before:always"></div><h1 style="text-align:center;font-size:17px">PLAN DES TRAVAUX'+(d.titre?' — '+esc(d.titre).toUpperCase():'')+'</h1>'+
-    '<p style="text-align:center;margin:2px 0 12px">'+esc(d.adresse)+'</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'+
-    plan.map(p=>'<div style="border:1.5px solid #111;padding:8px;break-inside:avoid"><img src="'+p.src+'" style="width:100%;height:3.1in;object-fit:contain;display:block;background:#f4f4f4"/>'+
+    '<p style="text-align:center;margin:2px 0 12px">'+esc(d.adresse)+'</p><div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px">'+
+    plan.map(p=>'<div style="border:1.5px solid #111;padding:8px;break-inside:avoid;box-sizing:border-box;min-width:0"><img src="'+p.src+'" style="width:100%;height:3.1in;object-fit:contain;display:block;background:#f4f4f4"/>'+
       (p.titre?'<div style="font-weight:bold;margin-top:6px">'+esc(p.titre)+'</div>':'')+
       (p.notes?'<div style="margin-top:4px"><u>NOTES :</u><br>'+esc(p.notes).split('\n').filter(Boolean).map((l,i)=>(i+1)+'. '+l).join('<br>')+'</div>':'')+'</div>').join('')+'</div>';
 }
 // Version imprimable (« Enregistrer en PDF » dans la fenêtre d'impression). L'ordre de travail n'a jamais de prix.
+// v114 : même présentation que les soumissions de ton logiciel (logo, en-tête, boîte client, tampon, clauses, signature).
+// Le logo est lu dans ton Drive (fichier « logo fond blanc JPEG ») — il n'est pas dans le code.
+const LOGO_ID = '1ryczUvdrXtdoKd8WNHW93n9QA-uGbTYg';
 function docHtml(d, calc, plan, imprimer){
   const prix = d.type!=='Ordre de travail';
-  const forfait = cvNum(d.forfait)!=null && d.forfait!=='';   // v110 : prix forfaitaire = pas de prix par ligne (comme ton logiciel)
+  const forfait = cvNum(d.forfait)!=null && d.forfait!=='';   // prix forfaitaire = pas de prix par ligne (comme ton logiciel)
   const esc = s => String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-  const m = n => (Number(n)||0).toLocaleString('fr-CA',{style:'currency',currency:'CAD'});
-  const titre = (d.type==='Facture' ? 'FACTURE (BROUILLON)' : d.type.toUpperCase())+' '+(d.numero||'');
-  // v112 : prix forfaitaire -> la main-d'œuvre est une ligne à 1 unité (minimum appel de service, tout inclus)
-  const ligneMO = (prix && forfait && (calc.h1+calc.h2>0 || d.depl || d.quin) && !d.lignes.some(l=>/^SA0[12]$/i.test(l.code))) ?
-    '<tr><td>SA01</td><td>Main-d\'œuvre — minimum appel de service : main-d\'œuvre incluse, déplacement, quincaillerie et tout le reste</td><td class="n">1 un</td></tr>' : '';
-  const lignes = ligneMO + d.lignes.filter(l=>cvNum(l.qte)).map(l=>{ const p=calc.px(l.code,l); return '<tr><td>'+esc(l.code)+'</td><td>'+esc(l.desc)+'</td><td class="n">'+esc(l.qte)+' '+esc(l.unite||'')+'</td>'+(prix && !forfait?'<td class="n">'+m(p)+'</td><td class="n">'+m(p*(cvNum(l.qte)||0))+'</td>':'')+'</tr>'; }).join('');
-  // v112 : pas de tableau d'heures vide ; une soumission à prix forfaitaire ne montre pas les heures au client
-  const heures = (prix && forfait) ? '' : d.jours.filter(j=>(cvNum(j.sa01)||0)+(cvNum(j.sa02)||0)>0).map(j=>'<tr><td>'+esc(j.date)+'</td><td class="n">'+esc(j.sa01||0)+' h</td><td class="n">'+esc(j.sa02||0)+' h</td></tr>').join('');
-  const totaux = !prix ? '' : '<table class="tot">'+
-    (cvNum(d.forfait)!=null && d.forfait!=='' ? '<tr><td>Prix forfaitaire</td><td class="n">'+m(calc.st)+'</td></tr>' :
-      (calc.mo?'<tr><td>Main-d\'œuvre</td><td class="n">'+m(calc.mo)+'</td></tr>':'')+(calc.mat?'<tr><td>Matériel</td><td class="n">'+m(calc.mat)+'</td></tr>':'')+
-      (calc.depl?'<tr><td>Déplacement</td><td class="n">'+m(calc.depl)+'</td></tr>':'')+(calc.quin?'<tr><td>Quincaillerie</td><td class="n">'+m(calc.quin)+'</td></tr>':'')+
-      '<tr><td><b>Sous-total</b></td><td class="n"><b>'+m(calc.st)+'</b></td></tr>')+
-    '<tr><td>TPS (5 %)</td><td class="n">'+m(calc.tps)+'</td></tr><tr><td>TVQ (9,975 %)</td><td class="n">'+m(calc.tvq)+'</td></tr>'+
-    '<tr class="g"><td>Total</td><td class="n">'+m(calc.total)+'</td></tr></table>'+(d.type==='Soumission'?'<p class="petit">Cette soumission est valide pour une durée de 30 jours.</p>':'');
+  const m = n => (Number(n)||0).toLocaleString('fr-CA',{minimumFractionDigits:2,maximumFractionDigits:2})+' $';
+  const nom = d.type==='Facture' ? 'FACTURE' : d.type==='Ordre de travail' ? 'ORDRE DE TRAVAIL' : 'SOUMISSION';
+  const titre = nom+' '+(d.numero||'');
+  const date = (d.jours[0]&&d.jours[0].date)||cvDay(new Date().toISOString());
+  const dateFr = s => { const x=String(s||'').match(/^(\d{4})-(\d{2})-(\d{2})/); return x ? x[3]+'/'+x[2]+'/'+x[1] : esc(s); };
+  const qte = l => esc(l.qte)+' '+esc(String(l.unite||'un').toUpperCase());
+  // Lignes : matériel, puis déplacement / électriciens / quincaillerie (comme ton logiciel)
+  const mat = d.lignes.filter(l=>cvNum(l.qte)).map(l=>{ const p=calc.px(l.code,l);
+    return '<tr><td>'+esc(l.code)+'</td><td>'+esc(l.desc)+'</td><td class="n">'+qte(l)+'</td>'+(prix && !forfait?'<td class="n">'+m(p)+'</td><td class="n">'+m(p*(cvNum(l.qte)||0))+'</td>':'')+'</tr>'; }).join('');
+  const aSA = d.lignes.some(l=>/^SA0[12]$/i.test(l.code));
+  let autres = '';
+  if(prix && forfait){
+    // prix forfaitaire -> la main-d'œuvre est une ligne à 1 unité (minimum appel de service, tout inclus)
+    if((calc.h1+calc.h2>0 || d.depl || d.quin) && !aSA) autres = '<tr><td>SA01</td><td>Main-d\'œuvre — minimum appel de service : main-d\'œuvre incluse, déplacement, quincaillerie et tout le reste</td><td class="n">1 UN</td></tr>';
+  } else if(prix){
+    const r = (c,t,q,p) => '<tr><td>'+c+'</td><td>'+t+'</td><td class="n">'+q+'</td><td class="n">'+m(p)+'</td><td class="n">'+m(p*(cvNum(q)||1))+'</td></tr>';
+    if(calc.depl) autres += r('DEPL','Déplacement','1 UN',calc.depl);
+    if(calc.h1) autres += r('SA01','Électriciens',calc.h1+' H',calc.r1);
+    if(calc.h2) autres += r('SA02','Apprentis',calc.h2+' H',calc.r2);
+    if(calc.quin) autres += r('QUIN','Quincaillerie','1 UN',calc.quin);
+  } else {
+    if(d.depl) autres += '<tr><td>DEPL</td><td>Déplacement</td><td class="n">1 UN</td></tr>';
+    const h = calc.h1+calc.h2; if(h) autres += '<tr><td>SA01</td><td>Électriciens</td><td class="n">'+h+' H</td></tr>';
+    if(d.quin) autres += '<tr><td>QUIN</td><td>Quincaillerie</td><td class="n">1 UN</td></tr>';
+  }
+  const ncol = prix && !forfait ? 5 : 3;
+  const libTotal = d.type==='Facture' ? 'Sous-total, avant les taxes' : 'Notre prix de soumission, avant les taxes';
+  const sommaire = !prix ? '' : forfait ?
+    '<tr class="som"><td></td><td class="b">'+libTotal+'</td><td class="n b">'+m(calc.st)+'</td></tr>' :
+    '<tr class="som"><td colspan="2"><i>Main-d\'oeuvre</i>&nbsp; '+m(calc.mo)+' &nbsp;&nbsp;&nbsp;&nbsp; <i>Matériel et autres</i>&nbsp; '+m(calc.mat+calc.depl+calc.quin)+'</td><td colspan="2" class="n">'+libTotal+'</td><td class="n">'+m(calc.st)+'</td></tr>';
+  const taxes = (prix && d.type==='Facture') ? '<table class="tx"><tr><td>TPS (5 %)</td><td class="n">'+m(calc.tps)+'</td></tr><tr><td>TVQ (9,975 %)</td><td class="n">'+m(calc.tvq)+'</td></tr><tr class="b"><td>Total</td><td class="n">'+m(calc.total)+'</td></tr></table>' : '';
+  const adr = String(d.adresse||'').split(/\s*,\s*/).filter(Boolean);
+  const logo = PLAN_IMG[LOGO_ID] ? '<img src="'+PLAN_IMG[LOGO_ID]+'" style="height:78px;max-width:170px;object-fit:contain"/>' : '<div style="font:bold 30px Arial;color:#222;letter-spacing:2px">SARAN</div>';
+  const info = (l,v) => '<tr><td class="lb">'+l+'</td><td class="v">'+esc(v||'')+'</td></tr>';
+  const clauses = d.type==='Ordre de travail' ? '' :
+    (d.type==='Soumission'?'<p>Cette soumission est valide pour une durée de 30 jours.</p>':'')+
+    '<p>INTÉRÊT SUR ARRÉRAGES<br>Sous réserve de tout autre droit ou recours de l\'Entrepreneur, tout retard dans un versement ou paiement dû à l\'Entrepreneur portera intérêt à un taux annuel de 12%.</p>'+
+    '<p>ÉLECTION DE DOMICILE<br>Relativement à tout litige ou procédure judiciaire pouvant résulter de l\'application du présent contrat, les parties élisent domicile dans le district judiciaire d\'Iberville.</p>';
+  const signature = d.type==='Soumission' ?
+    '<p style="margin-top:14px">Accepter par __________________________ le _____________</p>'+
+    '<div class="sg"><div></div><div>No du bon de commande :</div><div>Date (jj-mm-aa) :</div><div>Signature du client :&nbsp; X</div></div>' :
+    d.type==='Ordre de travail' ? '<div class="sg"><div>Date (jj-mm-aa) :</div><div>Signature du client :&nbsp; X</div></div>' : '';
   const html = '<!doctype html><html><head><meta charset="utf-8"><title>'+esc(titre)+'</title><style>'+
-    'body{font-family:Arial,sans-serif;color:#111;margin:28px;font-size:12.5px}h1{font-size:18px;margin:0}.ent{display:flex;justify-content:space-between;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:12px}'+
-    '.cl td{padding:2px 8px 2px 0;vertical-align:top}table{border-collapse:collapse;width:100%}.l th,.l td{border-bottom:1px solid #ccc;padding:5px 4px;text-align:left}.n{text-align:right;white-space:nowrap}'+
-    '.tot{width:280px;margin:12px 0 0 auto}.tot td{padding:3px 4px}.g td{font-weight:bold;font-size:14px;border-top:2px solid #111}.petit{font-size:11px;color:#555}h3{font-size:13px;margin:16px 0 6px}'+
-    '@media print{body{margin:12mm}}</style></head><body>'+
-    '<div class="ent"><div><h1>Saran Électrique inc.</h1>William Saran, Président<br>582, boul. du Séminaire Nord, Saint-Jean-sur-Richelieu (Québec) J3B 7E3<br>(438) 490-3412 · info@saranelectrique.com · RBQ 5819-9274-01</div>'+
-    '<div style="text-align:right"><h1>'+esc(titre)+'</h1>Date : '+esc((d.jours[0]&&d.jours[0].date)||cvDay(new Date().toISOString()))+'</div></div>'+
-    '<table class="cl"><tr><td><b>Client</b></td><td>'+esc(d.nom)+'</td><td><b>Téléphone</b></td><td>'+esc(d.tel)+'</td></tr><tr><td><b>Adresse</b></td><td>'+esc(d.adresse)+'</td><td><b>Courriel</b></td><td>'+esc(d.courriel)+'</td></tr>'+
-    (d.titre?'<tr><td><b>Projet</b></td><td colspan="3">'+esc(d.titre)+'</td></tr>':'')+(d.travaux?'<tr><td><b>Travaux</b></td><td colspan="3">'+esc(d.travaux).replace(/\n/g,'<br>')+'</td></tr>':'')+'</table>'+
-    (heures ? '<h3>Main-d\'œuvre</h3><table class="l"><tr><th>Date</th><th class="n">Compagnon (SA01)</th><th class="n">Apprenti (SA02)</th></tr>'+heures+'</table>' : '')+
-    (lignes ? '<h3>Matériel</h3><table class="l"><tr><th>Code</th><th>Description</th><th class="n">Qté</th>'+(prix && !forfait?'<th class="n">Prix</th><th class="n">Total</th>':'')+'</tr>'+lignes+'</table>' : '')+
-    (!prix ? '<p>'+(d.depl?'☑':'☐')+' Déplacement &nbsp; '+(d.quin?'☑':'☐')+' Quincaillerie</p>' : '')+
-    totaux+(d.remarques?'<h3>Remarques</h3><p>'+esc(d.remarques).replace(/\n/g,'<br>')+'</p>':'')+
-    (d.type==='Ordre de travail'?'<p style="margin-top:30px">Signature du client : ______________________ &nbsp; Date : __________</p>':'')+
+    'body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:26px 30px;font-size:11.5px}table{border-collapse:collapse}'+
+    '.ent{display:flex;align-items:center;gap:34px;margin:0 0 6px 30px}.ent h1{font-size:15px;margin:0 0 3px}.ent div.c{font-size:10.5px;line-height:1.35}'+
+    '.hd{display:grid;grid-template-columns:1fr 250px;gap:10px;align-items:start}.bar{width:100%}.bar th{background:#e9e9e9;font-weight:bold;font-size:9.5px;text-align:left;padding:2px 4px}.bar td{padding:2px 4px;vertical-align:top}'+
+    '.inf{width:100%;font-size:9.5px}.inf td{padding:2px 4px;border-bottom:1px solid #e3e3e3;height:12px}.inf td.lb{background:#ececec;width:92px;white-space:nowrap}.inf td.v{font-size:11.5px}'+
+    '.cli{position:relative;border:1px solid #cfcfcf;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.15);padding:26px 26px 14px;margin-top:10px;min-height:58px;font:bold 14px "Times New Roman",Times,serif;line-height:1.25}'+
+    '.tampon{position:absolute;right:20px;top:46px;transform:rotate(-38deg);color:#e00;font:bold 17px "Courier New",monospace;letter-spacing:1px}'+
+    '.coord{margin:8px 0 0 0;font-size:10.5px;line-height:1.5}.trav{margin:10px 0 12px;font-size:12px}.trav b{font-size:13px}.trav span{font-family:"Courier New",monospace;font-size:11px;line-height:1.3}'+
+    '.l{width:100%;margin-top:4px}.l th{background:#ececec;font-weight:normal;font-size:9.5px;text-align:left;padding:2px 4px}.l td{padding:1px 4px;vertical-align:top;font-size:11.5px}.l td:first-child{width:122px}'+
+    '.n{text-align:right;white-space:nowrap}.b{font-weight:bold}.som td{padding-top:8px;font-size:12px}.l .som td{font-size:12px}'+
+    '.tx{margin:6px 0 0 auto;width:260px}.tx td{padding:2px 4px}.tx tr.b td{border-top:1.5px solid #111}'+
+    '.cl{font-size:9.5px;margin-top:10px}.cl p{margin:0 0 6px}.sg{display:grid;grid-template-columns:1fr 1fr;gap:12px 40px;margin-top:4px;font-size:12px}.sg div{border-bottom:1px solid #ddd;padding:8px 4px 3px}.sg div:empty{border:0}'+
+    '.rq{margin-top:10px;font-size:11px}'+
+    '@page{size:letter;margin:12mm}@media print{body{margin:0}}</style></head><body>'+
+    '<div class="ent">'+logo+'<div class="c"><h1>Saran Électrique Inc.</h1>582 boul. du Séminaire Nord<br>Saint-Jean-Sur-Richelieu QC J3B 7E3<br>438-490-3412<br>info@saranelectrique.com &nbsp;&nbsp;&nbsp; www.saranelectrique.com<br>RBQ 5819-9274-01</div></div>'+
+    '<div class="hd"><div><table class="bar"><tr><th>'+nom+'</th><th>Date</th><th>Travaux prévus le</th><th>Commande du client</th></tr>'+
+      '<tr><td class="b" style="font-size:13px">'+esc(d.numero||'')+'</td><td>'+dateFr(date)+'</td><td>'+(d.prevu?dateFr(d.prevu):'')+'</td><td>'+esc(d.commande||'')+'</td></tr>'+
+      '<tr><td style="font-size:10px">Page 1 de 1</td><td colspan="3" style="font-size:10px">'+esc(d.titre||'')+'</td></tr></table>'+
+      '<div class="cli">'+esc(d.nom)+(adr.length?'<br>'+adr.map(esc).join('<br>'):'')+'<div class="tampon">'+nom+'</div></div>'+
+      '<div class="coord">'+(d.tel?'&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'+esc(d.tel)+'<br>':'')+esc(d.courriel||'')+'</div></div>'+
+    '<table class="inf">'+info('Employé assigné', d.employe||'William Saran')+info('Type de transaction', d.transaction||'Appel de service résidentiel')+info('État', d.etat||'À planifier')+
+      info('No de permis','')+info('No de facture', d.type==='Facture'?d.numero:'')+info('No de projet','')+info('No de contrat','')+'</table></div>'+
+    '<div class="trav"><b>Travaux :</b> <span>'+esc(d.travaux||d.titre||'').replace(/\n/g,'<br>')+'</span></div>'+
+    '<table class="l"><tr><th>Produit</th><th>Description</th><th class="n">Quantité</th>'+(prix && !forfait?'<th class="n">Prix</th><th class="n">Total</th>':'')+'</tr>'+
+      mat+autres+sommaire+'</table>'+taxes+
+    (d.remarques?'<div class="rq"><b>Remarques :</b><br>'+esc(d.remarques).replace(/\n/g,'<br>')+'</div>':'')+
+    '<div style="break-inside:avoid"><div class="cl">'+clauses+'</div>'+signature+'</div>'+
     planHtml(d, plan||[], esc)+
     (imprimer ? '<scr'+'ipt>window.onload=()=>setTimeout(()=>window.print(),600)</scr'+'ipt>' : '')+'</body></html>';
   return html;
@@ -4698,6 +4741,7 @@ function PlanTravaux({d, setD, toast}){
 }
 // Page « Plan des travaux » pour le PDF (images déjà chargées en data:)
 async function planPourImpression(doc){
+  try{ await planImage(LOGO_ID); }catch(e){}   // v114 : logo pour l'en-tête
   const out = [];
   for(const p of (doc.plan||[])){ try{ out.push({...p, src: await planImage(p.id)}); }catch(e){} }
   return out;
