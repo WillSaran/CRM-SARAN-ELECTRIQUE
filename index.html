@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v110';
+const APP_VERSION = 'v111';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -197,8 +197,16 @@ const RAPPELS_HEADERS = ['id','titre','description','dateEcheance','adresse','st
 // 'PARTICULIER' = client résidentiel, pas de contracteur associé.
 const JOB_PREFIXES = ['PAY','CRS','ASC','GGP','SAR','BOM','5PIL','RROY','GOU'];
 const CONTRACTEURS = [...JOB_PREFIXES, 'PARTICULIER'];
-const JOB_PHASES = ['ROUGH','FINITION','BORNES','SERV','PISCINE','ENTREE','AUTRE'];
-const JOB_PHASE_LABELS = {ROUGH:'ROUGH',FINITION:'FINITION',BORNES:'BORNES',SERV:'SERV',PISCINE:'PISCINE',ENTREE:'ENTRÉE',AUTRE:'AUTRE'};
+const JOB_PHASES = ['ROUGH','FINITION','BORNES','SERV','RAPUP','PISCINE','ENTREE','AUTRE'];
+const JOB_PHASE_LABELS = {ROUGH:'ROUGH',FINITION:'FINITION',BORNES:'BORNES',SERV:'SERV (service)',RAPUP:'WRAP-UP (RAPUP)',PISCINE:'PISCINE',ENTREE:'ENTRÉE',AUTRE:'AUTRE'};
+// v111 : un service (SERV) précise quoi — le mot suit SERV dans le titre (« SERV PRISE 12 rue X »), comme « CRS SERV ATALLAH ».
+const SERV_TYPES = ['PRISE','LUMIÈRE','ENTRETIEN','RÉPARATION','CHAUFFAGE','CLIMATISATION'];
+const phaseTitre = (phase, sous) => phase==='SERV' && sous ? 'SERV '+sous : phase;
+function ChoixPhase({phase, setPhase, sous, setSous}){
+  return <><select value={phase} onChange={e=>{ setPhase(e.target.value); if(e.target.value!=='SERV') setSous(''); }}>
+      <option value="">—</option>{JOB_PHASES.map(p=><option key={p} value={p}>{JOB_PHASE_LABELS[p]}</option>)}</select>
+    {phase==='SERV' && <select value={sous} onChange={e=>setSous(e.target.value)} style={{marginTop:4}}><option value="">Quel service ?</option>{SERV_TYPES.map(t=><option key={t} value={t}>{t.charAt(0)+t.slice(1).toLowerCase()}</option>)}</select>}</>;
+}
 // Même logique que PunchPro pour composer le titre d'une job: PREFIXE + PHASE + NUMÉRO+RUE
 function parseCivicStreet(addr){
   if(!addr) return '';
@@ -633,12 +641,12 @@ const PASSAGE_HEURES = (()=>{ const L=[]; for(let h=5; h<=21; h++) for(const m o
 function passageHeure(h){ const [a,b]=h.split(':'); return (+a)+' h'+(b!=='00'?' '+b:''); }
 function CvAjouterPassage({job, phaseDefaut, libelle, onDone}){
   const [ouvert,setOuvert]=useState(false);
-  const [f,setF]=useState({phase:phaseDefaut||'FINITION', date:'', debut:'07:00', fin:'15:30', journee:false, qui:'', attente:false});
+  const [f,setF]=useState({phase:phaseDefaut||'FINITION', sous:'', date:'', debut:'07:00', fin:'15:30', journee:false, qui:'', attente:false});
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState('');
   const pro = job.client!=='PART';
   const membre = cvEquipe().find(m=>m.colorId===f.qui);
-  const titre = [pro ? job.client : '', f.phase, job.name, job.po, membre ? membre.ini : ''].filter(Boolean).join(' ');
+  const titre = [pro ? job.client : '', phaseTitre(f.phase, f.sous), job.name, job.po, membre ? membre.ini : ''].filter(Boolean).join(' ');
   const creer = async ()=>{
     setBusy(true); setMsg('');
     try{
@@ -657,8 +665,11 @@ function CvAjouterPassage({job, phaseDefaut, libelle, onDone}){
   if(!ouvert) return <span>{msg && <span style={{fontSize:12,marginRight:6}}>{msg}</span>}<button className="btn btn-sm" onClick={()=>setOuvert(true)}>{libelle || '+ Ajouter un passage'}</button></span>;
   return <div style={{border:'1px solid var(--accent)',borderRadius:8,padding:8,margin:'6px 0',fontSize:12.5,display:'grid',gap:6}}>
     <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
-      {['ROUGH','FINITION','SERV','AJUST','RAPUP'].map(ph=><button key={ph} className="btn btn-sm" style={f.phase===ph?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setF({...f,phase:ph})}>{ph}</button>)}
+      {['ROUGH','FINITION','SERV','AJUST','RAPUP'].map(ph=><button key={ph} className="btn btn-sm" style={f.phase===ph?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setF({...f,phase:ph,sous:''})}>{ph==='RAPUP'?'WRAP-UP':ph}</button>)}
     </div>
+    {f.phase==='SERV' && <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+      {SERV_TYPES.map(t=><button key={t} className="btn btn-sm" style={f.sous===t?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setF({...f,sous:f.sous===t?'':t})}>{t.charAt(0)+t.slice(1).toLowerCase()}</button>)}
+    </div>}
     {!f.attente && <>
       <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
         <span className="muted" style={{width:42}}>Date</span>
@@ -1198,8 +1209,9 @@ function CreateJobModal({opp, contact, cfg, onClose, onDone, addProjet, toast}){
   const entrepriseMatch = contact && CONTRACTEURS.includes((contact.entreprise||'').toUpperCase()) ? (contact.entreprise||'').toUpperCase() : 'PARTICULIER';
   const [prefixe,setPrefixe]=useState(entrepriseMatch);
   const [phase,setPhase]=useState('');
+  const [sous,setSous]=useState('');
   const [busy,setBusy]=useState(false);
-  const titre = buildJobTitle(prefixe, phase, opp.adresse);
+  const titre = buildJobTitle(prefixe, phaseTitre(phase, sous), opp.adresse);
 
   async function handleCreate(){
     setBusy(true);
@@ -1245,10 +1257,7 @@ function CreateJobModal({opp, contact, cfg, onClose, onDone, addProjet, toast}){
         </select>
       </div>
       <div className="field"><label>Phase</label>
-        <select value={phase} onChange={e=>setPhase(e.target.value)}>
-          <option value="">—</option>
-          {JOB_PHASES.map(p=><option key={p} value={p}>{JOB_PHASE_LABELS[p]}</option>)}
-        </select>
+        <ChoixPhase phase={phase} setPhase={setPhase} sous={sous} setSous={setSous}/>
       </div>
     </div>
     <div className="field"><label>Titre généré</label><input value={titre} disabled/></div>
@@ -2774,9 +2783,10 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate, ini
   const [heure,setHeure]=useState(initialHeure||'08:00');
   const [prefixe,setPrefixe]=useState(defaults.prefixe);
   const [phase,setPhase]=useState(defaults.phase);
+  const [sous,setSous]=useState('');
   const [notes,setNotes]=useState('');
   const [busy,setBusy]=useState(false);
-  const titre = buildJobTitle(prefixe, phase, adresse);
+  const titre = buildJobTitle(prefixe, phaseTitre(phase, sous), adresse);
 
   async function handleCreate(){
     if(!adresse){ toast('Indique une adresse.','err'); return; }
@@ -2820,10 +2830,7 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate, ini
         </select>
       </div>
       <div className="field"><label>Phase</label>
-        <select value={phase} onChange={e=>setPhase(e.target.value)}>
-          <option value="">—</option>
-          {JOB_PHASES.map(p=><option key={p} value={p}>{JOB_PHASE_LABELS[p]}</option>)}
-        </select>
+        <ChoixPhase phase={phase} setPhase={setPhase} sous={sous} setSous={setSous}/>
       </div>
     </div>
     <div className="row2">
@@ -3736,7 +3743,8 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const cherche = (txt)=> !q || cvNorm(txt).includes(cvNorm(q));
   const action = async (s, statut, note)=>{
     setOccupe(s.cle);
-    try{ await S.marquer(s, statut, note); toast && toast(statut ? 'Soumission : '+statut.toLowerCase() : 'Remise à faire'); }
+    try{ await S.marquer(s, statut, note); toast && toast(statut ? 'Soumission : '+statut.toLowerCase() : 'Remise à faire');
+      if(statut==='Acceptée') soumAccepteeVersEnAttente(cfg, s, toast); }
     catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); S.relire(); }
     setOccupe('');
   };
@@ -4273,12 +4281,12 @@ const CALC_SOUMISSION = {
   borne: {
     nom:'🔌 Borne', typeProjet:'Borne de recharge',
     tarifs:[['BORNE-BASE','Installation de base ($) — disjoncteur, raccordement, déplacement, quincaillerie, mise en service'],
-      ['BORNE-INCLUS-M','Mètres de câble inclus dans la base (m)'],['BORNE-M-INT','Câble intérieur additionnel ($/m)'],
-      ['BORNE-SORTIE','Sortie à l\'extérieur ($) — percer le mur / la fondation'],['BORNE-M-EXT','Extérieur en câble TECK/ACWU ($/m)'],
-      ['BORNE-M-TUYAU','Extérieur en tuyau PVC ($/m)'],['BORNE-M-SOUT','Souterrain — tranchée ($/m)'],['BORNE-BETON','Béton : percer, descendre au sol, remonter ($)'],
+      ['BORNE-INCLUS-M','Mètres de câble inclus dans la base (m)'],['BORNE-M-INT','Câble à l\'intérieur, en plus ($/m)'],
+      ['BORNE-SORTIE','Sortie à l\'extérieur ($) — percer le mur / la fondation'],['BORNE-M-EXT','Dehors, câble TECK/ACWU au mur ($/m)'],
+      ['BORNE-M-TUYAU','Dehors, tuyau PVC au mur ($/m)'],['BORNE-M-SOUT','Sous terre — tranchée ($/m)'],['BORNE-BETON','Béton : percer, descendre au sol, remonter ($)'],
       ['BORNE-ENTRETOIT','Passage par l\'entretoit ($)'],['BORNE-DCC','Contrôleur de charge DCC ($)'],['FLOX3','Borne FLO Maison X3 fournie ($)']],
-    defaut:{borne:'flox3', modele:'', prixBorne:'', amp:'60', panneau:'QO', lieu:'ext', parcours:'cable', dist:'', unite:'m', ext:'', sout:'', beton:false, entretoit:false, dcc:false, note:''},
-    // Devine ce qu'on peut à partir du texte de la demande (distance, intérieur/extérieur, FLO…)
+    // Longueurs : tapées dans l'unité choisie (m ou pi) ; changer l'unité convertit ; les calculs sont toujours en mètres.
+    defaut:{lieu:'ext', unite:'m', dist:'', intCable:'NMD', segs:[{type:'TECK', long:'', fil:'RW90'}], borne:'flox3', modele:'', prixBorne:'', amp:'60', panneau:'QO', beton:false, entretoit:false, dcc:false, note:''},
     deviner(txt){ const t=String(txt||''), v={};
       const m=t.match(/(\d+(?:[.,]\d+)?)\s*(m\b|m[eè]tres?|pi\b|pieds?|')/i);
       if(m){ v.dist=m[1].replace(',','.'); v.unite=/^m/i.test(m[2])?'m':'pi'; }
@@ -4286,74 +4294,193 @@ const CALC_SOUMISSION = {
       if(/wallbox|pulsar|tesla|grizzl/i.test(t)) { v.borne='autre'; v.modele=(t.match(/(wallbox[^,.\n]{0,20}|tesla[^,.\n]{0,20}|grizzl[^,.\n]{0,20})/i)||[])[1]||''; }
       if(/(j'ai|a d[ée]j[aà]|poss[eè]de).{0,25}borne/i.test(t)) v.borne='client';
       return v; },
-    champs(v, maj){ const r = (k, opts) => <select value={v[k]} onChange={e=>maj({[k]:e.target.value})}>{opts.map(([a,b])=><option key={a} value={a}>{b}</option>)}</select>;
-      const n = (k, ph, w) => <input value={v[k]} inputMode="decimal" placeholder={ph} onChange={e=>maj({[k]:e.target.value})} style={{width:w||70}}/>;
+    champs(v, maj){
+      const sel = (val, on, opts, st) => <select value={val} onChange={e=>on(e.target.value)} style={st}>{opts.map(([a,b])=><option key={a} value={a}>{b}</option>)}</select>;
+      const r = (k, opts) => sel(v[k], x=>maj({[k]:x}), opts);
       const c = (k, l) => <label style={{display:'flex',gap:4,alignItems:'center',fontSize:13}}><input type="checkbox" checked={!!v[k]} onChange={e=>maj({[k]:e.target.checked})}/> {l}</label>;
-      const u = v.unite;
+      const long = (val, on) => <input value={val} inputMode="decimal" placeholder={v.unite} onChange={e=>on(e.target.value)} style={{width:64}}/>;
+      // Changer m ↔ pi convertit toutes les longueurs déjà tapées
+      const unite = u => { if(u===v.unite) return; const f = u==='pi' ? 3.281 : 1/3.281, cv = x => { const n=cvNum(x); return n==null ? x : String(Math.round(n*f*10)/10); };
+        maj({unite:u, dist:cv(v.dist), segs:v.segs.map(s=>({...s, long:cv(s.long)}))}); };
+      const uSel = sel(v.unite, unite, [['m','mètres'],['pi','pieds']]);
+      const majSeg = (i, p) => maj({segs:v.segs.map((s,k)=>k===i?{...s,...p}:s)});
+      const ext = v.lieu==='ext';
       return <div style={{display:'grid',gap:8,fontSize:13}}>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Borne {r('borne',[['flox3','FLO Maison X3 (fournie)'],['autre','Autre borne (fournie)'],['client','Le client a sa borne']])}
-          {v.borne==='autre' && <>{<input value={v.modele} onChange={e=>maj({modele:e.target.value})} placeholder="Modèle" style={{width:140}}/>}{n('prixBorne','prix $',80)}</>}
-          {v.borne==='client' && <input value={v.modele} onChange={e=>maj({modele:e.target.value})} placeholder="Modèle (facultatif)" style={{width:150}}/>}</div>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Panneau {r('panneau',[['QO','Square D QO'],['HOM','Square D Homeline'],['BR','Eaton BR / CHOM'],['SIE','Siemens'],['AUTRE','Autre']])}
-          Disjoncteur {r('amp',[['60','2P 60 A (48 A de charge)'],['40','2P 40 A (32 A de charge)']])}
-          {c('dcc','Panneau juste : contrôleur de charge (DCC)')}</div>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Borne {r('lieu',[['ext','à l\'extérieur'],['int','à l\'intérieur (garage)']])}
-          Distance panneau → borne {n('dist', u)} {r('unite',[['m','m'],['pi','pi']])}</div>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Parcours {r('parcours',[['int','Par l\'intérieur'],['cable','Dehors en câble TECK/ACWU'],['tuyau','Dehors en tuyau PVC'],['entretoit','Par l\'entretoit']])}
-          {(v.parcours==='cable'||v.parcours==='tuyau') && <>dont dehors {n('ext',u)} · dont sous terre {n('sout',u)}</>}</div>
-        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}}>{c('beton','Béton / coin de maison : percer, descendre au sol, remonter à la borne')}{c('entretoit','Passage dans l\'entretoit')}</div>
-        <input value={v.note} onChange={e=>maj({note:e.target.value})} placeholder="Emplacement exact (ex. au bout du mur, près de l'allée)"/>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>1. Parcours</b> — la borne est {r('lieu',[['ext','à l\'extérieur'],['int','à l\'intérieur (garage)']])} · mesures en {uSel}</div>
+        {!ext && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:12}}>Câble NMD du panneau à la borne : {long(v.dist, x=>maj({dist:x}))} {v.unite}</div>}
+        {ext && <div style={{display:'grid',gap:5,paddingLeft:12}}>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Du panneau jusqu'à la sortie : {long(v.dist, x=>maj({dist:x}))} {v.unite} en {r('intCable',[['NMD','NMD'],['TECK','TECK / ACWU']])}</div>
+          <div>De la sortie jusqu'à la borne (dans l'ordre) :</div>
+          {v.segs.map((s,i)=><div key={i} style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:12}}>
+            {i+1}. {sel(s.type, x=>majSeg(i,{type:x}), [['TECK','Câble TECK/ACWU au mur'],['TECK_SOL','Câble TECK/ACWU sous terre'],['TUYAU','Tuyau PVC au mur'],['TUYAU_SOL','Tuyau PVC sous terre']])}
+            {long(s.long, x=>majSeg(i,{long:x}))} {v.unite}
+            {/TUYAU/.test(s.type) && <>fils {sel(s.fil, x=>majSeg(i,{fil:x}), [['RW90','RW90'],['T90','T90'],['CABLE','le câble dans le tuyau']])}</>}
+            {v.segs.length>1 && <button className="btn btn-sm" onClick={()=>maj({segs:v.segs.filter((x,k)=>k!==i)})}>✕</button>}
+          </div>)}
+          <div style={{paddingLeft:12}}><button className="btn btn-sm" onClick={()=>maj({segs:[...v.segs, {type:'TUYAU', long:'', fil:'RW90'}]})}>+ Un bout (ex. sous terre, puis remonter en tuyau)</button></div>
+        </div>}
+        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}}>{c('beton','Béton / coin de maison : percer, descendre au sol, remonter')}{c('entretoit','Passage par l\'entretoit')}</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>2. Borne</b> {r('borne',[['flox3','FLO Maison X3 (fournie)'],['autre','Autre borne (fournie)'],['client','Le client a sa borne']])}
+          {v.borne!=='flox3' && <input value={v.modele} onChange={e=>maj({modele:e.target.value})} placeholder="Modèle" style={{width:140}}/>}
+          {v.borne==='autre' && <input value={v.prixBorne} inputMode="decimal" placeholder="prix $" onChange={e=>maj({prixBorne:e.target.value})} style={{width:80}}/>}</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>3. Panneau</b> {r('panneau',[['QO','Square D QO'],['HOM','Square D Homeline'],['BR','Eaton BR / CHOM'],['SIE','Siemens'],['AUTRE','Autre']])}
+          disjoncteur {r('amp',[['60','2P 60 A (48 A de charge)'],['40','2P 40 A (32 A de charge)']])} {c('dcc','Panneau juste : contrôleur DCC')}</div>
+        <input value={v.note} onChange={e=>maj({note:e.target.value})} placeholder="Emplacement exact de la borne (ex. au bout du mur, près de l'allée)"/>
       </div>; },
     calculer(v, t){
-      const k = v.unite==='pi' ? 0.3048 : 1, m = x => Math.max(0, (cvNum(x)||0)*k);
-      const D = m(v.dist), dehors = (v.parcours==='cable'||v.parcours==='tuyau'), S = dehors ? Math.min(m(v.sout), D) : 0, E = dehors ? Math.min(Math.max(m(v.ext), S), D) : 0, I = Math.max(0, D-E);
-      const tuyau = v.parcours==='tuyau', amp = v.amp, six = amp==='60';
+      const f = v.unite==='pi' ? 0.3048 : 1, m = x => Math.max(0, (cvNum(x)||0)*f), r1 = x => String(Math.round(x*10)/10).replace('.',',');
+      const ext = v.lieu==='ext', six = v.amp==='60', amp = v.amp;
+      const I = m(v.dist);                                                       // intérieur (ou tout le parcours si borne dedans)
+      const segs = ext ? v.segs.map(s=>({...s, m:m(s.long), sol:/_SOL$/.test(s.type), tuyau:/^TUYAU/.test(s.type)})).filter(s=>s.m>0) : [];
+      const E = segs.reduce((a,s)=>a+s.m,0), D = I+E, S = segs.filter(s=>s.sol).reduce((a,s)=>a+s.m,0);
       // --- Prix (tarifs de l'onglet Prix) ---
       const manque = []; const T = key => { const x = t(key); if(x==null) manque.push(key); return x||0; };
       const inclus = t('BORNE-INCLUS-M')!=null ? t('BORNE-INCLUS-M') : 0;
-      const intExtra = Math.max(0, I-inclus), reste = Math.max(0, inclus-I), extExtra = Math.max(0, (E-S)-reste);
-      let inst = T('BORNE-BASE') + (intExtra ? intExtra*T('BORNE-M-INT') : 0);
-      if(E>0 || (v.lieu==='ext' && v.parcours!=='entretoit')) inst += T('BORNE-SORTIE');
-      if(extExtra) inst += extExtra*T(tuyau?'BORNE-M-TUYAU':'BORNE-M-EXT');
-      if(S) inst += S*T('BORNE-M-SOUT');
+      let reste = inclus, inst = T('BORNE-BASE');
+      const prend = x => { const p = Math.min(reste, x); reste -= p; return x-p; };
+      const iExtra = prend(I); if(iExtra) inst += iExtra*T('BORNE-M-INT');
+      if(ext) inst += T('BORNE-SORTIE');
+      segs.forEach(s=>{ const x = s.sol ? s.m : prend(s.m); if(x) inst += x*T(s.sol ? 'BORNE-M-SOUT' : s.tuyau ? 'BORNE-M-TUYAU' : 'BORNE-M-EXT'); });
       if(v.beton) inst += T('BORNE-BETON');
-      if(v.entretoit || v.parcours==='entretoit') inst += T('BORNE-ENTRETOIT');
+      if(v.entretoit) inst += T('BORNE-ENTRETOIT');
       if(v.dcc) inst += T('BORNE-DCC');
       inst = arr5(inst);
       const nomBorne = v.borne==='flox3' ? 'FLO Maison X3' : (v.modele||'');
       const pBorne = v.borne==='flox3' ? T('FLOX3') : v.borne==='autre' ? (cvNum(v.prixBorne)||0) : 0;
-      // --- Matériel (codes de ton logiciel ; quantités en pieds) ---
-      const L = []; const ajout = (code, desc, qte, unite) => { if(qte>0) L.push({code, desc, unite:unite||'un', qte:String(qte), prix:''}); };
+      // --- Matériel / stock pour l'ordre de travail (codes de ton logiciel ; longueurs en pieds, +10 % de jeu) ---
+      const L = []; const ajout = (code, desc, qte, unite) => { if(qte>0){ const ex = L.find(l=>l.code===code); if(ex) ex.qte = String(+ex.qte + qte); else L.push({code, desc, unite:unite||'un', qte:String(qte), prix:''}); } };
       const disj = {QO:'QO2', HOM:'HOM2', BR:'BR2', SIE:'SIEQ2'}[v.panneau];
       ajout(disj ? disj+amp : 'DISJ-2P'+amp, 'Disjoncteur 2P '+amp+' A '+({QO:'Square D QO',HOM:'Square D Homeline',BR:'Eaton BR',SIE:'Siemens Q2',AUTRE:''}[v.panneau]||''), 1);
-      const nmd = six?'NMD2C6':'NMD2C8', teck = six?'CAB6TECK2C1KV':'CAB8TECK2C1KV', t90 = six?'T906BLK':'T908BLK';
-      if(v.parcours==='cable'){ ajout(teck, 'Câble TECK 2C #'+(six?6:8)+' 1 kV', piDe(D*1.1), 'pi'); ajout('CI2216','Connecteur 1 po 90°',2); ajout('RCS15-1','Sangle PVC 3/4 po',Math.ceil(E)+2); }
-      else { ajout(nmd, 'Fil NMD 2C #'+(six?6:8), piDe((v.parcours==='tuyau'?I:D)*1.1), 'pi'); ajout('CI73','Connecteur NMD 1 po',2); }
-      if(tuyau && E>0){ ajout('RC4001010','Conduit PVC rigide 1 po', piDe(E*1.1),'pi'); ajout(t90,'Fil T90 #'+(six?6:8)+' (×2 conducteurs)', 2*piDe(E*1.15),'pi'); ajout(six?'T908GRN':'T910GRN','Fil T90 de mise à la terre', piDe(E*1.15),'pi');
-        ajout('RJB664','Boîte de jonction PVC (passage intérieur → extérieur)',1); ajout('RSLB30S','LB PVC 1 po',1); ajout('RTA20','Adaptateur PVC 1 po',2); ajout('REE2090','Coude PVC 1 po 90°', S>0?2:1); ajout('RPS20','Sangle PVC 1 po', Math.ceil(E)+1); ajout('CI2708','Bague isolante 1 po',2); }
-      else if(E>0 || v.lieu==='ext') { ajout('RSLB30S','LB PVC 1 po',1); ajout('CI2708','Bague isolante 1 po',2); }
+      const g = six?6:8, gt = six?8:10;
+      const NMD = six?'NMD2C6':'NMD2C8', TECK = six?'CAB6TECK2C1KV':'CAB8TECK2C1KV';
+      // Conducteur de chaque bout : NMD, TECK (aussi le câble passé dans un tuyau), RW90 ou T90 (fils dans le tuyau)
+      const intCond = ext ? v.intCable : 'NMD';
+      const chaine = [{cond:intCond, m:I, int:true}, ...segs.map(s=>({...s, cond: s.tuyau ? (s.fil==='CABLE' ? 'TECK' : s.fil) : 'TECK'}))].filter(s=>s.m>0);
+      chaine.forEach(s=>{
+        const ft = piDe(s.m*1.1);
+        if(s.cond==='NMD') ajout(NMD, 'Fil NMD 2C #'+g, ft, 'pi');
+        else if(s.cond==='TECK') ajout(TECK, 'Câble TECK 2C #'+g+' 1 kV', ft, 'pi');
+        else { const pre = s.cond==='RW90' ? 'RW90' : 'T90', code = pre+g+'BLK';
+          ajout(code, 'Fil '+pre+' #'+g+' noir (2 conducteurs)', 2*piDe(s.m*1.15), 'pi'); ajout(pre+gt+'GRN', 'Fil '+pre+' #'+gt+' vert (mise à la terre)', piDe(s.m*1.15), 'pi'); }
+        if(!s.int && !s.tuyau && !s.sol) ajout('RCS15-1','Sangle pour câble TECK', Math.ceil(s.m/1.5)+1);
+      });
+      // Boîtes de jonction : chaque fois que le conducteur change (NMD → TECK, TECK → fils RW90…)
+      let jb = 0; chaine.forEach((s,i)=>{ if(i && s.cond!==chaine[i-1].cond) jb++; });
+      ajout('RJB664','Boîte de jonction PVC 6×6×4 (changement de conducteur)', jb);
+      // Connecteurs : 2 par bout de NMD ou de TECK (entrée et sortie)
+      const runs = c => chaine.reduce((n,s,i)=>n + (s.cond===c && (!i || chaine[i-1].cond!==c) ? 1 : 0), 0);
+      ajout('CI73','Connecteur NMD 1 po', 2*runs('NMD')); ajout('CI2216','Connecteur câble TECK 1 po', 2*runs('TECK'));
+      // Tuyau PVC 1 po : longueurs de 10 pi, couplings, adaptateurs, coudes, sangles, colle
+      const tuy = segs.filter(s=>s.tuyau);
+      if(tuy.length){
+        let barres = 0, couplings = 0, tRuns = 0;
+        segs.forEach((s,i)=>{ if(s.tuyau && !(i && segs[i-1].tuyau)) tRuns++; });
+        let run = 0; segs.forEach((s,i)=>{ if(s.tuyau) run += s.m; if(!s.tuyau || i===segs.length-1 || !segs[i+1].tuyau){ if(run){ const b = Math.ceil(piDe(run*1.1)/10); barres += b; couplings += Math.max(0,b-1); run = 0; } } });
+        ajout('RC4001010','Conduit PVC rigide 1 po (longueurs de 10 pi)', barres*10, 'pi');
+        ajout('REC20','Coupling PVC 1 po', couplings);
+        ajout('RTA20','Adaptateur de boîte PVC 1 po', 2*tRuns);
+        ajout('REE2090','Coude PVC 1 po 90°', tuy.filter(s=>s.sol).length*2);
+        ajout('RPS20','Sangle PVC 1 po', tuy.filter(s=>!s.sol).reduce((n,s)=>n+Math.ceil(s.m)+1,0));
+        ajout('RVOC475','Colle à solvant pour PVC', 1);
+        ajout('CI2708','Bague isolante 1 po', 2*tRuns);
+      }
+      if(ext){ if(segs[0] && segs[0].tuyau) ajout('RSLB30S','LB PVC 1 po (sortie du mur)', 1); else ajout('CIDUCT-1','Composé scellant (passage du mur)', 1); }
+      if(S) ajout('RUBAN-AVERT','Ruban d\'avertissement rouge (tranchée)', piDe(S), 'pi');
+      if(v.beton) ajout('USC-72100','Tapcon 3/16 × 1-1/4 (boîte de 100)', 1);
       if(v.borne==='flox3') ajout('FLOX3','Borne FLO Maison X3, connecteur J1772',1);
       else if(v.borne==='autre') ajout('BORNE','Borne '+(v.modele||'de recharge'),1);
       if(v.dcc) ajout('DCC','Contrôleur de charge (DCC)',1);
-      // --- Heures (pour l'ordre de travail ; le prix, lui, est le forfait) ---
-      const h = Math.round((3 + (E>0?1:0) + S*0.3 + (v.beton?1:0) + ((v.entretoit||v.parcours==='entretoit')?1.5:0) + (v.dcc?1:0) + D*0.04)*2)/2;
+      // --- Heures (ordre de travail ; le prix, lui, est le forfait) ---
+      const h = Math.round((3 + (ext?1:0) + S*0.3 + jb*0.5 + (v.beton?1:0) + (v.entretoit?1.5:0) + (v.dcc?1:0) + D*0.04)*2)/2;
       // --- Texte pour le client ---
-      const dm = Math.round(D*10)/10, txt = [];
+      const nomSeg = s => ({TECK:'câble TECK fixé au mur', TECK_SOL:'câble enterré', TUYAU:'tuyau PVC rigide au mur', TUYAU_SOL:'tuyau PVC rigide enterré'}[s.type]);
+      const txt = [];
       txt.push(v.borne==='client' ? 'Installation d\'une borne de recharge de niveau 2 (240 V) fournie par le client'+(v.modele?' ('+v.modele+')':'')+'.' : 'Fourniture et installation d\'une borne de recharge '+nomBorne+' (niveau 2, 240 V).');
-      txt.push('Emplacement : '+(v.lieu==='ext'?'à l\'extérieur':'à l\'intérieur (garage)')+(v.note?', '+v.note:'')+'.');
-      txt.push('Raccordement au panneau électrique avec un nouveau disjoncteur 2 pôles '+amp+' A.');
-      if(dm) txt.push('Câblage d\'environ '+dm+' m'+({int: v.lieu==='ext' ? ' par l\'intérieur jusqu\'au mur, puis sortie par le mur vers la borne' : ' par l\'intérieur', entretoit:' en passant par l\'entretoit', cable:', avec sortie par le mur et câble '+(six?'TECK':'TECK')+' fixé à l\'extérieur', tuyau:', avec sortie par le mur et conduit PVC rigide à l\'extérieur'}[v.parcours]||'')+'.');
-      if(S) txt.push('Section souterraine d\'environ '+(Math.round(S*10)/10)+' m (tranchée et câble ou conduit enterré).');
+      txt.push('Emplacement : '+(ext?'à l\'extérieur':'à l\'intérieur (garage)')+(v.note?', '+v.note:'')+'.');
+      txt.push('Raccordement au panneau électrique avec un nouveau disjoncteur 2 pôles '+amp+' A'+(v.dcc?' et contrôleur de charge (DCC) pour respecter la capacité du panneau':'')+'.');
+      if(D) txt.push('Câblage d\'environ '+r1(D)+' m'+(ext ? ' : '+r1(I)+' m à l\'intérieur'+(v.entretoit?' (par l\'entretoit)':'')+', sortie par le mur'+(segs.length ? ', puis '+segs.map(s=>r1(s.m)+' m en '+nomSeg(s)).join(', ') : '')+' jusqu\'à la borne' : (v.entretoit?' en passant par l\'entretoit':' à l\'intérieur'))+'.');
+      if(S) txt.push('Tranchée d\'environ '+r1(S)+' m pour la partie enterrée.');
       if(v.beton) txt.push('Perçage et fixation dans le béton (coin de maison / fondation) pour descendre au sol et remonter à la borne.');
-      if(v.dcc) txt.push('Contrôleur de charge (DCC) pour respecter la capacité du panneau électrique.');
       txt.push('Inclus : matériel électrique, déplacement, mise en service et essai de la borne.');
       const detail = pBorne ? 'Détail : borne '+nomBorne+' — '+cvMoney(pBorne)+' · câblage et installation — '+cvMoney(inst)+'.' : '';
       const exclus = (S||v.beton) ? 'Ne comprend pas la réfection du béton, de l\'asphalte ou de l\'aménagement paysager.' : '';
-      return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(inst+pBorne), installation:inst, borne:pBorne,
+      return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(inst+pBorne), installation:inst, borne:pBorne, metres:r1(D),
         titre: v.borne==='client' ? 'Installation borne de recharge' : 'Borne '+nomBorne, travaux: txt.join('\n'), remarques:[detail, exclus].filter(Boolean).join('\n'), lignes:L, heures:h};
     }
   },
 };
+
+// ===== v111 : agenda Google « Soumission » =====
+// Les demandes de soumission vont dans un agenda « Soumission » (créé par William dans Google Agenda).
+// Le CRM y prend le client (nom, téléphone, courriel, adresse, travaux) ; quand la soumission est acceptée,
+// l'événement est déplacé dans « En Attente » (rien n'est effacé ni réécrit : on déplace seulement l'événement).
+let SOUM_CAL_ID;
+async function soumCalId(){
+  if(SOUM_CAL_ID !== undefined) return SOUM_CAL_ID;
+  try{ const r = await window.gapi.client.calendar.calendarList.list({maxResults:250, fields:'items(id,summary,summaryOverride)'});
+    const c = (r.result.items||[]).find(x=>/^soumissions?$/i.test(String(x.summaryOverride||x.summary||'').trim()));
+    SOUM_CAL_ID = c ? c.id : null; }catch(e){ SOUM_CAL_ID = null; }
+  return SOUM_CAL_ID;
+}
+async function soumEvenements(){
+  const id = await soumCalId(); if(!id) return {id:null, liste:[]};
+  const min = new Date(); min.setDate(min.getDate()-150); const max = new Date(); max.setDate(max.getDate()+200);
+  const r = await window.gapi.client.calendar.events.list({calendarId:id, timeMin:min.toISOString(), timeMax:max.toISOString(), singleEvents:true, orderBy:'startTime', maxResults:250});
+  return {id, liste:(r.result.items||[]).filter(e=>e.status!=='cancelled').reverse()};
+}
+// Client d'un événement : « Client : … », « Tél : … », « Courriel : … » dans la description, sinon devinés.
+function infosEvenement(ev){
+  const desc = String(ev.description||'').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&#39;/g,"'");
+  const champ = re => ((desc.match(re)||[])[1]||'').trim();
+  const courriel = (champ(/^\s*(?:courriel|e-?mail|email)\s*:\s*\S*?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)/im) || (desc.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/)||[''])[0]).toLowerCase();
+  let tel = champ(/^\s*t[ée]l(?:[ée]phone)?\s*:\s*(.+)$/im) || ((desc.match(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/)||[''])[0]);
+  const ch = tel.replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); if(ch.length===10) tel = ch.slice(0,3)+' '+ch.slice(3,6)+'-'+ch.slice(6);
+  const titre = String(ev.summary||'').trim();
+  const nom = champ(/^\s*(?:client|nom)\s*:\s*(.+)$/im) || titre.replace(/^\s*(soum(ission)?|serv|borne|entr[ée]e)\b\s*[-–:]?\s*/i,'').replace(/\s*[-–]\s*.*$/,'').trim();
+  const travaux = desc.split('\n').filter(l=>!/^\s*(client|nom|t[ée]l(?:[ée]phone)?|courriel|e-?mail|email|adresse)\s*:/i.test(l)).join('\n').replace(/\n{3,}/g,'\n\n').trim();
+  return {nom, tel, courriel, adresse:ev.location||'', titre, travaux};
+}
+function ChoixEvenementSoumission({onChoix, toast}){
+  const [ouvert,setOuvert]=useState(false);
+  const [etat,setEtat]=useState(null);
+  const [q,setQ]=useState('');
+  const ouvrir = async ()=>{ setOuvert(!ouvert); if(etat) return; try{ setEtat(await soumEvenements()); }catch(e){ setEtat({id:null, liste:[], err:apiErrMsg(e)}); } };
+  const liste = etat ? etat.liste.filter(e=>!q || cvNorm([e.summary,e.location,e.description].join(' ')).includes(cvNorm(q))) : [];
+  return <div style={{marginTop:2}}>
+    <button className="btn btn-sm" onClick={ouvrir}>📅 Prendre le client dans l'agenda « Soumission »</button>
+    {ouvert && <div style={{marginTop:6,border:'1px solid var(--border2)',borderRadius:8,padding:6}}>
+      {!etat && <div className="muted" style={{fontSize:12.5}}>Lecture de l'agenda…</div>}
+      {etat && !etat.id && <div style={{fontSize:12.5}}>{etat.err ? 'Erreur : '+etat.err : 'Pas d\'agenda « Soumission » dans Google Agenda. Crée-le (Autres agendas › + › Créer un agenda, nom : Soumission), puis rouvre.'}</div>}
+      {etat && etat.id && <>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (nom, adresse…)" style={{width:'100%',boxSizing:'border-box',marginBottom:4}}/>
+        <div style={{maxHeight:240,overflowY:'auto'}}>
+          {liste.map(e=><div key={e.id} onClick={()=>{ onChoix(e, etat.id); setOuvert(false); }} style={{padding:'5px 4px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}>
+            <b>{e.summary||'(sans titre)'}</b> <span className="muted" style={{fontSize:12}}>· {cvFmtDay(cvDay((e.start&&(e.start.dateTime||e.start.date))||''))}{e.location?' · 📍 '+e.location:''}</span>
+          </div>)}
+          {!liste.length && <div className="muted" style={{fontSize:12.5,padding:4}}>Aucun événement dans l'agenda « Soumission ».</div>}
+        </div></>}
+    </div>}
+  </div>;
+}
+// Soumission acceptée : déplace son événement de l'agenda « Soumission » vers « En Attente ».
+async function soumAccepteeVersEnAttente(cfg, s, toast){
+  try{
+    const calId = await soumCalId(); if(!calId) return;
+    let ev = null;
+    // 1) La soumission faite dans le CRM se souvient de son événement
+    if(s.no){ try{ const r = await lireCache(cfg.memoireJobsSpreadsheetId, "'Documents CRM'!A1:K", true);
+      const l = (r.result.values||[]).find(x=>x[0]===s.no || x[0]==='E-'+String(s.no).replace(/^E-/,''));
+      const doc = l && l[10] ? JSON.parse(l[10]) : null; if(doc && doc.evenement && doc.evenement.calId===calId) ev = doc.evenement; }catch(e){} }
+    // 2) Sinon : l'événement « Soumission » au même courriel ou au même nom
+    if(!ev){ const {liste} = await soumEvenements(); const c = (s.courriel||'').toLowerCase(), n = cvNorm(s.client||'');
+      const ok = liste.filter(e=>{ const t = [e.summary,e.description].join(' '); return (c && t.toLowerCase().includes(c)) || (n.length>4 && cvNorm(t).includes(n)); });
+      if(ok.length===1) ev = {id:ok[0].id, calId, titre:ok[0].summary}; }
+    if(!ev) return;
+    if(!confirm('Soumission acceptée : déplacer « '+(ev.titre||'l\'événement')+' » de l\'agenda Soumission vers En Attente ?')) return;
+    await window.gapi.client.calendar.events.move({calendarId:calId, eventId:ev.id, destination:EN_ATTENTE_CAL});
+    toast && toast('📅 Déplacé dans En Attente');
+  }catch(e){ toast && toast('Agenda : '+apiErrMsg(e)); }
+}
 
 function CalculRapide({C, d, setD, toast}){
   const [type,setType]=useState('');
@@ -4496,6 +4623,10 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
         {champ('nom','Nom du client')}{champ('tel','Téléphone')}{champ('courriel','Courriel')}{champ('titre','Titre du projet (ex. Borne Flo X3)')}
       </div>
       <ChampAdresse value={d.adresse} onChange={a=>maj({adresse:a})} placeholder="Adresse"/>
+      {d.type==='Soumission' && <ChoixEvenementSoumission toast={toast} onChoix={(ev, calId)=>{ const i = infosEvenement(ev);
+        setD(o=>({...o, nom:o.nom||i.nom, tel:o.tel||i.tel, courriel:o.courriel||i.courriel, adresse:o.adresse||i.adresse, titre:o.titre||i.titre, travaux:o.travaux||i.travaux, evenement:{id:ev.id, calId, titre:ev.summary||''}}));
+        toast && toast('Client pris dans l\'agenda'); }}/>}
+      {d.evenement && <div className="muted" style={{fontSize:12}}>📅 Lié à « {d.evenement.titre} » (agenda Soumission) — acceptée, il ira dans En Attente.</div>}
       <textarea value={d.travaux} onChange={e=>maj({travaux:e.target.value})} rows={d.travaux && d.travaux.length>160 ? 5 : 2} placeholder="Travaux…" style={{resize:'vertical',fontFamily:'inherit'}}/>
       {d.dossier && <div><span className="muted" style={{fontSize:12}}>PDF et photos du client :</span><SoumPhotos dossier={d.dossier}/></div>}
     </div>
@@ -4959,9 +5090,11 @@ function cvPO(text){
 function cvParseEvent(e){
   const title = String(e.title||'').trim();
   const toks = title.replace(new RegExp(CV_NOJOB_RE.source,'ig'),' ').replace(/[()]/g,' ').split(/[\s\-–]+/).filter(Boolean);
-  let code='', phase='', initials=[], nameParts=[];
+  let code='', phase='', initials=[], nameParts=[], apresServ=false, servType='';
   toks.forEach(t=>{
     const T=t.toUpperCase();
+    if(apresServ && !servType && SERV_TYPES.includes(T)){ servType=T; return; }   // « SERV PRISE … » : PRISE n'est pas le nom
+    apresServ = T==='SERV' || T==='SERVICE';
     if(!code && T==='PAYNE'){ code = 'PAY'; return; }                 // « Payne Edison » = PAY
     if(!code && CLIENT_CODES[T]){ code = (T==='PY'?'PAY':T); return; }
     const ph = PHASES.find(p=>p[0]===T); if(ph){ if(!phase) phase=ph[1]; return; }
@@ -4975,7 +5108,7 @@ function cvParseEvent(e){
   const crew = new Set(initials.map(i=>CREW_INITIALS[i]));
   if(CREW_COLORS[e.colorId]) crew.add(CREW_COLORS[e.colorId]);
   return {
-    code, phase: phase || (code?'SERV':''), po, name, key: cvNorm(name), crew:[...crew],
+    code, phase: phase || (code?'SERV':''), servType, po, name, key: cvNorm(name), crew:[...crew],
     as: cvSuivi(e.description,'Appel de service'), ot: cvSuivi(e.description,'Ordre de travail'), fac: cvSuivi(e.description,'Facture'),
     attente: e.calendarId===EN_ATTENTE_CAL, id: e.id||'', calId: e.calendarId||'', day: cvDay(e.start), start: e.start||'', end: e.end||'', allDay: !!e.allDay, location: e.location||'', title, attachments: e.attachments||[], lien: e.htmlLink||'', colorId: e.colorId||'', calColor: e.calColor||'', couleurId: couleurIdEvenement(e)
   };
