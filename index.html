@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v114';
+const APP_VERSION = 'v115';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5949,9 +5949,12 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
   const [reglees, marquerRegle] = useVerifsReglees(cfg);
   const av = useMemo(()=>cvAVerifierClient(client, reglees, archives),[client, reglees, archives]);
   const nbTerm = client.jobs.filter(j=>j.status==='done' && !arch(j)).length;
-  const list = client.jobs.filter(j=>(filter==='arch' ? arch(j) : !arch(j)) && (filter==='all' || filter==='arch' || (filter==='flag'?av.ids.has(j.id):j.etatClient===filter)) &&
-    (voirTerm || filter==='done' || filter==='arch' || filter==='flag' || j.status!=='done') &&
-    (!q || cvNorm([j.po,j.name,j.address,...j.factures].join(' ')).includes(cvNorm(q))));
+  // v115 : une recherche cherche dans TOUTES les jobs (terminées et archivées comprises), peu importe le filtre choisi
+  const qn = cvNorm(q.replace(/\bP[O0]\s*(?=\d)/i,'P0'));
+  const trouve = j => { const t = cvNorm([j.po,j.name,j.address,...j.factures].join(' ')); return t.includes(qn) || (/^\d{3,}$/.test(qn) && t.includes('p0'+qn)); };
+  const list = q.trim() ? client.jobs.filter(trouve) :
+    client.jobs.filter(j=>(filter==='arch' ? arch(j) : !arch(j)) && (filter==='all' || filter==='arch' || (filter==='flag'?av.ids.has(j.id):j.etatClient===filter)) &&
+    (voirTerm || filter==='done' || filter==='arch' || filter==='flag' || j.status!=='done'));
   const job = client.jobs.find(j=>j.id===sel) || null;
   function pick(id){ setSel(id); if(!isDesktop) setTimeout(()=>detailRef.current && detailRef.current.scrollIntoView({behavior:'smooth'}),50); }
   const tiles = [
@@ -5978,13 +5981,14 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
           <CaseTerminees v={voirTerm} set={setVoirTerm} n={nbTerm}/>
           <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Nom, PO, ville, facture…" style={{flex:'1 1 150px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
         </div>
+        {q.trim() && <div className="muted" style={{fontSize:12,margin:'-4px 0 8px'}}>Recherche dans toutes les jobs (terminées et archivées comprises) : {list.length} résultat{list.length>1?'s':''}</div>}
         <div style={{overflowX:'auto'}}>
           <table>
             <thead><tr><th>PO</th><th>Job</th><th>Rough</th><th>Finition</th><th>Facturé / PO</th><th>État</th></tr></thead>
             <tbody>
               {list.map(j=><tr key={j.id} onClick={()=>pick(j.id)} style={{cursor:'pointer',background:sel===j.id?'rgba(var(--accent-rgb),0.10)':undefined}}>
                 <td style={{whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>{j.po||'—'}</td>
-                <td><b>{j.name}</b>{av.ids.has(j.id) && <span style={{color:'var(--danger)',fontWeight:800}}> !</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></td>
+                <td><b>{j.name}</b>{av.ids.has(j.id) && <span style={{color:'var(--danger)',fontWeight:800}}> !</span>}{q.trim() && arch(j) && <span className="badge" style={{marginLeft:6,fontSize:10.5}}>archivée</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></td>
                 <td><CvPhaseCell job={j} phase="ROUGH"/></td>
                 <td><CvPhaseCell job={j} phase="FINITION"/></td>
                 <td style={{fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>
