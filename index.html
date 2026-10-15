@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v116';
+const APP_VERSION = 'v117';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3985,7 +3985,7 @@ const codeSansMarque = c => codeNorm(String(c||'').replace(/^[A-Z]{2,4}-(?=\S)/i
 // Tout est dans « La mémoire — Jobs » (privé) : onglet « Produits » (sans prix) et onglet « Prix fournisseurs ».
 // STOCK PUNCH PRO (ce que les gars voient) n'est pas touché par l'import.
 const PROD_ENTETE = ['Code','Description','Catégorie','Sous-catégorie','Unité','Photo','Code fabricant','Notes','Source','Mis à jour'];
-const OFFRE_ENTETE = ['Fournisseur','Code fournisseur','Code fabricant','Marque','Description','Catégorie','Unité','Mon prix','Prix de liste','Stock','Succursale','URL','Photo','Vendu par','Code Saran','Correspondance','Date'];
+const OFFRE_ENTETE = ['Fournisseur','Code fournisseur','Code fabricant','Marque','Description','Catégorie','Unité','Mon prix','Prix de liste','Stock','Succursale','URL','Photo','Vendu par','Code CRM','Correspondance','Date'];
 const CAT_ORDRE = ['FIL','CONDUIT','BOÎTES','DÉCORA','PANNEAUX','CHAUFFAGE','ÉCLAIRAGE','BORNES','CONNEXIONS / MALT','CONTRÔLE','DÉTECTION','QUINCAILLERIE','DIVERS','Stock personnalisé','SERVICES','À CLASSER','ADMINISTRATIF'];
 const FOURN_ORDRE = ['Dubo','Lumen','Gagnon'];
 function catSimple(c){
@@ -4028,19 +4028,19 @@ function csvLire(txt){
 function csvGenre(objs){
   const k = objs[0] ? Object.keys(objs[0]) : [];
   if(k.includes('fournisseur') && k.includes('codefournisseur')) return (k.includes('monprix') || k.includes('prix')) ? 'offres' : (k.includes('urlphoto') ? 'photos' : 'offres');
-  if(k.includes('codecomptable') || k.includes('code')) return 'produits';
+  if(k.includes('codecrm') || k.includes('codecomptable') || k.includes('code')) return 'produits';
   return '';
 }
 const csvVal = (o, ...cles) => { for(const c of cles){ if(o[c]!=null && o[c]!=='') return o[c]; } return ''; };
 function ficheDeCsv(o){
-  const code = csvVal(o,'codecomptable','codesaran','code'); const desc = csvVal(o,'descriptioncomplete','description','descriptionsommaire');
+  const code = csvVal(o,'codecrm','codecomptable','codesaran','code'); const desc = csvVal(o,'descriptioncomplete','description','descriptionsommaire');
   const cat = catSimple(csvVal(o,'categorieproposee','categorie')); const sous = sousCatSimple(csvVal(o,'souscategorieproposee','souscategorie'));
   return {code, desc, cat, sous, unite: csvVal(o,'unite','unitedevente') || uniteDevinee(cat, sous, desc), photo: csvVal(o,'photo','urlphoto'), fab: csvVal(o,'codefabricant'), notes:''};
 }
 function offreDeCsv(o){
   return {f: csvVal(o,'fournisseur'), codeF: csvVal(o,'codefournisseur'), fab: csvVal(o,'codefabricant'), marque: csvVal(o,'marque'), desc: csvVal(o,'description'),
     cat: csvVal(o,'categorie'), unite: csvVal(o,'unitedevente','unite'), prix: csvVal(o,'monprix','prix'), liste: csvVal(o,'prixdeliste'), stock: csvVal(o,'quantiteenstock','stock'),
-    succ: csvVal(o,'succursale'), url: csvVal(o,'urlduproduit','url'), photo: csvVal(o,'urlphoto','photo'), vendu: csvVal(o,'vendupar','format'), saran: csvVal(o,'codesaran','codecomptable'),
+    succ: csvVal(o,'succursale'), url: csvVal(o,'urlduproduit','url'), photo: csvVal(o,'urlphoto','photo'), vendu: csvVal(o,'vendupar','format'), saran: csvVal(o,'codecrm','codesaran','codecomptable'),
     corr: csvVal(o,'correspondance'), date: csvVal(o,'datedelecture','date')};
 }
 const offreLigne = o => [o.f, o.codeF, o.fab, o.marque, o.desc, o.cat, o.unite, o.prix, o.liste, o.stock, o.succ, o.url, o.photo, o.vendu, o.saran, o.corr, o.date];
@@ -4130,7 +4130,7 @@ function useCatalogue(cfg){
     return Object.values(m).sort((a,b)=>b.fois-a.fois || b.total-a.total);
   },[etat.achats, etat.liens, produitDe]);
 
-  // v116 : prix des sites fournisseurs reliés à tes produits — lien confirmé > « Code Saran » de Manus > même code > même code fabricant
+  // v116 : prix des sites fournisseurs reliés à tes produits — lien confirmé > « Code CRM » de Manus > même code > même code fabricant
   const liensOffres = useMemo(()=>{
     const parFab = {}; etat.produits.forEach(p=>{ if(p.fab) parFab[codeNorm(p.fab)] = p; });
     const par = {}, libres = [], deja = new Map();
@@ -4229,8 +4229,9 @@ function useCatalogue(cfg){
     liste.forEach(f=>{ const k = codeNorm(f.code); if(!k) return;
       if(idx[k]!=null){ const r = rows[idx[k]]; while(r.length<10) r.push(''); let ch=false;
         [[1,f.desc],[2,f.cat],[3,f.sous],[4,f.unite],[5,f.photo],[6,f.fab]].forEach(([i,v])=>{ if(v && (!String(r[i]||'').trim() || (i===2 && r[i]==='À CLASSER' && v!=='À CLASSER'))){ r[i]=v; ch=true; } });
+        if(r[8]==='Import'){ r[8]='Logiciel comptable'; ch=true; }
         if(ch){ r[9]=le; maj++; } }
-      else { rows.push(ficheLigne({...f, source:'Import', le})); idx[k]=rows.length-1; nouveaux++; } });
+      else { rows.push(ficheLigne({...f, source:'Logiciel comptable', le})); idx[k]=rows.length-1; nouveaux++; } });
     await ecrireOnglet('Produits', PROD_ENTETE, rows);
     return {nouveaux, maj, total:rows.length};
   };
@@ -4248,7 +4249,7 @@ function useCatalogue(cfg){
     await ecrireOnglet('Prix fournisseurs', OFFRE_ENTETE, rows);
     return {nouveaux, maj, total:rows.length};
   };
-  const ajouterFiche = async (f)=>{ await ensureOnglet('Produits', PROD_ENTETE); await sheetsAppendRow(idJ, 'Produits', ficheLigne({...f, source:'CRM', le:maintenant()})); };
+  const ajouterFiche = async (f)=>{ await ensureOnglet('Produits', PROD_ENTETE); await sheetsAppendRow(idJ, 'Produits', ficheLigne({...f, source:'Saran', le:maintenant()})); };
   // Si un code change : ton prix et tes liens fournisseurs suivent
   const suivreCode = async (ancien, nouveau)=>{
     if(codeNorm(ancien)===codeNorm(nouveau)) return;
@@ -4260,7 +4261,7 @@ function useCatalogue(cfg){
   // Fiche : catégorie, sous-catégorie, photo, notes (et code / description / unité). Un produit PunchPro garde sa ligne dans STOCK PUNCH PRO.
   const modifierFiche = async (p, n)=>{
     const f = p.fiche;
-    const ligne = ficheLigne({code:n.code, desc:n.desc, cat:n.cat, sous:n.sous, unite:n.unite, photo:n.photo, fab:(f&&f.fab)||p.fab||'', notes:n.notes, source:(f&&f.source)||'CRM', le:maintenant()});
+    const ligne = ficheLigne({code:n.code, desc:n.desc, cat:n.cat, sous:n.sous, unite:n.unite, photo:n.photo, fab:(f&&f.fab)||p.fab||'', notes:n.notes, source:(f&&f.source)||'Saran', le:maintenant()});
     if(p.src==='punch' && (n.code!==p.code || n.desc!==p.desc || n.unite!==p.unite)) await modifierProduit(p, {code:n.code, desc:n.desc, unite:n.unite});
     else if(p.src!=='punch') await suivreCode(p.code, n.code);
     if(f && f.row) await sheetsUpdateRow(idJ, 'Produits', f.row, ligne);
@@ -4335,7 +4336,7 @@ function ProduitsView({cfg, toast}){
     </div>
     {nouveau && <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-        <input placeholder="Code (ton code comptable)" value={nouveau.code} onChange={e=>setNouveau({...nouveau,code:e.target.value})} style={{flex:'1 1 120px'}}/>
+        <input placeholder="Code CRM" value={nouveau.code} onChange={e=>setNouveau({...nouveau,code:e.target.value})} style={{flex:'1 1 120px'}}/>
         <input placeholder="Description claire" value={nouveau.desc} onChange={e=>setNouveau({...nouveau,desc:e.target.value})} style={{flex:'3 1 220px'}}/>
         <input placeholder="Unité" value={nouveau.unite} onChange={e=>setNouveau({...nouveau,unite:e.target.value})} style={{flex:'0 1 70px'}}/>
         <select value={nouveau.cat} onChange={e=>setNouveau({...nouveau,cat:e.target.value})} style={{flex:'0 1 150px'}}>{C.toutesCats.map(c=><option key={c}>{c}</option>)}</select>
@@ -4529,7 +4530,7 @@ function ImportProduits({C, toast, onFini}){
   return <div className="card" style={{marginBottom:10,display:'grid',gap:8}}>
     <b>Importer des fichiers CSV</b>
     <div className="muted" style={{fontSize:12}}>• <b>Ta liste de produits</b> (logiciel comptable) : colonnes Code, Description, Catégorie… → onglet « Produits » de La mémoire.<br/>
-      • <b>Prix des fournisseurs</b> (Manus) : Fournisseur, Code fournisseur, Code fabricant, Mon prix, Quantité en stock, URL photo, Code Saran… → onglet « Prix fournisseurs ».<br/>
+      • <b>Prix des fournisseurs</b> (Manus) : Fournisseur, Code fournisseur, Code fabricant, Mon prix, Quantité en stock, URL photo, Code CRM… → onglet « Prix fournisseurs ».<br/>• Le <b>Code CRM</b> relie chaque prix à ton produit. Source « Saran » = article créé à l'interne (SA, SO…).<br/>
       Rien n'est écrit dans STOCK PUNCH PRO. Ce que tu as déjà classé ou corrigé n'est jamais remplacé.</div>
     <input type="file" accept=".csv,text/csv" multiple onChange={e=>lireFichiers(e.target.files)}/>
     {fichiers.map(x=><div key={x.nom} style={{fontSize:13}}>📄 <b>{x.nom}</b> — {resume(x)}</div>)}
