@@ -145,7 +145,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v117';
+const APP_VERSION = 'v118';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5321,6 +5321,48 @@ let BC_PREFILL = null;
 function bcRefTitre(e){ return String(e.title||'').split(/\s+/).filter(t=>!(CREW_INITIALS[t] && t===t.toUpperCase())).join(' ').trim().toUpperCase(); }
 function bcCourriel(f){ try{ const m = JSON.parse(localStorage.getItem('bc_courriels')||'{}'); return m[f] || BC_COURRIELS[f] || ''; }catch(e){ return BC_COURRIELS[f]||''; } }
 function bcRetenirCourriel(f, c){ try{ const m = JSON.parse(localStorage.getItem('bc_courriels')||'{}'); m[f]=c; localStorage.setItem('bc_courriels', JSON.stringify(m)); }catch(e){} }
+// v118 : contacts des fournisseurs (représentant, courriel pour les commandes et demandes de prix) — La mémoire — Jobs › « Contacts fournisseurs » (privé, pas dans le code)
+const CF_ENTETE = ['Fournisseur','Nom','Rôle','Courriel commandes','Cellulaire','Succursale','Adresse de livraison','Note','Mis à jour'];
+function useContactsFournisseurs(cfg){
+  const [etat,setEtat]=useState({lu:false, map:{}});
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async(force)=>{
+    try{ const r = await lireCache(id, "'Contacts fournisseurs'!A1:I", force); const map = {};
+      (r.result.values||[]).slice(1).forEach((x,i)=>{ if(x[0]) map[x[0]] = {row:i+2, f:x[0], nom:x[1]||'', role:x[2]||'', courriel:x[3]||'', cell:x[4]||'', succ:x[5]||'', adresse:x[6]||'', note:x[7]||''}; });
+      setEtat({lu:true, map}); }catch(e){ setEtat({lu:true, map:{}}); }
+  },[id]);
+  useEffect(()=>{ if(id) lire(); },[lire]);
+  const enregistrer = async (c)=>{
+    const ligne = [c.f, c.nom, c.role, c.courriel, c.cell, c.succ, c.adresse, c.note, new Date().toLocaleString('fr-CA')];
+    const ex = etat.map[c.f];
+    if(ex && ex.row) await sheetsUpdateRow(id, qSheet('Contacts fournisseurs'), ex.row, ligne);
+    else {
+      const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:id, fields:'sheets.properties.title'});
+      if(!(meta.result.sheets||[]).some(x=>x.properties.title==='Contacts fournisseurs')){
+        await window.gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId:id, resource:{requests:[{addSheet:{properties:{title:'Contacts fournisseurs'}}}]}});
+        await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:qSheet('Contacts fournisseurs')+'!A1', valueInputOption:'RAW', resource:{values:[CF_ENTETE]}});
+      }
+      await sheetsAppendRow(id, qSheet('Contacts fournisseurs'), ligne);
+    }
+    await lire(true);
+  };
+  return {...etat, lire, enregistrer};
+}
+function ContactFournisseur({f, K, toast, onCourriel}){
+  const c = K.map[f];
+  const [ed,setEd]=useState(null);
+  const champs = [['nom','Nom'],['role','Rôle (ex. représentant)'],['courriel','Courriel pour commandes et prix'],['cell','Cellulaire'],['succ','Succursale (tél.)'],['adresse','Adresse de livraison'],['note','Note']];
+  if(ed) return <div style={{display:'grid',gap:5,marginTop:6,padding:8,border:'1px solid var(--border2)',borderRadius:8}}>
+    <b style={{fontSize:12.5}}>Contact {f}</b>
+    {champs.map(([k,l])=><input key={k} value={ed[k]||''} onChange={e=>setEd({...ed,[k]:e.target.value})} placeholder={l}/>)}
+    <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" onClick={async()=>{ try{ await K.enregistrer({...ed, f}); setEd(null); if(ed.courriel) onCourriel(ed.courriel); toast&&toast('Contact '+f+' enregistré'); }catch(e){ toast&&toast('Erreur : '+apiErrMsg(e)); } }}>Enregistrer</button>
+      <button className="btn btn-sm" onClick={()=>setEd(null)}>Annuler</button></div>
+  </div>;
+  return <div className="muted" style={{fontSize:12,marginTop:5,display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+    {c ? <>👤 <b style={{color:'var(--text)'}}>{c.nom}</b>{c.role?' · '+c.role:''}{c.cell?<> · <a href={'tel:'+c.cell.replace(/[^\d+]/g,'')}>{c.cell}</a></>:''}{c.succ?' · succ. '+c.succ:''}{c.adresse?' · livraison : '+c.adresse:''}</> : <span>Aucun contact enregistré pour {f}.</span>}
+    <button className="btn btn-sm" style={{padding:'1px 8px',fontSize:11}} onClick={()=>setEd(c ? {...c} : {f})}>✏️ Contact</button>
+  </div>;
+}
 
 // ── Commandes passées ailleurs : confirmations Lumen + tes courriels « Commande … » à Dubo ──────────────
 // Onglet « Commandes fournisseurs » du registre des jobs, rempli par commandes.gs (La mémoire), colonnes A à J.
@@ -5441,7 +5483,10 @@ function CommandesView({cfg, toast, refreshKey}){
   const [commandes, enregistrerCommande] = useCommandes(cfg);
   const C = useCatalogue(cfg);
   const B = useBonsCommande(cfg);
+  const K = useContactsFournisseurs(cfg);
   const [bc,setBc]=useState(bcVide());
+  const courrielDe = f => (K.map[f] && K.map[f].courriel) || bcCourriel(f);
+  useEffect(()=>{ if(K.lu && K.map[bc.fournisseur] && K.map[bc.fournisseur].courriel && bc.courriel===bcCourriel(bc.fournisseur)) setBc(x=>({...x, courriel:K.map[x.fournisseur].courriel})); },[K.lu, K.map]);
   const [q,setQ]=useState('');
   const [cat,setCat]=useState('');
   const [occupe,setOccupe]=useState(false);
@@ -5471,7 +5516,7 @@ function CommandesView({cfg, toast, refreshKey}){
     return {...x, lignes};
   });
   // Code du fournisseur choisi (ex. LEV-T5325-W chez Dubo) quand on l'a déjà acheté là
-  const codeFourn = code => { const a = C.coutsDe(code).find(c=>c.fournisseur===bc.fournisseur); return a ? a.code : ''; };
+  const codeFourn = code => { const o = C.offresDe(code).find(x=>cvNorm(x.f)===cvNorm(bc.fournisseur)); if(o) return o.codeF; const a = C.coutsDe(code).find(c=>c.fournisseur===bc.fournisseur); return a ? a.code : ''; };
   const choisies = bc.lignes.filter(l=>cvNum(l.qte));
   const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat) && (!q || cvNorm(p.code+' '+p.desc).includes(cvNorm(q))));
   const texteArticles = () => [...choisies.map(l=>{ const cf = codeFourn(l.code); return '- '+l.qte+' '+(l.unite&&l.unite!=='un'?l.unite+' ':'')+'× '+l.code+(cf && codeNorm(cf)!==codeNorm(l.code)?' ('+cf+')':'')+' — '+l.desc; }),
@@ -5509,9 +5554,10 @@ function CommandesView({cfg, toast, refreshKey}){
     <div className="card" style={{marginBottom:10}}>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
         <b style={{fontSize:13}}>Fournisseur :</b>
-        {['Dubo','Lumen'].map(f=><button key={f} className={'btn btn-sm'+(bc.fournisseur===f?' btn-p':'')} onClick={()=>maj({fournisseur:f, courriel:bcCourriel(f)})}>{f}</button>)}
+        {['Dubo','Lumen'].map(f=><button key={f} className={'btn btn-sm'+(bc.fournisseur===f?' btn-p':'')} onClick={()=>maj({fournisseur:f, courriel:courrielDe(f)})}>{f}</button>)}
         <input value={bc.courriel} onChange={e=>maj({courriel:e.target.value})} placeholder="courriel du comptoir" style={{flex:'1 1 200px'}}/>
       </div>
+      <ContactFournisseur f={bc.fournisseur} K={K} toast={toast} onCourriel={c=>maj({courriel:c})}/>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:6}}>
         <label style={{fontSize:12}}>Référence (revient sur la facture)<input value={bc.ref} onChange={e=>maj({ref:e.target.value.toUpperCase()})} placeholder="ex. CRS FINITION CURPAS P03056" style={{width:'100%',boxSizing:'border-box'}}/></label>
         <label style={{fontSize:12}}>Qui va chercher<select value={bc.employe} onChange={e=>maj({employe:e.target.value})} style={{width:'100%'}}><option value="">—</option>{employes.map(n=><option key={n}>{n}</option>)}</select></label>
