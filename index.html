@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v119';
+const APP_VERSION = 'v120';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3985,7 +3985,7 @@ const codeSansMarque = c => codeNorm(String(c||'').replace(/^[A-Z]{2,4}-(?=\S)/i
 // ===== v116 : PRODUITS — fiches (ta liste du logiciel comptable) + prix des sites fournisseurs (Manus) =====
 // Tout est dans « La mémoire — Jobs » (privé) : onglet « Produits » (sans prix) et onglet « Prix fournisseurs ».
 // STOCK PUNCH PRO (ce que les gars voient) n'est pas touché par l'import.
-const PROD_ENTETE = ['Code','Description','Catégorie','Sous-catégorie','Unité','Photo','Code fabricant','Notes','Source','Mis à jour'];
+const PROD_ENTETE = ['Code','Description','Catégorie','Sous-catégorie','Unité','Photo','Code fabricant','Notes','Source','Mis à jour','Code PunchPro'];
 const OFFRE_ENTETE = ['Fournisseur','Code fournisseur','Code fabricant','Marque','Description','Catégorie','Unité','Mon prix','Prix de liste','Stock','Succursale','URL','Photo','Vendu par','Code CRM','Correspondance','Date'];
 const CAT_ORDRE = ['FIL','CONDUIT','BOÎTES','DÉCORA','PANNEAUX','CHAUFFAGE','ÉCLAIRAGE','BORNES','CONNEXIONS / MALT','CONTRÔLE','DÉTECTION','QUINCAILLERIE','DIVERS','Stock personnalisé','SERVICES','À CLASSER','ADMINISTRATIF'];
 const FOURN_ORDRE = ['Dubo','Lumen','Gagnon'];
@@ -4045,7 +4045,7 @@ function offreDeCsv(o){
     corr: csvVal(o,'correspondance'), date: csvVal(o,'datedelecture','date')};
 }
 const offreLigne = o => [o.f, o.codeF, o.fab, o.marque, o.desc, o.cat, o.unite, o.prix, o.liste, o.stock, o.succ, o.url, o.photo, o.vendu, o.saran, o.corr, o.date];
-const ficheLigne = f => [f.code, f.desc, f.cat, f.sous, f.unite, f.photo, f.fab, f.notes, f.source||'', f.le||''];
+const ficheLigne = f => [f.code, f.desc, f.cat, f.sous, f.unite, f.photo, f.fab, f.notes, f.source||'', f.le||'', f.alias||''];
 const uniteNorm = u => { const x = cvNorm(u); return /^(un|unite|ch|chaque|ea|unit|pc|piece)s?$/.test(x) ? 'un' : /^(pi|pied|pieds|ft)$/.test(x) ? 'pi' : /^(m|metre|metres|mtr)$/.test(x) ? 'm' : x; };
 // Photo d'un produit : adresse web (site fournisseur) ou fichier Drive (photo prise avec le CRM)
 function ProdPhoto({src, taille}){
@@ -4070,12 +4070,20 @@ function useCatalogue(cfg){
       produits.forEach(p=>{ p.src='punch'; });
       // v116 : fiches produits (ta liste du logiciel comptable, classée) et prix des sites fournisseurs — La mémoire — Jobs
       const parK = {}; produits.forEach(p=>{ parK[codeNorm(p.code)] = p; });
-      try{ const fp = await lireCache(idJ, 'Produits!A1:J', force);
+      const fichesLues = [];
+      try{ const fp = await lireCache(idJ, 'Produits!A1:K', force);
         (fp.result.values||[]).slice(1).forEach((r,i)=>{ const code = String(r[0]||'').trim(); const k = codeNorm(code); if(!k) return;
-          const f = {row:i+2, code, desc:r[1]||'', cat:r[2]||'À CLASSER', sous:r[3]||'', unite:r[4]||'', photo:r[5]||'', fab:r[6]||'', notes:r[7]||'', source:r[8]||'', le:r[9]||''};
+          const f = {row:i+2, code, desc:r[1]||'', cat:r[2]||'À CLASSER', sous:r[3]||'', unite:r[4]||'', photo:r[5]||'', fab:r[6]||'', notes:r[7]||'', source:r[8]||'', le:r[9]||'', alias:String(r[10]||'').trim()};
+          fichesLues.push(f);
           const x = parK[k];
           if(x){ if(!x.fiche){ x.fiche=f; x.photo=f.photo; x.sous=f.sous; x.fab=f.fab; } }
           else { const n = {cat:f.cat, sous:f.sous, code, desc:f.desc, unite:f.unite||'un', notes:f.notes, photo:f.photo, fab:f.fab, src:'fiche', fiche:f}; produits.push(n); parK[k]=n; } }); }catch(e){}
+      // v120 : même produit, deux codes (PunchPro « NMD2C14 » = logiciel « NMD2C14X150 ») → un seul produit, au code du logiciel.
+      // Le produit de PunchPro garde sa ligne dans STOCK PUNCH PRO (les gars ne voient aucun changement).
+      fichesLues.forEach(f=>{ if(!f.alias) return; const n = parK[codeNorm(f.code)], pp = parK[codeNorm(f.alias)];
+        if(!n || !pp || n===pp || pp.src!=='punch' || n.src==='punch') return;
+        n.alias = pp.code; n.punch = {code:pp.code, cat:pp.cat, row:pp.row, desc:pp.desc};
+        const i = produits.indexOf(pp); if(i>=0) produits.splice(i,1); parK[codeNorm(pp.code)] = n; });
       let offres = [];
       try{ const op = await lireCache(idJ, "'Prix fournisseurs'!A1:Q", force);
         offres = (op.result.values||[]).slice(1).map((r,i)=>({row:i+2, f:r[0]||'', codeF:r[1]||'', fab:r[2]||'', marque:r[3]||'', desc:r[4]||'', cat:r[5]||'', unite:r[6]||'', prix:cvNum(r[7]),
@@ -4107,7 +4115,8 @@ function useCatalogue(cfg){
   useEffect(()=>{ lire(); },[lire]);
 
   // Produit du catalogue pour un code fournisseur : lien confirmé, sinon code identique (sans la marque), sinon rien (« à confirmer »).
-  const parCode = useMemo(()=>{ const m={}; etat.produits.forEach(p=>{ m[codeNorm(p.code)] = p; }); return m; },[etat.produits]);
+  const parCode = useMemo(()=>{ const m={}; etat.produits.forEach(p=>{ m[codeNorm(p.code)] = p; }); etat.produits.forEach(p=>{ if(p.alias && !m[codeNorm(p.alias)]) m[codeNorm(p.alias)] = p; }); return m; },[etat.produits]);
+  const codeMaitre = code => { const p = parCode[codeNorm(code)]; return p ? p.code : code; };   // v120 : le code PunchPro mène au même produit
   const produitDe = useCallback(codeF => {
     const l = etat.liens[codeNorm(codeF)];
     if(l) return l.produit ? (parCode[codeNorm(l.produit)] || {code:l.produit, desc:'', cat:''}) : null;   // lien vide = ignoré
@@ -4148,7 +4157,7 @@ function useCatalogue(cfg){
     Object.values(par).forEach(l=>l.sort((a,b)=>(a.prix>0?a.prix:1e9)-(b.prix>0?b.prix:1e9)));
     return {par, libres};
   },[etat.offres, etat.liens, etat.produits, parCode]);
-  const offresDe = code => liensOffres.par[codeNorm(code)] || [];
+  const offresDe = code => liensOffres.par[codeNorm(codeMaitre(code))] || [];
   const meilleureOffre = code => offresDe(code).find(o=>o.prix>0) || null;
   const fournisseurs = useMemo(()=>[...new Set(etat.offres.map(o=>o.f))].sort((a,b)=>{ const i=x=>{ const k=FOURN_ORDRE.indexOf(x); return k<0?9:k; }; return i(a)-i(b) || a.localeCompare(b); }),[etat.offres]);
   const comparaison = useMemo(()=>{
@@ -4161,14 +4170,16 @@ function useCatalogue(cfg){
       out.push({p, best, pire, unite:g[0], ecart:arrondi(pire.prix-best.prix), pct: best.prix>0 ? (pire.prix-best.prix)/best.prix*100 : 0}); });
     return out.sort((a,b)=>b.pct-a.pct);
   },[etat.produits, liensOffres]);
-  const coutsDe = code => Object.values(achatsParProduit[codeNorm(code)] || {}).sort((a,b)=>b.date.localeCompare(a.date));
+  const coutsDe = code => Object.values(achatsParProduit[codeNorm(codeMaitre(code))] || {}).sort((a,b)=>b.date.localeCompare(a.date));
   // Coût : le meilleur prix de compte lu sur les sites fournisseurs, sinon ton dernier achat
   const coutDe = code => { const o = meilleureOffre(code); if(o) return {prix:o.prix, fournisseur:o.f, date:o.date, site:true};
     const c = coutsDe(code)[0]; return c ? {prix:c.cout, fournisseur:c.fournisseur, date:c.date} : null; };
-  const factureDe = code => { const k=codeNorm(code); return k ? (etat.facture[k] || null) : null; };
+  const codesDe = code => { const p = parCode[codeNorm(code)]; return [...new Set([codeNorm(code), ...(p ? [codeNorm(p.code), codeNorm(p.alias||'')] : [])].filter(Boolean))]; };
+  const factureDe = code => { let best=null; codesDe(code).forEach(k=>{ const f = etat.facture[k]; if(f && (!best || f.n>best.n)) best=f; }); return best; };
+  const monPrix = code => { for(const k of codesDe(code)){ const x = etat.prix[k]; if(x && x.prix!=null) return x; } return null; };
   const suggereDe = code => { const c = coutDe(code); return c ? prixPolitique(c.prix, etat.profil) : null; };
   // Prix utilisé : mon prix (écrit à la main) > politique appliquée au dernier coût > dernier prix facturé
-  const prixDe = code => { const k=codeNorm(code); const p = etat.prix[k]; if(p && p.prix!=null) return p.prix; const s = suggereDe(code); if(s!=null) return s; const f = factureDe(code); return f ? f.prix : null; };
+  const prixDe = code => { const p = monPrix(code); if(p) return p.prix; const s = suggereDe(code); if(s!=null) return s; const f = factureDe(code); return f ? f.prix : null; };
 
   const ecrirePrix = async (code, valeur, ligneEx)=>{
     const le = new Date().toLocaleString('fr-CA');
@@ -4225,10 +4236,10 @@ function useCatalogue(cfg){
   const maintenant = () => new Date().toLocaleString('fr-CA');
   // Ta liste de produits : ajoute les nouveaux codes, remplit seulement les cases vides des produits déjà là.
   const importerProduits = async (liste)=>{
-    const rows = await lireOnglet('Produits', 'A1:J'); const idx = {}; rows.forEach((r,i)=>{ const k=codeNorm(r[0]); if(k && idx[k]==null) idx[k]=i; });
+    const rows = await lireOnglet('Produits', 'A1:K'); const idx = {}; rows.forEach((r,i)=>{ const k=codeNorm(r[0]); if(k && idx[k]==null) idx[k]=i; });
     let nouveaux=0, maj=0; const le = maintenant();
     liste.forEach(f=>{ const k = codeNorm(f.code); if(!k) return;
-      if(idx[k]!=null){ const r = rows[idx[k]]; while(r.length<10) r.push(''); let ch=false;
+      if(idx[k]!=null){ const r = rows[idx[k]]; while(r.length<11) r.push(''); let ch=false;
         [[1,f.desc],[2,f.cat],[3,f.sous],[4,f.unite],[5,f.photo],[6,f.fab]].forEach(([i,v])=>{ if(v && (!String(r[i]||'').trim() || (i===2 && r[i]==='À CLASSER' && v!=='À CLASSER'))){ r[i]=v; ch=true; } });
         if(r[8]==='Import'){ r[8]='Logiciel comptable'; ch=true; }
         if(ch){ r[9]=le; maj++; } }
@@ -4262,14 +4273,14 @@ function useCatalogue(cfg){
   // Fiche : catégorie, sous-catégorie, photo, notes (et code / description / unité). Un produit PunchPro garde sa ligne dans STOCK PUNCH PRO.
   const modifierFiche = async (p, n)=>{
     const f = p.fiche;
-    const ligne = ficheLigne({code:n.code, desc:n.desc, cat:n.cat, sous:n.sous, unite:n.unite, photo:n.photo, fab:(f&&f.fab)||p.fab||'', notes:n.notes, source:(f&&f.source)||'Saran', le:maintenant()});
+    const ligne = ficheLigne({code:n.code, desc:n.desc, cat:n.cat, sous:n.sous, unite:n.unite, photo:n.photo, fab:(f&&f.fab)||p.fab||'', notes:n.notes, source:(f&&f.source)||'Saran', le:maintenant(), alias:n.alias!==undefined ? n.alias : ((f&&f.alias)||'')});
     if(p.src==='punch' && (n.code!==p.code || n.desc!==p.desc || n.unite!==p.unite)) await modifierProduit(p, {code:n.code, desc:n.desc, unite:n.unite});
     else if(p.src!=='punch') await suivreCode(p.code, n.code);
     if(f && f.row) await sheetsUpdateRow(idJ, 'Produits', f.row, ligne);
     else { await ensureOnglet('Produits', PROD_ENTETE); await sheetsAppendRow(idJ, 'Produits', ligne); }
   };
   return {...etat, lire, coutDe, coutsDe, factureDe, suggereDe, prixDe, produitDe, aConfirmer, majPrix, majProfil, ajouterProduit, lier, modifierProduit,
-    offresDe, meilleureOffre, offresLibres:liensOffres.libres, fournisseurs, comparaison, importerProduits, importerOffres, ajouterFiche, modifierFiche};
+    offresDe, meilleureOffre, monPrix, codeMaitre, offresLibres:liensOffres.libres, fournisseurs, comparaison, importerProduits, importerOffres, ajouterFiche, modifierFiche};
 }
 
 // Choisir un produit du catalogue (pour lier un code fournisseur)
@@ -4295,7 +4306,7 @@ function ProduitsView({cfg, toast}){
   const [importer,setImporter]=useState(false);
   const err = e => toast && toast('Erreur : '+apiErrMsg(e));
   const fourn = C.fournisseurs;
-  const cherche = p => !q || cvNorm(p.code+' '+p.desc+' '+(p.notes||'')+' '+(p.fab||'')+' '+(p.sous||'')+' '+(C.offresDe(p.code).map(o=>o.codeF+' '+o.desc).join(' '))).includes(cvNorm(q));
+  const cherche = p => !q || cvNorm(p.code+' '+(p.alias||'')+' '+p.desc+' '+(p.notes||'')+' '+(p.fab||'')+' '+(p.sous||'')+' '+(C.offresDe(p.code).map(o=>o.codeF+' '+o.desc).join(' '))).includes(cvNorm(q));
   const liste = C.produits.filter(p=>(q || ((!cat || p.cat===cat) && (!sous || (p.sous||'')===sous))) && cherche(p));
   const sousCats = cat ? [...new Set(C.produits.filter(p=>p.cat===cat && p.sous).map(p=>p.sous))].sort() : [];
   const aConf = C.aConfirmer.filter(a=>!q || cvNorm(a.code+' '+a.desc).includes(cvNorm(q)));
@@ -4366,11 +4377,11 @@ function ProduitsView({cfg, toast}){
         <table>
           <thead><tr><th></th><th>Code</th><th>Description</th>{fourn.map(f=><th key={f}>{f}</th>)}<th style={{textAlign:'right'}}>Suggéré</th><th style={{textAlign:'right'}}>Mon prix</th><th style={{textAlign:'right'}}>Dernier facturé</th><th></th></tr></thead>
           <tbody>
-            {liste.slice(0,lim).map(p=>{ const k=p.cat+'|'+p.code, f=C.factureDe(p.code), sug=C.suggereDe(p.code), mp=C.prix[codeNorm(p.code)], couts=C.coutsDe(p.code);
+            {liste.slice(0,lim).map(p=>{ const k=p.cat+'|'+p.code, f=C.factureDe(p.code), sug=C.suggereDe(p.code), mp=C.monPrix(p.code), couts=C.coutsDe(p.code);
               if(edit && edit.k===k) return <tr key={k}><td colSpan={7+fourn.length}><FicheEdit p={p} edit={edit} setEdit={setEdit} C={C} toast={toast} err={err} photoDe={photoDe}/></td></tr>;
               return <tr key={k}>
                 <td style={{width:46}}><ProdPhoto src={photoDe(p)}/></td>
-                <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}{(!cat || q) && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>{p.cat}{p.sous ? ' · '+p.sous : ''}</div>}</td>
+                <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}{p.alias && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>PunchPro : {p.alias}</div>}{(!cat || q) && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>{p.cat}{p.sous ? ' · '+p.sous : ''}</div>}</td>
                 <td>{p.desc}<span className="muted" style={{fontSize:11}}> · {p.unite}{p.src==='punch' ? ' · PunchPro' : ''}</span>
                   {couts.length>0 && <div className="muted" style={{fontSize:10.5}}>Acheté : {couts.map(c=>c.fournisseur+' '+cvMoney(c.cout)+' ('+cvFmtDay(c.date)+')').join(' · ')}</div>}</td>
                 {fourn.map(fr=><td key={fr} style={{fontSize:12.5}}>{prixCell(p, fr)}</td>)}
@@ -4379,7 +4390,7 @@ function ProduitsView({cfg, toast}){
                   onBlur={async e=>{ const v=e.target.value.trim().replace(',','.'); if(v===String(mp && mp.prix!=null ? mp.prix : '')) return; try{ await C.majPrix(p.code, v); toast&&toast(v ? 'Prix enregistré : '+p.code : 'Prix suggéré utilisé : '+p.code); }catch(er){ err(er); } }}
                   style={{width:78,textAlign:'right',padding:'3px 6px'}}/></td>
                 <td style={{textAlign:'right'}} className="muted">{f ? cvMoney(f.prix) : '—'}</td>
-                <td><button className="btn btn-sm" title="Modifier la fiche (catégorie, photo, description…)" onClick={()=>setEdit({k, code:p.code, desc:p.desc, unite:p.unite, cat:p.cat, sous:p.sous||'', photo:p.photo||'', notes:p.notes||''})}>✏️</button></td>
+                <td><button className="btn btn-sm" title="Modifier la fiche (catégorie, photo, description…)" onClick={()=>setEdit({k, code:p.code, desc:p.desc, unite:p.unite, cat:p.cat, sous:p.sous||'', photo:p.photo||'', notes:p.notes||'', alias:p.alias||''})}>✏️</button></td>
               </tr>; })}
             {C.lu && !liste.length && <tr><td colSpan={7+fourn.length} className="muted" style={{padding:16}}>Aucun produit.</td></tr>}
           </tbody>
@@ -4485,6 +4496,11 @@ function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
           {occupe && <span className="muted" style={{fontSize:12}}>{occupe}</span>}
         </div>
         <input value={edit.notes} onChange={e=>setEdit({...edit,notes:e.target.value})} placeholder="Notes"/>
+        {p.src!=='punch' && <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+          <span className="muted" style={{fontSize:12}}>Même produit dans PunchPro :</span>
+          <input value={edit.alias||''} onChange={e=>setEdit({...edit,alias:e.target.value})} list="prod-punch" placeholder="code PunchPro (ex. NMD2C14)" style={{flex:'1 1 160px'}}/>
+          <datalist id="prod-punch">{C.produits.filter(x=>x.src==='punch').map(x=><option key={x.code} value={x.code}>{x.desc}</option>)}</datalist>
+        </div>}
       </div>
     </div>
     {offres.length>0 && <div style={{fontSize:12.5}}>
