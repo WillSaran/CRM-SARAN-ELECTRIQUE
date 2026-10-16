@@ -53,7 +53,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .nav-item.active{background:rgba(var(--accent-rgb),0.13);color:var(--accent)}
 .nav-item:hover{background:var(--bg3)}
 .main{flex:1;padding:20px;max-width:1200px}
-@media(max-width:760px){.nav{position:fixed;bottom:0;left:0;right:0;top:auto;width:100%;display:flex;flex-direction:row;justify-content:space-around;border-right:none;border-top:1px solid var(--border);padding:6px;z-index:39}.nav-item{flex-direction:column;font-size:10.5px;gap:3px;padding:6px}.main{padding-bottom:80px}.remind-cols{grid-template-columns:1fr !important}}
+@media(max-width:899px){.nav{position:fixed;top:0;bottom:0;left:0;width:min(250px,80vw);transform:translateX(-102%);transition:transform .2s ease;overflow-y:auto;-webkit-overflow-scrolling:touch;z-index:61;padding:12px 10px 40px;border-right:1px solid var(--border);box-shadow:4px 0 18px rgba(0,0,0,.35)}.nav.ouvert{transform:none}.nav-fond{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60}.nav-item{font-size:15px;padding:12px}}
+@media(max-width:760px){.main{padding:14px 12px}.remind-cols{grid-template-columns:1fr !important}}
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px}
 .grid{display:grid;gap:12px}
 .badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:700}
@@ -145,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v118';
+const APP_VERSION = 'v119';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6945,6 +6946,7 @@ function App(){
   const effectiveCfg = {...cfg, calendarIds: configuredCals.filter(c=>activeCals.has(c)).join(',')};
   useTheme();
   const isDesktop = useIsDesktop();
+  const [menuMobile,setMenuMobile]=useState(false);   // v119 : menu à gauche, rétractable, sur téléphone
   function toggleNav(){ const v=!navCollapsed; setNavCollapsedState(v); try{ localStorage.setItem('crm_nav_collapsed', v?'1':'0'); }catch(e){} }
 
   async function handleRefresh(){
@@ -7012,7 +7014,7 @@ function App(){
 
   return <div>
     <div className="topbar">
-      <div className="logo"><span className="dot"></span>SoumissionPro <span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div>
+      <div style={{display:'flex',alignItems:'center',gap:10}}>{!isDesktop && <button className="btn btn-sm" onClick={()=>setMenuMobile(true)} aria-label="Menu" style={{fontSize:18,padding:'4px 11px'}}>☰</button>}<div className="logo"><span className="dot"></span>SoumissionPro <span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div></div>
       <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
         {configuredCals.length>1 && <div style={{display:'flex',gap:10,alignItems:'center'}}>
           {configuredCals.map(email=>
@@ -7034,8 +7036,10 @@ function App(){
       <button className="btn btn-sm btn-p" onClick={reconnecter}>Reconnecter</button>
     </div>}
     <div className="shell">
-      <div className="nav" style={(isDesktop && navCollapsed) ? {width:0,minWidth:0,padding:0,overflow:'hidden',border:'none'} : null}>
-        {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id?' active':'')} onClick={()=>{ if(nav===n.id) setNavKey(k=>k+1); setNav(n.id); }}>{n.label}</div>)}
+      {!isDesktop && menuMobile && <div className="nav-fond" onClick={()=>setMenuMobile(false)}/>}
+      <div className={'nav'+(!isDesktop && menuMobile ? ' ouvert' : '')} style={(isDesktop && navCollapsed) ? {width:0,minWidth:0,padding:0,overflow:'hidden',border:'none'} : null}>
+        {!isDesktop && <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'2px 4px 10px'}}><b className="fh" style={{fontSize:15}}>Menu</b><button className="btn btn-sm" onClick={()=>setMenuMobile(false)} aria-label="Fermer">✕</button></div>}
+        {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id?' active':'')} onClick={()=>{ if(nav===n.id) setNavKey(k=>k+1); setNav(n.id); setMenuMobile(false); window.scrollTo(0,0); }}>{n.label}</div>)}
       </div>
       <div className="main" style={(nav==='agenda' && isDesktop) ? {maxWidth:'none',width:'100%'} : null}>
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
