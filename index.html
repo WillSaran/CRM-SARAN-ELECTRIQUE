@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v131';
+const APP_VERSION = 'v132';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4105,7 +4105,7 @@ function sigFil(code, desc){
     else for(const src of [D, C]){ for(const f of essais){ const r=f(src); if(r){ g=r[0]; c=r[1]; break; } } if(g) break; }
   }
   if(!g || !c) return null;
-  g = {'00':'2/0','000':'3/0','0000':'4/0'}[g] || g;   // « deux fois le zéro » = 2/0
+  g = {'0':'1/0','00':'2/0','000':'3/0','0000':'4/0'}[g] || g;   // « deux fois le zéro » = 2/0
   let coul='', cc=''; for(const [re,n,k] of FIL_COUL){ if(re.test(C) || re.test(D)){ coul=n; cc=k; break; } }
   if(!['NMD','RW90','T90','CAT6','CAT6A'].includes(type)){ coul=''; cc=''; }              // NMWU, ACWU, AC90, TECK… : la gaine ne change rien
   if(type==='NMD' && FIL_NMD_NORMAL[g]===coul) coul='';                                   // NMD 14 blanc, 12 jaune, 10 orange, 8-6 noir = normal
@@ -4113,9 +4113,11 @@ function sigFil(code, desc){
   return {type, g, c, coul, cc, alu, base:[type,c,g,alu?'AL':''].join('|'), cle:[type,c,g,alu?'AL':'',coul].join('|')};
 }
 // Ton nom de code : NMD2C14, NMWU2C12, AC902C14, ACWU3C2, TECK3C4, RW90-2WHTALU, RW90-2/0BLK, T90-6BLK… (+ couleur si le même fil existe en d'autres couleurs, + ALU)
+const calibreCode = g => ({'1/0':'0','2/0':'00','3/0':'000','4/0':'0000'})[g] || g;   // 1/0 = 0, 2/0 = 00… (jamais de « / » dans un code)
 function codeFil(s, couleurUtile){
   if(s.type==='CAT6' || s.type==='CAT6A') return '';
-  const base = FIL_UN_COND.includes(s.type) ? s.type+'-'+s.g : s.type+s.c+'C'+s.g;   // RW90-2…, T90-6…
+  const g = calibreCode(s.g);
+  const base = FIL_UN_COND.includes(s.type) ? s.type+'-'+g : s.type+s.c+'C'+g;   // RW90-2…, T90-6…
   return base + ((couleurUtile || FIL_UN_COND.includes(s.type)) && s.cc ? s.cc : '') + (s.alu && s.type!=='ACWU' ? 'ALU' : '');
 }
 // v125 : format de commande d'un prix fournisseur — « rouleau 150 m », « au mètre », « à la coupe »
@@ -4808,6 +4810,8 @@ function ProduitsView({cfg, toast}){
 function RelierVue({C, toast, err, libres, achats}){
   const [ed,setEd]=useState({}); const [off,setOff]=useState({}); const [faits,setFaits]=useState({}); const [occupe,setOccupe]=useState(''); const [lien,setLien]=useState(''); const [lim,setLim]=useState(60);
   const codeGen = c => String(c||'').replace(/^[A-Z]{2,4}-(?=\S)/i,'');
+  const strict = c => String(c||'').toUpperCase().replace(/[\s\-_.]/g,'');
+  const existeVraiment = c => { const p = C.trouverProduit(c); return p && [p.code, ...autresCodes(p)].some(x=>strict(x)===strict(c)) ? p : null; };
   const groupes = useMemo(()=>{
     const g = new Map();
     libres.forEach(o=>{ const z = estFil(o.codeF, o.desc, o.cat) && sigFil(o.codeF, o.desc);
@@ -4821,7 +4825,7 @@ function RelierVue({C, toast, err, libres, achats}){
       const desc = fil ? descFil(x.z, !!x.z.coul) : o0.desc;
       const dz = !x.z && sigDisj(o0.codeF, o0.desc);
       const proches = x.z ? sigP.filter(y=>y.s.type===x.z.type && y.s.c===x.z.c && y.s.g===x.z.g).map(y=>y.p) : dz ? disjP.filter(y=>y.d===dz).sort((u,v)=>{ const mq = marquePanneau(String(o0.codeF+' '+o0.desc).toUpperCase()); const mu = y=>mq && marquePanneau(String(y.p.code+' '+y.p.desc).toUpperCase())===mq ? 0 : 1; return mu(u)-mu(v); }).map(y=>y.p) : [];
-      const deja = C.trouverProduit(code);
+      const deja = existeVraiment(code);
       const cl = fil ? null : classerProduit(code, o0.desc, catSimple(o0.cat));
       return {...x, code, desc, deja, cat: fil ? 'FIL' : (cl ? cl.cat : catSimple(o0.cat)), sous: fil ? (FIL_SOUS[x.z.type]||'') : (cl ? cl.sous : ''), unite: fil ? 'm' : (uniteNorm(o0.unite)||'un'),
         fab: o0.fab||'', photo:(x.offres.find(o=>o.photo)||{}).photo||'', proches: [...new Set([...(deja ? [deja] : []), ...proches])].slice(0,3)};
@@ -4830,7 +4834,7 @@ function RelierVue({C, toast, err, libres, achats}){
   const liste = groupes.filter(g=>!faits[g.k]);
   const val = g => ({code:g.code, desc:g.desc, ...(ed[g.k]||{})});
   const coches = liste.filter(g=>!off[g.k]);
-  const aCreer = coches.filter(g=>!C.trouverProduit(val(g).code));   // jamais de doublon : un code qui existe déjà se relie
+  const aCreer = coches.filter(g=>!existeVraiment(val(g).code));   // jamais de doublon : un code qui existe déjà se relie
   const fini = (gs, msg)=>{ setFaits(f=>({...f, ...Object.fromEntries(gs.map(g=>[g.k,true]))})); toast&&toast(msg); };
   const relierA = async (g, p)=>{ setOccupe('…'); try{ await C.lierEnLot(g.offres.map(o=>({codeF:o.codeF, f:o.f, produit:p.code}))); fini([g], g.offres.length+' prix → '+p.code); setLien(''); }catch(e){ err(e); } setOccupe(''); };
   const creer = async gs=>{ setOccupe('Création…');
@@ -4869,7 +4873,7 @@ function RelierVue({C, toast, err, libres, achats}){
         <span className="muted" style={{fontSize:11.5}}>({g.z ? 'même fil, autre couleur ou format' : 'même nombre de pôles et d\'ampères'} — relie si c'est pareil pour toi)</span>
       </div>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-        {C.trouverProduit(v.code) ? <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={()=>relierA(g, C.trouverProduit(v.code))}>🔗 Relier à {C.trouverProduit(v.code).code} (existe déjà)</button>
+        {existeVraiment(v.code) ? <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={()=>relierA(g, existeVraiment(v.code))}>🔗 Relier à {existeVraiment(v.code).code} (existe déjà)</button>
           : <button className="btn btn-sm btn-p" disabled={!!occupe || !v.code.trim()} onClick={()=>creer([g])}>+ Créer {v.code}</button>}
         <button className="btn btn-sm" disabled={!!occupe} onClick={()=>setLien(lien===g.k?'':g.k)}>🔗 Relier à un autre produit</button>
         <button className="btn btn-sm" disabled={!!occupe} onClick={()=>ignorer([g])}>✕ Ignorer</button>
