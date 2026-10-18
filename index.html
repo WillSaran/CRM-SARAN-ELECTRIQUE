@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v125';
+const APP_VERSION = 'v126';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -247,6 +247,9 @@ function localDateStr(d){ const dt=d||new Date(); return dt.getFullYear()+'-'+St
 function fmtH(h){ if(!h) return '0h'; const totalMin=Math.round(h*60/15)*15; const hh=Math.floor(totalMin/60), mm=totalMin%60; return hh+'h'+(mm?String(mm).padStart(2,'0'):''); }
 
 // ── Semaines (même logique que PunchPro, pour aligner les libellés) ──────
+// v126 : la semaine « en cours » des heures change le MERCREDI — lundi et mardi, on regarde encore la semaine passée
+// (les gars l'envoient au plus tard le mardi).
+function semaineHeures(d){ const x = new Date(d||new Date()); const j = x.getDay(); if(j===1 || j===2) x.setDate(x.getDate()-7); return getWeek(x); }
 function getWeek(d){
   const dt=new Date(d); dt.setHours(0,0,0,0); dt.setDate(dt.getDate()+3-(dt.getDay()+6)%7);
   const w1=new Date(dt.getFullYear(),0,4);
@@ -2248,7 +2251,7 @@ function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
     getPunchProDataBatched(cfg.punchproSpreadsheetId)
       .then(({emps,pts})=>{
         if(cancelled) return;
-        const week=getWeek(new Date());
+        const week=semaineHeures(new Date());
         const table=heuresParEmployeSemaine(pts, week);
         const dateStrs=weekDatesArr(week).map(localDateStr);
         setTotal(emps.reduce((s,e)=>{ const row=table[e.nom]||{}; return s+dateStrs.reduce((a,d)=>a+(row[d]||0),0); },0));
@@ -2262,10 +2265,28 @@ function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
   },[cfg.punchproSpreadsheetId, refreshKey]);
   return <div className="card" style={{flex:'1 1 200px',minWidth:180,cursor:'pointer'}} onClick={()=>onNavigate('heures')}>
     <div style={{fontSize:26,fontWeight:800}}>{loading?'…':err?'—':fmtH(total)}</div>
-    <div className="muted" style={{fontSize:12.5,marginTop:2}}>Heures d'équipe cette semaine</div>
+    <div className="muted" style={{fontSize:12.5,marginTop:2}}>Heures d'équipe — {semaineHeures()===getWeek(new Date()) ? 'cette semaine' : 'semaine passée (jusqu\'à mercredi)'}</div>
     {conf.pret && !conf.absent && noms.length>0 && (()=>{ const ok=noms.filter(n=>conf.de(semPassee, n)), manque=noms.filter(n=>!conf.de(semPassee, n));
       return <div style={{fontSize:11.5,marginTop:3,color:manque.length?'var(--warning)':'var(--success)'}} title={manque.length?'Pas confirmée : '+manque.join(', '):''}>
         ✓ Semaine passée : {ok.length}/{noms.length} confirmées{manque.length>0 && manque.length<=3 ? ' — manque '+manque.map(n=>n.split(' ')[0]).join(', ') : ''}</div>; })()}
+  </div>;
+}
+// v126 : convertisseur pieds ⇄ mètres (accepte aussi 10'6")
+function ConvertisseurCard(){
+  const [pi,setPi]=useState(''); const [m,setM]=useState('');
+  const lire = v => { const t = String(v||'').trim().replace(',','.'); const fi = t.match(/^(\d+(?:\.\d+)?)\s*(?:'|pi|pieds?)\s*(?:(\d+(?:\.\d+)?)\s*(?:"|po)?)?$/i);
+    if(fi) return +fi[1] + (fi[2] ? +fi[2]/12 : 0); const n = parseFloat(t); return isNaN(n) ? null : n; };
+  const f = n => n==null ? '' : String(Math.round(n*100)/100).replace('.',',');
+  const pouces = n => { if(n==null) return ''; const tot = Math.round(n*12); return Math.floor(tot/12)+"' "+(tot%12)+'"'; };
+  const nPi = lire(pi);
+  return <div className="card" style={{flex:'1 1 200px',minWidth:180}}>
+    <div style={{fontWeight:700,fontSize:13.5,marginBottom:8}}>📏 Pieds ⇄ mètres</div>
+    <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+      <input value={pi} inputMode="decimal" placeholder="pieds" onChange={e=>{ setPi(e.target.value); const n=lire(e.target.value); setM(n==null ? '' : f(n*0.3048)); }} style={{width:78,textAlign:'right'}}/><span>pi</span>
+      <span className="muted">=</span>
+      <input value={m} inputMode="decimal" placeholder="mètres" onChange={e=>{ setM(e.target.value); const n=lire(e.target.value); setPi(n==null ? '' : f(n/0.3048)); }} style={{width:78,textAlign:'right'}}/><span>m</span>
+    </div>
+    <div className="muted" style={{fontSize:11,marginTop:6}}>{nPi!=null && pi ? pouces(nPi)+' · ' : ''}1 m = 3,281 pi · 1 pi = 0,3048 m</div>
   </div>;
 }
 function DashboardRappelsCard({data, onNavigate}){
@@ -2636,6 +2657,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
       <Tuile n={aRepondre.length} l="Courriels à répondre" sub={aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'le plus vieux : '+cvJoursDepuis(aRepondre[0].dernier)+' jours' : 'clients et contracteurs'} alerte={aRepondre.length>0} go="courriels"/>
       <Tuile n={aAssocier.length} l="Achats à associer" sub={cvMoney(achatsMois)+' achetés ce mois-ci'} go="fournisseurs"/>
       <DashboardHeuresCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
+      <ConvertisseurCard/>
     </div>
 
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,360px),1fr))',gap:14,alignItems:'start'}}>
@@ -2755,7 +2777,7 @@ function HeuresView({cfg, refreshKey}){
   const [emps,setEmps]=useState([]);
   const [pts,setPts]=useState([]);
   const [err,setErr]=useState('');
-  const [week,setWeek]=useState(()=>getWeek(new Date()));
+  const [week,setWeek]=useState(()=>semaineHeures(new Date()));
   const conf = useSemainesConfirmees(cfg, refreshKey);
 
   useEffect(()=>{
@@ -2775,7 +2797,7 @@ function HeuresView({cfg, refreshKey}){
   const joursLabel = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
   function prevWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()-7); setWeek(getWeek(d)); }
   function nextWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()+7); setWeek(getWeek(d)); }
-  function thisWeek(){ setWeek(getWeek(new Date())); }
+  function thisWeek(){ setWeek(semaineHeures(new Date())); }
   const empsSorted = [...emps].sort((a,b)=>a.nom.localeCompare(b.nom));
   const grandTotal = empsSorted.reduce((s,e)=>{ const row=table[e.nom]||{}; return s+dateStrs.reduce((a,d)=>a+(row[d]||0),0); },0);
   const nbConf = empsSorted.filter(e=>conf.de(week, e.nom)).length;
@@ -4232,6 +4254,8 @@ function useCatalogue(cfg){
         ['photo','fab','sous'].forEach(c=>{ if(!m[c] && n[c]) m[c]=n[c]; }); if(m.cat==='À CLASSER' && n.cat && n.cat!=='À CLASSER') m.cat=n.cat;
         const i = produits.indexOf(n); if(i>=0) produits.splice(i,1);
         Object.keys(parK).forEach(x=>{ if(parK[x]===n) parK[x]=m; }); });
+      // v126 : le fil est TOUJOURS en mètres dans le CRM (prix, soumissions). STOCK PUNCH PRO garde son unité (on ne l'écrase pas).
+      produits.forEach(p=>{ const u = uniteNorm(p.unite); if(estFil(p.code, p.desc, p.cat) && (u==='pi' || u==='m' || !u)){ if(u!=='m') p.unitePunch = p.unite || 'pi'; p.unite = 'm'; } });
       let offres = [];
       try{ const op = await att(pOffres);
         offres = (op.result.values||[]).slice(1).map((r,i)=>({row:i+2, f:r[0]||'', codeF:r[1]||'', fab:r[2]||'', marque:r[3]||'', desc:r[4]||'', cat:r[5]||'', unite:r[6]||'', prix:cvNum(r[7]),
@@ -4336,7 +4360,9 @@ function useCatalogue(cfg){
   const monPrix = code => { for(const k of codesDe(code)){ const x = etat.prix[k]; if(x && x.prix!=null) return x; } return null; };
   const suggereDe = code => { const c = coutDe(code); return c ? prixPolitique(c.prix, etat.profil) : null; };
   // Prix utilisé : mon prix (écrit à la main) > politique appliquée au dernier coût > dernier prix facturé
-  const prixDe = code => { const p = monPrix(code); if(p) return p.prix; const s = suggereDe(code); if(s!=null) return s; const f = factureDe(code); return f ? f.prix : null; };
+  // uLigne : unité de la ligne du document (ex. une vieille soumission en « pi ») — mon prix et le suggéré y sont convertis
+  const prixDe = (code, uLigne) => { const conv = x => (uLigne && x!=null) ? prixEnUnite(x, uniteDe(code) || uLigne, uLigne) : x;
+    const p = monPrix(code); if(p) return conv(p.prix); const s = suggereDe(code); if(s!=null) return conv(s); const f = factureDe(code); return f ? f.prix : null; };
 
   const ecrirePrix = async (code, valeur, ligneEx)=>{
     const le = new Date().toLocaleString('fr-CA');
@@ -4431,7 +4457,7 @@ function useCatalogue(cfg){
   const modifierFiche = async (p, n)=>{
     const f = p.fiche;
     const ligne = ficheLigne({code:n.code, desc:n.desc, cat:n.cat, sous:n.sous, unite:n.unite, photo:n.photo, fab:(f&&f.fab)||p.fab||'', notes:n.notes, source:(f&&f.source)||'Saran', le:maintenant(), alias:n.alias!==undefined ? n.alias : ((f&&f.alias)||''), groupe:(f&&f.groupe)||''});
-    if(p.src==='punch' && (n.code!==p.code || n.desc!==p.desc || n.unite!==p.unite)) await modifierProduit(p, {code:n.code, desc:n.desc, unite:n.unite});
+    if(p.src==='punch' && (n.code!==p.code || n.desc!==p.desc || n.unite!==p.unite)) await modifierProduit(p, {code:n.code, desc:n.desc, unite:(p.unitePunch && n.unite===p.unite) ? p.unitePunch : n.unite});
     else if(p.src!=='punch') await suivreCode(p.code, n.code);
     if(f && f.row) await sheetsUpdateRow(idJ, 'Produits', f.row, ligne);
     else { await ensureOnglet('Produits', PROD_ENTETE); await sheetsAppendRow(idJ, 'Produits', ligne); }
@@ -4864,7 +4890,7 @@ function docVide(){ return {numero:'', type:'Soumission', typeProjet:'', origine
 // Calcul des montants d'un document (prix : ceux de la ligne, sinon mes prix / dernier facturé)
 function docCalcul(d, prixDe){
   const h1 = d.jours.reduce((t,j)=>t+(cvNum(j.sa01)||0),0), h2 = d.jours.reduce((t,j)=>t+(cvNum(j.sa02)||0),0);
-  const px = (code, l) => l && l.prix!=='' && l.prix!=null ? (cvNum(l.prix)||0) : (prixDe(code)||0);
+  const px = (code, l) => l && l.prix!=='' && l.prix!=null ? (cvNum(l.prix)||0) : (prixDe(code, l && l.unite)||0);
   const mat = d.lignes.reduce((t,l)=>t+px(l.code,l)*(cvNum(l.qte)||0),0);
   const mo = h1*(prixDe('SA01')||0) + h2*(prixDe('SA02')||0);
   const depl = d.depl ? (prixDe('DEPL')||0) : 0, quin = d.quin ? (prixDe('QUIN')||0) : 0;
@@ -5555,7 +5581,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
         {choisies.map(l=><div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
           <b style={{minWidth:90}}>{l.code}</b><span style={{flex:'1 1 140px'}}>{l.desc}</span>
           <input value={l.qte} inputMode="decimal" onChange={e=>changerQte(l, 0, e.target.value)} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{l.unite}</span>
-          {prix && <input value={l.prix} inputMode="decimal" placeholder={C.prixDe(l.code)!=null ? String(C.prixDe(l.code)) : 'prix'} onChange={e=>setD(x=>({...x, lignes:x.lignes.map(y=>y.code===l.code?{...y,prix:e.target.value}:y)}))} style={{width:70,textAlign:'right'}} title="Prix unitaire (vide = ton prix habituel)"/>}
+          {prix && <input value={l.prix} inputMode="decimal" placeholder={C.prixDe(l.code, l.unite)!=null ? String(C.prixDe(l.code, l.unite)) : 'prix'} onChange={e=>setD(x=>({...x, lignes:x.lignes.map(y=>y.code===l.code?{...y,prix:e.target.value}:y)}))} style={{width:70,textAlign:'right'}} title="Prix unitaire (vide = ton prix habituel)"/>}
           {prix && <span style={{width:80,textAlign:'right'}}>{cvMoney(calc.px(l.code,l)*(cvNum(l.qte)||0))}</span>}
           <button className="btn btn-sm" onClick={()=>setD(x=>({...x, lignes:x.lignes.filter(y=>y.code!==l.code)}))}>✕</button>
         </div>)}
