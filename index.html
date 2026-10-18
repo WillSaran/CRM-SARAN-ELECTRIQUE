@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v128';
+const APP_VERSION = 'v129';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4109,7 +4109,7 @@ function sigFil(code, desc){
   let coul='', cc=''; for(const [re,n,k] of FIL_COUL){ if(re.test(C) || re.test(D)){ coul=n; cc=k; break; } }
   if(!['NMD','RW90','T90','CAT6','CAT6A'].includes(type)){ coul=''; cc=''; }              // NMWU, ACWU, AC90, TECK… : la gaine ne change rien
   if(type==='NMD' && FIL_NMD_NORMAL[g]===coul) coul='';                                   // NMD 14 blanc, 12 jaune, 10 orange, 8-6 noir = normal
-  const alu = /ALU|NUAL|ALUMIN|\bAL\b|AL(BLK|WHI)|\dAL$|KVAL$/.test(T) || type==='ACWU';
+  const alu = type==='ACWU' || (type!=='AC90' && /ALU|NUAL|ALUMIN|\bAL\b|AL(BLK|WHI)|\dAL$|KVAL$/.test(T));   // AC90 : l'armure est en alu, pas les fils
   return {type, g, c, coul, cc, alu, base:[type,c,g,alu?'AL':''].join('|'), cle:[type,c,g,alu?'AL':'',coul].join('|')};
 }
 // Ton nom de code : NMD2C14, NMWU2C12, AC902C14, ACWU3C2, TECK3C4, RW90-2WHTALU, RW90-2/0BLK, T90-6BLK… (+ couleur si le même fil existe en d'autres couleurs, + ALU)
@@ -4196,6 +4196,7 @@ function rechercheOk(texte, q){
   return toks.length>0 && toks.every(k => t.includes(k) || alt(k).some(a=>t.includes(a)));
 }
 const texteProduit = p => [p.code, ...autresCodes(p), p.desc, p.sous||'', p.cat||'', p.fab||'', ...(p.membres||[]).map(m=>m.desc)].join(' ');
+const codeDansDesc = d => { const t = String(d||'').trim().split(/\s+/).slice(0,3).find(w=>/^[A-Z0-9][A-Z0-9\-\/\.]*\d[A-Z0-9\-\/\.]*$/i.test(w) && w.replace(/[^A-Z0-9]/gi,'').length>=4); return t ? t.toUpperCase() : ''; };
 const autresCodes = p => [...new Set([p.alias, ...(p.membres||[]).flatMap(m=>[m.code, m.alias])].filter(Boolean))];
 const codesPunch = p => [...new Set([p.alias, ...(p.membres||[]).filter(m=>m.src==='punch').map(m=>m.code), ...(p.membres||[]).map(m=>m.alias)].filter(Boolean))];
 function descFil(s, couleurUtile){
@@ -4365,7 +4366,8 @@ function useCatalogue(cfg){
     const l = etat.liens[codeNorm(codeF)];
     if(l) return l.produit ? (parCode[codeNorm(l.produit)] || {code:l.produit, desc:'', cat:''}) : null;   // lien vide = ignoré
     const k1 = codeNorm(codeF), k2 = codeSansMarque(codeF);
-    return parCode[k1] || parCode[k2] || (desc!==undefined ? parSignature(codeF, desc) : null) || null;
+    const kd = desc!==undefined ? codeNorm(codeDansDesc(desc)) : '';
+    return parCode[k1] || parCode[k2] || (kd ? parCode[kd] : null) || (desc!==undefined ? parSignature(codeF, desc) : null) || null;
   },[etat.liens, parCode, parSig]);
   // Achats de chaque produit, par fournisseur (le plus récent de chacun)
   const achatsParProduit = useMemo(()=>{
@@ -4393,7 +4395,7 @@ function useCatalogue(cfg){
       if(l) return l.produit ? (parCode[codeNorm(l.produit)] || null) : 'ignore';
       if(o.saran && parCode[codeNorm(o.saran)]) return parCode[codeNorm(o.saran)];
       if(/pas trouv/i.test(o.corr)) return null;
-      return parCode[codeNorm(o.codeF)] || parCode[codeSansMarque(o.codeF)] || (o.fab ? (parFab[codeNorm(o.fab)] || parCode[codeNorm(o.fab)]) : null) || parSignature(o.codeF, o.desc) || null;
+      return parCode[codeNorm(o.codeF)] || parCode[codeSansMarque(o.codeF)] || (o.fab ? (parFab[codeNorm(o.fab)] || parCode[codeNorm(o.fab)]) : null) || (codeDansDesc(o.desc) ? parCode[codeNorm(codeDansDesc(o.desc))] : null) || parSignature(o.codeF, o.desc) || null;
     };
     const rest = [];
     etat.offres.forEach(o=>{ const p = trouver(o); if(p==='ignore') return; if(p){ (par[codeNorm(p.code)] = par[codeNorm(p.code)] || []).push(o); if(o.fab) deja.set(codeNorm(o.fab), p); } else rest.push(o); });
@@ -4590,11 +4592,25 @@ function useCatalogue(cfg){
     else if(desc && desc!==m.desc && m.src!=='punch' && m.fiche && m.fiche.row) await sheetsUpdateRow(idJ, 'Produits', m.fiche.row, ficheLigne({...m.fiche, desc, le:maintenant()}));
     for(const p of membres){ if(p===m || codeNorm(p.code)===k) continue; await marquer(p, m ? m.code : code); }
   };
+  // v129 : plusieurs liens / plusieurs fiches en UNE écriture
+  const lierEnLot = async items=>{ if(!items.length) return;
+    const le = new Date().toLocaleString('fr-CA'), nouv = [], maj = [];
+    items.forEach(({codeF, f, produit})=>{ const ex = etat.liens[codeNorm(codeF)]; (ex && ex.row ? maj : nouv).push({codeF, f, produit, row:ex && ex.row}); });
+    setEtat(s=>{ const l = {...s.liens}; items.forEach(({codeF, f, produit})=>{ l[codeNorm(codeF)] = {...(l[codeNorm(codeF)]||{}), produit:produit||'', fournisseur:f}; }); return {...s, liens:l}; });
+    if(!Object.keys(etat.liens).length) await ensureSheetsExist(idJ, [{name:'Correspondances', headers:['Code fournisseur','Fournisseur','Code produit','Confirmé le']}]);
+    if(nouv.length) await window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:idJ, range:'Correspondances!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:nouv.map(x=>[x.codeF, x.f||'', x.produit||'', le])}});
+    for(const x of maj) await sheetsUpdateRow(idJ, 'Correspondances', x.row, [x.codeF, x.f||'', x.produit||'', le]);
+  };
+  const ajouterFichesEnLot = async liste=>{ if(!liste.length) return;
+    const rows = await lireOnglet('Produits', 'A1:L'); const idx = new Set(rows.map(r=>codeNorm(r[0]))); const le = maintenant();
+    liste.forEach(f=>{ const k = codeNorm(f.code); if(!k || idx.has(k)) return; rows.push(ficheLigne({...f, source:'Saran', le})); idx.add(k); });
+    await ecrireOnglet('Produits', PROD_ENTETE, rows);
+  };
   const pasPareil = async membres=>{ await assurerColL(); for(const p of membres) await marquer(p, '≠'); };
   const retirerDuGroupe = async p=>{ await marquer(p, ''); };
   return {...etat, lire, coutDe, coutsDe, factureDe, suggereDe, prixDe, produitDe, aConfirmer, majPrix, majProfil, ajouterProduit, lier, modifierProduit,
     offresDe, meilleureOffre, monPrix, codeMaitre, offresLibres:liensOffres.libres, fournisseurs, comparaison, importerProduits, importerOffres, ajouterFiche, modifierFiche,
-    propositions, trouverProduit, regrouper, pasPareil, retirerDuGroupe, aClasser, classerEnLot};
+    propositions, trouverProduit, regrouper, pasPareil, retirerDuGroupe, aClasser, classerEnLot, lierEnLot, ajouterFichesEnLot};
 }
 
 // Choisir un produit du catalogue (pour lier un code fournisseur)
@@ -4667,14 +4683,14 @@ function ProduitsView({cfg, toast}){
       <button className={'btn btn-sm'+(vue==='catalogue'?' btn-p':'')} onClick={()=>setVue('catalogue')}>📦 Catalogue ({C.produits.length})</button>
       <button className={'btn btn-sm'+(vue==='regrouper'?' btn-p':'')} onClick={()=>setVue('regrouper')}>🧩 Regrouper ({C.propositions.length})</button>
       <button className={'btn btn-sm'+(vue==='comparer'?' btn-p':'')} onClick={()=>setVue('comparer')}>💲 Comparer les prix ({C.comparaison.length})</button>
-      <button className={'btn btn-sm'+(vue==='relier'?' btn-p':'')} onClick={()=>setVue('relier')}>🔗 Prix à relier ({C.offresLibres.length})</button>
+      <button className={'btn btn-sm'+(vue==='relier'?' btn-p':'')} onClick={()=>setVue('relier')}>🔗 Prix à relier / créer ({C.offresLibres.length})</button>
       <button className={'btn btn-sm'+(vue==='confirmer'?' btn-p':'')} onClick={()=>setVue('confirmer')}>❓ Achats à confirmer ({C.aConfirmer.length})</button>
     </div>
     <div className="muted" style={{fontSize:11.5,marginBottom:8}}>
       {vue==='catalogue' && <>Prix des sites fournisseurs (tes prix de compte, lus par Manus) ; le plus bas est en vert. Suggéré = meilleur coût ÷ (1 − profit %), grille « {C.profil} ». « Mon prix » remplace le suggéré. Les prix ne sont jamais dans PunchPro.</>}
       {vue==='comparer' && <>Produits offerts par au moins deux fournisseurs, dans la même unité. Écart = combien tu paies de plus chez le plus cher.</>}
       {vue==='regrouper' && <>Un produit = <b>ton code</b> (ex. NMD2C6). Ici, les codes qui semblent être le même produit (logiciel comptable, PunchPro, Lumen « CAB… ») : choisis ton code, coche ceux qui vont dessous, puis ✓. Les prix, achats et factures suivent. PunchPro ne change pas pour les gars.</>}
-      {vue==='relier' && <>Prix que Manus a lus sur les sites, mais que le CRM n'a pas su placer. 🔗 Relier = « ce code fournisseur, c'est mon produit X » (tu choisis un de tes produits). Le CRM s'en souvient pour la suite.</>}
+      {vue==='relier' && <>Prix lus sur les sites qui ne correspondent à aucun de tes produits — surtout des produits que tu n'as pas encore dans ta liste.</>}
       {vue==='confirmer' && <>Codes de tes factures fournisseurs qui ne correspondent à aucun de tes produits. 🔗 Relier = « c'est mon produit X » : le coût de la facture devient son dernier coût. ✕ pour les frais (livraison, etc.).</>}
     </div>
     {nouveau && <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
@@ -4756,25 +4772,7 @@ function ProduitsView({cfg, toast}){
 
     {vue==='regrouper' && <RegrouperVue C={C} toast={toast} err={err} q={q}/>}
 
-    {vue==='relier' && <div className="card">
-      {libres.slice(0,lim).map(o=>{ const k='o|'+o.f+'|'+o.codeF; return <div key={k} style={{padding:'8px 0',borderBottom:'1px solid var(--border)',display:'grid',gap:4}}>
-        <div style={{display:'flex',gap:10,alignItems:'flex-start',flexWrap:'wrap'}}>
-          <ProdPhoto src={o.photo} taille={44}/>
-          <div style={{minWidth:0,flex:'1 1 240px'}}>
-            <div style={{fontSize:13.5}}><b>{o.codeF}</b> <span className="muted" style={{fontSize:12}}>· {o.f}{o.fab ? ' · fabricant '+o.fab : ''} · {o.prix>0 ? cvMoney(o.prix)+(o.unite?'/'+o.unite:'') : 'sans prix'}{o.cat ? ' · '+o.cat : ''}</span></div>
-            <div style={{fontSize:12.5}}>{o.desc}</div>
-          </div>
-          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-            <button className="btn btn-sm btn-p" onClick={()=>setLien(lien===k?'':k)}>🔗 Relier</button>
-            <button className="btn btn-sm" onClick={()=>{ setNouveau({code:codeGenerique(o.codeF), desc:o.desc, unite:uniteNorm(o.unite)||'un', cat:catSimple(o.cat), photo:o.photo, fab:o.fab, codeF:o.codeF, fournisseur:o.f}); window.scrollTo(0,0); }}>+ Créer le produit</button>
-            <button className="btn btn-sm" title="Ne pas garder ce prix" onClick={async()=>{ try{ await C.lier(o.codeF, o.f, ''); toast&&toast('Ignoré : '+o.codeF); }catch(e){ err(e); } }}>✕</button>
-          </div>
-        </div>
-        {lien===k && <ChoixProduit produits={C.produits} defaut={o.fab||''} onChoix={async p=>{ try{ await C.lier(o.codeF, o.f, p.code); setLien(''); toast&&toast(o.codeF+' → '+p.code); }catch(e){ err(e); } }}/>}
-      </div>; })}
-      {C.lu && !libres.length && <div className="muted" style={{fontSize:13}}>Tous les prix sont reliés 👍</div>}
-      {libres.length>lim && <div style={{textAlign:'center',marginTop:8}}><button className="btn btn-sm" onClick={()=>setLim(lim+300)}>Afficher plus ({libres.length-lim} autres)</button></div>}
-    </div>}
+    {vue==='relier' && <RelierVue C={C} toast={toast} err={err} libres={libres}/>}
 
     {vue==='confirmer' && <div className="card">
       {aConf.slice(0,80).map(a=>{ const k=codeNorm(a.code); return <div key={k} style={{padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
@@ -4794,6 +4792,79 @@ function ProduitsView({cfg, toast}){
       {C.lu && !aConf.length && <div className="muted" style={{fontSize:13}}>Tout est relié 👍</div>}
       {aConf.length>80 && <div className="muted" style={{fontSize:12,marginTop:6}}>+ {aConf.length-80} autres (cherche par code ou description).</div>}
     </div>}
+  </div>;
+}
+
+// v129 : Prix à relier, regroupés — un même produit chez Dubo et Lumen = UNE carte. Pour chaque carte :
+// « Ressemble à » (un de tes produits proches), « + Créer » (ton code proposé), « ✕ Ignorer ». Tout se fait aussi en lot (cases à cocher).
+function RelierVue({C, toast, err, libres}){
+  const [ed,setEd]=useState({}); const [off,setOff]=useState({}); const [faits,setFaits]=useState({}); const [occupe,setOccupe]=useState(''); const [lien,setLien]=useState(''); const [lim,setLim]=useState(60);
+  const codeGen = c => String(c||'').replace(/^[A-Z]{2,4}-(?=\S)/i,'');
+  const groupes = useMemo(()=>{
+    const g = new Map();
+    libres.forEach(o=>{ const z = estFil(o.codeF, o.desc, o.cat) && sigFil(o.codeF, o.desc);
+      const k = z ? 'F|'+z.cle : (o.fab ? 'B|'+codeNorm(o.fab) : 'C|'+o.f+'|'+codeNorm(o.codeF));
+      if(!g.has(k)) g.set(k, {k, z, offres:[]}); g.get(k).offres.push(o); });
+    const sigP = C.produits.map(p=>({p, s: estFil(p.code, p.desc, p.cat) && sigFil(p.code, p.desc)})).filter(x=>x.s);
+    return [...g.values()].map(x=>{ const o0 = x.offres[0];
+      const fil = !!(x.z && codeFil(x.z, !!x.z.coul));
+      const code = fil ? codeFil(x.z, !!x.z.coul) : (codeDansDesc(o0.desc) || codeGen(o0.codeF).toUpperCase());
+      const desc = fil ? descFil(x.z, !!x.z.coul) : o0.desc;
+      const proches = x.z ? sigP.filter(y=>y.s.type===x.z.type && y.s.c===x.z.c && y.s.g===x.z.g).map(y=>y.p) : [];
+      const deja = C.trouverProduit(code);
+      const cl = fil ? null : classerProduit(code, o0.desc, catSimple(o0.cat));
+      return {...x, code, desc, deja, cat: fil ? 'FIL' : (cl ? cl.cat : catSimple(o0.cat)), sous: fil ? (FIL_SOUS[x.z.type]||'') : (cl ? cl.sous : ''), unite: fil ? 'm' : (uniteNorm(o0.unite)||'un'),
+        fab: o0.fab||'', photo:(x.offres.find(o=>o.photo)||{}).photo||'', proches: [...new Set([...(deja ? [deja] : []), ...proches])].slice(0,3)};
+    }).sort((a,b)=>(b.proches.length>0)-(a.proches.length>0) || String(a.cat).localeCompare(String(b.cat)) || String(a.code).localeCompare(String(b.code)));
+  },[libres, C.produits]);
+  const liste = groupes.filter(g=>!faits[g.k]);
+  const val = g => ({code:g.code, desc:g.desc, ...(ed[g.k]||{})});
+  const coches = liste.filter(g=>!off[g.k]);
+  const aCreer = coches.filter(g=>!C.trouverProduit(val(g).code));   // jamais de doublon : un code qui existe déjà se relie
+  const fini = (gs, msg)=>{ setFaits(f=>({...f, ...Object.fromEntries(gs.map(g=>[g.k,true]))})); toast&&toast(msg); };
+  const relierA = async (g, p)=>{ setOccupe('…'); try{ await C.lierEnLot(g.offres.map(o=>({codeF:o.codeF, f:o.f, produit:p.code}))); fini([g], g.offres.length+' prix → '+p.code); setLien(''); }catch(e){ err(e); } setOccupe(''); };
+  const creer = async gs=>{ setOccupe('Création…');
+    try{ const fiches = gs.map(g=>{ const v = val(g); return {code:v.code.trim(), desc:v.desc, cat:g.cat, sous:g.sous, unite:g.unite, photo:g.photo, fab:g.fab, notes:''}; }).filter(f=>f.code);
+      await C.ajouterFichesEnLot(fiches);
+      await C.lierEnLot(gs.flatMap(g=>g.offres.map(o=>({codeF:o.codeF, f:o.f, produit:val(g).code.trim()}))));
+      fini(gs, fiches.length+' produit'+(fiches.length>1?'s':'')+' créé'+(fiches.length>1?'s':'')); await C.lire(true); }catch(e){ err(e); }
+    setOccupe(''); };
+  const ignorer = async gs=>{ setOccupe('…'); try{ await C.lierEnLot(gs.flatMap(g=>g.offres.map(o=>({codeF:o.codeF, f:o.f, produit:''})))); fini(gs, gs.length+' ignoré'+(gs.length>1?'s':'')); }catch(e){ err(e); } setOccupe(''); };
+  if(C.lu && !liste.length) return <div className="card muted" style={{fontSize:13}}>Tous les prix sont reliés 👍</div>;
+  return <div style={{display:'grid',gap:8}}>
+    <div className="card" style={{display:'grid',gap:6,fontSize:12.5}}>
+      <div>Ces prix viennent de Manus : il a aussi ramené des grosseurs et des formats <b>que tu n'as pas dans ta liste</b>. Le CRM ne crée jamais un produit tout seul — c'est toi qui choisis : <b>+ Créer</b> (ton code est proposé), <b>Ressemble à</b> un de tes produits, ou <b>✕ Ignorer</b>. Un même produit chez Dubo et Lumen = une seule carte.</div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+        <span className="muted">{liste.length} produits · {coches.length} cochés</span>
+        <button className="btn btn-sm" onClick={()=>setOff(Object.keys(off).length ? {} : Object.fromEntries(liste.map(g=>[g.k,true])))}>{Object.keys(off).length ? 'Tout cocher' : 'Tout décocher'}</button>
+        <button className="btn btn-sm btn-p" onClick={()=>creer(aCreer)} disabled={!!occupe || !aCreer.length}>+ Créer les cochés ({aCreer.length})</button>
+        <button className="btn btn-sm" disabled={!!occupe || !coches.length} onClick={()=>{ if(confirm('Ignorer '+coches.length+' produits (leurs prix ne seront plus proposés) ?')) ignorer(coches); }}>✕ Ignorer les cochés</button>
+        {occupe && <span className="muted">{occupe}</span>}
+      </div>
+    </div>
+    {liste.slice(0,lim).map(g=>{ const v = val(g); return <div key={g.k} className="card" style={{display:'grid',gap:6,opacity:off[g.k]?0.6:1}}>
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <input type="checkbox" checked={!off[g.k]} onChange={e=>setOff(o=>{ const n={...o}; if(e.target.checked) delete n[g.k]; else n[g.k]=true; return n; })}/>
+        <ProdPhoto src={g.photo} taille={40}/>
+        <input value={v.code} onChange={e=>setEd(x=>({...x, [g.k]:{...v, code:e.target.value}}))} style={{flex:'0 1 150px',fontWeight:700}}/>
+        <input value={v.desc} onChange={e=>setEd(x=>({...x, [g.k]:{...v, desc:e.target.value}}))} style={{flex:'1 1 220px'}}/>
+        <span className="muted" style={{fontSize:11.5}}>{g.cat}{g.sous ? ' · '+g.sous : ''} · {g.unite}</span>
+      </div>
+      <div style={{fontSize:12}}>{g.offres.map(o=><div key={o.f+o.codeF} className="muted"><b style={{color:'var(--text)'}}>{o.f}</b> {o.codeF} · {o.prix>0 ? cvMoney(o.prix)+(o.unite?'/'+o.unite:'') : 'sans prix'}{formatDe(o) ? ' · '+formatDe(o).txt : ''} — {String(o.desc).slice(0,70)}</div>)}</div>
+      {g.proches.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',fontSize:12.5}}>
+        <span style={{color:'var(--warning)'}}>Ressemble à :</span>
+        {g.proches.map(p=><button key={p.code} className="btn btn-sm" disabled={!!occupe} title={p.desc} onClick={()=>relierA(g, p)}>🔗 {p.code}</button>)}
+        <span className="muted" style={{fontSize:11.5}}>(même fil, autre couleur ou format — relie si c'est pareil pour toi)</span>
+      </div>}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        {C.trouverProduit(v.code) ? <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={()=>relierA(g, C.trouverProduit(v.code))}>🔗 Relier à {C.trouverProduit(v.code).code} (existe déjà)</button>
+          : <button className="btn btn-sm btn-p" disabled={!!occupe || !v.code.trim()} onClick={()=>creer([g])}>+ Créer {v.code}</button>}
+        <button className="btn btn-sm" disabled={!!occupe} onClick={()=>setLien(lien===g.k?'':g.k)}>🔗 Relier à un autre produit</button>
+        <button className="btn btn-sm" disabled={!!occupe} onClick={()=>ignorer([g])}>✕ Ignorer</button>
+      </div>
+      {lien===g.k && <ChoixProduit produits={C.produits} defaut={g.fab||''} onChoix={p=>relierA(g, p)}/>}
+    </div>; })}
+    {liste.length>lim && <div style={{textAlign:'center'}}><button className="btn btn-sm" onClick={()=>setLim(lim+60)}>Afficher plus ({liste.length-lim} autres)</button></div>}
   </div>;
 }
 
