@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v121';
+const APP_VERSION = 'v122';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -839,12 +839,14 @@ async function sheetsBatchGet(spreadsheetId, ranges){
   return (resp.result.valueRanges||[]).map(vr=>vr.values||[]);
 }
 async function sheetsAppendRow(spreadsheetId, sheetName, rowArray){
+  if(typeof suivreEcritures==='function') suivreEcritures();
   return window.gapi.client.sheets.spreadsheets.values.append({
     spreadsheetId, range: sheetName+'!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS',
     resource:{values:[rowArray]}
   });
 }
 async function sheetsUpdateRow(spreadsheetId, sheetName, rowIndex1Based, rowArray){
+  if(typeof suivreEcritures==='function') suivreEcritures();
   const lastCol = String.fromCharCode(65+rowArray.length-1);
   return window.gapi.client.sheets.spreadsheets.values.update({
     spreadsheetId, range: sheetName+'!A'+rowIndex1Based+':'+lastCol+rowIndex1Based, valueInputOption:'RAW',
@@ -2677,17 +2679,34 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
 // Semaines confirmées (« Confirmer ma semaine » dans PunchPro → courriel → La mémoire, script semaines.gs)
 // Onglet « Semaines confirmées » du registre des jobs : Id, Semaine, Employé, Confirmée le, Total heures, Heures supp, Banque, Déplacement, Note, Lien.
 // Retourne {pret, absent, de(semaine, nom)} — de() donne la confirmation la plus récente de l'employé pour la semaine.
+// v122 : tu peux aussi confirmer une semaine à la main (ex. l'employé te l'a confirmée par courriel) — une ligne « CRM-… » est ajoutée
+// au même onglet (le script semaines.gs ne fait qu'ajouter ses lignes, il ne touche pas aux tiennes). « Annuler » ajoute une ligne ANNULÉE.
+const SEM_ENTETE_CRM = ['Id','Semaine','Employé','Confirmée le','Total heures','Heures supp','Banque','Déplacement (min)','Note','Lien'];
 function useSemainesConfirmees(cfg, refreshKey){
   const [etat,setEtat]=useState({pret:false, absent:false, map:{}});
+  const [tick,setTick]=useState(0);
   const id = cfg.memoireJobsSpreadsheetId;
   useEffect(()=>{ if(!id) return; let ok=true;
-    lireCache(id, qSheet('Semaines confirmées')+'!A1:J', !!refreshKey).then(r=>{ if(!ok) return;
+    lireCache(id, qSheet('Semaines confirmées')+'!A1:J', !!refreshKey || tick>0).then(r=>{ if(!ok) return;
       const map={}; (r.result.values||[]).slice(1).forEach(x=>{ if(!x[1]||!x[2]) return;
-        const k=x[1]+'|'+cvNorm(x[2]), c={semaine:x[1], employe:x[2], le:x[3]||'', total:cvNum(x[4]), supp:cvNum(x[5]), banque:cvNum(x[6]), dep:cvNum(x[7]), note:x[8]||'', lien:x[9]||''};
-        if(!map[k] || c.le>map[k].le) map[k]=c; });
-      setEtat({pret:true, absent:false, map}); }).catch(()=>{ if(ok) setEtat({pret:true, absent:true, map:{}}); });
-    return ()=>{ ok=false; }; },[id, refreshKey]);
-  return {...etat, de:(semaine, nom)=>etat.map[semaine+'|'+cvNorm(nom)]||null};
+        const k=x[1]+'|'+cvNorm(x[2]), c={id:x[0]||'', semaine:x[1], employe:x[2], le:x[3]||'', total:cvNum(x[4]), supp:cvNum(x[5]), banque:cvNum(x[6]), dep:cvNum(x[7]), note:x[8]||'', lien:x[9]||''};
+        if(!map[k] || c.le>=map[k].le) map[k]=c; });
+      setEtat(s=>({pret:true, absent:false, map})); }).catch(()=>{ if(ok) setEtat({pret:true, absent:true, map:{}}); });
+    return ()=>{ ok=false; }; },[id, refreshKey, tick]);
+  const maintenant = ()=>{ const d=new Date(), z=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+' '+z(d.getHours())+':'+z(d.getMinutes()); };
+  const ecrire = async (semaine, nom, total, note)=>{
+    const ligne = ['CRM-'+Date.now(), semaine, nom, maintenant(), total!=null ? Math.round(total*100)/100 : '', '', '', '', note, ''];
+    const k = semaine+'|'+cvNorm(nom);
+    setEtat(s=>({...s, absent:false, map:{...s.map, [k]:{id:ligne[0], semaine, employe:nom, le:ligne[3], total:cvNum(ligne[4]), note, lien:''}}}));   // tout de suite à l'écran
+    if(etat.absent) await ensureSheetsExist(id, [{name:'Semaines confirmées', headers:SEM_ENTETE_CRM}]);
+    await sheetsAppendRow(id, qSheet('Semaines confirmées'), ligne);
+    setTick(t=>t+1);
+  };
+  const annulee = c => c && /^ANNUL/i.test(c.note||'');
+  return {...etat,
+    de:(semaine, nom)=>{ const c = etat.map[semaine+'|'+cvNorm(nom)]; return c && !annulee(c) ? c : null; },
+    confirmerMain:(semaine, nom, total, note)=>ecrire(semaine, nom, total, note||'Confirmée à la main dans le CRM'),
+    annuler:(semaine, nom)=>ecrire(semaine, nom, null, 'ANNULÉE dans le CRM')};
 }
 // Pastille ✓ : confirmée (avec la date) ; ⚠ si le total de PunchPro a changé depuis de plus de 15 min.
 function SemaineConfirmee({c, total}){
@@ -2696,7 +2715,21 @@ function SemaineConfirmee({c, total}){
   const quand = c.le ? new Date(c.le.replace(' ','T')).toLocaleDateString('fr-CA',{weekday:'short',day:'numeric',month:'short'}) : '';
   return <a href={c.lien||undefined} target="_blank" rel="noopener" style={{textDecoration:'none',whiteSpace:'nowrap',fontSize:12.5,color:ecart?'var(--warning)':'var(--success)',fontWeight:700}}
     title={'Confirmée le '+c.le+(c.total!=null?' — '+fmtH(c.total):'')+(c.supp?' (supp '+fmtH(c.supp)+')':'')+(c.note?' — '+c.note:'')}>
-    ✓ {quand}{ecart && <span style={{fontWeight:600}}> · ⚠ confirmé {fmtH(c.total)}, maintenant {fmtH(total)}</span>}</a>;
+    ✓ {quand}{/^CRM-/.test(c.id||'') && <span style={{fontWeight:500}}> (à la main)</span>}{ecart && <span style={{fontWeight:600}}> · ⚠ confirmé {fmtH(c.total)}, maintenant {fmtH(total)}</span>}</a>;
+}
+// Confirmer / annuler à la main dans la page Heures
+function ConfirmerMain({conf, week, nom, total}){
+  const [ouvert,setOuvert]=useState(false); const [note,setNote]=useState('Confirmée par courriel'); const [occupe,setOccupe]=useState(false);
+  const c = conf.de(week, nom);
+  const go = async f=>{ setOccupe(true); try{ await f(); setOuvert(false); }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } setOccupe(false); };
+  if(c) return <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><SemaineConfirmee c={c} total={total}/>
+    {/^CRM-/.test(c.id||'') && <button className="btn btn-sm" style={{padding:'1px 6px',fontSize:11}} disabled={occupe} onClick={()=>{ if(confirm('Annuler la confirmation de '+nom+' ?')) go(()=>conf.annuler(week, nom)); }}>annuler</button>}</div>;
+  if(!ouvert) return <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><span className="muted" style={{fontSize:12}}>pas confirmée</span>
+    <button className="btn btn-sm" style={{padding:'1px 8px',fontSize:11.5}} onClick={()=>setOuvert(true)}>✓ Confirmer</button></div>;
+  return <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+    <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Note (ex. confirmée par courriel)" style={{width:170,padding:'3px 6px',fontSize:12}}/>
+    <button className="btn btn-sm btn-p" disabled={occupe} onClick={()=>go(()=>conf.confirmerMain(week, nom, total, note))}>OK</button>
+    <button className="btn btn-sm" disabled={occupe} onClick={()=>setOuvert(false)}>✕</button></div>;
 }
 function HeuresView({cfg, refreshKey}){
   const [loading,setLoading]=useState(true);
@@ -2730,7 +2763,7 @@ function HeuresView({cfg, refreshKey}){
 
   return <div>
     <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Heures — employés (PunchPro)</h2>
-    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Lecture seule — données du Sheet de pointage PunchPro.</div>
+    <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Heures lues dans PunchPro (lecture seule). Tu peux confirmer une semaine à la main si l'employé te l'a confirmée autrement.</div>
     {!cfg.punchproSpreadsheetId && <div className="card">Configure l'ID du Sheet PunchPro (Heures &amp; Employés) dans Réglages.</div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {cfg.punchproSpreadsheetId && <>
@@ -2741,7 +2774,7 @@ function HeuresView({cfg, refreshKey}){
         <button className="btn btn-sm" onClick={thisWeek}>Cette semaine</button>
         {conf.pret && !conf.absent && empsSorted.length>0 && <span style={{fontSize:13,fontWeight:700,color:nbConf===empsSorted.length?'var(--success)':'var(--muted)'}}>✓ {nbConf}/{empsSorted.length} semaines confirmées</span>}
       </div>
-      {conf.absent && <div className="muted" style={{fontSize:12,marginBottom:10}}>Les ✓ « semaine confirmée » apparaîtront quand le script semaines.gs de La mémoire aura rempli l'onglet « Semaines confirmées ».</div>}
+      {conf.absent && <div className="muted" style={{fontSize:12,marginBottom:10}}>Les ✓ « semaine confirmée » de PunchPro apparaîtront quand le script semaines.gs de La mémoire aura rempli l'onglet « Semaines confirmées ». Tu peux déjà confirmer à la main (✓ Confirmer).</div>}
       {loading ? <div className="muted">Chargement...</div> :
       <div className="card" style={{padding:0,overflowX:'auto'}}>
         <table>
@@ -2759,7 +2792,7 @@ function HeuresView({cfg, refreshKey}){
                 <td><span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:e.couleur,marginRight:6}}></span>{e.nom}</td>
                 {dateStrs.map((d,i)=><td key={i}>{row[d]?fmtH(row[d]):'—'}</td>)}
                 <td style={{fontWeight:700,color:'var(--accent)'}}>{fmtH(total)}</td>
-                <td>{conf.absent ? '' : <SemaineConfirmee c={conf.de(week, e.nom)} total={total}/>}</td>
+                <td>{conf.pret ? <ConfirmerMain conf={conf} week={week} nom={e.nom} total={total}/> : ''}</td>
               </tr>;
             })}
             {empsSorted.length===0 && <tr><td colSpan="10" className="muted" style={{padding:16}}>Aucun employé trouvé dans le Sheet PunchPro.</td></tr>}
@@ -3984,7 +4017,7 @@ const codeSansMarque = c => codeNorm(String(c||'').replace(/^[A-Z]{2,4}-(?=\S)/i
 // v121 : un produit = TON code (ex. NMD2C6). Les autres codes (logiciel comptable, PunchPro, Lumen, Dubo) se rangent dessous.
 // Signature d'un fil : type + conducteurs + calibre + couleur + alu → sert à PROPOSER les regroupements (tu confirmes).
 const FIL_COUL = [[/YELLOW|\b(YEL|JAUNE|YL)\b|YEL(?=X|\d|$)/,'jaune','YEL'],[/\b(RED|ROUGE|RD)\b|RED(?=X|\d|$)/,'rouge','RED'],[/\b(BLK|BLACK|NOIR|BK)\b|BLK/,'noir','BLK'],
-  [/\bBLW\b|BLEU-BLANC|BLW(?=ALU)/,'bleu-blanc','BLW'],[/\b(WHI|WHT|WHITE|BLANC|BLANCHE)\b|WHI|WHT/,'blanc','WHI'],[/\b(BLU|BLUE|BLEU)\b|BLEU$|BLU(?=FT|$)/,'bleu','BLU'],[/\b(ORA|ORANGE)\b/,'orange','ORA'],[/\b(GRIS|GREY|GRAY)\b/,'gris','GRY']];
+  [/\bBLW\b|BLEU-BLANC|BLW(?=ALU)/,'bleu-blanc','BLW'],[/\b(WHI|WHT|WHITE|BLANC|BLANCHE)\b|WHI|WHT/,'blanc','WHT'],[/\b(BLU|BLUE|BLEU)\b|BLEU$|BLU(?=FT|$)/,'bleu','BLU'],[/\b(ORA|ORANGE)\b/,'orange','ORA'],[/\b(GRIS|GREY|GRAY)\b/,'gris','GRY']];
 const FIL_UN_COND = ['RW90','T90'];
 function sigFil(code, desc){
   const sansAcc = x => String(x||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
@@ -4014,7 +4047,7 @@ function sigFil(code, desc){
   ];
   if(FIL_UN_COND.includes(type)){
     c='1';
-    const m = C.match(/^CAB(\d+(?:\/0)?)(?:\/\d+)?(?:RW90|T90)/) || C.match(/^RW(?:90)?(\d+(?:\/0)?)/) || D.match(/(\d+\/0|\d+)\s*(?:\(\d+\))?\s*(?:MCM\s*)?(?:RW90|T90)/) || D.match(/(\d+)\s*MCM/);
+    const m = C.match(/^CAB(\d+(?:\/0)?)(?:\/\d+)?(?:RW90|T90)/) || C.match(/^RW(?:90)?-?(\d+(?:\/0)?)/) || C.match(/^T90-?(\d+(?:\/0)?)/) || D.match(/(\d+\/0|\d+)\s*(?:\(\d+\))?\s*(?:MCM\s*)?(?:RW90|T90)/) || D.match(/(\d+)\s*MCM/);
     if(m) g=m[1];
   } else if(type==='CAT6' || type==='CAT6A'){ g='-'; c='-'; }
   else {
@@ -4022,14 +4055,15 @@ function sigFil(code, desc){
     else for(const src of [D, C]){ for(const f of essais){ const r=f(src); if(r){ g=r[0]; c=r[1]; break; } } if(g) break; }
   }
   if(!g || !c) return null;
+  g = {'00':'2/0','000':'3/0','0000':'4/0'}[g] || g;   // « deux fois le zéro » = 2/0
   let coul='', cc=''; for(const [re,n,k] of FIL_COUL){ if(re.test(C) || re.test(D)){ coul=n; cc=k; break; } }
   const alu = /ALU|NUAL|ALUMIN|\bAL\b|AL(BLK|WHI)|\dAL$|KVAL$/.test(T) || type==='ACWU';
   return {type, g, c, coul, cc, alu, base:[type,c,g,alu?'AL':''].join('|'), cle:[type,c,g,alu?'AL':'',coul].join('|')};
 }
-// Ton nom de code : NMD2C14, NMWU2C12, AC902C14, ACWU3C2, TECK3C4, RW90 2/0, T90 6… (+ couleur si le même fil existe en d'autres couleurs, + ALU)
+// Ton nom de code : NMD2C14, NMWU2C12, AC902C14, ACWU3C2, TECK3C4, RW90-2WHTALU, RW90-2/0BLK, T90-6BLK… (+ couleur si le même fil existe en d'autres couleurs, + ALU)
 function codeFil(s, couleurUtile){
   if(s.type==='CAT6' || s.type==='CAT6A') return '';
-  const base = FIL_UN_COND.includes(s.type) ? s.type+s.g : s.type+s.c+'C'+s.g;
+  const base = FIL_UN_COND.includes(s.type) ? s.type+'-'+s.g : s.type+s.c+'C'+s.g;   // RW90-2…, T90-6…
   return base + ((couleurUtile || FIL_UN_COND.includes(s.type)) && s.cc ? s.cc : '') + (s.alu && s.type!=='ACWU' ? 'ALU' : '');
 }
 const autresCodes = p => [...new Set([p.alias, ...(p.membres||[]).flatMap(m=>[m.code, m.alias])].filter(Boolean))];
@@ -4118,6 +4152,12 @@ function useCatalogue(cfg){
   const idS = cfg.stockSpreadsheetId, idJ = cfg.memoireJobsSpreadsheetId;
   const lire = useCallback(async(force)=>{
     if(!idS){ setEtat(s=>({...s, lu:true, err:'Le Sheet STOCK PUNCH PRO n\'est pas configuré (Réglages).'})); return; }
+    // v122 : tout est lu en même temps (au lieu d'un onglet après l'autre)
+    const tot = f => { try{ return f().then(r=>({r}), e=>({e})); }catch(e){ return Promise.resolve({e}); } };
+    const att = pr => pr.then(x=>{ if(x.e) throw x.e; return x.r; });
+    const pFiches = tot(()=>lireCache(idJ, 'Produits!A1:L', force)), pOffres = tot(()=>lireCache(idJ, "'Prix fournisseurs'!A1:Q", force));
+    const pPrix = tot(()=>lireCache(idJ, 'Prix!A1:C', force)), pLiens = tot(()=>lireCache(idJ, 'Correspondances!A1:D', force));
+    const pFact = tot(()=>lireCache(cfg.memoireFacturesSpreadsheetId, 'Lignes!A1:F', force)), pAch = tot(()=>sheetsBatchGet(cfg.memoireAchatsSpreadsheetId, ['A1:C', 'Lignes!A1:F']));
     try{
       const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:idS, fields:'sheets.properties.title'});
       const cats = (meta.result.sheets||[]).map(x=>x.properties.title).filter(t=>!STOCK_HORS_CATALOGUE.includes(t));
@@ -4128,7 +4168,7 @@ function useCatalogue(cfg){
       // v116 : fiches produits (ta liste du logiciel comptable, classée) et prix des sites fournisseurs — La mémoire — Jobs
       const parK = {}; produits.forEach(p=>{ parK[codeNorm(p.code)] = p; });
       const fichesLues = [];
-      try{ const fp = await lireCache(idJ, 'Produits!A1:L', force);
+      try{ const fp = await att(pFiches);
         (fp.result.values||[]).slice(1).forEach((r,i)=>{ const code = String(r[0]||'').trim(); const k = codeNorm(code); if(!k) return;
           const f = {row:i+2, code, desc:r[1]||'', cat:r[2]||'À CLASSER', sous:r[3]||'', unite:r[4]||'', photo:r[5]||'', fab:r[6]||'', notes:r[7]||'', source:r[8]||'', le:r[9]||'', alias:String(r[10]||'').trim(), groupe:String(r[11]||'').trim()};
           fichesLues.push(f);
@@ -4151,7 +4191,7 @@ function useCatalogue(cfg){
         const i = produits.indexOf(n); if(i>=0) produits.splice(i,1);
         Object.keys(parK).forEach(x=>{ if(parK[x]===n) parK[x]=m; }); });
       let offres = [];
-      try{ const op = await lireCache(idJ, "'Prix fournisseurs'!A1:Q", force);
+      try{ const op = await att(pOffres);
         offres = (op.result.values||[]).slice(1).map((r,i)=>({row:i+2, f:r[0]||'', codeF:r[1]||'', fab:r[2]||'', marque:r[3]||'', desc:r[4]||'', cat:r[5]||'', unite:r[6]||'', prix:cvNum(r[7]),
           liste:cvNum(r[8]), stock:r[9]||'', succ:r[10]||'', url:r[11]||'', photo:r[12]||'', vendu:r[13]||'', saran:r[14]||'', corr:r[15]||'', date:r[16]||''})).filter(o=>o.f && o.codeF); }catch(e){}
       const ordre = c => { const i = CAT_ORDRE.indexOf(c); return i<0 ? 50 : i; };
@@ -4159,18 +4199,18 @@ function useCatalogue(cfg){
       produits.sort((a,b)=>ordre(a.cat)-ordre(b.cat) || (a.sous||'').localeCompare(b.sous||'') || String(a.code).localeCompare(String(b.code)));
       // Mes prix + réglages (onglet « Prix » : PROFIL = profil de profit) et correspondances fournisseur → produit
       const prix = {}; let profil = 'Base';
-      try{ const p = await lireCache(idJ, 'Prix!A1:C', force); (p.result.values||[]).slice(1).forEach((r,i)=>{ if(!r[0]) return; if(r[0]==='PROFIL'){ profil = r[1]||'Base'; prix.PROFIL={row:i+2}; return; } prix[codeNorm(r[0])] = {prix:cvNum(r[1]), row:i+2, code:r[0]}; }); }catch(e){}
+      try{ const p = await att(pPrix); (p.result.values||[]).slice(1).forEach((r,i)=>{ if(!r[0]) return; if(r[0]==='PROFIL'){ profil = r[1]||'Base'; prix.PROFIL={row:i+2}; return; } prix[codeNorm(r[0])] = {prix:cvNum(r[1]), row:i+2, code:r[0]}; }); }catch(e){}
       const liens = {};
-      try{ const l = await lireCache(idJ, 'Correspondances!A1:D', force); (l.result.values||[]).slice(1).forEach((r,i)=>{ if(r[0]) liens[codeNorm(r[0])] = {produit:r[2]||'', row:i+2, fournisseur:r[1]||''}; }); }catch(e){}
+      try{ const l = await att(pLiens); (l.result.values||[]).slice(1).forEach((r,i)=>{ if(r[0]) liens[codeNorm(r[0])] = {produit:r[2]||'', row:i+2, fournisseur:r[1]||''}; }); }catch(e){}
       // Dernier prix facturé à tes clients : chaque jeton de la colonne Codes (registre des factures › Lignes)
       const facture = {};
-      try{ const f = await lireCache(cfg.memoireFacturesSpreadsheetId, 'Lignes!A1:F', force);
+      try{ const f = await att(pFact);
         (f.result.values||[]).slice(1).forEach(r=>{ const p=cvNum(r[4]); const n=Number(r[0])||0; if(p==null) return;
           codeJetons(r[1]).forEach(k=>{ if(!facture[k] || n>=facture[k].n) facture[k]={prix:p, n}; }); }); }catch(e){}
       // Achats (factures fournisseurs) : une ligne par article acheté, avec la date de la facture
       let achats = [];
       try{
-        const [ent, lig] = await sheetsBatchGet(cfg.memoireAchatsSpreadsheetId, ['A1:C', 'Lignes!A1:F']);
+        const [ent, lig] = await att(pAch);
         const dates = {}; (ent||[]).slice(1).forEach(r=>{ if(r[0]) dates[r[0]+'|'+r[1]] = r[2]||''; });
         achats = (lig||[]).slice(1).map(r=>{ const q=cvNum(r[4])||0, m=cvNum(r[5]); return {fournisseur:r[0]||'', facture:r[1]||'', code:r[2]||'', desc:r[3]||'', qte:q, cout: q>0 && m!=null ? arrondi(m/q) : null, date:dates[(r[0]||'')+'|'+(r[1]||'')]||''}; })
           .filter(a=>a.code && a.cout!=null && a.cout>0);
@@ -4588,14 +4628,14 @@ function ProduitsView({cfg, toast}){
 
 // v121 : codes rangés sous ce produit (logiciel comptable, PunchPro…) — retirer ou ajouter un code au groupe
 function GroupeFiche({p, C, toast, err}){
-  const [ajout,setAjout]=useState(false); const [occupe,setOccupe]=useState(false);
-  const fais = async (f, msg)=>{ setOccupe(true); try{ await f(); await C.lire(true); toast&&toast(msg); }catch(e){ err(e); } setOccupe(false); };
+  const [ajout,setAjout]=useState(false); const [occupe,setOccupe]=useState(false); const [retires,setRetires]=useState({});
+  const fais = async (f, msg)=>{ setOccupe(true); try{ await f(); toast&&toast(msg); await C.lire(true); }catch(e){ err(e); setRetires({}); } setOccupe(false); };
   const src = m => m.src==='punch' ? 'PunchPro' : ((m.fiche && m.fiche.source) || 'Logiciel comptable');
   return <div style={{display:'grid',gap:4,fontSize:12.5}}>
     {(p.membres||[]).length>0 && <div className="muted" style={{fontSize:12}}>Codes regroupés sous {p.code} :</div>}
-    {(p.membres||[]).map(m=><div key={m.code} style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+    {(p.membres||[]).filter(m=>!retires[m.code]).map(m=><div key={m.code} style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
       <b>{m.code}</b><span>{m.desc}</span><span className="muted" style={{fontSize:11}}>· {src(m)}</span>
-      <button className="btn btn-sm" style={{padding:'1px 6px',fontSize:11}} disabled={occupe} title="Ce n'est pas le même produit" onClick={()=>fais(()=>C.retirerDuGroupe(m), 'Retiré du groupe : '+m.code)}>retirer</button>
+      <button className="btn btn-sm" style={{padding:'1px 6px',fontSize:11}} disabled={occupe} title="Ce n'est pas le même produit" onClick={()=>{ setRetires(r=>({...r, [m.code]:true})); fais(()=>C.retirerDuGroupe(m), 'Retiré du groupe : '+m.code); }}>retirer</button>
     </div>)}
     <div><button className="btn btn-sm" disabled={occupe} onClick={()=>setAjout(!ajout)}>🧩 Ranger un autre code sous {p.code}</button></div>
     {ajout && <ChoixProduit produits={C.produits.filter(x=>x!==p)} onChoix={x=>{ setAjout(false); fais(()=>C.regrouper(p.code, '', [x]), x.code+' → '+p.code); }}/>}
@@ -4603,20 +4643,20 @@ function GroupeFiche({p, C, toast, err}){
 }
 
 function RegrouperVue({C, toast, err, q}){
-  const [ed,setEd]=useState({}); const [occupe,setOccupe]=useState('');
+  const [ed,setEd]=useState({}); const [occupe,setOccupe]=useState(''); const [faits,setFaits]=useState({});
   const [lim,setLim]=useState(60);
   const base = g => ({code:g.code, desc:g.desc, coche:Object.fromEntries(g.membres.map(m=>[codeNorm(m.p.code), m.fort]))});
   const etatDe = g => ed[g.id] || base(g);
   const maj = (g, x) => setEd(s=>({...s, [g.id]:{...etatDe(g), ...x}}));
   const choisis = g => { const e = etatDe(g); return g.membres.filter(m=>e.coche[codeNorm(m.p.code)]).map(m=>m.p); };
   const valide = g => { const e = etatDe(g), k = codeNorm(e.code); return k && choisis(g).filter(p=>codeNorm(p.code)!==k).length>=1; };
-  const liste = C.propositions.filter(g=>!q || cvNorm(g.code+' '+g.desc+' '+g.membres.map(m=>m.p.code+' '+m.p.desc).join(' ')).includes(cvNorm(q)));
+  const liste = C.propositions.filter(g=>!faits[g.id]).filter(g=>!q || cvNorm(g.code+' '+g.desc+' '+g.membres.map(m=>m.p.code+' '+m.p.desc).join(' ')).includes(cvNorm(q)));
   const filsOk = liste.filter(g=>g.fil && valide(g));
-  const confirmer = async gs=>{ setOccupe('Regroupement…');
+  const confirmer = async gs=>{ setOccupe('Regroupement…'); setFaits(f=>({...f, ...Object.fromEntries(gs.map(g=>[g.id,true]))}));
     try{ for(const g of gs){ const e = etatDe(g); await C.regrouper(e.code, e.desc, choisis(g)); }
-      await C.lire(true); setEd({}); toast&&toast(gs.length>1 ? gs.length+' groupes faits' : 'Regroupé sous '+etatDe(gs[0]).code); }catch(e){ err(e); }
+      await C.lire(true); setEd({}); toast&&toast(gs.length>1 ? gs.length+' groupes faits' : 'Regroupé sous '+etatDe(gs[0]).code); }catch(e){ err(e); setFaits({}); await C.lire(true); }
     setOccupe(''); };
-  const refuser = async g=>{ setOccupe('…'); try{ const e = etatDe(g); await C.pasPareil(g.membres.map(m=>m.p).filter(p=>codeNorm(p.code)!==codeNorm(e.code))); await C.lire(true); toast&&toast('Noté : pas le même produit'); }catch(e){ err(e); } setOccupe(''); };
+  const refuser = async g=>{ setOccupe('…'); setFaits(f=>({...f, [g.id]:true})); try{ const e = etatDe(g); await C.pasPareil(g.membres.map(m=>m.p).filter(p=>codeNorm(p.code)!==codeNorm(e.code))); await C.lire(true); toast&&toast('Noté : pas le même produit'); }catch(e){ err(e); } setOccupe(''); };
   const src = p => p.src==='punch' ? 'PunchPro' : ((p.fiche && p.fiche.source) || 'Logiciel comptable');
   if(C.lu && !liste.length) return <div className="card muted" style={{fontSize:13}}>Rien à regrouper 👍</div>;
   return <div style={{display:'grid',gap:8}}>
@@ -6781,12 +6821,39 @@ function cvHeure(iso){ const m=String(iso||'').match(/T(\d{2}):(\d{2})/); return
 // Étapes cochées à la main dans Projets : onglet « Etapes » du registre des jobs (Job | Étape | Statut | Le).
 // Petites lectures partagées entre les onglets (Commandes, Etapes, Adresses) : gardées 2 min.
 const LECT_CACHE = {};
+// v122 : chaque écriture dans un Sheet est suivie (onglet + moment). Une lecture attend les écritures en cours sur son onglet,
+// ignore le cache s'il est plus vieux que la dernière écriture, et relit si quelqu'un a écrit pendant qu'elle lisait.
+// Résultat : après un lien ou un changement, l'écran ne revient plus en arrière.
+const ECRIT = {};
+const ongletDe = r => { const x = String(r||''); const m = x.match(/^'((?:[^']|'')+)'!/) || x.match(/^([^!']+)!/); return m ? m[1].replace(/''/g,"'") : (/^\$?[A-Z]+\$?\d*(:\$?[A-Z]+\$?\d*)?$/i.test(x) ? '*' : x); };
+function ecritureSur(id, onglet, promesse){
+  const e = (ECRIT[id] = ECRIT[id] || {}), x = (e[onglet] = e[onglet] || {t:0, p:new Set()});
+  x.t = Date.now(); x.p.add(promesse); const fin = ()=>{ x.p.delete(promesse); x.t = Date.now(); }; promesse.then(fin, fin);
+}
+function derniereEcriture(id, onglet){ let t=0; const ps=[]; Object.entries(ECRIT[id]||{}).forEach(([k,x])=>{ if(onglet==='*' || k==='*' || k===onglet){ t=Math.max(t,x.t); ps.push(...x.p); } }); return {t, ps}; }
+function suivreEcritures(){
+  const s = window.gapi && window.gapi.client && window.gapi.client.sheets && window.gapi.client.sheets.spreadsheets; if(!s || s.__suivi) return; s.__suivi = true;
+  const env = (obj, m, onglets)=>{ const f = obj && obj[m]; if(typeof f!=='function') return;
+    obj[m] = function(o){ const pr = Promise.resolve(f.apply(this, arguments)); try{ onglets(o||{}).forEach(n=>ecritureSur(o.spreadsheetId, n, pr)); }catch(e){} return pr; }; };
+  env(s.values,'update',o=>[ongletDe(o.range)]); env(s.values,'append',o=>[ongletDe(o.range)]); env(s.values,'clear',o=>[ongletDe(o.range)]);
+  env(s.values,'batchUpdate',o=>((o.resource&&o.resource.data)||[]).map(d=>ongletDe(d.range))); env(s.values,'batchClear',o=>((o.resource&&o.resource.ranges)||[]).map(ongletDe));
+  env(s,'batchUpdate',()=>['*']);
+}
 async function lireCache(id, range, force){
-  const k = id+'|'+range, c = LECT_CACHE[k];
-  if(!force && c && Date.now()-c.t < 120000) return c.r;
-  const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range});
-  LECT_CACHE[k] = {t:Date.now(), r};
-  return r;
+  suivreEcritures();
+  const k = id+'|'+range, ong = ongletDe(range);
+  for(let essai=0; essai<4; essai++){
+    let w = derniereEcriture(id, ong);
+    if(w.ps.length){ await Promise.allSettled(w.ps); w = derniereEcriture(id, ong); }
+    const c = LECT_CACHE[k];
+    if(!force && c && c.t > w.t && Date.now()-c.t < 120000) return c.r;
+    const t0 = Date.now();
+    const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range});
+    const w2 = derniereEcriture(id, ong);
+    if((w2.ps.length || w2.t >= t0) && essai<3){ force = true; continue; }   // écrit pendant la lecture → relire
+    LECT_CACHE[k] = {t:Date.now(), r};
+    return r;
+  }
 }
 function useEtapesManuelles(cfg){
   const [etat,setEtat]=useState({map:{}, rows:{}, lu:false});
