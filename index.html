@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v130';
+const APP_VERSION = 'v131';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4142,7 +4142,20 @@ const SOUS_SUGG = {
   'ENTRÉE ÉLECTRIQUE':['Sectionneur','Embase de compteur','Mât et tête de service','Autres'],
   'PANNEAUX':['QO · Square D','Homeline · Schneider (CHOM)','BR · Eaton','Siemens','GE','Autres'],
   'DISJONCTEURS':['QO · Square D','Homeline · Schneider (CHOM)','BR · Eaton','Siemens','GE','Autres'],
-  'CONNEXIONS / MALT':['MALT','Raccordement']};
+  'CONNEXIONS / MALT':['MALT','Raccordement'],
+  'DÉCORA':['Prises','Interrupteurs','Gradateurs','Intelligent','Plaques','Minuteries et détecteurs','Fiches','Carillons']};
+// v131 : Décora par sous-catégorie (on ne change pas la catégorie, seulement la sous-catégorie)
+function sousDecora(T){
+  if(/CASETA|PICO\b|^PICO|WI-?FI|SMART|INTELLIGENT|ZIGBEE|Z-?WAVE|\bRA2\b|MYQ|HOMEKIT|KIT PICO|KSC2V|\bKSC/.test(T)) return 'Intelligent';
+  if(/GRADATEUR|DIMMER|VARIATEUR|DVCL|\bDIVA\b|^DV|MACL|CTCL|\bMA-?\d|LUTDV/.test(T)) return 'Gradateurs';
+  if(/MINUTERIE|TIMER|\bTI\d|OCCUPANCY|VACANCY|MOUVEMENT|MOTION|HUMIDIT|DETECTEUR DE PRESENCE|\bDHS|ODS|\bPIR\b/.test(T)) return 'Minuteries et détecteurs';
+  if(/PLAQUE|PLATE|WALLPLATE|\dGPJ|\dGSW|VIERGE|COUVERCLE|COUV\b|\bWP\d|INTEMP|80714/.test(T)) return 'Plaques';
+  if(/PRISE|RECEPT|OUTLET|\bGFI|GFCI|DDFT|\bUSB|^T5\d{3}|GFTR|SECHEUSE|POELE|14-30|14-50|10-30|DUPLEX|RECPT|5-15|5-20/.test(T)) return 'Prises';
+  if(/PLUG\b(?!-IN)|\bFICHE/.test(T)) return 'Fiches';
+  if(/CARILLON|SONNETTE|CHIME|DOORBELL|BOUTON C/.test(T)) return 'Carillons';
+  if(/INTERRUPTEUR|\bINTERR\b|SWITCH|^56\d{2}|\b56\d{2}-|3-VOIES|4-VOIES|3 VOIES|4 VOIES|UNIPOLAIRE|SINGLE POLE|\bSPST/.test(T)) return 'Interrupteurs';
+  return '';
+}
 const FIL_SOUS = {NMD:'NMD', NMWU:'NMWU', AC90:'AC90 / BX', ACWU:'ACWU', TECK:'TECK', RW90:'RW90', T90:'T90', LVT:'LVT', SOOW:'SOOW', SJOOW:'SOOW', CAT6:'Réseau', CAT6A:'Réseau'};
 function marquePanneau(T){
   if(/SIEMENS|^SIE|\bSIEQ|^Q\d{3}|^B\d{3,4}\b|\bQP\b/.test(T)) return 'Siemens';
@@ -4156,6 +4169,9 @@ const CAT_FIXES = /^(BORNES|D[ÉE]CORA|[ÉE]CLAIRAGE|SERVICES|ADMIN|CONTR[ÔO]LE
 function classerProduit(code, desc, catActuelle){
   const sansAcc = x => String(x||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
   const C = sansAcc(code), D = sansAcc(desc), T = C+' '+D, cat = String(catActuelle||'');
+  if(/^D[ÉE]CORA/i.test(cat)){
+    if(/BREAKER|DISJ|\bBRK\b|PLUG-IN|TWIN \d|SIEMENS TWIN/.test(T) || (sigDisj(code, desc) && !/PRISE|RECEPT|PLUG|FICHE/.test(T))) return {cat:'DISJONCTEURS', sous:marquePanneau(T)};   // disjoncteur rangé dans Décora par erreur
+    const sd = sousDecora(T); return sd ? {cat, sous:sd} : null; }
   if(CAT_FIXES.test(cat)) return null;
   // entrée électrique (pas les panneaux : ils ont leur catégorie)
   if(/DISCONNECT|SECTIONNEUR|DISCONNECTEUR|^DIS \d|\bDIS \d+A|SAFETY SWITCH|NON-?FUS/.test(T)) return {cat:'ENTRÉE ÉLECTRIQUE', sous:'Sectionneur'};
