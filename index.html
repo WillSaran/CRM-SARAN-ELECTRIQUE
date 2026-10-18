@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v120';
+const APP_VERSION = 'v121';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3981,11 +3981,68 @@ function prixPolitique(cout, profil){ if(cout==null || !(cout>0)) return null; r
 const codeJetons = s => String(s||'').split(/[\s,]+/).map(codeNorm).filter(t=>t.length>=4 && !/^\d+(V|KA|W|A)$/.test(t) && !/HOLES$/.test(t) && !/^\d+$/.test(t));
 // Code fournisseur sans le préfixe de marque (LEV-T5325-W → T5325W, ABB-BC1110 → BC1110)
 const codeSansMarque = c => codeNorm(String(c||'').replace(/^[A-Z]{2,4}-(?=\S)/i,''));
+// v121 : un produit = TON code (ex. NMD2C6). Les autres codes (logiciel comptable, PunchPro, Lumen, Dubo) se rangent dessous.
+// Signature d'un fil : type + conducteurs + calibre + couleur + alu → sert à PROPOSER les regroupements (tu confirmes).
+const FIL_COUL = [[/YELLOW|\b(YEL|JAUNE|YL)\b|YEL(?=X|\d|$)/,'jaune','YEL'],[/\b(RED|ROUGE|RD)\b|RED(?=X|\d|$)/,'rouge','RED'],[/\b(BLK|BLACK|NOIR|BK)\b|BLK/,'noir','BLK'],
+  [/\bBLW\b|BLEU-BLANC|BLW(?=ALU)/,'bleu-blanc','BLW'],[/\b(WHI|WHT|WHITE|BLANC|BLANCHE)\b|WHI|WHT/,'blanc','WHI'],[/\b(BLU|BLUE|BLEU)\b|BLEU$|BLU(?=FT|$)/,'bleu','BLU'],[/\b(ORA|ORANGE)\b/,'orange','ORA'],[/\b(GRIS|GREY|GRAY)\b/,'gris','GRY']];
+const FIL_UN_COND = ['RW90','T90'];
+function sigFil(code, desc){
+  const sansAcc = x => String(x||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+  const C = sansAcc(code), D = sansAcc(desc), T = C+' '+D;
+  if(/CONN|CONNECT|BOITE|BOX|CLIP|COUV|PLAQUE|BRIDE|STRAP|EMBOUT|RACCORD/.test(T)) return null;
+  const lum = C.match(/^CAB(\d+(?:\/0)?)\/(\d)([DW])/);           // Lumen : cab14/2d… = NMD90, cab6/2w… = NMWU
+  let type = '';
+  if(/NMWU/.test(T) || (lum && lum[3]==='W')) type='NMWU';
+  else if(/NMD|LOOMEX/.test(T) || (lum && lum[3]==='D')) type='NMD';
+  else if(/ACWU/.test(T)) type='ACWU';
+  else if(/AC90|\bBX\b|^BX|^AC\d/.test(T)) type='AC90';
+  else if(/TECK/.test(T)) type='TECK';
+  else if(/RW90|^RW\d/.test(T)) type='RW90';
+  else if(/\bT90\b|\dT90/.test(T)) type='T90';
+  else if(/LVT/.test(T)) type='LVT';
+  else if(/SJOOW/.test(T)) type='SJOOW';
+  else if(/SOOW/.test(T)) type='SOOW';
+  else if(/CAT ?6A|PR6A/.test(T)) type='CAT6A';
+  else if(/CAT ?6|4PR6|PCAT6/.test(T)) type='CAT6';
+  if(!type) return null;
+  let g='', c='';
+  const essais = [
+    s=>{ const m=s.match(/(?:^|[^0-9])(\d)C\s*(\d+\/0|\d+)(?!\d)/); return m && [m[2],m[1]]; },                          // 2C14, 3C2/0
+    s=>{ const m=s.match(/(\d+\/0|\d+)(?:\(\d+\))?(?:\s*AWG)?(?:\s+|\s*[-\/]\s*)(\d)C\b/); return m && [m[1],m[2]]; },     // 6(7) 2C, 14 3C, 6AWG/3C, 12-3C
+    s=>{ const m=s.match(/\b(\d+)-(\d)C?\b/); return m && [m[1],m[2]]; },                                                // NMWU 14-2
+    s=>{ const m=s.match(/\b(\d+)\/(\d)\b(?!\d)/); return m && m[2]!=='0' && [m[1],m[2]]; },                             // 14/2
+  ];
+  if(FIL_UN_COND.includes(type)){
+    c='1';
+    const m = C.match(/^CAB(\d+(?:\/0)?)(?:\/\d+)?(?:RW90|T90)/) || C.match(/^RW(?:90)?(\d+(?:\/0)?)/) || D.match(/(\d+\/0|\d+)\s*(?:\(\d+\))?\s*(?:MCM\s*)?(?:RW90|T90)/) || D.match(/(\d+)\s*MCM/);
+    if(m) g=m[1];
+  } else if(type==='CAT6' || type==='CAT6A'){ g='-'; c='-'; }
+  else {
+    if(lum){ g=lum[1]; c=lum[2]; }
+    else for(const src of [D, C]){ for(const f of essais){ const r=f(src); if(r){ g=r[0]; c=r[1]; break; } } if(g) break; }
+  }
+  if(!g || !c) return null;
+  let coul='', cc=''; for(const [re,n,k] of FIL_COUL){ if(re.test(C) || re.test(D)){ coul=n; cc=k; break; } }
+  const alu = /ALU|NUAL|ALUMIN|\bAL\b|AL(BLK|WHI)|\dAL$|KVAL$/.test(T) || type==='ACWU';
+  return {type, g, c, coul, cc, alu, base:[type,c,g,alu?'AL':''].join('|'), cle:[type,c,g,alu?'AL':'',coul].join('|')};
+}
+// Ton nom de code : NMD2C14, NMWU2C12, AC902C14, ACWU3C2, TECK3C4, RW90 2/0, T90 6… (+ couleur si le même fil existe en d'autres couleurs, + ALU)
+function codeFil(s, couleurUtile){
+  if(s.type==='CAT6' || s.type==='CAT6A') return '';
+  const base = FIL_UN_COND.includes(s.type) ? s.type+s.g : s.type+s.c+'C'+s.g;
+  return base + ((couleurUtile || FIL_UN_COND.includes(s.type)) && s.cc ? s.cc : '') + (s.alu && s.type!=='ACWU' ? 'ALU' : '');
+}
+const autresCodes = p => [...new Set([p.alias, ...(p.membres||[]).flatMap(m=>[m.code, m.alias])].filter(Boolean))];
+const codesPunch = p => [...new Set([p.alias, ...(p.membres||[]).filter(m=>m.src==='punch').map(m=>m.code), ...(p.membres||[]).map(m=>m.alias)].filter(Boolean))];
+function descFil(s, couleurUtile){
+  const coul = (couleurUtile || FIL_UN_COND.includes(s.type)) && s.coul ? ' '+s.coul : '';
+  return (FIL_UN_COND.includes(s.type) ? s.type+' '+s.g : s.type+' '+s.c+' conducteurs '+s.g) + coul + (s.alu && s.type!=='ACWU' ? ' aluminium' : '');
+}
 
 // ===== v116 : PRODUITS — fiches (ta liste du logiciel comptable) + prix des sites fournisseurs (Manus) =====
 // Tout est dans « La mémoire — Jobs » (privé) : onglet « Produits » (sans prix) et onglet « Prix fournisseurs ».
 // STOCK PUNCH PRO (ce que les gars voient) n'est pas touché par l'import.
-const PROD_ENTETE = ['Code','Description','Catégorie','Sous-catégorie','Unité','Photo','Code fabricant','Notes','Source','Mis à jour','Code PunchPro'];
+const PROD_ENTETE = ['Code','Description','Catégorie','Sous-catégorie','Unité','Photo','Code fabricant','Notes','Source','Mis à jour','Code PunchPro','Regroupé sous'];
 const OFFRE_ENTETE = ['Fournisseur','Code fournisseur','Code fabricant','Marque','Description','Catégorie','Unité','Mon prix','Prix de liste','Stock','Succursale','URL','Photo','Vendu par','Code CRM','Correspondance','Date'];
 const CAT_ORDRE = ['FIL','CONDUIT','BOÎTES','DÉCORA','PANNEAUX','CHAUFFAGE','ÉCLAIRAGE','BORNES','CONNEXIONS / MALT','CONTRÔLE','DÉTECTION','QUINCAILLERIE','DIVERS','Stock personnalisé','SERVICES','À CLASSER','ADMINISTRATIF'];
 const FOURN_ORDRE = ['Dubo','Lumen','Gagnon'];
@@ -4045,7 +4102,7 @@ function offreDeCsv(o){
     corr: csvVal(o,'correspondance'), date: csvVal(o,'datedelecture','date')};
 }
 const offreLigne = o => [o.f, o.codeF, o.fab, o.marque, o.desc, o.cat, o.unite, o.prix, o.liste, o.stock, o.succ, o.url, o.photo, o.vendu, o.saran, o.corr, o.date];
-const ficheLigne = f => [f.code, f.desc, f.cat, f.sous, f.unite, f.photo, f.fab, f.notes, f.source||'', f.le||'', f.alias||''];
+const ficheLigne = f => [f.code, f.desc, f.cat, f.sous, f.unite, f.photo, f.fab, f.notes, f.source||'', f.le||'', f.alias||'', f.groupe||''];
 const uniteNorm = u => { const x = cvNorm(u); return /^(un|unite|ch|chaque|ea|unit|pc|piece)s?$/.test(x) ? 'un' : /^(pi|pied|pieds|ft)$/.test(x) ? 'pi' : /^(m|metre|metres|mtr)$/.test(x) ? 'm' : x; };
 // Photo d'un produit : adresse web (site fournisseur) ou fichier Drive (photo prise avec le CRM)
 function ProdPhoto({src, taille}){
@@ -4071,9 +4128,9 @@ function useCatalogue(cfg){
       // v116 : fiches produits (ta liste du logiciel comptable, classée) et prix des sites fournisseurs — La mémoire — Jobs
       const parK = {}; produits.forEach(p=>{ parK[codeNorm(p.code)] = p; });
       const fichesLues = [];
-      try{ const fp = await lireCache(idJ, 'Produits!A1:K', force);
+      try{ const fp = await lireCache(idJ, 'Produits!A1:L', force);
         (fp.result.values||[]).slice(1).forEach((r,i)=>{ const code = String(r[0]||'').trim(); const k = codeNorm(code); if(!k) return;
-          const f = {row:i+2, code, desc:r[1]||'', cat:r[2]||'À CLASSER', sous:r[3]||'', unite:r[4]||'', photo:r[5]||'', fab:r[6]||'', notes:r[7]||'', source:r[8]||'', le:r[9]||'', alias:String(r[10]||'').trim()};
+          const f = {row:i+2, code, desc:r[1]||'', cat:r[2]||'À CLASSER', sous:r[3]||'', unite:r[4]||'', photo:r[5]||'', fab:r[6]||'', notes:r[7]||'', source:r[8]||'', le:r[9]||'', alias:String(r[10]||'').trim(), groupe:String(r[11]||'').trim()};
           fichesLues.push(f);
           const x = parK[k];
           if(x){ if(!x.fiche){ x.fiche=f; x.photo=f.photo; x.sous=f.sous; x.fab=f.fab; } }
@@ -4084,6 +4141,15 @@ function useCatalogue(cfg){
         if(!n || !pp || n===pp || pp.src!=='punch' || n.src==='punch') return;
         n.alias = pp.code; n.punch = {code:pp.code, cat:pp.cat, row:pp.row, desc:pp.desc};
         const i = produits.indexOf(pp); if(i>=0) produits.splice(i,1); parK[codeNorm(pp.code)] = n; });
+      // v121 : « Regroupé sous » (colonne L) — ce produit se range sous ton code maître ; ses codes, prix, achats et factures suivent.
+      // Rien n'est changé dans STOCK PUNCH PRO : le produit PunchPro garde sa ligne et son code.
+      const groupeDe = {}; fichesLues.forEach(f=>{ if(f.groupe && f.groupe!=='≠') groupeDe[codeNorm(f.code)] = codeNorm(f.groupe); });
+      const racine = k => { let x=k, n=0; while(groupeDe[x] && groupeDe[x]!==x && n<8){ x=groupeDe[x]; n++; } return x; };
+      Object.keys(groupeDe).forEach(k=>{ const n = parK[k], m = parK[racine(k)]; if(!n || !m || n===m) return;
+        m.membres = [...(m.membres||[]), n, ...(n.membres||[])]; n.membres = [];
+        ['photo','fab','sous'].forEach(c=>{ if(!m[c] && n[c]) m[c]=n[c]; }); if(m.cat==='À CLASSER' && n.cat && n.cat!=='À CLASSER') m.cat=n.cat;
+        const i = produits.indexOf(n); if(i>=0) produits.splice(i,1);
+        Object.keys(parK).forEach(x=>{ if(parK[x]===n) parK[x]=m; }); });
       let offres = [];
       try{ const op = await lireCache(idJ, "'Prix fournisseurs'!A1:Q", force);
         offres = (op.result.values||[]).slice(1).map((r,i)=>({row:i+2, f:r[0]||'', codeF:r[1]||'', fab:r[2]||'', marque:r[3]||'', desc:r[4]||'', cat:r[5]||'', unite:r[6]||'', prix:cvNum(r[7]),
@@ -4115,7 +4181,7 @@ function useCatalogue(cfg){
   useEffect(()=>{ lire(); },[lire]);
 
   // Produit du catalogue pour un code fournisseur : lien confirmé, sinon code identique (sans la marque), sinon rien (« à confirmer »).
-  const parCode = useMemo(()=>{ const m={}; etat.produits.forEach(p=>{ m[codeNorm(p.code)] = p; }); etat.produits.forEach(p=>{ if(p.alias && !m[codeNorm(p.alias)]) m[codeNorm(p.alias)] = p; }); return m; },[etat.produits]);
+  const parCode = useMemo(()=>{ const m={}; etat.produits.forEach(p=>{ m[codeNorm(p.code)] = p; }); etat.produits.forEach(p=>{ autresCodes(p).forEach(c=>{ if(!m[codeNorm(c)]) m[codeNorm(c)] = p; }); }); return m; },[etat.produits]);
   const codeMaitre = code => { const p = parCode[codeNorm(code)]; return p ? p.code : code; };   // v120 : le code PunchPro mène au même produit
   const produitDe = useCallback(codeF => {
     const l = etat.liens[codeNorm(codeF)];
@@ -4142,7 +4208,7 @@ function useCatalogue(cfg){
 
   // v116 : prix des sites fournisseurs reliés à tes produits — lien confirmé > « Code CRM » de Manus > même code > même code fabricant
   const liensOffres = useMemo(()=>{
-    const parFab = {}; etat.produits.forEach(p=>{ if(p.fab) parFab[codeNorm(p.fab)] = p; });
+    const parFab = {}; etat.produits.forEach(p=>{ [p, ...(p.membres||[])].forEach(x=>{ if(x.fab && !parFab[codeNorm(x.fab)]) parFab[codeNorm(x.fab)] = p; }); });
     const par = {}, libres = [], deja = new Map();
     const trouver = o => {
       const l = etat.liens[codeNorm(o.codeF)];
@@ -4174,7 +4240,7 @@ function useCatalogue(cfg){
   // Coût : le meilleur prix de compte lu sur les sites fournisseurs, sinon ton dernier achat
   const coutDe = code => { const o = meilleureOffre(code); if(o) return {prix:o.prix, fournisseur:o.f, date:o.date, site:true};
     const c = coutsDe(code)[0]; return c ? {prix:c.cout, fournisseur:c.fournisseur, date:c.date} : null; };
-  const codesDe = code => { const p = parCode[codeNorm(code)]; return [...new Set([codeNorm(code), ...(p ? [codeNorm(p.code), codeNorm(p.alias||'')] : [])].filter(Boolean))]; };
+  const codesDe = code => { const p = parCode[codeNorm(code)]; return [...new Set([codeNorm(code), ...(p ? [p.code, ...autresCodes(p)].map(codeNorm) : [])].filter(Boolean))]; };
   const factureDe = code => { let best=null; codesDe(code).forEach(k=>{ const f = etat.facture[k]; if(f && (!best || f.n>best.n)) best=f; }); return best; };
   const monPrix = code => { for(const k of codesDe(code)){ const x = etat.prix[k]; if(x && x.prix!=null) return x; } return null; };
   const suggereDe = code => { const c = coutDe(code); return c ? prixPolitique(c.prix, etat.profil) : null; };
@@ -4236,10 +4302,10 @@ function useCatalogue(cfg){
   const maintenant = () => new Date().toLocaleString('fr-CA');
   // Ta liste de produits : ajoute les nouveaux codes, remplit seulement les cases vides des produits déjà là.
   const importerProduits = async (liste)=>{
-    const rows = await lireOnglet('Produits', 'A1:K'); const idx = {}; rows.forEach((r,i)=>{ const k=codeNorm(r[0]); if(k && idx[k]==null) idx[k]=i; });
+    const rows = await lireOnglet('Produits', 'A1:L'); const idx = {}; rows.forEach((r,i)=>{ const k=codeNorm(r[0]); if(k && idx[k]==null) idx[k]=i; });
     let nouveaux=0, maj=0; const le = maintenant();
     liste.forEach(f=>{ const k = codeNorm(f.code); if(!k) return;
-      if(idx[k]!=null){ const r = rows[idx[k]]; while(r.length<11) r.push(''); let ch=false;
+      if(idx[k]!=null){ const r = rows[idx[k]]; while(r.length<12) r.push(''); let ch=false;
         [[1,f.desc],[2,f.cat],[3,f.sous],[4,f.unite],[5,f.photo],[6,f.fab]].forEach(([i,v])=>{ if(v && (!String(r[i]||'').trim() || (i===2 && r[i]==='À CLASSER' && v!=='À CLASSER'))){ r[i]=v; ch=true; } });
         if(r[8]==='Import'){ r[8]='Logiciel comptable'; ch=true; }
         if(ch){ r[9]=le; maj++; } }
@@ -4273,20 +4339,73 @@ function useCatalogue(cfg){
   // Fiche : catégorie, sous-catégorie, photo, notes (et code / description / unité). Un produit PunchPro garde sa ligne dans STOCK PUNCH PRO.
   const modifierFiche = async (p, n)=>{
     const f = p.fiche;
-    const ligne = ficheLigne({code:n.code, desc:n.desc, cat:n.cat, sous:n.sous, unite:n.unite, photo:n.photo, fab:(f&&f.fab)||p.fab||'', notes:n.notes, source:(f&&f.source)||'Saran', le:maintenant(), alias:n.alias!==undefined ? n.alias : ((f&&f.alias)||'')});
+    const ligne = ficheLigne({code:n.code, desc:n.desc, cat:n.cat, sous:n.sous, unite:n.unite, photo:n.photo, fab:(f&&f.fab)||p.fab||'', notes:n.notes, source:(f&&f.source)||'Saran', le:maintenant(), alias:n.alias!==undefined ? n.alias : ((f&&f.alias)||''), groupe:(f&&f.groupe)||''});
     if(p.src==='punch' && (n.code!==p.code || n.desc!==p.desc || n.unite!==p.unite)) await modifierProduit(p, {code:n.code, desc:n.desc, unite:n.unite});
     else if(p.src!=='punch') await suivreCode(p.code, n.code);
     if(f && f.row) await sheetsUpdateRow(idJ, 'Produits', f.row, ligne);
     else { await ensureOnglet('Produits', PROD_ENTETE); await sheetsAppendRow(idJ, 'Produits', ligne); }
   };
+  // v121 : propositions de regroupement (tu confirmes chaque groupe) — fils par signature, autres par code
+  const propositions = useMemo(()=>{
+    const N = codeNorm, mot1 = d => N(String(d||'').trim().split(/\s+/)[0]);
+    const prods = etat.produits.filter(p=>!(p.fiche && p.fiche.groupe==='≠'));
+    const par = new Map(); prods.forEach(p=>par.set(p,p));
+    const trouve = p => { while(par.get(p)!==p){ par.set(p, par.get(par.get(p))); p = par.get(p); } return p; };
+    const forts = new Set();
+    const unir = (a,b,fort)=>{ if(a===b) return; par.set(trouve(a), trouve(b)); if(fort){ forts.add(a); forts.add(b); } };
+    const sig = new Map(), parBase = {};
+    prods.forEach(p=>{ if(!(p.cat==='FIL' || /^(CAB|NMD|NMWU|LVT|ACWU|AC\d|AC90|BX|TECK|RW|T90|SOOW|SJOOW|TELE4P|CAT ?6|WIRE)/i.test(p.code))) return;
+      const x = sigFil(p.code, p.desc); if(x){ sig.set(p,x); (parBase[x.base] = parBase[x.base] || new Set()).add(x.coul); } });
+    const parCle = {}; sig.forEach((x,p)=>{ (parCle[x.cle] = parCle[x.cle] || []).push(p); });
+    Object.values(parCle).forEach(l=>{ for(let i=1;i<l.length;i++) unir(l[0], l[i], true); });
+    const parN = {}; prods.forEach(p=>{ parN[N(p.code)] = p; });
+    prods.forEach(p=>{ const w = mot1(p.desc); const y = w.length>=4 && /\d/.test(w) && w!==N(p.code) ? parN[w] : null; if(y && y!==p) unir(p,y,true);
+      const m = N(p.code).match(/^[A-Z]{2,4}(.{4,})$/); const z = m && /\d/.test(m[1]) ? parN[m[1]] : null; if(z && z!==p) unir(p,z,true); });
+    const fiches = prods.filter(p=>p.src!=='punch');
+    prods.filter(p=>p.src==='punch').forEach(p=>{ const k = N(String(p.code).replace(/\(.*?\)/g,'')); if(k.length<4 || !/\d/.test(k)) return;
+      fiches.forEach(f=>{ if(N(f.code).includes(k) || mot1(f.desc).startsWith(k)) unir(p,f,false); }); });
+    const comp = new Map(); prods.forEach(p=>{ const r = trouve(p); if(!comp.has(r)) comp.set(r,[]); comp.get(r).push(p); });
+    const out = [];
+    comp.forEach(l=>{ if(l.length<2) return;
+      const ss = l.map(p=>sig.get(p)); const s0 = ss.every(x=>x && x.cle===ss[0].cle) ? ss[0] : null;
+      let code='', desc='';
+      if(s0){ const utile = (parBase[s0.base]||new Set()).size>1; code = codeFil(s0, utile); desc = code ? descFil(s0, utile) : ''; }
+      let maitre = null;
+      if(code){ for(const c of [code, codeFil(s0,true), codeFil(s0,false)]){ maitre = l.find(p=>N(p.code)===N(c)) || null; if(maitre) break; } }
+      if(!code) maitre = l.find(p=>p.src==='punch') || l.find(p=>l.some(q=>q!==p && mot1(q.desc)===N(p.code))) || [...l].sort((a,b)=>a.code.length-b.code.length)[0];
+      if(maitre){ code = maitre.code; if(maitre.src==='punch' || !desc) desc = maitre.desc; }
+      out.push({id:l.map(p=>N(p.code)).sort().join('+'), code, desc, maitre, fil:!!s0, membres:l.map(p=>({p, fort:forts.has(p) || p===maitre}))});
+    });
+    return out.sort((a,b)=>(b.fil-a.fil) || String(a.code).localeCompare(String(b.code)));
+  },[etat.produits]);
+  const trouverProduit = code => parCode[codeNorm(code)] || null;
+  const assurerColL = async ()=>{ await ensureOnglet('Produits', PROD_ENTETE);
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:idJ, range:'Produits!K1:L1', valueInputOption:'RAW', resource:{values:[['Code PunchPro','Regroupé sous']]}}); };
+  // Écrit « Regroupé sous » sur la fiche du produit (crée la fiche si c'est un produit PunchPro sans fiche). STOCK PUNCH PRO n'est pas touché.
+  const marquer = async (p, valeur)=>{ const f = p.fiche;
+    const base = f ? {...f} : {code:p.code, desc:p.desc, cat:p.cat==='Stock personnalisé' ? 'À CLASSER' : p.cat, sous:p.sous||'', unite:p.unite||'', photo:p.photo||'', fab:p.fab||'', notes:'', source:p.src==='punch' ? 'PunchPro' : 'Saran', alias:''};
+    const ligne = ficheLigne({...base, le:maintenant(), groupe:valeur});
+    if(f && f.row) await sheetsUpdateRow(idJ, 'Produits', f.row, ligne); else await sheetsAppendRow(idJ, 'Produits', ligne); };
+  const regrouper = async (code, desc, membres)=>{
+    code = String(code||'').trim(); if(!code) throw new Error('Le code maître est vide');
+    await assurerColL();
+    const k = codeNorm(code), m = parCode[k];
+    if(!m){ const b = membres.find(p=>p.src==='punch') || membres[0] || {};
+      await sheetsAppendRow(idJ, 'Produits', ficheLigne({code, desc:desc||b.desc||'', cat:(!b.cat || b.cat==='Stock personnalisé') ? 'À CLASSER' : b.cat, sous:b.sous||'', unite:b.unite||'', photo:b.photo||'', fab:'', notes:'', source:'Saran', le:maintenant()})); }
+    else if(desc && desc!==m.desc && m.src!=='punch' && m.fiche && m.fiche.row) await sheetsUpdateRow(idJ, 'Produits', m.fiche.row, ficheLigne({...m.fiche, desc, le:maintenant()}));
+    for(const p of membres){ if(p===m || codeNorm(p.code)===k) continue; await marquer(p, m ? m.code : code); }
+  };
+  const pasPareil = async membres=>{ await assurerColL(); for(const p of membres) await marquer(p, '≠'); };
+  const retirerDuGroupe = async p=>{ await marquer(p, ''); };
   return {...etat, lire, coutDe, coutsDe, factureDe, suggereDe, prixDe, produitDe, aConfirmer, majPrix, majProfil, ajouterProduit, lier, modifierProduit,
-    offresDe, meilleureOffre, monPrix, codeMaitre, offresLibres:liensOffres.libres, fournisseurs, comparaison, importerProduits, importerOffres, ajouterFiche, modifierFiche};
+    offresDe, meilleureOffre, monPrix, codeMaitre, offresLibres:liensOffres.libres, fournisseurs, comparaison, importerProduits, importerOffres, ajouterFiche, modifierFiche,
+    propositions, trouverProduit, regrouper, pasPareil, retirerDuGroupe};
 }
 
 // Choisir un produit du catalogue (pour lier un code fournisseur)
 function ChoixProduit({produits, onChoix, defaut}){
   const [q,setQ]=useState(defaut||'');
-  const l = q.trim().length<2 ? [] : produits.filter(p=>cvNorm(p.code+' '+p.desc).includes(cvNorm(q))).slice(0,8);
+  const l = q.trim().length<2 ? [] : produits.filter(p=>cvNorm(p.code+' '+autresCodes(p).join(' ')+' '+p.desc).includes(cvNorm(q))).slice(0,8);
   return <div style={{marginTop:6}}>
     <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher le produit (ex. prise 15A, BC1110)…" style={{width:'100%',boxSizing:'border-box'}}/>
     {l.map(p=><div key={p.cat+p.code} onClick={()=>onChoix(p)} style={{padding:'5px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}><b>{p.code}</b> · {p.desc} <span className="muted" style={{fontSize:11}}>· {p.cat}</span></div>)}
@@ -4306,7 +4425,7 @@ function ProduitsView({cfg, toast}){
   const [importer,setImporter]=useState(false);
   const err = e => toast && toast('Erreur : '+apiErrMsg(e));
   const fourn = C.fournisseurs;
-  const cherche = p => !q || cvNorm(p.code+' '+(p.alias||'')+' '+p.desc+' '+(p.notes||'')+' '+(p.fab||'')+' '+(p.sous||'')+' '+(C.offresDe(p.code).map(o=>o.codeF+' '+o.desc).join(' '))).includes(cvNorm(q));
+  const cherche = p => !q || cvNorm(p.code+' '+autresCodes(p).join(' ')+' '+p.desc+' '+(p.notes||'')+' '+(p.fab||'')+' '+(p.sous||'')+' '+(C.offresDe(p.code).map(o=>o.codeF+' '+o.desc).join(' '))).includes(cvNorm(q));
   const liste = C.produits.filter(p=>(q || ((!cat || p.cat===cat) && (!sous || (p.sous||'')===sous))) && cherche(p));
   const sousCats = cat ? [...new Set(C.produits.filter(p=>p.cat===cat && p.sous).map(p=>p.sous))].sort() : [];
   const aConf = C.aConfirmer.filter(a=>!q || cvNorm(a.code+' '+a.desc).includes(cvNorm(q)));
@@ -4336,6 +4455,7 @@ function ProduitsView({cfg, toast}){
     {importer && <ImportProduits C={C} toast={toast} onFini={()=>setImporter(false)}/>}
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
       <button className={'btn btn-sm'+(vue==='catalogue'?' btn-p':'')} onClick={()=>setVue('catalogue')}>📦 Catalogue ({C.produits.length})</button>
+      <button className={'btn btn-sm'+(vue==='regrouper'?' btn-p':'')} onClick={()=>setVue('regrouper')}>🧩 Regrouper ({C.propositions.length})</button>
       <button className={'btn btn-sm'+(vue==='comparer'?' btn-p':'')} onClick={()=>setVue('comparer')}>💲 Comparer les prix ({C.comparaison.length})</button>
       <button className={'btn btn-sm'+(vue==='relier'?' btn-p':'')} onClick={()=>setVue('relier')}>🔗 Prix à relier ({C.offresLibres.length})</button>
       <button className={'btn btn-sm'+(vue==='confirmer'?' btn-p':'')} onClick={()=>setVue('confirmer')}>❓ Achats à confirmer ({C.aConfirmer.length})</button>
@@ -4343,8 +4463,9 @@ function ProduitsView({cfg, toast}){
     <div className="muted" style={{fontSize:11.5,marginBottom:8}}>
       {vue==='catalogue' && <>Prix des sites fournisseurs (tes prix de compte, lus par Manus) ; le plus bas est en vert. Suggéré = meilleur coût ÷ (1 − profit %), grille « {C.profil} ». « Mon prix » remplace le suggéré. Les prix ne sont jamais dans PunchPro.</>}
       {vue==='comparer' && <>Produits offerts par au moins deux fournisseurs, dans la même unité. Écart = combien tu paies de plus chez le plus cher.</>}
-      {vue==='relier' && <>Prix lus sur les sites qui ne sont reliés à aucun de tes produits. Relie-les à ton code, crée le produit, ou ignore-les.</>}
-      {vue==='confirmer' && <>Articles achetés (tes factures fournisseurs) qui ne sont reliés à aucun produit.</>}
+      {vue==='regrouper' && <>Un produit = <b>ton code</b> (ex. NMD2C6). Ici, les codes qui semblent être le même produit (logiciel comptable, PunchPro, Lumen « CAB… ») : choisis ton code, coche ceux qui vont dessous, puis ✓. Les prix, achats et factures suivent. PunchPro ne change pas pour les gars.</>}
+      {vue==='relier' && <>Prix que Manus a lus sur les sites, mais que le CRM n'a pas su placer. 🔗 Relier = « ce code fournisseur, c'est mon produit X » (tu choisis un de tes produits). Le CRM s'en souvient pour la suite.</>}
+      {vue==='confirmer' && <>Codes de tes factures fournisseurs qui ne correspondent à aucun de tes produits. 🔗 Relier = « c'est mon produit X » : le coût de la facture devient son dernier coût. ✕ pour les frais (livraison, etc.).</>}
     </div>
     {nouveau && <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
@@ -4381,7 +4502,8 @@ function ProduitsView({cfg, toast}){
               if(edit && edit.k===k) return <tr key={k}><td colSpan={7+fourn.length}><FicheEdit p={p} edit={edit} setEdit={setEdit} C={C} toast={toast} err={err} photoDe={photoDe}/></td></tr>;
               return <tr key={k}>
                 <td style={{width:46}}><ProdPhoto src={photoDe(p)}/></td>
-                <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}{p.alias && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>PunchPro : {p.alias}</div>}{(!cat || q) && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>{p.cat}{p.sous ? ' · '+p.sous : ''}</div>}</td>
+                <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}{codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>PunchPro : {codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).join(' · ')}</div>}
+                  {(p.membres||[]).filter(m=>m.src!=='punch').length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400,whiteSpace:'normal',maxWidth:170}}>Aussi : {(p.membres||[]).filter(m=>m.src!=='punch').map(m=>m.code).join(' · ')}</div>}{(!cat || q) && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>{p.cat}{p.sous ? ' · '+p.sous : ''}</div>}</td>
                 <td>{p.desc}<span className="muted" style={{fontSize:11}}> · {p.unite}{p.src==='punch' ? ' · PunchPro' : ''}</span>
                   {couts.length>0 && <div className="muted" style={{fontSize:10.5}}>Acheté : {couts.map(c=>c.fournisseur+' '+cvMoney(c.cout)+' ('+cvFmtDay(c.date)+')').join(' · ')}</div>}</td>
                 {fourn.map(fr=><td key={fr} style={{fontSize:12.5}}>{prixCell(p, fr)}</td>)}
@@ -4420,6 +4542,8 @@ function ProduitsView({cfg, toast}){
       </div>
       {comp.length>lim && <div style={{textAlign:'center',marginTop:8}}><button className="btn btn-sm" onClick={()=>setLim(lim+300)}>Afficher plus</button></div>}
     </>}
+
+    {vue==='regrouper' && <RegrouperVue C={C} toast={toast} err={err} q={q}/>}
 
     {vue==='relier' && <div className="card">
       {libres.slice(0,lim).map(o=>{ const k='o|'+o.f+'|'+o.codeF; return <div key={k} style={{padding:'8px 0',borderBottom:'1px solid var(--border)',display:'grid',gap:4}}>
@@ -4462,6 +4586,69 @@ function ProduitsView({cfg, toast}){
   </div>;
 }
 
+// v121 : codes rangés sous ce produit (logiciel comptable, PunchPro…) — retirer ou ajouter un code au groupe
+function GroupeFiche({p, C, toast, err}){
+  const [ajout,setAjout]=useState(false); const [occupe,setOccupe]=useState(false);
+  const fais = async (f, msg)=>{ setOccupe(true); try{ await f(); await C.lire(true); toast&&toast(msg); }catch(e){ err(e); } setOccupe(false); };
+  const src = m => m.src==='punch' ? 'PunchPro' : ((m.fiche && m.fiche.source) || 'Logiciel comptable');
+  return <div style={{display:'grid',gap:4,fontSize:12.5}}>
+    {(p.membres||[]).length>0 && <div className="muted" style={{fontSize:12}}>Codes regroupés sous {p.code} :</div>}
+    {(p.membres||[]).map(m=><div key={m.code} style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+      <b>{m.code}</b><span>{m.desc}</span><span className="muted" style={{fontSize:11}}>· {src(m)}</span>
+      <button className="btn btn-sm" style={{padding:'1px 6px',fontSize:11}} disabled={occupe} title="Ce n'est pas le même produit" onClick={()=>fais(()=>C.retirerDuGroupe(m), 'Retiré du groupe : '+m.code)}>retirer</button>
+    </div>)}
+    <div><button className="btn btn-sm" disabled={occupe} onClick={()=>setAjout(!ajout)}>🧩 Ranger un autre code sous {p.code}</button></div>
+    {ajout && <ChoixProduit produits={C.produits.filter(x=>x!==p)} onChoix={x=>{ setAjout(false); fais(()=>C.regrouper(p.code, '', [x]), x.code+' → '+p.code); }}/>}
+  </div>;
+}
+
+function RegrouperVue({C, toast, err, q}){
+  const [ed,setEd]=useState({}); const [occupe,setOccupe]=useState('');
+  const [lim,setLim]=useState(60);
+  const base = g => ({code:g.code, desc:g.desc, coche:Object.fromEntries(g.membres.map(m=>[codeNorm(m.p.code), m.fort]))});
+  const etatDe = g => ed[g.id] || base(g);
+  const maj = (g, x) => setEd(s=>({...s, [g.id]:{...etatDe(g), ...x}}));
+  const choisis = g => { const e = etatDe(g); return g.membres.filter(m=>e.coche[codeNorm(m.p.code)]).map(m=>m.p); };
+  const valide = g => { const e = etatDe(g), k = codeNorm(e.code); return k && choisis(g).filter(p=>codeNorm(p.code)!==k).length>=1; };
+  const liste = C.propositions.filter(g=>!q || cvNorm(g.code+' '+g.desc+' '+g.membres.map(m=>m.p.code+' '+m.p.desc).join(' ')).includes(cvNorm(q)));
+  const filsOk = liste.filter(g=>g.fil && valide(g));
+  const confirmer = async gs=>{ setOccupe('Regroupement…');
+    try{ for(const g of gs){ const e = etatDe(g); await C.regrouper(e.code, e.desc, choisis(g)); }
+      await C.lire(true); setEd({}); toast&&toast(gs.length>1 ? gs.length+' groupes faits' : 'Regroupé sous '+etatDe(gs[0]).code); }catch(e){ err(e); }
+    setOccupe(''); };
+  const refuser = async g=>{ setOccupe('…'); try{ const e = etatDe(g); await C.pasPareil(g.membres.map(m=>m.p).filter(p=>codeNorm(p.code)!==codeNorm(e.code))); await C.lire(true); toast&&toast('Noté : pas le même produit'); }catch(e){ err(e); } setOccupe(''); };
+  const src = p => p.src==='punch' ? 'PunchPro' : ((p.fiche && p.fiche.source) || 'Logiciel comptable');
+  if(C.lu && !liste.length) return <div className="card muted" style={{fontSize:13}}>Rien à regrouper 👍</div>;
+  return <div style={{display:'grid',gap:8}}>
+    {filsOk.length>1 && <div className="card" style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+      <span style={{fontSize:13}}>{filsOk.length} groupes de fils prêts (tel que proposé ci-dessous).</span>
+      <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={()=>confirmer(filsOk)}>✓ Regrouper tous les fils</button>
+      {occupe && <span className="muted" style={{fontSize:12}}>{occupe}</span>}
+    </div>}
+    {liste.slice(0,lim).map(g=>{ const e = etatDe(g); const m = C.trouverProduit(e.code); const nouveauCode = !m;
+      return <div key={g.id} className="card" style={{display:'grid',gap:6}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+          <span className="muted" style={{fontSize:12}}>Ton code :</span>
+          <input value={e.code} onChange={x=>maj(g,{code:x.target.value})} list={'grp-'+g.id} style={{flex:'0 1 150px',fontWeight:700}}/>
+          <datalist id={'grp-'+g.id}>{g.membres.map(x=><option key={x.p.code} value={x.p.code}/>)}</datalist>
+          <input value={e.desc} onChange={x=>maj(g,{desc:x.target.value})} disabled={m && m.src==='punch'} placeholder="Description" style={{flex:'1 1 220px'}}/>
+        </div>
+        <div className="muted" style={{fontSize:11.5}}>{nouveauCode ? 'Nouveau code : il sera créé dans ta liste (pas dans PunchPro).' : (m.src==='punch' ? 'Code PunchPro : la description reste celle de PunchPro.' : 'Code existant.')}</div>
+        {g.membres.map(x=>{ const k = codeNorm(x.p.code), estM = k===codeNorm(e.code); const os = C.offresDe(x.p.code);
+          return <label key={k} style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:13,opacity:e.coche[k]||estM?1:0.6}}>
+            <input type="checkbox" checked={!!e.coche[k] || estM} disabled={estM} onChange={y=>maj(g,{coche:{...e.coche, [k]:y.target.checked}})}/>
+            <b>{x.p.code}</b><span>{x.p.desc}</span>
+            <span className="muted" style={{fontSize:11}}>· {src(x.p)}{os.length ? ' · '+os.map(o=>o.f+(o.prix>0?' '+cvMoney(o.prix)+(o.unite?'/'+o.unite:''):'')).join(', ') : ''}{estM ? ' · code maître' : ''}</span>
+          </label>; })}
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          <button className="btn btn-sm btn-p" disabled={!!occupe || !valide(g)} onClick={()=>confirmer([g])}>✓ Regrouper sous {e.code||'…'}</button>
+          <button className="btn btn-sm" disabled={!!occupe} onClick={()=>refuser(g)}>Pas le même produit</button>
+        </div>
+      </div>; })}
+    {liste.length>lim && <div style={{textAlign:'center'}}><button className="btn btn-sm" onClick={()=>setLim(lim+60)}>Afficher plus ({liste.length-lim} autres)</button></div>}
+  </div>;
+}
+
 // Modifier la fiche d'un produit : description, unité, catégorie, sous-catégorie, photo (site fournisseur ou prise avec le téléphone)
 function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
   const [occupe,setOccupe]=useState('');
@@ -4496,11 +4683,7 @@ function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
           {occupe && <span className="muted" style={{fontSize:12}}>{occupe}</span>}
         </div>
         <input value={edit.notes} onChange={e=>setEdit({...edit,notes:e.target.value})} placeholder="Notes"/>
-        {p.src!=='punch' && <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-          <span className="muted" style={{fontSize:12}}>Même produit dans PunchPro :</span>
-          <input value={edit.alias||''} onChange={e=>setEdit({...edit,alias:e.target.value})} list="prod-punch" placeholder="code PunchPro (ex. NMD2C14)" style={{flex:'1 1 160px'}}/>
-          <datalist id="prod-punch">{C.produits.filter(x=>x.src==='punch').map(x=><option key={x.code} value={x.code}>{x.desc}</option>)}</datalist>
-        </div>}
+        <GroupeFiche p={p} C={C} toast={toast} err={err}/>
       </div>
     </div>
     {offres.length>0 && <div style={{fontSize:12.5}}>
