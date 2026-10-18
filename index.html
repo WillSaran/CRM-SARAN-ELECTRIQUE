@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v132';
+const APP_VERSION = 'v133';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4043,7 +4043,7 @@ const DOC_TYPES = [['Soumission','📝 Soumission'],['Ordre de travail','🔧 Or
 const TPS = 0.05, TVQ = 0.09975;
 const DOCS_ENTETE = ['Numéro','Type','Date','Client','Courriel','Titre','Sous-total','TPS','TVQ','Total','Données'];
 const qSheet = n => "'"+String(n).replace(/'/g,"''")+"'";
-const codeNorm = c => String(c||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+const codeNorm = c => String(c||'').toUpperCase().replace(/(\d)\/0(?!\d)/g,'$1ZZ0').replace(/[^A-Z0-9]/g,'');   // v133 : 1/0, 2/0, 4/0 ≠ 10, 20, 40
 const arrondi = n => Math.round((Number(n)||0)*100)/100;
 
 // Politique de prix (même grille que ton système comptable) : prix de vente = coût ÷ (1 − profit %).
@@ -4113,7 +4113,7 @@ function sigFil(code, desc){
   return {type, g, c, coul, cc, alu, base:[type,c,g,alu?'AL':''].join('|'), cle:[type,c,g,alu?'AL':'',coul].join('|')};
 }
 // Ton nom de code : NMD2C14, NMWU2C12, AC902C14, ACWU3C2, TECK3C4, RW90-2WHTALU, RW90-2/0BLK, T90-6BLK… (+ couleur si le même fil existe en d'autres couleurs, + ALU)
-const calibreCode = g => ({'1/0':'0','2/0':'00','3/0':'000','4/0':'0000'})[g] || g;   // 1/0 = 0, 2/0 = 00… (jamais de « / » dans un code)
+const calibreCode = g => g;   // v133 : tu écris 1/0, 2/0, 4/0 dans tes codes (00 ou 0000 sont quand même reconnus à la lecture)
 function codeFil(s, couleurUtile){
   if(s.type==='CAT6' || s.type==='CAT6A') return '';
   const g = calibreCode(s.g);
@@ -4665,7 +4665,20 @@ function ProduitsView({cfg, toast}){
   const err = e => toast && toast('Erreur : '+apiErrMsg(e));
   const fourn = C.fournisseurs;
   const cherche = p => !q || rechercheOk(texteProduit(p)+' '+(p.notes||'')+' '+C.offresDe(p.code).map(o=>o.codeF+' '+o.desc).join(' '), q);
-  const liste = C.produits.filter(p=>(q || ((!cat || p.cat===cat) && (!sous || (p.sous||'')===sous))) && cherche(p));
+  const liste0 = C.produits.filter(p=>(q || ((!cat || p.cat===cat) && (!sous || (p.sous||'')===sous))) && cherche(p));
+  // v133 : FIL rangé par type (NMD, AC90 / BX…), puis par calibre (14, 12, 10… 1/0… 250 MCM), puis 2, 3, 4 conducteurs — avec une séparation à chaque calibre
+  const vueFil = cat==='FIL' && !q;
+  const zFil = useMemo(()=>{ const m = new Map(); C.produits.forEach(p=>{ if(p.cat==='FIL') m.set(p, sigFil(p.code, p.desc)); }); return m; },[C.produits]);
+  const typeFil = p => { const z = zFil.get(p); return p.sous || (z && FIL_SOUS[z.type]) || 'Autres'; };
+  const rangCal = g => { if(!g) return 999; const m = String(g).match(/^(\d)\/0$/); if(m) return 100 + +m[1]; const n = +g; if(isNaN(n)) return 998; return n>=100 ? 200+n/1000 : 100-n; };
+  const rangType = t => { const i = (SOUS_SUGG.FIL||[]).indexOf(t); return i<0 ? 50 : i; };
+  const liste = !vueFil ? liste0 : [...liste0].sort((a,b)=>{ const za = zFil.get(a)||{}, zb = zFil.get(b)||{};
+    return rangType(typeFil(a))-rangType(typeFil(b)) || typeFil(a).localeCompare(typeFil(b)) || rangCal(za.g)-rangCal(zb.g) || ((+za.c||9)-(+zb.c||9)) || ((za.alu?1:0)-(zb.alu?1:0)) || String(za.coul||'').localeCompare(String(zb.coul||'')) || String(a.code).localeCompare(String(b.code)); });
+  const calTxt = g => (!g || g==='-') ? '' : (+g>=100 ? g+' MCM' : '#'+g);
+  const entete = (i, nbCol) => { if(!vueFil) return null; const p = liste[i], av = liste[i-1]; const z = zFil.get(p)||{}, za = av ? (zFil.get(av)||{}) : {};
+    if(!av || typeFil(p)!==typeFil(av)) return <tr key={'t'+i}><td colSpan={nbCol} style={{background:'var(--bg3)',fontWeight:800,fontSize:13.5,padding:'8px 12px'}}>{typeFil(p)}{z.g ? <span className="muted" style={{fontWeight:500,fontSize:12}}> · {calTxt(z.g)}</span> : null}</td></tr>;
+    if(z.g!==za.g && calTxt(z.g)) return <tr key={'c'+i}><td colSpan={nbCol} style={{padding:'3px 12px',borderTop:'2px solid var(--border2)',fontSize:11.5,fontWeight:700,color:'var(--muted)'}}>{calTxt(z.g) || 'Autres'}</td></tr>;
+    return null; };
   const sousCats = cat ? [...new Set(C.produits.filter(p=>p.cat===cat && p.sous).map(p=>p.sous))].sort() : [];
   const aConf = C.aConfirmer.filter(a=>!q || cvNorm(a.code+' '+a.desc).includes(cvNorm(q)));
   const libres = C.offresLibres.filter(o=>!q || cvNorm(o.f+' '+o.codeF+' '+o.desc+' '+o.fab).includes(cvNorm(q)));
@@ -4751,9 +4764,10 @@ function ProduitsView({cfg, toast}){
         <table>
           <thead><tr><th></th><th>Code</th><th>Description</th>{fourn.map(f=><th key={f}>{f}</th>)}<th style={{textAlign:'right'}}>Suggéré</th><th style={{textAlign:'right'}}>Mon prix</th><th style={{textAlign:'right'}}>Dernier facturé</th><th></th></tr></thead>
           <tbody>
-            {liste.slice(0,lim).map(p=>{ const k=p.cat+'|'+p.code, f=C.factureDe(p.code), sug=C.suggereDe(p.code), mp=C.monPrix(p.code), couts=C.coutsDe(p.code);
+            {liste.slice(0,lim).map((p,i)=>[entete(i, 7+fourn.length), (()=>{ const k=p.cat+'|'+p.code, f=C.factureDe(p.code), sug=C.suggereDe(p.code), mp=C.monPrix(p.code), couts=C.coutsDe(p.code);
               if(edit && edit.k===k) return <tr key={k}><td colSpan={7+fourn.length}><FicheEdit p={p} edit={edit} setEdit={setEdit} C={C} toast={toast} err={err} photoDe={photoDe}/></td></tr>;
-              return <tr key={k}>
+              const ouvrir = ()=>setEdit({k, code:p.code, desc:p.desc, unite:p.unite, cat:p.cat, sous:p.sous||'', photo:p.photo||'', notes:p.notes||'', alias:p.alias||''});
+              return <tr key={k} style={{cursor:'pointer'}} title="Cliquer pour modifier" onClick={e=>{ if(e.target.closest('input,button,a,select,label,textarea')) return; ouvrir(); }}>
                 <td style={{width:46}}><ProdPhoto src={photoDe(p)}/></td>
                 <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}{codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>PunchPro : {codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).join(' · ')}</div>}
                   {(p.membres||[]).filter(m=>m.src!=='punch').length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400,whiteSpace:'normal',maxWidth:170}}>Aussi : {(p.membres||[]).filter(m=>m.src!=='punch').map(m=>m.code).join(' · ')}</div>}{(!cat || q) && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>{p.cat}{p.sous ? ' · '+p.sous : ''}</div>}</td>
@@ -4767,7 +4781,7 @@ function ProduitsView({cfg, toast}){
                   style={{width:78,textAlign:'right',padding:'3px 6px'}}/></td>
                 <td style={{textAlign:'right'}} className="muted">{f ? cvMoney(f.prix) : '—'}</td>
                 <td><button className="btn btn-sm" title="Modifier la fiche (catégorie, photo, description…)" onClick={()=>setEdit({k, code:p.code, desc:p.desc, unite:p.unite, cat:p.cat, sous:p.sous||'', photo:p.photo||'', notes:p.notes||'', alias:p.alias||''})}>✏️</button></td>
-              </tr>; })}
+              </tr>; })()])}
             {C.lu && !liste.length && <tr><td colSpan={7+fourn.length} className="muted" style={{padding:16}}>Aucun produit.</td></tr>}
           </tbody>
         </table>
