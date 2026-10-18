@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v135';
+const APP_VERSION = 'v136';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1756,6 +1756,10 @@ function CvCourriels({liste}){
 function cvJobCle(c, j){ return (c.code!=='PART' ? c.code+' ' : '')+j.name+(j.po?' '+j.po:''); }
 // Matériel d'une job : sous-total des achats associés à la job.
 const CV_DESTS = ['Entrepôt','Shop','Camion 7','Camion 14','Camion 25'];
+// v136 : autres destinations d'achat — Éclairage Saran et un employé (« Employé — Daniel »)
+const CV_EMPLOYES = ['William','Daniel','Philippe','Brandon','Adèle','Maude'];
+const cvAutreDest = j => j==='Éclairage Saran' || /^Employé — /.test(j||'');
+const cvIconeDest = d => d==='Entrepôt' ? '📦 ' : d==='Shop' ? '🏠 ' : d==='Éclairage Saran' ? '💡 ' : /^Employé/.test(d) ? '👷 ' : '🚚 ';
 // « Inventaire » s'appelle maintenant Entrepôt (code ENT) — les anciennes lignes « Inventaire » sont lues comme Entrepôt.
 function cvDest(j){ return /^inventaire$/i.test(String(j||'').trim()) ? 'Entrepôt' : (j||''); }
 const CV_DEST_REF = {'Entrepôt':'ENT'};   // référence écrite sur la commande au fournisseur
@@ -1803,6 +1807,7 @@ function CvListeJobs({jobs, onChoix}){
 function CvChoixJob({clients, propose, onChoix}){
   const [groupe,setGroupe]=useState('');
   const [autre,setAutre]=useState(null);
+  const [emp,setEmp]=useState(false);
   const today = cvDay(new Date(Date.now()-120*864e5).toISOString());
   const groupes = Object.values(clients).filter(c=>c.jobs.some(j=>j.last>=today)).sort((a,b)=>(a.code==='PART')-(b.code==='PART')||a.code.localeCompare(b.code));
   const g = groupes.find(c=>c.code===groupe);
@@ -1816,7 +1821,11 @@ function CvChoixJob({clients, propose, onChoix}){
     <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5}}>
       {groupes.map(c=>pill(c.code==='PART'?'Particuliers':c.code, ()=>setGroupe(groupe===c.code?'':c.code), groupe===c.code?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null))}
       {pill('💡 Éclairage Saran', ()=>onChoix('Éclairage Saran'))}
+      {pill('👷 Employé', ()=>setEmp(!emp), emp?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null)}
     </div>
+    {emp && <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,paddingLeft:8,borderLeft:'2px solid var(--accent)'}}>
+      {CV_EMPLOYES.map(n=>pill(n, ()=>onChoix('Employé — '+n)))}
+    </div>}
     {g && <CvListeJobs key={g.code} jobs={g.jobs.filter(j=>j.last>=today).map(j=>({cle:cvJobCle(g,j), po:j.po, label:j.name, info:(CV_STATUS[j.status]||[''])[0]+' · '+cvFmtDay(j.last)}))} onChoix={onChoix}/>}
     {autre!==null && <div style={{display:'flex',gap:5,marginTop:5}}>
       <input value={autre} onChange={e=>setAutre(e.target.value)} placeholder="Ex. : Outils, Bureau, Job Rejean Roy…" style={{flex:1}}/>
@@ -1858,24 +1867,27 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
   const [ouvert,setOuvert]=useState(null);
   const [detail,setDetail]=useState(null);
   const [changer,setChanger]=useState(null);
-  if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des achats…</span></div>;
+  const [fait,setFait]=useState({});   // v136 : destination choisie, affichée tout de suite (pas de rechargement de toute la page)
+  const [q,setQ]=useState('');
+  if(loading && !(achats||[]).length) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des achats…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les achats : {err}</div>;
-  const A = achats||[];
+  const A = (achats||[]).map(a=>fait[a.row]!==undefined ? {...a, job:fait[a.row]} : a);
   const today = cvDay(new Date().toISOString());
   const enregistrer = async (a, job)=>{
-    setBusy(a.row);
+    const avant = a.job;
+    setFait(f=>({...f, [a.row]:job})); setChanger(null); setDetail(null);
     try{
       await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:cfg.memoireAchatsSpreadsheetId, range:'I'+a.row+':K'+a.row, valueInputOption:'RAW',
         resource:{values:[[job, '', 'Confirmée '+new Date().toLocaleDateString('fr-CA')]]}});
-      setChanger(null); setTick(t=>t+1);
-    }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); }
-    setBusy('');
+    }catch(e){ setFait(f=>({...f, [a.row]:avant||''})); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); }
   };
   const date = a => a.date||a.recue;
   const aAssocier = A.filter(a=>!a.job).sort((x,y)=>date(y).localeCompare(date(x)));
   const mois = today.slice(0,7);
   const parF = {}; A.forEach(a=>{ const f=parF[a.fournisseur]=parF[a.fournisseur]||{liste:[],mois:0}; f.liste.push(a); if(date(a).startsWith(mois)) f.mois+=a.st; });
-  const parDest = {}; A.filter(a=>CV_DESTS.includes(a.job)).forEach(a=>{ parDest[a.job]=(parDest[a.job]||0)+a.st; });
+  const parDest = {}; A.filter(a=>CV_DESTS.includes(a.job) || cvAutreDest(a.job)).forEach(a=>{ parDest[a.job]=(parDest[a.job]||0)+a.st; });
+  const destsVues = [...CV_DESTS, 'Éclairage Saran', ...CV_EMPLOYES.map(n=>'Employé — '+n)].filter(d=>parDest[d]);
+  const trouvees = q.trim().length<2 ? [] : A.filter(a=>rechercheOk([a.fournisseur, a.num, a.ref, a.job, a.propose, (a.articles||[]).map(x=>x.code+' '+x.desc).join(' ')].join(' '), q)).sort((x,y)=>date(y).localeCompare(date(x)));
   // Vue détaillée : un fournisseur (toutes ses factures, à traiter une à une) ou une destination (camion, shop, inventaire).
   const moisPasse = (()=>{ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1); return cvDay(d.toISOString()).slice(0,7); })();
   const somme = l => l.reduce((t,a)=>t+(a.st||0),0);
@@ -1885,7 +1897,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
     const tuiles = [[cvMoney(somme(liste.filter(a=>date(a).startsWith(mois)))),'ce mois-ci'],[cvMoney(somme(liste.filter(a=>date(a).startsWith(moisPasse)))),'le mois passé'],[cvMoney(somme(liste)),'total, avant taxes'],[liste.length,'factures']];
     if(!dest){ tuiles.push([liste.filter(a=>!a.job).length,'à associer']); tuiles.push([cvMoney(somme(liste.filter(a=>CV_DESTS.includes(a.job)))),'stock / camions / shop']); }
     const parJob = dest ? null : Object.entries(liste.filter(a=>a.job).reduce((m,a)=>{ m[a.job]=(m[a.job]||0)+(a.st||0); return m; },{})).sort((a,b)=>b[1]-a[1]).slice(0,8);
-    return {titre: dest ? ((dest==='Entrepôt'?'📦 ':dest==='Shop'?'🏠 ':'🚚 ')+dest+' — factures envoyées ici') : ouvert+' — toutes les factures', fournisseur: dest?'':ouvert, liste, tuiles, parJob: parJob && parJob.length ? parJob : null};
+    return {titre: dest ? (cvIconeDest(dest)+dest+' — factures envoyées ici') : ouvert+' — toutes les factures', fournisseur: dest?'':ouvert, liste, tuiles, parJob: parJob && parJob.length ? parJob : null};
   })();
   const Facture = ({a, assoc})=>{ const d = detail===a.row;
     return <div style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
@@ -1904,7 +1916,13 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
     </div>; };
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Fournisseurs</h2>
-    <div className="muted" style={{fontSize:13,marginBottom:12}}>Tes factures d'achat lues dans tes courriels. Clique une facture pour voir ses articles ; associe-la à une job, à l'inventaire, au shop ou à un camion.</div>
+    <div className="muted" style={{fontSize:13,marginBottom:12}}>Tes factures d'achat lues dans tes courriels. Clique une facture pour voir ses articles ; associe-la à une job, à l'inventaire, au shop, à un camion, à Éclairage Saran ou à un employé.</div>
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher une facture (fournisseur, #, référence, job, employé, article…)" style={{width:'100%',boxSizing:'border-box',marginBottom:12}}/>
+    {q.trim().length>=2 && <div className="card" style={{marginBottom:16,borderColor:'var(--accent)'}}>
+      <div className="fh" style={{fontSize:15}}>Recherche « {q} » — {trouvees.length} facture{trouvees.length>1?'s':''} · {cvMoney(somme(trouvees))}</div>
+      {trouvees.slice(0,60).map(a=><Facture key={a.row} a={a} assoc={!a.job}/>)}
+      {!trouvees.length && <div className="muted" style={{fontSize:13}}>Aucune facture.</div>}
+    </div>}
     <div style={{display:'grid',gridTemplateColumns:isDesktop?'repeat(auto-fit,minmax(150px,1fr))':'1fr 1fr',gap:10,marginBottom:16}}>
       {Object.entries(parF).map(([f,v])=>{ const n=v.liste.filter(a=>!a.job).length;
         return <div key={f} className="card" style={{padding:12,cursor:'pointer',borderColor:ouvert===f?'var(--accent)':undefined}} onClick={()=>{ setOuvert(ouvert===f?null:f); setSeulAAssocier(false); }}>
@@ -1912,8 +1930,8 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
         <div style={{fontSize:18,fontWeight:800}}>{cvMoney(v.mois)}</div>
         <div className="muted" style={{fontSize:11.5}}>ce mois-ci · {v.liste.length} factures{n ? <> · <span style={{color:'var(--warning)'}}>{n} à associer</span></> : ''}</div>
       </div>; })}
-      {CV_DESTS.filter(d=>parDest[d]).map(d=><div key={d} className="card" style={{padding:12,cursor:'pointer',borderColor:ouvert==='dest:'+d?'var(--accent)':undefined}} onClick={()=>setOuvert(ouvert==='dest:'+d?null:'dest:'+d)}>
-        <div className="muted" style={{fontSize:12}}>{d==='Entrepôt'?'📦 ':d==='Shop'?'🏠 ':'🚚 '}{d} ›</div>
+      {destsVues.map(d=><div key={d} className="card" style={{padding:12,cursor:'pointer',borderColor:ouvert==='dest:'+d?'var(--accent)':undefined}} onClick={()=>setOuvert(ouvert==='dest:'+d?null:'dest:'+d)}>
+        <div className="muted" style={{fontSize:12}}>{cvIconeDest(d)}{d} ›</div>
         <div style={{fontSize:18,fontWeight:800}}>{cvMoney(parDest[d])}</div>
         <div className="muted" style={{fontSize:11.5}}>avant taxes</div>
       </div>)}
@@ -2777,6 +2795,59 @@ function ConfirmerMain({conf, week, nom, total}){
     <button className="btn btn-sm btn-p" disabled={occupe} onClick={()=>go(()=>conf.confirmerMain(week, nom, total, note))}>OK</button>
     <button className="btn btn-sm" disabled={occupe} onClick={()=>setOuvert(false)}>✕</button></div>;
 }
+// v136 : banque d'heures supp — total de tout temps (heures au-delà de 40 h par semaine, même calcul que PunchPro),
+// valeur à un taux que tu fixes, moins les achats associés à l'employé (Fournisseurs › 👷 Employé). Onglet « Banque employés » (La mémoire — Jobs).
+const BQ_ENTETE = ['Employé','Taux ($/h supp)','Heures déjà payées','Note','Mis à jour'];
+function BanqueSupp({cfg, emps, pts}){
+  const id = cfg.memoireJobsSpreadsheetId;
+  const [reg,setReg]=useState({lu:false, rows:{}, absent:false});
+  const [achats,setAchats]=useState([]);
+  const lire = useCallback(async (force)=>{
+    try{ const r = await lireCache(id, qSheet('Banque employés')+'!A1:E', force); const rows = {};
+      (r.result.values||[]).slice(1).forEach((x,i)=>{ if(x[0]) rows[cvNorm(x[0])] = {nom:x[0], taux:cvNum(x[1]), payees:cvNum(x[2])||0, note:x[3]||'', row:i+2}; });
+      setReg({lu:true, rows, absent:false}); }catch(e){ setReg({lu:true, rows:{}, absent:true}); }
+    try{ const a = await lireCache(cfg.memoireAchatsSpreadsheetId, 'A1:L', force);
+      setAchats((a.result.values||[]).slice(1).filter(r=>/^Employé — /.test(r[8]||'')).map(r=>({emp:String(r[8]).replace(/^Employé — /,''), st:cvNum(r[4])||0, total:cvNum(r[5])||0, date:r[2]||'', f:r[0]||'', num:r[1]||''}))); }catch(e){}
+  },[id, cfg.memoireAchatsSpreadsheetId]);
+  useEffect(()=>{ lire(); },[lire]);
+  // heures supp de tout temps : chaque semaine, ce qui dépasse 40 h
+  const supp = useMemo(()=>{ const sem = [...new Set(pts.map(p=>p.date && getWeek(new Date(p.date+'T12:00:00'))).filter(Boolean))]; const m = {};
+    sem.forEach(w=>{ const t = heuresParEmployeSemaine(pts, w); Object.entries(t).forEach(([nom, jours])=>{ const h = Object.values(jours).reduce((a,b)=>a+b,0); if(h>40) m[nom] = (m[nom]||0) + (h-40); }); });
+    return m; },[pts]);
+  const prenom = n => cvNorm(String(n||'').split(/\s+/)[0]);
+  const global = reg.rows[cvNorm('TOUS')] || {taux:null};
+  const ecrire = async (nom, champs)=>{ const ex = reg.rows[cvNorm(nom)] || {nom, taux:'', payees:'', note:''};
+    const ligne = [nom, champs.taux!==undefined ? champs.taux : (ex.taux!=null ? ex.taux : ''), champs.payees!==undefined ? champs.payees : (ex.payees||''), ex.note||'', new Date().toLocaleString('fr-CA')];
+    setReg(r=>({...r, absent:false, rows:{...r.rows, [cvNorm(nom)]:{...ex, nom, taux:cvNum(ligne[1]), payees:cvNum(ligne[2])||0}}}));
+    try{ if(reg.absent) await ensureSheetsExist(id, [{name:'Banque employés', headers:BQ_ENTETE}]);
+      if(ex.row) await sheetsUpdateRow(id, qSheet('Banque employés'), ex.row, ligne); else await sheetsAppendRow(id, qSheet('Banque employés'), ligne);
+      await lire(true); }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
+  const lignes = emps.map(e=>{ const r = reg.rows[cvNorm(e.nom)] || {}; const taux = r.taux!=null ? r.taux : global.taux;
+    const h = Math.round((supp[e.nom]||0)*100)/100, payees = r.payees||0, reste = Math.max(0, h - payees);
+    const ach = achats.filter(a=>prenom(a.emp)===prenom(e.nom)); const deduit = ach.reduce((t,a)=>t+(a.total||a.st),0);
+    const valeur = taux!=null ? reste*taux : null;
+    return {e, h, payees, reste, taux, perso:r.taux!=null, ach, deduit, valeur, solde: valeur!=null ? valeur-deduit : null}; });
+  const champ = (val, onSave, w, ph) => <input key={String(val)} defaultValue={val==null?'':val} placeholder={ph} inputMode="decimal" onBlur={e=>{ const v=e.target.value.trim().replace(',','.'); if(v!==String(val==null?'':val)) onSave(v); }} style={{width:w||64,textAlign:'right',padding:'3px 6px'}}/>;
+  return <div className="card" style={{marginTop:16,padding:0,overflowX:'auto'}}>
+    <div style={{padding:'12px 14px',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',alignItems:'center'}}>
+      <div><div className="fh" style={{fontSize:16}}>Banque d'heures supp</div>
+        <div className="muted" style={{fontSize:11.5}}>Depuis le début dans PunchPro : heures au-delà de 40 h par semaine. Valeur = heures × taux. Les achats associés à l'employé (Fournisseurs › 👷 Employé) sont déduits.</div></div>
+      <div style={{display:'flex',gap:6,alignItems:'center'}}><span className="muted" style={{fontSize:12}}>Valeur d'une heure supp :</span>{champ(global.taux, v=>ecrire('TOUS', {taux:v}), 70, '$/h')}<span className="muted">$/h</span></div>
+    </div>
+    <table>
+      <thead><tr><th>Employé</th><th style={{textAlign:'right'}}>H supp (total)</th><th style={{textAlign:'right'}}>Déjà payées</th><th style={{textAlign:'right'}}>Taux</th><th style={{textAlign:'right'}}>Valeur</th><th style={{textAlign:'right'}}>Achats déduits</th><th style={{textAlign:'right'}}>Solde</th></tr></thead>
+      <tbody>{lignes.map(l=><tr key={l.e.nom}>
+        <td><span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:l.e.couleur,marginRight:6}}></span>{l.e.nom}</td>
+        <td style={{textAlign:'right',fontWeight:700}}>{fmtH(l.h)}</td>
+        <td style={{textAlign:'right'}}>{champ(l.payees||'', v=>ecrire(l.e.nom, {payees:v}), 60, 'h')}</td>
+        <td style={{textAlign:'right'}}>{champ(l.perso ? l.taux : '', v=>ecrire(l.e.nom, {taux:v}), 60, l.taux!=null ? String(l.taux) : '$/h')}</td>
+        <td style={{textAlign:'right'}}>{l.valeur!=null ? cvMoney(l.valeur) : <span className="muted">fixe le taux</span>}</td>
+        <td style={{textAlign:'right'}} title={l.ach.map(a=>a.f+' #'+a.num+' · '+a.date+' · '+cvMoney(a.total||a.st)).join('\n')}>{l.deduit ? '− '+cvMoney(l.deduit) : '—'}{l.ach.length ? <span className="muted" style={{fontSize:11}}> ({l.ach.length})</span> : null}</td>
+        <td style={{textAlign:'right',fontWeight:800,color:l.solde==null?'var(--muted)':l.solde<0?'var(--danger)':'var(--success)'}}>{l.solde!=null ? cvMoney(l.solde) : '—'}{l.solde!=null && l.taux ? <div className="muted" style={{fontSize:10.5,fontWeight:400}}>{fmtH(Math.max(0,l.solde)/l.taux)} restantes</div> : null}</td>
+      </tr>)}</tbody>
+    </table>
+  </div>;
+}
 function HeuresView({cfg, refreshKey}){
   const [loading,setLoading]=useState(true);
   const [emps,setEmps]=useState([]);
@@ -2808,7 +2879,7 @@ function HeuresView({cfg, refreshKey}){
   const nbConf = empsSorted.filter(e=>conf.de(week, e.nom)).length;
 
   return <div>
-    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Heures — employés (PunchPro)</h2>
+    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Employés — heures (PunchPro)</h2>
     <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Heures lues dans PunchPro (lecture seule). Tu peux confirmer une semaine à la main si l'employé te l'a confirmée autrement.</div>
     {!cfg.punchproSpreadsheetId && <div className="card">Configure l'ID du Sheet PunchPro (Heures &amp; Employés) dans Réglages.</div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
@@ -2846,6 +2917,7 @@ function HeuresView({cfg, refreshKey}){
         </table>
       </div>}
       {!loading && empsSorted.length>0 && <div className="muted" style={{fontSize:12,marginTop:10}}>Total équipe cette semaine: <strong style={{color:'var(--text)'}}>{fmtH(grandTotal)}</strong></div>}
+      {!loading && empsSorted.length>0 && <BanqueSupp cfg={cfg} emps={empsSorted} pts={pts}/>}
     </>}
   </div>;
 }
@@ -7574,7 +7646,7 @@ function App(){
     {id:'agenda',label:'Agenda'},
     {id:'fournisseurs',label:'Fournisseurs'},
     {id:'courriels',label:'Courriels'},
-    {id:'heures',label:'Heures'},
+    {id:'heures',label:'Employés'},
     {id:'factures',label:'Factures'},
     {id:'contacts',label:'Contacts'},
     {id:'rappels',label:'Rappels & Suivi'},
