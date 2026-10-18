@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v122';
+const APP_VERSION = 'v123';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4019,6 +4019,10 @@ const codeSansMarque = c => codeNorm(String(c||'').replace(/^[A-Z]{2,4}-(?=\S)/i
 const FIL_COUL = [[/YELLOW|\b(YEL|JAUNE|YL)\b|YEL(?=X|\d|$)/,'jaune','YEL'],[/\b(RED|ROUGE|RD)\b|RED(?=X|\d|$)/,'rouge','RED'],[/\b(BLK|BLACK|NOIR|BK)\b|BLK/,'noir','BLK'],
   [/\bBLW\b|BLEU-BLANC|BLW(?=ALU)/,'bleu-blanc','BLW'],[/\b(WHI|WHT|WHITE|BLANC|BLANCHE)\b|WHI|WHT/,'blanc','WHT'],[/\b(BLU|BLUE|BLEU)\b|BLEU$|BLU(?=FT|$)/,'bleu','BLU'],[/\b(ORA|ORANGE)\b/,'orange','ORA'],[/\b(GRIS|GREY|GRAY)\b/,'gris','GRY']];
 const FIL_UN_COND = ['RW90','T90'];
+// Est-ce un fil/câble ? (pour ne jamais confondre une boîte ou un connecteur « pour NMD » avec du fil)
+const RE_CODE_FIL = /^(WIRE-|CAB|NMD|NMWU|LVT|ACWU|AC\d|AC90|BX\d|TECK|RW|T90|SOOW|SJOOW|TELE4P|CAT ?6)/i;
+const estFil = (code, desc, cat) => cvNorm(cat)==='fil' || RE_CODE_FIL.test(String(code||'').trim()) || /^(electrical cable|cable|câble|fil|wire|sonecable)\b/i.test(String(desc||'').trim());
+const FIL_NMD_NORMAL = {'14':'blanc','12':'jaune','10':'orange','8':'noir','6':'noir'};
 function sigFil(code, desc){
   const sansAcc = x => String(x||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
   const C = sansAcc(code), D = sansAcc(desc), T = C+' '+D;
@@ -4040,6 +4044,7 @@ function sigFil(code, desc){
   if(!type) return null;
   let g='', c='';
   const essais = [
+    s=>{ const m=s.match(/\b(\d)\s+C\s+(\d+\/0|\d+)\s*(?:AWG|MCM|KCMIL)/); return m && [m[2],m[1]]; },                // Dubo : 3 C 10 AWG
     s=>{ const m=s.match(/(?:^|[^0-9])(\d)C\s*(\d+\/0|\d+)(?!\d)/); return m && [m[2],m[1]]; },                          // 2C14, 3C2/0
     s=>{ const m=s.match(/(\d+\/0|\d+)(?:\(\d+\))?(?:\s*AWG)?(?:\s+|\s*[-\/]\s*)(\d)C\b/); return m && [m[1],m[2]]; },     // 6(7) 2C, 14 3C, 6AWG/3C, 12-3C
     s=>{ const m=s.match(/\b(\d+)-(\d)C?\b/); return m && [m[1],m[2]]; },                                                // NMWU 14-2
@@ -4057,6 +4062,8 @@ function sigFil(code, desc){
   if(!g || !c) return null;
   g = {'00':'2/0','000':'3/0','0000':'4/0'}[g] || g;   // « deux fois le zéro » = 2/0
   let coul='', cc=''; for(const [re,n,k] of FIL_COUL){ if(re.test(C) || re.test(D)){ coul=n; cc=k; break; } }
+  if(!['NMD','RW90','T90','CAT6','CAT6A'].includes(type)){ coul=''; cc=''; }              // NMWU, ACWU, AC90, TECK… : la gaine ne change rien
+  if(type==='NMD' && FIL_NMD_NORMAL[g]===coul) coul='';                                   // NMD 14 blanc, 12 jaune, 10 orange, 8-6 noir = normal
   const alu = /ALU|NUAL|ALUMIN|\bAL\b|AL(BLK|WHI)|\dAL$|KVAL$/.test(T) || type==='ACWU';
   return {type, g, c, coul, cc, alu, base:[type,c,g,alu?'AL':''].join('|'), cle:[type,c,g,alu?'AL':'',coul].join('|')};
 }
@@ -4223,16 +4230,22 @@ function useCatalogue(cfg){
   // Produit du catalogue pour un code fournisseur : lien confirmé, sinon code identique (sans la marque), sinon rien (« à confirmer »).
   const parCode = useMemo(()=>{ const m={}; etat.produits.forEach(p=>{ m[codeNorm(p.code)] = p; }); etat.produits.forEach(p=>{ autresCodes(p).forEach(c=>{ if(!m[codeNorm(c)]) m[codeNorm(c)] = p; }); }); return m; },[etat.produits]);
   const codeMaitre = code => { const p = parCode[codeNorm(code)]; return p ? p.code : code; };   // v120 : le code PunchPro mène au même produit
-  const produitDe = useCallback(codeF => {
+  // v123 : un fil se reconnaît à sa signature (type, conducteurs, calibre, couleur, alu) — la longueur du rouleau ne compte pas.
+  // WIRE-NMD3C10X75 (Dubo) va donc tout seul sous ton NMD3C10. Seulement si UN seul de tes produits a cette signature.
+  const parSig = useMemo(()=>{ const m={};
+    etat.produits.forEach(p=>{ [p, ...(p.membres||[])].forEach(x=>{ const z = estFil(x.code, x.desc, x.cat) && sigFil(x.code, x.desc); if(z) (m[z.cle] = m[z.cle] || new Set()).add(p); }); });
+    return m; },[etat.produits]);
+  const parSignature = (code, desc)=>{ const z = estFil(code, desc) && sigFil(code, desc); const l = z && parSig[z.cle]; return l && l.size===1 ? [...l][0] : null; };
+  const produitDe = useCallback((codeF, desc) => {
     const l = etat.liens[codeNorm(codeF)];
     if(l) return l.produit ? (parCode[codeNorm(l.produit)] || {code:l.produit, desc:'', cat:''}) : null;   // lien vide = ignoré
     const k1 = codeNorm(codeF), k2 = codeSansMarque(codeF);
-    return parCode[k1] || parCode[k2] || null;
-  },[etat.liens, parCode]);
+    return parCode[k1] || parCode[k2] || (desc!==undefined ? parSignature(codeF, desc) : null) || null;
+  },[etat.liens, parCode, parSig]);
   // Achats de chaque produit, par fournisseur (le plus récent de chacun)
   const achatsParProduit = useMemo(()=>{
     const m = {};
-    etat.achats.forEach(a=>{ const p = produitDe(a.code); if(!p) return; const k = codeNorm(p.code);
+    etat.achats.forEach(a=>{ const p = produitDe(a.code, a.desc||''); if(!p) return; const k = codeNorm(p.code);
       const x = (m[k] = m[k] || {});
       if(!x[a.fournisseur] || a.date > x[a.fournisseur].date || (a.date===x[a.fournisseur].date && a.facture > x[a.fournisseur].facture)) x[a.fournisseur] = a; });
     return m;
@@ -4240,7 +4253,7 @@ function useCatalogue(cfg){
   // Codes achetés qui ne sont reliés à aucun produit (ni ignorés) : « à confirmer »
   const aConfirmer = useMemo(()=>{
     const m = {};
-    etat.achats.forEach(a=>{ const k = codeNorm(a.code); if(etat.liens[k] || produitDe(a.code)) return;
+    etat.achats.forEach(a=>{ const k = codeNorm(a.code); if(etat.liens[k] || produitDe(a.code, a.desc||'')) return;
       const x = m[k] || (m[k] = {code:a.code, desc:a.desc, fournisseur:a.fournisseur, cout:a.cout, date:a.date, fois:0, total:0});
       x.fois++; x.total += a.cout*a.qte; if(a.date > x.date){ x.date=a.date; x.cout=a.cout; x.fournisseur=a.fournisseur; } });
     return Object.values(m).sort((a,b)=>b.fois-a.fois || b.total-a.total);
@@ -4255,14 +4268,14 @@ function useCatalogue(cfg){
       if(l) return l.produit ? (parCode[codeNorm(l.produit)] || null) : 'ignore';
       if(o.saran && parCode[codeNorm(o.saran)]) return parCode[codeNorm(o.saran)];
       if(/pas trouv/i.test(o.corr)) return null;
-      return parCode[codeNorm(o.codeF)] || parCode[codeSansMarque(o.codeF)] || (o.fab ? (parFab[codeNorm(o.fab)] || parCode[codeNorm(o.fab)]) : null) || null;
+      return parCode[codeNorm(o.codeF)] || parCode[codeSansMarque(o.codeF)] || (o.fab ? (parFab[codeNorm(o.fab)] || parCode[codeNorm(o.fab)]) : null) || parSignature(o.codeF, o.desc) || null;
     };
     const rest = [];
     etat.offres.forEach(o=>{ const p = trouver(o); if(p==='ignore') return; if(p){ (par[codeNorm(p.code)] = par[codeNorm(p.code)] || []).push(o); if(o.fab) deja.set(codeNorm(o.fab), p); } else rest.push(o); });
     rest.forEach(o=>{ const p = o.fab && !etat.liens[codeNorm(o.codeF)] ? deja.get(codeNorm(o.fab)) : null; if(p) (par[codeNorm(p.code)] = par[codeNorm(p.code)] || []).push(o); else libres.push(o); });
     Object.values(par).forEach(l=>l.sort((a,b)=>(a.prix>0?a.prix:1e9)-(b.prix>0?b.prix:1e9)));
     return {par, libres};
-  },[etat.offres, etat.liens, etat.produits, parCode]);
+  },[etat.offres, etat.liens, etat.produits, parCode, parSig]);
   const offresDe = code => liensOffres.par[codeNorm(codeMaitre(code))] || [];
   const meilleureOffre = code => offresDe(code).find(o=>o.prix>0) || null;
   const fournisseurs = useMemo(()=>[...new Set(etat.offres.map(o=>o.f))].sort((a,b)=>{ const i=x=>{ const k=FOURN_ORDRE.indexOf(x); return k<0?9:k; }; return i(a)-i(b) || a.localeCompare(b); }),[etat.offres]);
@@ -4394,7 +4407,7 @@ function useCatalogue(cfg){
     const forts = new Set();
     const unir = (a,b,fort)=>{ if(a===b) return; par.set(trouve(a), trouve(b)); if(fort){ forts.add(a); forts.add(b); } };
     const sig = new Map(), parBase = {};
-    prods.forEach(p=>{ if(!(p.cat==='FIL' || /^(CAB|NMD|NMWU|LVT|ACWU|AC\d|AC90|BX|TECK|RW|T90|SOOW|SJOOW|TELE4P|CAT ?6|WIRE)/i.test(p.code))) return;
+    prods.forEach(p=>{ if(!estFil(p.code, p.desc, p.cat)) return;
       const x = sigFil(p.code, p.desc); if(x){ sig.set(p,x); (parBase[x.base] = parBase[x.base] || new Set()).add(x.coul); } });
     const parCle = {}; sig.forEach((x,p)=>{ (parCle[x.cle] = parCle[x.cle] || []).push(p); });
     Object.values(parCle).forEach(l=>{ for(let i=1;i<l.length;i++) unir(l[0], l[i], true); });
@@ -4407,7 +4420,7 @@ function useCatalogue(cfg){
     const comp = new Map(); prods.forEach(p=>{ const r = trouve(p); if(!comp.has(r)) comp.set(r,[]); comp.get(r).push(p); });
     const out = [];
     comp.forEach(l=>{ if(l.length<2) return;
-      const ss = l.map(p=>sig.get(p)); const s0 = ss.every(x=>x && x.cle===ss[0].cle) ? ss[0] : null;
+      const lf = l.filter(p=>forts.has(p)); const ss = (lf.length>1 ? lf : l).map(p=>sig.get(p)); const s0 = ss.every(x=>x && x.cle===ss[0].cle) ? ss[0] : null;   // les « peut-être » ne comptent pas
       let code='', desc='';
       if(s0){ const utile = (parBase[s0.base]||new Set()).size>1; code = codeFil(s0, utile); desc = code ? descFil(s0, utile) : ''; }
       let maitre = null;
