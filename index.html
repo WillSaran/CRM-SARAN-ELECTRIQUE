@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v127';
+const APP_VERSION = 'v128';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2242,7 +2242,10 @@ function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
   const [total,setTotal]=useState(0);
   const [noms,setNoms]=useState([]);
   const conf = useSemainesConfirmees(cfg, refreshKey);
-  const semPassee = (()=>{ const d=new Date(); d.setDate(d.getDate()-7); return getWeek(d); })();
+  // v128 : UNE semaine de paie — les heures ET les confirmations de la même semaine (change le mercredi)
+  const semPassee = semaineHeures(new Date());
+  const jours = weekDatesArr(semPassee), mardi = new Date(jours[6]); mardi.setDate(mardi.getDate()+2);
+  const jj = d => d.toLocaleDateString('fr-CA',{day:'numeric',month:'short'});
   const [err,setErr]=useState(false);
   useEffect(()=>{
     if(!cfg.punchproSpreadsheetId){ setLoading(false); return; }
@@ -2251,7 +2254,7 @@ function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
     getPunchProDataBatched(cfg.punchproSpreadsheetId)
       .then(({emps,pts})=>{
         if(cancelled) return;
-        const week=semaineHeures(new Date());
+        const week=semPassee;
         const table=heuresParEmployeSemaine(pts, week);
         const dateStrs=weekDatesArr(week).map(localDateStr);
         setTotal(emps.reduce((s,e)=>{ const row=table[e.nom]||{}; return s+dateStrs.reduce((a,d)=>a+(row[d]||0),0); },0));
@@ -2263,12 +2266,13 @@ function DashboardHeuresCard({cfg, refreshKey, onNavigate}){
       .finally(()=>{ if(!cancelled) setLoading(false); });
     return ()=>{ cancelled=true; };
   },[cfg.punchproSpreadsheetId, refreshKey]);
-  return <div className="card" style={{flex:'1 1 200px',minWidth:180,cursor:'pointer'}} onClick={()=>onNavigate('heures')}>
+  return <div className="card" style={{padding:14,cursor:'pointer',minWidth:0}} onClick={()=>onNavigate('heures')}>
     <div style={{fontSize:26,fontWeight:800}}>{loading?'…':err?'—':fmtH(total)}</div>
-    <div className="muted" style={{fontSize:12.5,marginTop:2}}>Heures d'équipe — {semaineHeures()===getWeek(new Date()) ? 'cette semaine' : 'semaine passée (jusqu\'à mercredi)'}</div>
+    <div style={{fontSize:13,fontWeight:600}}>Heures — paie du {jj(jours[0])} au {jj(jours[6])}</div>
+    <div className="muted" style={{fontSize:11.5,marginTop:2}}>à confirmer et payer d'ici mardi {jj(mardi)}</div>
     {conf.pret && !conf.absent && noms.length>0 && (()=>{ const ok=noms.filter(n=>conf.de(semPassee, n)), manque=noms.filter(n=>!conf.de(semPassee, n));
       return <div style={{fontSize:11.5,marginTop:3,color:manque.length?'var(--warning)':'var(--success)'}} title={manque.length?'Pas confirmée : '+manque.join(', '):''}>
-        ✓ Semaine passée : {ok.length}/{noms.length} confirmées{manque.length>0 && manque.length<=3 ? ' — manque '+manque.map(n=>n.split(' ')[0]).join(', ') : ''}</div>; })()}
+        ✓ {ok.length}/{noms.length} confirmées{manque.length>0 && manque.length<=3 ? ' — manque '+manque.map(n=>n.split(' ')[0]).join(', ') : ''}</div>; })()}
   </div>;
 }
 // v126 : convertisseur pieds ⇄ mètres (accepte aussi 10'6")
@@ -2279,12 +2283,12 @@ function ConvertisseurCard(){
   const f = n => n==null ? '' : String(Math.round(n*100)/100).replace('.',',');
   const pouces = n => { if(n==null) return ''; const tot = Math.round(n*12); return Math.floor(tot/12)+"' "+(tot%12)+'"'; };
   const nPi = lire(pi);
-  return <div className="card" style={{flex:'1 1 200px',minWidth:180}}>
+  return <div className="card" style={{maxWidth:420,marginBottom:16,boxSizing:'border-box'}}>
     <div style={{fontWeight:700,fontSize:13.5,marginBottom:8}}>📏 Pieds ⇄ mètres</div>
     <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-      <input value={pi} inputMode="decimal" placeholder="pieds" onChange={e=>{ setPi(e.target.value); const n=lire(e.target.value); setM(n==null ? '' : f(n*0.3048)); }} style={{width:78,textAlign:'right'}}/><span>pi</span>
+      <input value={pi} inputMode="decimal" placeholder="pieds" onChange={e=>{ setPi(e.target.value); const n=lire(e.target.value); setM(n==null ? '' : f(n*0.3048)); }} style={{flex:'1 1 70px',minWidth:0,textAlign:'right'}}/><span>pi</span>
       <span className="muted">=</span>
-      <input value={m} inputMode="decimal" placeholder="mètres" onChange={e=>{ setM(e.target.value); const n=lire(e.target.value); setPi(n==null ? '' : f(n/0.3048)); }} style={{width:78,textAlign:'right'}}/><span>m</span>
+      <input value={m} inputMode="decimal" placeholder="mètres" onChange={e=>{ setM(e.target.value); const n=lire(e.target.value); setPi(n==null ? '' : f(n/0.3048)); }} style={{flex:'1 1 70px',minWidth:0,textAlign:'right'}}/><span>m</span>
     </div>
     <div className="muted" style={{fontSize:11,marginTop:6}}>{nPi!=null && pi ? pouces(nPi)+' · ' : ''}1 m = 3,281 pi · 1 pi = 0,3048 m</div>
   </div>;
@@ -2657,8 +2661,8 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
       <Tuile n={aRepondre.length} l="Courriels à répondre" sub={aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'le plus vieux : '+cvJoursDepuis(aRepondre[0].dernier)+' jours' : 'clients et contracteurs'} alerte={aRepondre.length>0} go="courriels"/>
       <Tuile n={aAssocier.length} l="Achats à associer" sub={cvMoney(achatsMois)+' achetés ce mois-ci'} go="fournisseurs"/>
       <DashboardHeuresCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
-      <ConvertisseurCard/>
     </div>
+    <ConvertisseurCard/>
 
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,360px),1fr))',gap:14,alignItems:'start'}}>
       <div>
