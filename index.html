@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v136';
+const APP_VERSION = 'v137';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1755,13 +1755,13 @@ function CvCourriels({liste}){
 // ── Fournisseurs : factures d'achat (Dubo, Lumen, Groupe Gagnon, Westburne), lien avec les jobs, stock ──
 function cvJobCle(c, j){ return (c.code!=='PART' ? c.code+' ' : '')+j.name+(j.po?' '+j.po:''); }
 // Matériel d'une job : sous-total des achats associés à la job.
-const CV_DESTS = ['Entrepôt','Shop','Camion 7','Camion 14','Camion 25'];
+const CV_DESTS = ['Entrepôt','Camion 7','Camion 14','Camion 25'];   // v137 : la shop = l'entrepôt
 // v136 : autres destinations d'achat — Éclairage Saran et un employé (« Employé — Daniel »)
 const CV_EMPLOYES = ['William','Daniel','Philippe','Brandon','Adèle','Maude'];
 const cvAutreDest = j => j==='Éclairage Saran' || /^Employé — /.test(j||'');
-const cvIconeDest = d => d==='Entrepôt' ? '📦 ' : d==='Shop' ? '🏠 ' : d==='Éclairage Saran' ? '💡 ' : /^Employé/.test(d) ? '👷 ' : '🚚 ';
+const cvIconeDest = d => d==='Entrepôt' ? '📦 ' : d==='Éclairage Saran' ? '💡 ' : /^Employé/.test(d) ? '👷 ' : '🚚 ';
 // « Inventaire » s'appelle maintenant Entrepôt (code ENT) — les anciennes lignes « Inventaire » sont lues comme Entrepôt.
-function cvDest(j){ return /^inventaire$/i.test(String(j||'').trim()) ? 'Entrepôt' : (j||''); }
+function cvDest(j){ return /^(inventaire|shop|atelier)$/i.test(String(j||'').trim()) ? 'Entrepôt' : (j||''); }   // anciennes factures « Shop » → Entrepôt
 const CV_DEST_REF = {'Entrepôt':'ENT'};   // référence écrite sur la commande au fournisseur
 function cvMateriel(job, achats){
   const l = (achats||[]).filter(a=>a.job && !CV_DESTS.includes(a.job) && ((job.po && a.job.includes(job.po)) || cvNorm(a.job).endsWith(cvNorm(job.name))));
@@ -1815,7 +1815,7 @@ function CvChoixJob({clients, propose, onChoix}){
   return <div style={{marginTop:6}}>
     <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
       {propose && pill('✓ '+propose, ()=>onChoix(propose), {background:'var(--accent)',color:'#fff',border:'none'})}
-      {CV_DESTS.map(d=>pill((d==='Entrepôt'?'📦 ':d==='Shop'?'🏠 ':'🚚 ')+d, ()=>onChoix(d)))}
+      {CV_DESTS.map(d=>pill(cvIconeDest(d)+d, ()=>onChoix(d)))}
       {pill('✏️ Autre…', ()=>setAutre(autre===null?'':null))}
     </div>
     <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5}}>
@@ -1895,7 +1895,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
     const dest = ouvert.startsWith('dest:') ? ouvert.slice(5) : '';
     const liste = A.filter(a=> dest ? a.job===dest : a.fournisseur===ouvert).sort((x,y)=>date(y).localeCompare(date(x)));
     const tuiles = [[cvMoney(somme(liste.filter(a=>date(a).startsWith(mois)))),'ce mois-ci'],[cvMoney(somme(liste.filter(a=>date(a).startsWith(moisPasse)))),'le mois passé'],[cvMoney(somme(liste)),'total, avant taxes'],[liste.length,'factures']];
-    if(!dest){ tuiles.push([liste.filter(a=>!a.job).length,'à associer']); tuiles.push([cvMoney(somme(liste.filter(a=>CV_DESTS.includes(a.job)))),'stock / camions / shop']); }
+    if(!dest){ tuiles.push([liste.filter(a=>!a.job).length,'à associer']); tuiles.push([cvMoney(somme(liste.filter(a=>CV_DESTS.includes(a.job)))),'entrepôt / camions']); }
     const parJob = dest ? null : Object.entries(liste.filter(a=>a.job).reduce((m,a)=>{ m[a.job]=(m[a.job]||0)+(a.st||0); return m; },{})).sort((a,b)=>b[1]-a[1]).slice(0,8);
     return {titre: dest ? (cvIconeDest(dest)+dest+' — factures envoyées ici') : ouvert+' — toutes les factures', fournisseur: dest?'':ouvert, liste, tuiles, parJob: parJob && parJob.length ? parJob : null};
   })();
@@ -1916,7 +1916,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
     </div>; };
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Fournisseurs</h2>
-    <div className="muted" style={{fontSize:13,marginBottom:12}}>Tes factures d'achat lues dans tes courriels. Clique une facture pour voir ses articles ; associe-la à une job, à l'inventaire, au shop, à un camion, à Éclairage Saran ou à un employé.</div>
+    <div className="muted" style={{fontSize:13,marginBottom:12}}>Tes factures d'achat lues dans tes courriels. Clique une facture pour voir ses articles ; associe-la à une job, à l'entrepôt, à un camion, à Éclairage Saran ou à un employé.</div>
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher une facture (fournisseur, #, référence, job, employé, article…)" style={{width:'100%',boxSizing:'border-box',marginBottom:12}}/>
     {q.trim().length>=2 && <div className="card" style={{marginBottom:16,borderColor:'var(--accent)'}}>
       <div className="fh" style={{fontSize:15}}>Recherche « {q} » — {trouvees.length} facture{trouvees.length>1?'s':''} · {cvMoney(somme(trouvees))}</div>
@@ -6007,8 +6007,7 @@ function useCommandesFournisseurs(cfg, refreshKey){
 function cmdProposer(ref, date, clients){
   const r = String(ref||''); if(!r) return '';
   const cam = r.match(/\bcamion\s*#?\s*0?(7|14|25)\b/i); if(cam) return 'Camion '+cam[1];
-  if(/\b(entrep[oô]t|ent|inventaire|stock)\b/i.test(r)) return 'Entrepôt';
-  if(/\b(shop|atelier)\b/i.test(r)) return 'Shop';
+  if(/\b(entrep[oô]t|ent|inventaire|stock|shop|atelier)\b/i.test(r)) return 'Entrepôt';
   const po = cvPO(r), nr = cvNorm(r), t = date ? new Date(date+'T12:00:00').getTime() : null;
   const parPO = [], parNom = [];
   Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{
@@ -7338,7 +7337,7 @@ function useCommandes(cfg){
 }
 
 const CMD_FAIT = ['Placée','Rien à commander'];
-const CMD_FOURNISSEURS = ['Dubo','Lumen','Shop'];   // un ou plusieurs (ex. Dubo + Shop)
+const CMD_FOURNISSEURS = ['Dubo','Lumen','Entrepôt'];   // un ou plusieurs (ex. Dubo + Entrepôt) — la shop = l'entrepôt
 const CMD_MODES = ['À aller chercher'];   // pas de livraison des fournisseurs pour l'instant : Dubo / Lumen = à aller chercher
 // Une seule commande pour les passages collés d'une même job et même phase (ex. rough sur 2 jours) :
 // si un passage de la même phase à 7 jours ou moins est réglé, celui-ci l'est aussi (via).
@@ -7365,10 +7364,10 @@ function CvBoutonsCommande({cmd, info, onCommande}){
   </span>;
   if(choix){
     const bascule = f => setChoix(c=>({...c, f: c.f.includes(f) ? c.f.filter(x=>x!==f) : [...c.f, f]}));
-    const fournisseurs = choix.f.filter(f=>f!=='Shop');   // Dubo / Lumen : livraison ou à aller chercher
+    const fournisseurs = choix.f.filter(f=>f!=='Entrepôt' && f!=='Shop');   // Dubo / Lumen : livraison ou à aller chercher
     return <span style={{display:'inline-flex',flexDirection:'column',gap:4}}>
       <span style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}><span className="muted" style={{fontSize:11.5}}>Où (un ou plusieurs) :</span>
-        {CMD_FOURNISSEURS.map(f=><button key={f} className="btn btn-sm" style={choix.f.includes(f)?sel:null} onClick={()=>bascule(f)}>{choix.f.includes(f)?'✓ ':''}{f==='Shop'?'🏠 Stock de la shop':f}</button>)}</span>
+        {CMD_FOURNISSEURS.map(f=><button key={f} className="btn btn-sm" style={choix.f.includes(f)?sel:null} onClick={()=>bascule(f)}>{choix.f.includes(f)?'✓ ':''}{f==='Entrepôt'?'📦 Stock de l\'entrepôt':f}</button>)}</span>
       {fournisseurs.length>0 && <span className="muted" style={{fontSize:11.5}}>🏃 {fournisseurs.join(' et ')} : à aller chercher</span>}
       <span style={{display:'flex',gap:4}}>
         <button className="btn btn-sm btn-p" disabled={!choix.f.length} onClick={()=>{ onCommande(cmd.cle, info, 'Placée', undefined, {fournisseur:CMD_FOURNISSEURS.filter(f=>choix.f.includes(f)).join(' + '), mode:fournisseurs.length ? 'À aller chercher' : ''}); setChoix(null); }}>✓ Enregistrer</button>
