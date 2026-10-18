@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v126';
+const APP_VERSION = 'v127';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4130,6 +4130,68 @@ function formatDe(o){
   if(k) return {txt:'rouleau '+(+k[1])+' m', long:+k[1], u:'m'};
   return v ? {txt:v.length>28 ? v.slice(0,28)+'…' : v} : null;
 }
+// v127 : catégories PROPOSÉES (tu confirmes dans « 🏷 Classer ») — entrée électrique, panneaux et disjoncteurs par marque,
+// connecteurs par type de fil (ou tuyau), raccordement / MALT, fil par type (NMD, TECK…) + réseau / télécom.
+const SOUS_SUGG = {
+  'FIL':['NMD','NMWU','AC90 / BX','ACWU','TECK','RW90','T90','LVT','SOOW','Réseau','Télécom'],
+  'CONNECTEURS':['NMD','AC90 / BX','TECK','ACWU','EMT','PVC','Liquidtight','Autres'],
+  'ENTRÉE ÉLECTRIQUE':['Sectionneur','Embase de compteur','Mât et tête de service','Autres'],
+  'PANNEAUX':['QO · Square D','Homeline · Schneider (CHOM)','BR · Eaton','Siemens','GE','Autres'],
+  'DISJONCTEURS':['QO · Square D','Homeline · Schneider (CHOM)','BR · Eaton','Siemens','GE','Autres'],
+  'CONNEXIONS / MALT':['MALT','Raccordement']};
+const FIL_SOUS = {NMD:'NMD', NMWU:'NMWU', AC90:'AC90 / BX', ACWU:'ACWU', TECK:'TECK', RW90:'RW90', T90:'T90', LVT:'LVT', SOOW:'SOOW', SJOOW:'SOOW', CAT6:'Réseau', CAT6A:'Réseau'};
+function marquePanneau(T){
+  if(/SIEMENS|^SIE|\bSIEQ|^Q\d{3}|^B\d{3,4}\b|\bQP\b/.test(T)) return 'Siemens';
+  if(/CHOM|HOMELINE|\bHOM\d|^HOM/.test(T)) return 'Homeline · Schneider (CHOM)';
+  if(/\bQO|^QO|SQUARE ?D|\bSQD|^CQO|^CQ0/.test(T)) return 'QO · Square D';
+  if(/EATON|CUTLER|^BR[\/\d -]|\bBR\d{3}|\bBR\/STAB|\bBR\b|DNPL|^EAT-/.test(T)) return 'BR · Eaton';
+  if(/\bGE\b|^GE\d|THQ/.test(T)) return 'GE';
+  return '';
+}
+const CAT_FIXES = /^(BORNES|D[ÉE]CORA|[ÉE]CLAIRAGE|SERVICES|ADMIN|CONTR[ÔO]LE|D[ÉE]TECTION|CHAUFFAGE)/i;   // on ne déplace pas ces produits-là
+function classerProduit(code, desc, catActuelle){
+  const sansAcc = x => String(x||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+  const C = sansAcc(code), D = sansAcc(desc), T = C+' '+D, cat = String(catActuelle||'');
+  if(CAT_FIXES.test(cat)) return null;
+  // entrée électrique (pas les panneaux : ils ont leur catégorie)
+  if(/DISCONNECT|SECTIONNEUR|DISCONNECTEUR|^DIS \d|\bDIS \d+A|SAFETY SWITCH|NON-?FUS/.test(T)) return {cat:'ENTRÉE ÉLECTRIQUE', sous:'Sectionneur'};
+  if(/METER ?BASE|METER ?SOCKET|EMBASE|BASE DE COMPTEUR|BOITE DE COMPTEUR/.test(T)) return {cat:'ENTRÉE ÉLECTRIQUE', sous:'Embase de compteur'};
+  if(/\bMAST\b|\bMAT DE|SERVICE ?HEAD|TETE DE SERVICE|WEATHER ?HEAD|ENTRANCE CAP|CHAPEAU DE MAT/.test(T)) return {cat:'ENTRÉE ÉLECTRIQUE', sous:'Mât et tête de service'};
+  if(/^BO[IÎ]TES/i.test(cat)) return null;
+  // disjoncteurs et panneaux
+  const panneau = /PANNEAU|LOAD ?CENTRE|LOAD ?CENTER|LOADCENTER|LOAD CTR|PANELBOARD|^CQO|^CQ0|^QO C|^CHOM \d{4}|^SIEQ \d|^SIESEQ/.test(T) && !/PASSE ?FIL|COUVERCLE|COVER|\bTRIM\b|SERRURE|LOCK|PLASTIQUE|PICTO/.test(T);
+  const disj = /BREAKER|\bBRK\b|DISJONCTEUR|DIJONCT|\bDISJ\b|^BR\/STAB|^QOB?\d|^HOM\d|^CHOM\d|^BR ?\d|^QBH|^Q\d{3}|^SIEQ?\d{3}|^SIEB\d|^DNPL|PCAFI|\bPDF\b|^DOUBLE \d{4}|^GE\d{3}/.test(T);
+  if(disj && !panneau) return {cat:'DISJONCTEURS', sous:marquePanneau(T)};
+  if(panneau) return {cat:'PANNEAUX', sous:marquePanneau(T)};
+  // raccordement et mise à la terre
+  const malt = /GROUND|\bMALT\b|MISE A LA TERRE|\bGND\b|TIGE DE|ACORN|BONDING|\bMASSE\b/.test(T);
+  const racc = /MARRETTE|WIRE ?NUT|WAGO|SPLIT ?BOLT|LEVER ?NUT|COSSE|\bLUGS?\b|TERMINAL BLOCK|BORNIER|POLARIS|CONN H\b|H-TAP|CONN BOULON|CONNECTEUR HYDRO|CONNECTEUR DE FILS|ANTI ?OX/.test(T);
+  if(/^CONNEXION/i.test(cat)) return (malt || racc) ? {cat:'CONNEXIONS / MALT', sous: malt ? 'MALT' : 'Raccordement'} : null;
+  if(malt) return {cat:'CONNEXIONS / MALT', sous:'MALT'};
+  if(racc) return {cat:'CONNEXIONS / MALT', sous:'Raccordement'};
+  // connecteurs (fil ou tuyau)
+  if(/\bCONN\b|CONN |CONNECTOR|CONNECTEUR|^CI ?\d|^RTA\b|COUPLING|COUPLAGE|^REC\b|BUSHING|EMBOUT .*PO|LOCKNUT|CONTRE-ECROU|C-CLIP/.test(T)){
+    const s = /NMD|LOOMEX|ROMEX|\bNM\b|C-CLIP/.test(T) ? 'NMD' : /TECK/.test(T) ? 'TECK' : /ACWU/.test(T) ? 'ACWU' : /\bBX\b|BX\/|AC90|FLEX|ARMOU?R/.test(T) ? 'AC90 / BX'
+      : /LIQUID|\bLT\b|SEALTITE/.test(T) ? 'Liquidtight' : /EMT|SET ?SCREW|COMPRESS/.test(T) ? 'EMT' : /PVC|^RTA|PLAST/.test(T) ? 'PVC' : '';
+    return {cat:'CONNECTEURS', sous:s};
+  }
+  // fil : par type ; sinon réseau / télécom
+  if(/^FIL/i.test(cat) || estFil(code, desc, cat)){
+    const z = sigFil(code, desc); if(z && FIL_SOUS[z.type]) return {cat:'FIL', sous:FIL_SOUS[z.type]};
+    if(/CAT ?5|CAT ?6|COAX|RG ?6|RG59|FIBRE|FIBER|\d{2}\/4PR/.test(T) && !/JACK|PLAQUE|PLATE|ADAPT|FICHE|PLUG/.test(T)) return {cat:'FIL', sous:'Réseau'};
+    if(/TELEPH|ALARM|SPEAKER|HAUT-PARLEUR|\bSH\b|\d{2}-\d ?PR|\dPR\b|FT4|SPOS|\d{2}\/\d\b/.test(T)) return {cat:'FIL', sous:'Télécom'};
+  }
+  return null;
+}
+// v127 : recherche souple — « 54-C1 » trouve BC54-C1 et IBE54C1 ; plusieurs mots = tous doivent y être ;
+// « 1500W » / « 1 500 W » trouve aussi les plinthes STEB 1502, STEPR 1502, STEMIR 1502 (code Stelpro = watts ÷ 10 + 2)
+function rechercheOk(texte, q){
+  const t = cvNorm(texte), n = cvNorm(q); if(!n) return true; if(t.includes(n)) return true;
+  const toks = String(q).replace(/(\d)[\s\u00a0]+(?=\d{3}\b)/g,'$1').replace(/(\d)\s+(w|watts?|a|amp|v|po|pi|m)\b/gi,'$1$2').split(/\s+/).map(cvNorm).filter(Boolean);
+  const alt = k => { const m = k.match(/^(\d{3,4})(w|watts?)?$/); if(!m) return []; const w = +m[1]; return w%50===0 ? [String(w/10).padStart(3,'0')+'2'] : []; };
+  return toks.length>0 && toks.every(k => t.includes(k) || alt(k).some(a=>t.includes(a)));
+}
+const texteProduit = p => [p.code, ...autresCodes(p), p.desc, p.sous||'', p.cat||'', p.fab||'', ...(p.membres||[]).map(m=>m.desc)].join(' ');
 const autresCodes = p => [...new Set([p.alias, ...(p.membres||[]).flatMap(m=>[m.code, m.alias])].filter(Boolean))];
 const codesPunch = p => [...new Set([p.alias, ...(p.membres||[]).filter(m=>m.src==='punch').map(m=>m.code), ...(p.membres||[]).map(m=>m.alias)].filter(Boolean))];
 function descFil(s, couleurUtile){
@@ -4142,12 +4204,12 @@ function descFil(s, couleurUtile){
 // STOCK PUNCH PRO (ce que les gars voient) n'est pas touché par l'import.
 const PROD_ENTETE = ['Code','Description','Catégorie','Sous-catégorie','Unité','Photo','Code fabricant','Notes','Source','Mis à jour','Code PunchPro','Regroupé sous'];
 const OFFRE_ENTETE = ['Fournisseur','Code fournisseur','Code fabricant','Marque','Description','Catégorie','Unité','Mon prix','Prix de liste','Stock','Succursale','URL','Photo','Vendu par','Code CRM','Correspondance','Date'];
-const CAT_ORDRE = ['FIL','CONDUIT','BOÎTES','DÉCORA','PANNEAUX','CHAUFFAGE','ÉCLAIRAGE','BORNES','CONNEXIONS / MALT','CONTRÔLE','DÉTECTION','QUINCAILLERIE','DIVERS','Stock personnalisé','SERVICES','À CLASSER','ADMINISTRATIF'];
+const CAT_ORDRE = ['FIL','CONDUIT','CONNECTEURS','BOÎTES','DÉCORA','ENTRÉE ÉLECTRIQUE','PANNEAUX','DISJONCTEURS','CHAUFFAGE','ÉCLAIRAGE','BORNES','CONNEXIONS / MALT','CONTRÔLE','DÉTECTION','QUINCAILLERIE','DIVERS','Stock personnalisé','SERVICES','À CLASSER','ADMINISTRATIF'];
 const FOURN_ORDRE = ['Dubo','Lumen','Gagnon'];
 function catSimple(c){
   const u = String(c||'').trim().toUpperCase(); if(!u) return 'À CLASSER';
   const m = [[/^D[ÉE]CORA/,'DÉCORA'],[/^BORNE/,'BORNES'],[/^CONTR[ÔO]LE/,'CONTRÔLE'],[/^D[ÉE]TECTION/,'DÉTECTION'],[/^SERVICE/,'SERVICES'],[/^ADMIN/,'ADMINISTRATIF'],
-    [/^BO[ÎI]TE/,'BOÎTES'],[/^CONNEXION/,'CONNEXIONS / MALT'],[/^[ÉE]CLAIRAGE/,'ÉCLAIRAGE'],[/^PANNEAU/,'PANNEAUX'],[/^CONDUIT|^TUYAU/,'CONDUIT'],[/^FIL|^C[ÂA]BLE/,'FIL'],[/^CHAUFFAGE/,'CHAUFFAGE'],[/^QUINCAILLERIE/,'QUINCAILLERIE'],[/^[ÀA] CLASSER/,'À CLASSER']];
+    [/^BO[ÎI]TE/,'BOÎTES'],[/^CONNEXION|^RACCORD|^MALT/,'CONNEXIONS / MALT'],[/^CONNECTEUR/,'CONNECTEURS'],[/^DISJONCTEUR/,'DISJONCTEURS'],[/^ENTR[ÉE]E/,'ENTRÉE ÉLECTRIQUE'],[/^[ÉE]CLAIRAGE/,'ÉCLAIRAGE'],[/^PANNEAU/,'PANNEAUX'],[/^CONDUIT|^TUYAU/,'CONDUIT'],[/^FIL|^C[ÂA]BLE/,'FIL'],[/^CHAUFFAGE/,'CHAUFFAGE'],[/^QUINCAILLERIE/,'QUINCAILLERIE'],[/^[ÀA] CLASSER/,'À CLASSER']];
   for(const [r,v] of m) if(r.test(u)) return v;
   return u;
 }
@@ -4228,7 +4290,7 @@ function useCatalogue(cfg){
       const vals = await sheetsBatchGet(idS, cats.map(c=>qSheet(c)+'!A1:E'));
       const produits = [];
       cats.forEach((c,i)=>(vals[i]||[]).slice(1).forEach((r,k)=>{ if(r[0]) produits.push({cat:c, row:k+2, code:String(r[0]).trim(), desc:r[1]||'', unite:r[2]||'', notes: c==='Stock personnalisé' ? '' : (r[3]||'')}); }));
-      produits.forEach(p=>{ p.src='punch'; });
+      produits.forEach(p=>{ p.src='punch'; p.onglet=p.cat; });   // onglet de STOCK PUNCH PRO (pour y écrire) ; p.cat = catégorie affichée
       // v116 : fiches produits (ta liste du logiciel comptable, classée) et prix des sites fournisseurs — La mémoire — Jobs
       const parK = {}; produits.forEach(p=>{ parK[codeNorm(p.code)] = p; });
       const fichesLues = [];
@@ -4237,7 +4299,7 @@ function useCatalogue(cfg){
           const f = {row:i+2, code, desc:r[1]||'', cat:r[2]||'À CLASSER', sous:r[3]||'', unite:r[4]||'', photo:r[5]||'', fab:r[6]||'', notes:r[7]||'', source:r[8]||'', le:r[9]||'', alias:String(r[10]||'').trim(), groupe:String(r[11]||'').trim()};
           fichesLues.push(f);
           const x = parK[k];
-          if(x){ if(!x.fiche){ x.fiche=f; x.photo=f.photo; x.sous=f.sous; x.fab=f.fab; } }
+          if(x){ if(!x.fiche){ x.fiche=f; x.photo=f.photo; x.sous=f.sous; x.fab=f.fab; if(f.cat && f.cat!=='À CLASSER') x.cat=f.cat; } }
           else { const n = {cat:f.cat, sous:f.sous, code, desc:f.desc, unite:f.unite||'un', notes:f.notes, photo:f.photo, fab:f.fab, src:'fiche', fiche:f}; produits.push(n); parK[k]=n; } }); }catch(e){}
       // v120 : même produit, deux codes (PunchPro « NMD2C14 » = logiciel « NMD2C14X150 ») → un seul produit, au code du logiciel.
       // Le produit de PunchPro garde sa ligne dans STOCK PUNCH PRO (les gars ne voient aucun changement).
@@ -4394,8 +4456,9 @@ function useCatalogue(cfg){
   };
   // Modifier un produit (code, description, unité) dans STOCK PUNCH PRO ; si le code change, ton prix et tes liens suivent.
   const modifierProduit = async (p, n)=>{
-    const ligne = p.cat==='Stock personnalisé' ? [n.code, n.desc, n.unite] : [n.code, n.desc, n.unite, n.notes!==undefined ? n.notes : p.notes];
-    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:idS, range:qSheet(p.cat)+'!A'+p.row, valueInputOption:'RAW', resource:{values:[ligne]}});
+    const ong = p.onglet || p.cat;
+    const ligne = ong==='Stock personnalisé' ? [n.code, n.desc, n.unite] : [n.code, n.desc, n.unite, n.notes!==undefined ? n.notes : p.notes];
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:idS, range:qSheet(ong)+'!A'+p.row, valueInputOption:'RAW', resource:{values:[ligne]}});
     if(codeNorm(n.code)!==codeNorm(p.code)){
       const ex = etat.prix[codeNorm(p.code)];
       if(ex && ex.row) await sheetsUpdateRow(idJ, 'Prix', ex.row, [n.code, ex.prix!=null?ex.prix:'', new Date().toLocaleString('fr-CA')]);
@@ -4496,6 +4559,17 @@ function useCatalogue(cfg){
     return out.sort((a,b)=>(b.fil-a.fil) || String(a.code).localeCompare(String(b.code)));
   },[etat.produits]);
   const trouverProduit = code => parCode[codeNorm(code)] || null;
+  // v127 : classement proposé (catégorie + sous-catégorie) — tu confirmes dans « 🏷 Classer »
+  const aClasser = useMemo(()=>etat.produits.map(p=>{ const k = classerProduit(p.code, p.desc, p.cat); if(!k) return null;
+      if(k.cat===p.cat && (!k.sous || k.sous===(p.sous||''))) return null; return {p, cat:k.cat, sous:k.sous || (k.cat===p.cat ? (p.sous||'') : '')}; }).filter(Boolean),[etat.produits]);
+  const classerEnLot = async items=>{
+    const rows = await lireOnglet('Produits', 'A1:L'); const idx = {}; rows.forEach((r,i)=>{ const k=codeNorm(r[0]); if(k && idx[k]==null) idx[k]=i; });
+    const le = maintenant();
+    items.forEach(({p, cat, sous})=>{ const k = codeNorm(p.code);
+      if(idx[k]!=null){ const r = rows[idx[k]]; while(r.length<12) r.push(''); r[2]=cat; if(sous) r[3]=sous; r[9]=le; }
+      else { rows.push(ficheLigne({code:p.code, desc:p.desc, cat, sous:sous||'', unite:p.unitePunch||p.unite||'', photo:'', fab:p.fab||'', notes:'', source:p.src==='punch' ? 'PunchPro' : 'Saran', le})); idx[k]=rows.length-1; } });
+    await ecrireOnglet('Produits', PROD_ENTETE, rows);
+  };
   const assurerColL = async ()=>{ await ensureOnglet('Produits', PROD_ENTETE);
     await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:idJ, range:'Produits!K1:L1', valueInputOption:'RAW', resource:{values:[['Code PunchPro','Regroupé sous']]}}); };
   // Écrit « Regroupé sous » sur la fiche du produit (crée la fiche si c'est un produit PunchPro sans fiche). STOCK PUNCH PRO n'est pas touché.
@@ -4516,13 +4590,13 @@ function useCatalogue(cfg){
   const retirerDuGroupe = async p=>{ await marquer(p, ''); };
   return {...etat, lire, coutDe, coutsDe, factureDe, suggereDe, prixDe, produitDe, aConfirmer, majPrix, majProfil, ajouterProduit, lier, modifierProduit,
     offresDe, meilleureOffre, monPrix, codeMaitre, offresLibres:liensOffres.libres, fournisseurs, comparaison, importerProduits, importerOffres, ajouterFiche, modifierFiche,
-    propositions, trouverProduit, regrouper, pasPareil, retirerDuGroupe};
+    propositions, trouverProduit, regrouper, pasPareil, retirerDuGroupe, aClasser, classerEnLot};
 }
 
 // Choisir un produit du catalogue (pour lier un code fournisseur)
 function ChoixProduit({produits, onChoix, defaut}){
   const [q,setQ]=useState(defaut||'');
-  const l = q.trim().length<2 ? [] : produits.filter(p=>cvNorm(p.code+' '+autresCodes(p).join(' ')+' '+p.desc).includes(cvNorm(q))).slice(0,8);
+  const l = q.trim().length<2 ? [] : produits.filter(p=>rechercheOk(texteProduit(p), q)).slice(0,8);
   return <div style={{marginTop:6}}>
     <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher le produit (ex. prise 15A, BC1110)…" style={{width:'100%',boxSizing:'border-box'}}/>
     {l.map(p=><div key={p.cat+p.code} onClick={()=>onChoix(p)} style={{padding:'5px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}><b>{p.code}</b> · {p.desc} <span className="muted" style={{fontSize:11}}>· {p.cat}</span></div>)}
@@ -4540,9 +4614,10 @@ function ProduitsView({cfg, toast}){
   const [lien,setLien]=useState('');
   const [lim,setLim]=useState(150);
   const [importer,setImporter]=useState(false);
+  const [classer,setClasser]=useState(false);
   const err = e => toast && toast('Erreur : '+apiErrMsg(e));
   const fourn = C.fournisseurs;
-  const cherche = p => !q || cvNorm(p.code+' '+autresCodes(p).join(' ')+' '+p.desc+' '+(p.notes||'')+' '+(p.fab||'')+' '+(p.sous||'')+' '+(C.offresDe(p.code).map(o=>o.codeF+' '+o.desc).join(' '))).includes(cvNorm(q));
+  const cherche = p => !q || rechercheOk(texteProduit(p)+' '+(p.notes||'')+' '+C.offresDe(p.code).map(o=>o.codeF+' '+o.desc).join(' '), q);
   const liste = C.produits.filter(p=>(q || ((!cat || p.cat===cat) && (!sous || (p.sous||'')===sous))) && cherche(p));
   const sousCats = cat ? [...new Set(C.produits.filter(p=>p.cat===cat && p.sous).map(p=>p.sous))].sort() : [];
   const aConf = C.aConfirmer.filter(a=>!q || cvNorm(a.code+' '+a.desc).includes(cvNorm(q)));
@@ -4577,11 +4652,13 @@ function ProduitsView({cfg, toast}){
           {PROFILS.map(p=><option key={p} value={p}>{p}</option>)}
         </select>
         <button className={'btn btn-sm'+(importer?' btn-p':'')} onClick={()=>setImporter(!importer)}>⬆ Importer</button>
+        {C.aClasser.length>0 && <button className={'btn btn-sm'+(classer?' btn-p':'')} onClick={()=>setClasser(!classer)}>🏷 Classer ({C.aClasser.length})</button>}
         <button className="btn btn-sm" onClick={()=>setNouveau(nouveau?null:{code:'',desc:'',unite:'un',cat:cat||'À CLASSER'})}>+ Ajouter</button>
         <button className="btn btn-sm" onClick={()=>C.lire(true)}>⟳</button>
       </div>
     </div>
     {importer && <ImportProduits C={C} toast={toast} onFini={()=>setImporter(false)}/>}
+    {classer && <ClasserPanel C={C} toast={toast} err={err} onFini={()=>setClasser(false)}/>}
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
       <button className={'btn btn-sm'+(vue==='catalogue'?' btn-p':'')} onClick={()=>setVue('catalogue')}>📦 Catalogue ({C.produits.length})</button>
       <button className={'btn btn-sm'+(vue==='regrouper'?' btn-p':'')} onClick={()=>setVue('regrouper')}>🧩 Regrouper ({C.propositions.length})</button>
@@ -4716,6 +4793,31 @@ function ProduitsView({cfg, toast}){
   </div>;
 }
 
+// v127 : classement proposé — coche, puis Appliquer (une seule écriture dans « Produits »)
+function ClasserPanel({C, toast, err, onFini}){
+  const [off,setOff]=useState({}); const [occupe,setOccupe]=useState(false);
+  const parCat = {}; C.aClasser.forEach(x=>{ (parCat[x.cat] = parCat[x.cat] || []).push(x); });
+  const choisis = C.aClasser.filter(x=>!off[x.p.code]);
+  const fmt = (c, s) => c + (s ? ' · '+s : '');
+  return <div className="card" style={{marginBottom:10,display:'grid',gap:8}}>
+    <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+      <div style={{fontSize:13}}>Classement proposé pour <b>{C.aClasser.length}</b> produits. Décoche ce qui ne va pas, puis Appliquer. PunchPro garde ses onglets.</div>
+      <div style={{display:'flex',gap:6}}>
+        <button className="btn btn-sm" onClick={()=>setOff(Object.keys(off).length ? {} : Object.fromEntries(C.aClasser.map(x=>[x.p.code,true])))}>{Object.keys(off).length ? 'Tout cocher' : 'Tout décocher'}</button>
+        <button className="btn btn-sm btn-p" disabled={occupe || !choisis.length} onClick={async()=>{ setOccupe(true); try{ await C.classerEnLot(choisis); toast&&toast(choisis.length+' produits classés'); await C.lire(true); onFini&&onFini(); }catch(e){ err(e); } setOccupe(false); }}>{occupe ? 'Classement…' : 'Appliquer ('+choisis.length+')'}</button>
+      </div>
+    </div>
+    {Object.entries(parCat).sort((a,b)=>CAT_ORDRE.indexOf(a[0])-CAT_ORDRE.indexOf(b[0])).map(([cat,l])=><div key={cat}>
+      <div style={{fontWeight:700,fontSize:13,margin:'4px 0'}}>{cat} ({l.length})</div>
+      {l.map(x=><label key={x.p.code} style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:12.5,padding:'2px 0',opacity:off[x.p.code]?0.5:1}}>
+        <input type="checkbox" checked={!off[x.p.code]} onChange={e=>setOff(o=>{ const n={...o}; if(e.target.checked) delete n[x.p.code]; else n[x.p.code]=true; return n; })}/>
+        <b style={{minWidth:90}}>{x.p.code}</b><span style={{flex:'1 1 200px'}}>{String(x.p.desc).slice(0,70)}</span>
+        <span className="muted" style={{fontSize:11.5}}>{fmt(x.p.cat, x.p.sous)} → <b style={{color:'var(--text)'}}>{fmt(x.cat, x.sous)}</b></span>
+      </label>)}
+    </div>)}
+  </div>;
+}
+
 // v121 : codes rangés sous ce produit (logiciel comptable, PunchPro…) — retirer ou ajouter un code au groupe
 function GroupeFiche({p, C, toast, err}){
   const [ajout,setAjout]=useState(false); const [occupe,setOccupe]=useState(false); const [retires,setRetires]=useState({});
@@ -4803,7 +4905,7 @@ function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
         <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
           <select value={edit.cat} onChange={e=>setEdit({...edit,cat:e.target.value})} style={{flex:'0 1 170px'}}>{[...new Set([...C.toutesCats, edit.cat])].map(c=><option key={c}>{c}</option>)}</select>
           <input value={edit.sous} onChange={e=>setEdit({...edit,sous:e.target.value})} list="prod-sous" style={{flex:'1 1 150px'}} placeholder="Sous-catégorie (ex. PVC, NMD, Thermostats)"/>
-          <datalist id="prod-sous">{[...new Set(C.produits.filter(x=>x.cat===edit.cat && x.sous).map(x=>x.sous))].map(s=><option key={s} value={s}/>)}</datalist>
+          <datalist id="prod-sous">{[...new Set([...(SOUS_SUGG[edit.cat]||[]), ...C.produits.filter(x=>x.cat===edit.cat && x.sous).map(x=>x.sous)])].map(s=><option key={s} value={s}/>)}</datalist>
         </div>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
           <input value={/^https?:/i.test(edit.photo||'') ? edit.photo : (edit.photo ? '(photo du Drive)' : '')} onChange={e=>setEdit({...edit,photo:e.target.value})} style={{flex:'1 1 200px'}} placeholder="Photo : adresse web, ou 📷"/>
@@ -5445,7 +5547,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
     if(valeur===undefined && !qte) lignes = lignes.filter(l=>l.code!==p.code);
     return {...x, lignes};
   });
-  const produits = C.produits.filter(p=>!['MAIN-ŒUVRE','FORFAIT','DÉPL STD','QUIN'].includes(p.code) && (!cat || p.cat===cat) && (!q || cvNorm(p.code+' '+p.desc).includes(cvNorm(q))));
+  const produits = C.produits.filter(p=>!['MAIN-ŒUVRE','FORFAIT','DÉPL STD','QUIN'].includes(p.code) && (!cat || p.cat===cat) && (!q || rechercheOk(texteProduit(p), q)));
 
   // Prochain numéro E-0001… (STOCK PUNCH PRO › Compteur, B1 = dernier numéro utilisé)
   const prochainNumero = async ()=>{
@@ -5848,7 +5950,7 @@ function CommandesView({cfg, toast, refreshKey}){
   // Code du fournisseur choisi (ex. LEV-T5325-W chez Dubo) quand on l'a déjà acheté là
   const codeFourn = code => { const o = C.offresDe(code).find(x=>cvNorm(x.f)===cvNorm(bc.fournisseur)); if(o) return o.codeF; const a = C.coutsDe(code).find(c=>c.fournisseur===bc.fournisseur); return a ? a.code : ''; };
   const choisies = bc.lignes.filter(l=>cvNum(l.qte));
-  const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat) && (!q || cvNorm(p.code+' '+p.desc).includes(cvNorm(q))));
+  const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat) && (!q || rechercheOk(texteProduit(p), q)));
   const texteArticles = () => [...choisies.map(l=>{ const cf = codeFourn(l.code); return '- '+l.qte+' '+(l.unite&&l.unite!=='un'?l.unite+' ':'')+'× '+l.code+(cf && codeNorm(cf)!==codeNorm(l.code)?' ('+cf+')':'')+' — '+l.desc; }),
     ...bc.libre.split('\n').map(s=>s.trim()).filter(Boolean).map(s=>'- '+s)].join('\n');
   const envoyer = async ()=>{
