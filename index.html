@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v124';
+const APP_VERSION = 'v125';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4092,6 +4092,22 @@ function codeFil(s, couleurUtile){
   const base = FIL_UN_COND.includes(s.type) ? s.type+'-'+s.g : s.type+s.c+'C'+s.g;   // RW90-2…, T90-6…
   return base + ((couleurUtile || FIL_UN_COND.includes(s.type)) && s.cc ? s.cc : '') + (s.alu && s.type!=='ACWU' ? 'ALU' : '');
 }
+// v125 : format de commande d'un prix fournisseur — « rouleau 150 m », « au mètre », « à la coupe »
+const LONG_M = {m:1, pi:0.3048};
+function prixEnUnite(prix, uniteOffre, uniteProduit){
+  const a = uniteNorm(uniteOffre), b = uniteNorm(uniteProduit);
+  return (LONG_M[a] && LONG_M[b] && a!==b && prix!=null) ? Math.round(prix*LONG_M[b]/LONG_M[a]*10000)/10000 : prix;
+}
+function formatDe(o){
+  const v = String(o.vendu||'').trim();
+  const m = v.match(/multiples?\s+de\s+(\d+(?:[.,]\d+)?)\s*(m|mètres?|metres?|pi|pieds?|ft)\b/i);
+  if(m){ const n = +m[1].replace(',','.'), u = /^m/i.test(m[2]) ? 'm' : 'pi'; return n<=1 ? {txt:u==='m' ? 'au mètre' : 'au pied', coupe:true} : {txt:'rouleau '+n+' '+u, long:n, u}; }
+  if(/coupe/i.test(v)) return {txt:'à la coupe', coupe:true};
+  const c = String(o.codeF||'').toUpperCase().trim();
+  const k = c.match(/X(\d{2,4})M?$/) || c.match(/D7(?:RED|YEL|WHI|BLK|BLU)?(\d{2,3})$/) || String(o.fab+' '+o.desc).toUpperCase().match(/\b(\d{2,4})\s?M\b/);
+  if(k) return {txt:'rouleau '+(+k[1])+' m', long:+k[1], u:'m'};
+  return v ? {txt:v.length>28 ? v.slice(0,28)+'…' : v} : null;
+}
 const autresCodes = p => [...new Set([p.alias, ...(p.membres||[]).flatMap(m=>[m.code, m.alias])].filter(Boolean))];
 const codesPunch = p => [...new Set([p.alias, ...(p.membres||[]).filter(m=>m.src==='punch').map(m=>m.code), ...(p.membres||[]).map(m=>m.alias)].filter(Boolean))];
 function descFil(s, couleurUtile){
@@ -4296,7 +4312,10 @@ function useCatalogue(cfg){
     return {par, libres};
   },[etat.offres, etat.liens, etat.produits, parCode, parSig]);
   const offresDe = code => liensOffres.par[codeNorm(codeMaitre(code))] || [];
-  const meilleureOffre = code => offresDe(code).find(o=>o.prix>0) || null;
+  // Meilleur prix dans l'unité de TON produit (un prix au mètre est converti au pied si ton produit se vend au pied)
+  const uniteDe = code => { const p = parCode[codeNorm(code)]; return p ? p.unite : ''; };
+  const meilleureOffre = code => { const u = uniteDe(code); let best=null, bp=Infinity;
+    offresDe(code).forEach(o=>{ if(!(o.prix>0)) return; const x = prixEnUnite(o.prix, o.unite, u || o.unite); if(x<bp){ bp=x; best=o; } }); return best; };
   const fournisseurs = useMemo(()=>[...new Set(etat.offres.map(o=>o.f))].sort((a,b)=>{ const i=x=>{ const k=FOURN_ORDRE.indexOf(x); return k<0?9:k; }; return i(a)-i(b) || a.localeCompare(b); }),[etat.offres]);
   const comparaison = useMemo(()=>{
     const out = [];
@@ -4310,7 +4329,7 @@ function useCatalogue(cfg){
   },[etat.produits, liensOffres]);
   const coutsDe = code => Object.values(achatsParProduit[codeNorm(codeMaitre(code))] || {}).sort((a,b)=>b.date.localeCompare(a.date));
   // Coût : le meilleur prix de compte lu sur les sites fournisseurs, sinon ton dernier achat
-  const coutDe = code => { const o = meilleureOffre(code); if(o) return {prix:o.prix, fournisseur:o.f, date:o.date, site:true};
+  const coutDe = code => { const o = meilleureOffre(code); if(o) return {prix:prixEnUnite(o.prix, o.unite, uniteDe(code) || o.unite), fournisseur:o.f, date:o.date, site:true};
     const c = coutsDe(code)[0]; return c ? {prix:c.cout, fournisseur:c.fournisseur, date:c.date} : null; };
   const codesDe = code => { const p = parCode[codeNorm(code)]; return [...new Set([codeNorm(code), ...(p ? [p.code, ...autresCodes(p)].map(codeNorm) : [])].filter(Boolean))]; };
   const factureDe = code => { let best=null; codesDe(code).forEach(k=>{ const f = etat.facture[k]; if(f && (!best || f.n>best.n)) best=f; }); return best; };
@@ -4510,7 +4529,19 @@ function ProduitsView({cfg, toast}){
     const best = C.meilleureOffre(p.code); 
     return os.map(o=><div key={o.codeF} title={o.codeF+(o.vendu?' · vendu par '+o.vendu:'')+(o.date?' · lu le '+o.date:'')} style={{whiteSpace:'nowrap'}}>
       <span style={best && best===o && C.offresDe(p.code).filter(x=>x.prix>0).length>1 ? {color:'var(--success, #2e9e5b)',fontWeight:700} : null}>{o.prix>0 ? cvMoney(o.prix) : '—'}</span>
-      <span className="muted" style={{fontSize:10.5}}>{o.unite ? '/'+o.unite : ''}{o.stock!=='' && o.stock!=null ? ' · '+o.stock+' en stock' : ''}</span></div>); };
+      <span className="muted" style={{fontSize:10.5}}>{o.unite ? '/'+o.unite : ''}{formatDe(o) ? ' · '+formatDe(o).txt : ''}{o.stock!=='' && o.stock!=null ? ' · '+o.stock+' en stock' : ''}</span></div>); };
+  // Fil : prix au mètre / au pied et façons de commander, tous fournisseurs
+  const resumeLongueur = p => { const os = C.offresDe(p.code).filter(o=>o.prix>0 && LONG_M[uniteNorm(o.unite)]); if(!os.length) return null;
+    const best = os.reduce((a,o)=>prixEnUnite(o.prix,o.unite,'m')<prixEnUnite(a.prix,a.unite,'m') ? o : a);
+    const pm = prixEnUnite(best.prix, best.unite, 'm'), ff = formatDe(best);
+    const coupe = os.filter(o=>{ const f=formatDe(o); return f && f.coupe; }).sort((a,b)=>prixEnUnite(a.prix,a.unite,'m')-prixEnUnite(b.prix,b.unite,'m'))[0];
+    const parF = {}; os.forEach(o=>{ const f=formatDe(o); if(f) (parF[o.f] = parF[o.f] || new Set()).add(f.txt.replace(/^rouleau /,'')); });
+    return <div style={{fontSize:11,marginTop:2}}>
+      <b>{cvMoney(pm)}/m</b> <span className="muted">({cvMoney(pm*0.3048)}/pi) chez {best.f}{ff && ff.long ? ', rouleau '+ff.long+' '+(ff.u||'m')+' ≈ '+cvMoney(best.prix*ff.long) : ''}</span>
+      {coupe && coupe!==best && <span className="muted"> · à l'unité : {cvMoney(prixEnUnite(coupe.prix,coupe.unite,'m'))}/m chez {coupe.f}</span>}
+      {!coupe && <span style={{color:'var(--warning)'}}> · pas à l'unité</span>}
+      <div className="muted">Se commande : {Object.entries(parF).map(([f,l])=>f+' '+[...l].join(', ')).join(' · ')}</div>
+    </div>; };
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
       <h2 className="fh" style={{margin:0,fontSize:20}}>Produits</h2>
@@ -4577,6 +4608,7 @@ function ProduitsView({cfg, toast}){
                 <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}{codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>PunchPro : {codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).join(' · ')}</div>}
                   {(p.membres||[]).filter(m=>m.src!=='punch').length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400,whiteSpace:'normal',maxWidth:170}}>Aussi : {(p.membres||[]).filter(m=>m.src!=='punch').map(m=>m.code).join(' · ')}</div>}{(!cat || q) && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>{p.cat}{p.sous ? ' · '+p.sous : ''}</div>}</td>
                 <td>{p.desc}<span className="muted" style={{fontSize:11}}> · {p.unite}{p.src==='punch' ? ' · PunchPro' : ''}</span>
+                  {resumeLongueur(p)}
                   {couts.length>0 && <div className="muted" style={{fontSize:10.5}}>Acheté : {couts.map(c=>c.fournisseur+' '+cvMoney(c.cout)+' ('+cvFmtDay(c.date)+')').join(' · ')}</div>}</td>
                 {fourn.map(fr=><td key={fr} style={{fontSize:12.5}}>{prixCell(p, fr)}</td>)}
                 <td style={{textAlign:'right'}}>{sug!=null ? cvMoney(sug) : '—'}</td>
