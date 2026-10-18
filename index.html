@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v123';
+const APP_VERSION = 'v124';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -235,6 +235,9 @@ function safeFloat(v){ try{ return parseFloat(String(v).replace(',','.'))||0; }c
 // message est niché dans e.result.error.message ; un simple "e.message" est donc
 // souvent undefined (d'où les toasts "Erreur: undefined" vus dans l'app).
 function apiErrMsg(e){
+  const code = e && (e.status || (e.result && e.result.error && e.result.error.code));
+  if(code===401 || /invalid authentication credentials|UNAUTHENTICATED/i.test((e && e.result && e.result.error && e.result.error.message) || (e && e.message) || ''))
+    return 'Ta connexion Google a expiré. Clique « Reconnecter » en haut, puis refais la dernière action (rien n\'est perdu).';
   if(e && e.result && e.result.error && e.result.error.message) return e.result.error.message;
   if(e && e.message) return e.message;
   if(typeof e==='string') return e;
@@ -761,9 +764,15 @@ function avecReessaiSheets(){
   const envelopper = (obj, nom)=>{ const f = obj[nom]; if(typeof f!=='function') return;
     obj[nom] = function(params){
       const essai = async (n)=>{
+        if(jetonEnCours) await jetonEnCours.catch(()=>{});   // v124 : un nouveau jeton arrive → on l'attend
         try{ return await f.call(obj, params); }
         catch(e){
           const code = e && (e.status || (e.result && e.result.error && e.result.error.code));
+          if(code===401){
+            if(jetonEnCours && n<1){ await jetonEnCours.catch(()=>{}); return essai(n+1); }
+            window.dispatchEvent(new Event('crm-jeton-expire'));   // affiche « Reconnecter » tout de suite
+            throw e;
+          }
           const quota = code===429 || /quota/i.test(JSON.stringify((e && e.result) || '')) ;
           if(quota && n<3){ await new Promise(r=>setTimeout(r, [3000,10000,25000][n])); return essai(n+1); }
           throw e;
@@ -777,6 +786,16 @@ function avecReessaiSheets(){
   sp.__reessai = true;
 }
 let tokenClient=null;
+// v124 : le jeton Google dure 1 h. Dans les 10 dernières minutes, ton prochain clic en demande un nouveau (en silence,
+// la fenêtre Google s'ouvre et se ferme seule) — les actions en cours attendent le nouveau jeton au lieu d'échouer.
+let jetonEnCours = null;
+function rafraichirJeton(){
+  if(!jetonEnCours) jetonEnCours = requestToken('').then(r=>{ window.dispatchEvent(new Event('crm-jeton')); return r; }).finally(()=>{ jetonEnCours = null; });
+  return jetonEnCours;
+}
+if(typeof document!=='undefined') document.addEventListener('pointerdown', ()=>{
+  if(tokenClient && tokenExpire && Date.now() > tokenExpire - 10*60000 && !jetonEnCours) rafraichirJeton().catch(()=>{});
+}, true);
 function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
 async function initGoogle(cfg){
   await loadScript('https://apis.google.com/js/api.js');
@@ -7245,10 +7264,13 @@ function App(){
   useEffect(()=>{
     if(!authed) return;
     const verifier = ()=>{ if(tokenExpired()) setExpired(true); };
+    const expire = ()=>setExpired(true), neuf = ()=>setExpired(false);
+    window.addEventListener('crm-jeton-expire', expire); window.addEventListener('crm-jeton', neuf);
     const id = setInterval(verifier, 30000);
     window.addEventListener('focus', verifier);
     document.addEventListener('visibilitychange', verifier);
-    return ()=>{ clearInterval(id); window.removeEventListener('focus', verifier); document.removeEventListener('visibilitychange', verifier); };
+    return ()=>{ clearInterval(id); window.removeEventListener('focus', verifier); document.removeEventListener('visibilitychange', verifier);
+      window.removeEventListener('crm-jeton-expire', expire); window.removeEventListener('crm-jeton', neuf); };
   },[authed]);
   // Reconnexion (clic = geste de l'utilisateur, donc la fenêtre Google n'est pas bloquée), puis on relit tout.
   async function reconnecter(){
