@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v160';
+const APP_VERSION = 'v161';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7726,7 +7726,7 @@ const FICHE_ENTETE = ['Type','Nom','Code','Aussi écrit','Adresse','Ville','Tél
 const ficheNorm = x => cvNorm(cvSansInit(String(x||'')));
 function ficheNomJob(f){ return f.code==='PART' ? [f.client, f.nom].filter(Boolean).join(' — ') : f.nom; }
 function lireFiches(rows){
-  const F = {clients:[], jobs:[], fourn:[], masques:[]};
+  const F = {clients:[], jobs:[], fourn:[], masques:[], contacts:[]};
   (rows||[]).slice(1).forEach((r,i)=>{
     const t = cvNorm(r[0]); if(!t) return;
     const f = {row:i+2, type:String(r[0]||''), nom:String(r[1]||'').trim(), code:String(r[2]||'').trim().toUpperCase(),
@@ -7738,6 +7738,7 @@ function lireFiches(rows){
     else if(t==='fournisseur') F.fourn.push(f);
     else if(t==='client') F.clients.push(f);
     else if(t==='masque') F.masques.push(f);
+    else if(t==='contact') F.contacts.push(f);   // v161 : employé d'un contracteur (Code = ASC, CRS…) ; Notes = rôle
   });
   return F;
 }
@@ -7846,7 +7847,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   // ---- Contracteurs ----
   const contr = {};
   const C = code => contr[code] || (contr[code] = {type:'contr', id:'C:'+code, code, nom:CLIENT_CODES[code]||code, contact:CLIENT_CONTACT[code]||'',
-    fiche:F.clients.find(f=>f.code===code)||null, jobs:{}, facturesSans:[], soum:[]});
+    fiche:F.clients.find(f=>f.code===code)||null, jobs:{}, facturesSans:[], soum:[], contacts:[]});
   const codeDe = c => { c = String(c||'').toUpperCase(); if(c==='PY') c='PAY'; return CLIENT_CODES[c] ? c : ''; };
   Object.values(clients||{}).forEach(c=>{ if(c.code==='PART') return; c.jobs.forEach(j=>ajouterJob(C(c.code).jobs, c.code, {cle:cvJobCle(c,j), nom:j.name, po:j.po, adresse:j.address, events:j.events, reg:j.reg, id:j.id})); });
   (registry||[]).forEach(r=>{ const code = codeDe(r.code); if(!code) return;
@@ -7860,6 +7861,9 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   const recs = [];   // {noeud, nom, courriel, tel, adresse, kind, obj}
   const rec = r => { r.noeud = noeud(r.nNom || r.nMail); if(r.nNom && r.nMail) unir(r.nNom, r.nMail); if(r.noeud) recs.push(r); return r; };
   const masques = new Set(F.masques.flatMap(f=>[f.nom, ...f.alias]).map(x=>persCle(x)).filter(Boolean));
+  (F.contacts||[]).forEach(f=>{ const n = 'c:'+f.row; noeud(n);
+    [f.nom, ...f.alias].forEach(a=>{ const k = nNom(a); if(k) unir(n, k); });
+    String(f.courriel||'').split(/[\s,;]+/).forEach(e=>{ const m = nMail(e); if(m) unir(n, m); }); });
   F.clients.filter(f=>f.code==='PART' || f.code==='COMMERCE' || !f.code).forEach(f=>{ const n = 'f:'+f.row; noeud(n);
     [f.nom, ...f.alias].forEach(a=>{ const k = nNom(a); if(k) unir(n, k); });
     String(f.courriel||'').split(/[\s,;]+/).forEach(e=>{ const m = nMail(e); if(m) unir(n, m); }); });
@@ -7915,7 +7919,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   const groupes = {};
   recs.forEach(r=>{ const g = trouve(r.noeud); (groupes[g] = groupes[g] || []).push(r); });
   const ficheDe = g => F.clients.find(f=>(f.code==='PART' || f.code==='COMMERCE' || !f.code) && trouve('f:'+f.row)===g) || null;
-  const pers = [];
+  const pers = [], vus = new Set();
   Object.entries(groupes).forEach(([g, rs])=>{
     const fiche = ficheDe(g);
     const variantes = {}; rs.forEach(r=>{ if(r.nom && !/@/.test(r.nom)){ const p = persNomPropre(r.nom); if(p) variantes[p] = (variantes[p]||0) + (r.kind==='reg'||r.kind==='fac'||r.kind==='soum' ? 2 : 1); } });
@@ -7956,8 +7960,21 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     p.courriel = (fiche && fiche.courriel) || courriels[0] || '';
     p.cle = persCle(p.nom);
     p.commerce = fiche && (fiche.code==='COMMERCE' || fiche.code==='PART') ? fiche.code==='COMMERCE' : repEstCommerce(p);
+    // v161 : contact d'un contracteur → va sous le contracteur (ses factures, soumissions et jobs aussi)
+    const fc = (F.contacts||[]).find(f=>trouve('c:'+f.row)===g);
+    if(fc && CLIENT_CODES[fc.code]){ const c = C(fc.code); vus.add('c:'+fc.row);
+      c.contacts.push({fiche:fc, nom:fc.nom || p.nom, role:fc.notes||'', courriels:[...new Set([...String(fc.courriel||'').toLowerCase().split(/[\s,;]+/), ...p.courriels].filter(e=>/@/.test(e)))],
+        tels:[...new Set([fc.tel, ...p.tels].filter(Boolean))], noms:p.noms});
+      c.facturesSans.push(...p.facturesSans, ...p.listeJobs.flatMap(j=>j.factures)); c.soum.push(...p.soum);
+      p.listeJobs.forEach(j=>{ j.factures = []; if(j.events.length || j.achats.length) c.listeJobs.push(j); });
+      return; }
     pers.push(p);
   });
+  // contacts ajoutés à la main (sans facture ni job)
+  (F.contacts||[]).forEach(fc=>{ if(vus.has('c:'+fc.row) || !CLIENT_CODES[fc.code]) return;
+    C(fc.code).contacts.push({fiche:fc, nom:fc.nom, role:fc.notes||'', courriels:String(fc.courriel||'').toLowerCase().split(/[\s,;]+/).filter(e=>/@/.test(e)), tels:[fc.tel].filter(Boolean), noms:[]}); });
+  Object.values(contr).forEach(c=>{ c.listeJobs = c.listeJobs || []; c.cout = c.cout || 0; c.last = c.last || ''; c.contacts.sort((a,b)=>a.nom.localeCompare(b.nom,'fr'));
+    c.facture = c.listeJobs.reduce((t,j)=>t+j.facture,0) + c.facturesSans.filter(f=>!f.annulee).reduce((t,f)=>t+(f.ht||0),0); });
   // Étiquette d'une job de particulier : ce que tu as écrit (« Cuisine »), sinon le mois (« Août 2026 »)
   const MOIS = ['','Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
   pers.forEach(p=>p.listeJobs.forEach(j=>{
@@ -8084,7 +8101,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   const nq = cvNorm(q);
   const trouve = txt => !nq || cvNorm(txt).includes(nq);
   const texteClient = c => c.type==='contr'
-    ? [c.code, c.nom, c.contact, c.fiche&&c.fiche.tel, c.fiche&&c.fiche.courriel, ...c.listeJobs.flatMap(j=>[j.nom, j.po, j.adresse, ...j.factures.map(f=>f.num)])].join(' ')
+    ? [c.code, c.nom, c.contact, c.fiche&&c.fiche.tel, c.fiche&&c.fiche.courriel, ...(c.contacts||[]).flatMap(k=>[k.nom, k.role, ...k.courriels, ...k.tels]), ...c.listeJobs.flatMap(j=>[j.nom, j.po, j.adresse, ...j.factures.map(f=>f.num)])].join(' ')
     : [c.nom, ...c.noms, ...c.courriels, ...c.tels, ...c.adresses, c.fiche&&c.fiche.notes, ...c.listeJobs.flatMap(j=>[j.po, j.label, ...j.factures.map(f=>f.num), ...j.achats.map(a=>a.num)]), ...c.facturesSans.map(f=>f.num), ...c.soum.map(s=>s.no)].join(' ');
   const tous = [...R.contr, ...R.pers];
   const choisi = sel && sel.startsWith('F:') ? fourn.find(f=>'F:'+f.nom===sel) : (tous.find(c=>c.id===sel) || (selNom && R.pers.find(p=>p.nom===selNom)));
@@ -8107,7 +8124,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   if(choisi) return <div>{entete}
     <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>setSel(null)}>← Retour à la liste</button>
     {sel.startsWith('F:') ? <RepFicheFournisseur f={choisi} K={K} toast={toast}/>
-      : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onLie={nom=>setSel('', nom)}
+      : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onLie={nom=>setSel('', nom)} onContr={code=>setSel('C:'+code)}
           nbAV={aVerif[choisi.type==='contr' ? 'C:'+choisi.code : choisi.id]||0} onSuivi={(choisi.type==='contr' ? clients[choisi.code] : choisi.srcJobs.length) ? ()=>setSuivi(choisi.type==='contr' ? choisi.code : choisi.id) : null}/>}
   </div>;
 
@@ -8251,7 +8268,37 @@ function RepLigneAchat({a, montrerJob}){
   </div>;
 }
 
-function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi}){
+function RepContacts({c, busy, ecrire}){
+  const [ed,setEd]=useState(null);   // {fiche?, nom, role, courriel, tel}
+  const sauver = () => ecrire([{...(ed.fiche||{}), type:'Contact', code:c.code, nom:ed.nom.trim(), alias:ed.fiche ? ed.fiche.alias : [], notes:ed.role, courriel:ed.courriel, tel:ed.tel}],
+    'Contact '+ed.nom.trim()+' enregistré chez '+c.code+'.').then(ok=>ok&&setEd(null));
+  const retirer = k => ecrire([{...k.fiche, type:'Retiré'}], k.nom+' retiré des contacts de '+c.code+'.');
+  const champ = (k, l) => <input value={ed[k]} placeholder={l} onChange={e=>setEd({...ed,[k]:e.target.value})} style={{padding:'5px 8px'}}/>;
+  return <div className="card" style={{marginBottom:12}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+      <b>👥 Contacts chez {c.nom} ({c.contacts.length})</b>
+      {!ed && <button className="btn btn-sm" disabled={busy} onClick={()=>setEd({nom:'', role:'', courriel:'', tel:''})}>+ Ajouter un contact</button>}
+    </div>
+    {ed && <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:6,margin:'8px 0'}}>
+      {champ('nom','Nom')}{champ('role','Rôle (ex. chargé de projet)')}{champ('courriel','Courriel')}{champ('tel','Téléphone')}
+      <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={busy || !ed.nom.trim()} onClick={sauver}>Enregistrer</button><button className="btn btn-sm" onClick={()=>setEd(null)}>Annuler</button></div>
+    </div>}
+    {c.contacts.map((k,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'6px 0',borderTop:'1px solid var(--border)',fontSize:13}}>
+      <div style={{minWidth:0}}><b>{k.nom}</b>{k.role && <span className="muted"> · {k.role}</span>}
+        <div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:12.5}}>
+          {k.courriels.map(e=><a key={e} href={'mailto:'+e} style={{color:'var(--accent)'}}>✉️ {e}</a>)}
+          {k.tels.map(t=><a key={t} href={repTel(t)} style={{color:'var(--accent)'}}>📞 {t}</a>)}
+        </div></div>
+      <span style={{display:'flex',gap:4}}>
+        <button className="btn btn-sm" disabled={busy} onClick={()=>setEd({fiche:k.fiche, nom:k.nom, role:k.role, courriel:k.courriels.join(', '), tel:k.tels[0]||''})}>✏️</button>
+        <button className="btn btn-sm" disabled={busy} title="Retirer de ce contracteur (redevient un particulier s'il a des factures)" onClick={()=>retirer(k)}>✕</button>
+      </span>
+    </div>)}
+    {!c.contacts.length && !ed && <div className="muted" style={{fontSize:12.5,marginTop:4}}>Aucun contact. Ajoute-en un, ou ouvre un particulier et clique « 🏗 Lier à un contracteur ».</div>}
+  </div>;
+}
+function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr}){
+  const [versContr,setVersContr]=useState(false);
   const [lier,setLier]=useState(null);           // texte de recherche, ou {autre}
   const [edit,setEdit]=useState(null);
   const [ouverte,setOuverte]=useState(()=>c.listeJobs[0] ? c.listeJobs[0].key : '');
@@ -8302,6 +8349,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi}){
           {onSuivi && <button className="btn btn-sm" onClick={onSuivi} style={nbAV ? {borderColor:'var(--danger)',color:'var(--danger)',fontWeight:700} : null}>🔎 Suivi des jobs{nbAV ? ' · '+nbAV+' à vérifier' : ''}</button>}
           <button className="btn btn-sm" onClick={ouvrirEdit} disabled={busy}>✏️ Modifier la fiche</button>
           {pers && <button className="btn btn-sm" onClick={()=>setLier(lier===null ? '' : null)} disabled={busy}>🔗 Lier à…</button>}
+          {pers && <button className="btn btn-sm" onClick={()=>setVersContr(!versContr)} disabled={busy}>🏗 Lier à un contracteur</button>}
           {pers && <button className="btn btn-sm" onClick={basculer} disabled={busy}>{c.commerce ? '👤 C\'est un particulier' : '🏪 C\'est un commerce'}</button>}
           {pers && !fiche && !c.masque && <button className="btn btn-sm" onClick={masquer} disabled={busy} title="Ce n'est pas un client (ex. Lettrage du camion 14)">🙈 Masquer</button>}
         </div>
@@ -8311,6 +8359,16 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi}){
         <span>Achats : <b>{cvMoney(c.cout)}</b> <span className="muted" style={{fontSize:11}}>avant taxes</span></span>
         <span>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''}</span>
       </div>
+      {versContr && pers && <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border)',fontSize:13}}>
+        <div style={{marginBottom:6}}><b>{c.nom}</b> travaille pour quel contracteur ? Il deviendra un contact de ce contracteur (ses factures et soumissions suivent).</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          {R.contr.map(k=><button key={k.code} className="btn btn-sm" disabled={busy} onClick={()=>{
+            const lignes = [{type:'Contact', code:k.code, nom:c.nom, alias:c.noms.filter(n=>n!==c.nom && !/@/.test(n)), courriel:c.courriels.join(', '), tel:c.tels[0]||'', notes:''}];
+            if(fiche) lignes.push({...fiche, type:'Retiré'});
+            ecrire(lignes, c.nom+' est maintenant un contact de '+k.code+'.').then(ok=>{ if(ok){ setVersContr(false); onContr && onContr(k.code); } }); }}><b>{k.code}</b> {k.nom}</button>)}
+          <button className="btn btn-sm" onClick={()=>setVersContr(false)}>Annuler</button>
+        </div>
+      </div>}
       {lier!==null && pers && (()=>{
         if(typeof lier==='object'){ const a = lier.autre;
           const lierEt = (garde, autre) => ecrire(repLignesFusion(garde, autre), autre.nom+' lié à '+garde.nom+'.').then(ok=>{ if(ok){ setLier(null); onLie && onLie(garde.nom); } });
@@ -8345,6 +8403,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi}){
       </div>}
     </div>
 
+    {!pers && <RepContacts c={c} busy={busy} ecrire={ecrire}/>}
     {dupJobs.length>0 && !regroupe && <div className="card" style={{marginBottom:12,borderColor:'var(--warning)',fontSize:13}}>
       <div style={{display:'flex',justifyContent:'space-between',cursor:'pointer',gap:8}} onClick={()=>setVoirDup(!voirDup)}><b>🔁 Jobs qui semblent être la même ({dupJobs.length} groupe{dupJobs.length>1?'s':''})</b><span className="muted" style={{fontSize:12}}>{voirDup?'▲ cacher':'▼ voir'}</span></div>
       {voirDup && dupJobs.map((g,i)=>{ const p = g.jobs.find(j=>j.po) || g.jobs[0];
