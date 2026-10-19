@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v140';
+const APP_VERSION = 'v141';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1767,9 +1767,22 @@ function achatSur(a, clients){
   const cam = nu.match(/^(?:camion|cam|truck)\s*0?(7|14|25)$/); if(cam) return 'Camion '+cam[1];
   if(/^(?:entrepot|ent|inventaire|stock|shop|atelier)$/.test(nu)) return 'Entrepôt';
   if(/\b(camion|cam|truck|entrepot|inventaire|stock|shop|atelier)\b/.test(nu) || /\bENT\b/.test(r)) return '';   // camion + autre chose : à associer
-  const po = cvPO(r); if(!po) return '';
-  const l = new Set(); Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{ if(j.po===po) l.add(cvJobCle(c,j)); }));
-  return l.size===1 ? [...l][0] : '';
+  const po = poDeRef(r); if(!po) return '';
+  // v141 : un PO = une job. Si le même PO apparaît sous deux noms (ex. rough et finition écrits différemment) chez le MÊME client,
+  // on prend la job la plus récente ; si c'est deux clients différents, ça reste à associer.
+  const l = []; Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{ if(j.po===po) l.push({c, j, cle:cvJobCle(c,j)}); }));
+  const cles = [...new Set(l.map(x=>x.cle))];
+  if(cles.length===1) return cles[0];
+  if(cles.length>1 && new Set(l.map(x=>x.c.code)).size===1) return l.sort((x,y)=>String(y.j.last||'').localeCompare(String(x.j.last||'')))[0].cle;
+  return '';
+}
+// PO écrit dans la référence de commande : « CRS PO 3110 », « CRS 3110 », « P03110 », « ASC 123 », « ASC-123 », « GOO 045 »…
+function poDeRef(r){
+  const t = String(r||'');
+  let m = t.match(/\b(PAY|PY|ASC|SAR|GOU|GOO|5PIL|BOM|JOY|GGP|RROY|SE)\s*[-#]?\s*(\d{3})\b/i);
+  if(m){ let c = m[1].toUpperCase(); if(c==='PY') c='PAY'; if(c==='GOO') c='GOU'; return c+'-'+m[2]; }
+  m = t.match(/\bCRS\s*[-#:]?\s*(?:P[O0]?\s*[-#:]?\s*)?0?(\d{4})\b/i); if(m) return 'P0'+m[1];
+  return cvPO(t);
 }
 // Mode essai : tant que tu n'as pas cliqué « Activer », on te montre seulement ce qui serait associé.
 const autoAssocActif = () => { try{ return localStorage.getItem('crm_auto_assoc')==='1'; }catch(e){ return false; } };
