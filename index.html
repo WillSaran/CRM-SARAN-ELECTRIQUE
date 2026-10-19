@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v153';
+const APP_VERSION = 'v154';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7762,7 +7762,7 @@ function ficheAppliquerJobs(jobs, F, regByPO){
 // « Alain Cuisine Robichaud », « Alain Borne Robichaud » → même personne (alain robichaud), job « Cuisine » / « Borne ».
 const REP_MOTS_JOB = new Set(['cuisine','cuisines','borne','bornes','sdb','salle','bain','bains','garage','spa','piscine','thermopompe','panneau','entree','electrique',
   'extra','rough','finition','finale','serv','service','ajustement','ajustements','ajust','soussol','ssol','chauffage','plinthe','plinthes','reno','renovation','cabanon',
-  'generatrice','agrandissement','extension','chalet','condo','app','appt','appartement','unite','luminaire','luminaires','eclairage','exterieur','interieur','demo','rapup',
+  'generatrice','agrandissement','extension','chalet','condo','app','appt','appartement','unite','luminaire','luminaires','exterieur','interieur','demo','rapup',
   'prep','soumission','estimation','phase','deck','patio','tempo','temporaire','raccordement','recharge','rdc','etage','sdb2','fixtures','thermostat','thermostats','prise','prises']);
 function repMots(nom){
   const brut = String(nom||'').replace(/\s+—\s+/g,' ');
@@ -7786,6 +7786,14 @@ function repCodeCourriel(e, F){
   if(CLIENT_COURRIELS[String(e).trim().toLowerCase()]) return CLIENT_COURRIELS[String(e).trim().toLowerCase()];
   const f = ((F && F.clients)||[]).find(x=>x.code && x.code!=='PART' && String(x.courriel).toLowerCase().split(/[\s,;]+/).some(c=>c.split('@')[1]===d));
   return f ? f.code : (CLIENT_DOMAINES[d] || '');
+}
+// v154 : commerce (Éclairage Saran, St-Jean Pizzeria, dentiste, Actiforme…) ou particulier — deviné par des mots, corrigeable dans la fiche
+const REP_COMMERCE_RE = /\b(pizzeria|pizza|dentiste|dentaire|denturologiste|clinique|centre|restaurant|resto|bistro|cafe|boutique|pharmacie|store|aubainerie|epicerie|depanneur|quincaillerie|garderie|cpe|ecole|eglise|paroisse|municipalite|ville de|hotel|motel|auberge|gym|actiforme|eclairage saran|eclairage moderne|inc|ltee|enr|cie|corporation|corp|cooperative|coop|caisse|desjardins|bureau|cabinet|notaire|avocats?|comptables?|pavage|construction|immobilier|gestion|entreprises?|industries?|magasin|marche|bar|brasserie|microbrasserie|dentistes?|veterinaire|optometriste|physio|chiro|spa nordique|condos? [a-z]+ inc)\b/;
+const REP_COURRIEL_PERSO = /@(gmail|hotmail|outlook|live|yahoo|videotron|icloud|me|msn|sympatico|bell|cgocable|globetrotter|telus|aol|protonmail|mail|xplornet|cooptel|derytele|b2b2c|tlb)\./i;
+function repEstCommerce(p){
+  const t = [p.nom, ...p.noms].map(x=>String(x||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()).join(' | ');
+  if(REP_COMMERCE_RE.test(t)) return true;
+  return p.courriels.length>0 && p.courriels.every(e=>!REP_COURRIEL_PERSO.test(e));   // courriel de compagnie (@eclairagesaran.com, @pavagebarbeau.ca…)
 }
 const REP_SPECIAL = j => !j || CV_DESTS.includes(j) || j==='Éclairage Saran' || /^Employé — /.test(j);
 function repProche(x, y){ if(x===y) return true; if(Math.abs(x.length-y.length)>1 || Math.min(x.length,y.length)<5) return false; let i=0, j=0, d=0; while(i<x.length && j<y.length){ if(x[i]===y[j]){ i++; j++; continue; } if(++d>1) return false; if(x.length>y.length) i++; else if(y.length>x.length) j++; else { i++; j++; } } return d + (x.length-i) + (y.length-j) <= 1; }
@@ -7844,7 +7852,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F}){
   const recs = [];   // {noeud, nom, courriel, tel, adresse, kind, obj}
   const rec = r => { r.noeud = noeud(r.nNom || r.nMail); if(r.nNom && r.nMail) unir(r.nNom, r.nMail); if(r.noeud) recs.push(r); return r; };
   const masques = new Set(F.masques.flatMap(f=>[f.nom, ...f.alias]).map(x=>persCle(x)).filter(Boolean));
-  F.clients.filter(f=>f.code==='PART' || !f.code).forEach(f=>{ const n = 'f:'+f.row; noeud(n);
+  F.clients.filter(f=>f.code==='PART' || f.code==='COMMERCE' || !f.code).forEach(f=>{ const n = 'f:'+f.row; noeud(n);
     [f.nom, ...f.alias].forEach(a=>{ const k = nNom(a); if(k) unir(n, k); });
     String(f.courriel||'').split(/[\s,;]+/).forEach(e=>{ const m = nMail(e); if(m) unir(n, m); }); });
   const part = (clients||{}).PART;
@@ -7880,7 +7888,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F}){
   // Groupes de personnes
   const groupes = {};
   recs.forEach(r=>{ const g = trouve(r.noeud); (groupes[g] = groupes[g] || []).push(r); });
-  const ficheDe = g => F.clients.find(f=>(f.code==='PART' || !f.code) && trouve('f:'+f.row)===g) || null;
+  const ficheDe = g => F.clients.find(f=>(f.code==='PART' || f.code==='COMMERCE' || !f.code) && trouve('f:'+f.row)===g) || null;
   const pers = [];
   Object.entries(groupes).forEach(([g, rs])=>{
     const fiche = ficheDe(g);
@@ -7920,6 +7928,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F}){
     p.tel = (fiche && fiche.tel) || p.tels[0] || '';
     p.courriel = (fiche && fiche.courriel) || courriels[0] || '';
     p.cle = persCle(p.nom);
+    p.commerce = fiche && (fiche.code==='COMMERCE' || fiche.code==='PART') ? fiche.code==='COMMERCE' : repEstCommerce(p);
     pers.push(p);
   });
   // Étiquette d'une job de particulier : ce que tu as écrit (« Cuisine »), sinon le mois (« Août 2026 »)
@@ -7928,7 +7937,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F}){
     j.label = (j.ficheJob && j.ficheJob.nom) || [...j.cles].map(persLabelJob).find(Boolean) || (j.first ? MOIS[+j.first.slice(5,7)]+' '+j.first.slice(0,4) : 'Job');
   }));
   Object.values(contr).forEach(c=>c.listeJobs.forEach(j=>{ j.label = cvSansInit(j.nom) || j.po || 'Job'; }));
-  pers.sort((a,b)=>String(b.last).localeCompare(String(a.last)) || a.nom.localeCompare(b.nom,'fr'));
+  pers.sort((a,b)=>a.nom.localeCompare(b.nom,'fr',{sensitivity:'base'}));   // v154 : ordre alphabétique
   return {contr:Object.values(contr).sort((a,b)=>String(b.last).localeCompare(String(a.last))), pers};
 }
 // Possibles doublons : même nom de famille et prénom pareil / initiale / une lettre de différence
@@ -7984,7 +7993,8 @@ function RepertoireView({cfg, refreshKey, toast}){
   const [q,setQ]=useState('');
   const [sel,setSel]=useState(null);         // id d'un client ou 'F:<fournisseur>'
   const [busy,setBusy]=useState(false);
-  const [voirTout,setVoirTout]=useState(false);
+  const [filtre,setFiltreS]=useState(()=>{ try{ return localStorage.getItem('crm_rep_filtre')||'tous'; }catch(e){ return 'tous'; } });
+  const setFiltre = k => { setFiltreS(k); try{ localStorage.setItem('crm_rep_filtre', k); }catch(e){} };
   const [masques,setMasques]=useState(false);
   const [ignores,setIgnores]=useState(repIgnores);
   const changerOnglet = o => { setOnglet(o); setSel(null); try{ localStorage.setItem('crm_rep_onglet', o); }catch(e){} };
@@ -8027,7 +8037,7 @@ function RepertoireView({cfg, refreshKey, toast}){
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Répertoire</h2>
     <div className="muted" style={{fontSize:13,marginBottom:10}}>Tout ce qui se rattache à un client ou à un fournisseur : coordonnées, jobs, factures envoyées, achats et soumissions.</div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-      <button className={'btn btn-sm'+(onglet==='clients'?' btn-p':'')} onClick={()=>changerOnglet('clients')}>👤 Clients ({R.contr.length + R.pers.filter(p=>!p.masque).length})</button>
+      <button className={'btn btn-sm'+(onglet==='clients'?' btn-p':'')} onClick={()=>changerOnglet('clients')}>👥 Clients ({R.contr.length + R.pers.filter(p=>!p.masque).length})</button>
       <button className={'btn btn-sm'+(onglet==='fourn'?' btn-p':'')} onClick={()=>changerOnglet('fourn')}>🏭 Fournisseurs ({fourn.length})</button>
       {!choisi && <input value={q} onChange={e=>setQ(e.target.value)} placeholder={onglet==='clients' ? 'Nom, courriel, téléphone, adresse, PO, no de facture…' : 'Fournisseur…'} style={{flex:'1 1 220px',width:'auto',minWidth:0,padding:'6px 10px'}}/>}
       {d.maj && <span className="muted" style={{fontSize:11.5}}>mise à jour…</span>}
@@ -8055,43 +8065,53 @@ function RepertoireView({cfg, refreshKey, toast}){
     </div>;
   }
 
-  const contr = R.contr.filter(c=>trouve(texteClient(c)));
-  const pers = R.pers.filter(p=>(masques || !p.masque) && trouve(texteClient(p)));
-  const montres = voirTout || nq ? pers : pers.slice(0,60);
+  const contr = R.contr.filter(c=>trouve(texteClient(c))).sort((a,b)=>a.code.localeCompare(b.code,'fr'));
+  const visibles = R.pers.filter(p=>(masques || !p.masque) && trouve(texteClient(p)));
+  const commerces = visibles.filter(p=>p.commerce), pers = visibles.filter(p=>!p.commerce);
   const nbMasques = R.pers.filter(p=>p.masque).length;
+  const montre = k => filtre==='tous' || filtre===k;
+  const titre = (t, n) => <div className="muted" style={{fontSize:12,fontWeight:700,margin:'12px 0 6px',textTransform:'uppercase',letterSpacing:.5}}>{t} ({n})</div>;
+  const lettre = n => { const l = String(n||'').normalize('NFD').replace(/[̀-ͯ]/g,'').charAt(0).toUpperCase(); return /[A-Z]/.test(l) ? l : '#'; };
+  const Liste = ({l}) => <div className="card" style={{padding:0}}>
+    {l.map((p,i)=>{ const L = lettre(p.nom), nouv = !i || lettre(l[i-1].nom)!==L;
+      return <React.Fragment key={p.id}>
+        {nouv && l.length>15 && <div style={{padding:'3px 14px',fontSize:11.5,fontWeight:800,color:'var(--accent)',background:'var(--bg3)',borderBottom:'1px solid var(--border)'}}>{L}</div>}
+        <div onClick={()=>setSel(p.id)} style={{padding:'9px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',opacity:p.masque?.55:1}}>
+          <div style={{minWidth:0}}><b>{p.nom}</b>{p.fiche && <span title="Fiche enregistrée" style={{fontSize:11}}> 📇</span>}
+            <div className="muted" style={{fontSize:12}}>{[p.adresse, p.tel, p.courriel].filter(Boolean).join(' · ') || '—'}</div></div>
+          <div style={{textAlign:'right',fontSize:12}}>{p.listeJobs.length} job{p.listeJobs.length>1?'s':''}{p.facture ? <> · <b>{cvMoney(p.facture)}</b></> : ''}<div className="muted" style={{fontSize:11}}>{p.last ? cvFmtDay(p.last)+' '+p.last.slice(0,4) : ''}</div></div>
+        </div>
+      </React.Fragment>; })}
+    {!l.length && <div className="muted" style={{padding:14}}>Aucun résultat.</div>}
+  </div>;
+  const chip = (k, t) => <button key={k} className={'btn btn-sm'+(filtre===k?' btn-p':'')} onClick={()=>setFiltre(k)}>{t}</button>;
   return <div>{entete}
-    {!!doublons.length && !nq && <RepDoublons doublons={doublons} busy={busy} ecrire={ecrire} onIgnorer={id=>{ repIgnorer(id); setIgnores(repIgnores()); }}/>}
-    {!!contr.length && <><div className="muted" style={{fontSize:12,fontWeight:700,margin:'4px 0 6px',textTransform:'uppercase',letterSpacing:.5}}>Contracteurs</div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(230px,1fr))',gap:8,marginBottom:16}}>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+      {chip('tous','Tous')}{chip('contr','🏗 Contracteurs ('+contr.length+')')}{chip('com','🏪 Commerces ('+commerces.length+')')}{chip('part','👤 Particuliers ('+pers.length+')')}
+      {!!nbMasques && <button className="btn btn-sm" onClick={()=>setMasques(!masques)} style={{fontSize:11.5,marginLeft:'auto'}}>{masques ? 'Cacher les masqués' : '🙈 Masqués ('+nbMasques+')'}</button>}
+    </div>
+    {!!doublons.length && !nq && (montre('part') || montre('com')) && <RepDoublons doublons={doublons} busy={busy} ecrire={ecrire} onIgnorer={id=>{ repIgnorer(id); setIgnores(repIgnores()); }}/>}
+    {montre('contr') && !!contr.length && <>{titre('Contracteurs', contr.length)}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(230px,1fr))',gap:8,marginBottom:8}}>
         {contr.map(c=><div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0}} onClick={()=>setSel(c.id)}>
           <div><b style={{color:'var(--accent)'}}>{c.code}</b> {c.nom}</div>
           <div className="muted" style={{fontSize:12}}>{c.contact || (c.fiche&&c.fiche.tel) || ''}</div>
           <div style={{fontSize:12,marginTop:4}}>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''} · facturé <b>{cvMoney(c.facture)}</b></div>
         </div>)}
       </div></>}
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,flexWrap:'wrap',margin:'4px 0 6px'}}>
-      <div className="muted" style={{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:.5}}>Particuliers ({pers.length})</div>
-      {!!nbMasques && <button className="btn btn-sm" onClick={()=>setMasques(!masques)} style={{fontSize:11.5}}>{masques ? 'Cacher les masqués' : '🙈 Voir les masqués ('+nbMasques+')'}</button>}
-    </div>
-    <div className="card" style={{padding:0}}>
-      {montres.map(p=><div key={p.id} onClick={()=>setSel(p.id)} style={{padding:'9px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',opacity:p.masque?.55:1}}>
-        <div style={{minWidth:0}}><b>{p.nom}</b>{p.fiche && <span title="Fiche enregistrée" style={{fontSize:11}}> 📇</span>}
-          <div className="muted" style={{fontSize:12}}>{[p.adresse, p.tel, p.courriel].filter(Boolean).join(' · ') || '—'}</div></div>
-        <div style={{textAlign:'right',fontSize:12}}>{p.listeJobs.length} job{p.listeJobs.length>1?'s':''}{p.facture ? <> · <b>{cvMoney(p.facture)}</b></> : ''}<div className="muted" style={{fontSize:11}}>{p.last ? cvFmtDay(p.last)+' '+p.last.slice(0,4) : ''}</div></div>
-      </div>)}
-      {!pers.length && <div className="muted" style={{padding:14}}>Aucun client trouvé.</div>}
-      {!voirTout && !nq && pers.length>60 && <div style={{padding:10,textAlign:'center'}}><button className="btn btn-sm" onClick={()=>setVoirTout(true)}>Voir les {pers.length-60} autres</button></div>}
-    </div>
+    {montre('com') && <>{titre('Commerces', commerces.length)}<Liste l={commerces}/>
+      <div className="muted" style={{fontSize:11,margin:'4px 2px 0'}}>Classés selon le nom ou le courriel de compagnie. Mal classé ? Ouvre la fiche et clique « C'est un particulier ».</div></>}
+    {montre('part') && <>{titre('Particuliers', pers.length)}<Liste l={pers}/></>}
   </div>;
 }
 
 function RepDoublons({doublons, busy, ecrire, onIgnorer}){
   const [ouvert,setOuvert]=useState(false);
   const fusionner = (garde, autre) => {
-    const base = garde.fiche || {type:'Client', code:'PART'};
+    const base = garde.fiche || {type:'Client', code:garde.commerce ? 'COMMERCE' : 'PART'};
     const alias = [...new Set([...(base.alias||[]), ...garde.noms, ...autre.noms, ...(autre.fiche ? [autre.fiche.nom, ...autre.fiche.alias] : [])].filter(n=>n && n!==garde.nom))];
     const pick = k => (garde.fiche && garde.fiche[k]) || (autre.fiche && autre.fiche[k]) || '';
-    const lignes = [{...base, type:'Client', code:'PART', nom:garde.nom, alias, adresse:pick('adresse') || (garde.fiche ? '' : (garde.adresses[0]||autre.adresses[0]||'')), ville:pick('ville'),
+    const lignes = [{...base, type:'Client', code:base.code || (garde.commerce ? 'COMMERCE' : 'PART'), nom:garde.nom, alias, adresse:pick('adresse') || (garde.fiche ? '' : (garde.adresses[0]||autre.adresses[0]||'')), ville:pick('ville'),
       tel:pick('tel') || garde.tels[0] || autre.tels[0] || '', courriel:pick('courriel') || garde.courriels[0] || autre.courriels[0] || '', notes:pick('notes')}];
     if(autre.fiche && (!garde.fiche || autre.fiche.row!==garde.fiche.row)) lignes.push({...autre.fiche, type:'Retiré'});
     ecrire(lignes, autre.nom+' regroupé sous '+garde.nom+'.');
@@ -8134,14 +8154,16 @@ function RepFicheClient({c, busy, ecrire, R}){
   const [regroupe,setRegroupe]=useState(null);   // Set de clés de jobs cochées
   const [nomGroupe,setNomGroupe]=useState('');
   const [renomme,setRenomme]=useState(null);     // {key, nom}
-  const pers = c.type==='pers', code = pers ? 'PART' : c.code;
+  const pers = c.type==='pers', code = pers ? 'PART' : c.code, ficheCode = pers ? (c.commerce ? 'COMMERCE' : 'PART') : c.code;
   const fiche = c.fiche;
   const ouvrirEdit = () => setEdit({nom:c.nom, alias:fiche ? fiche.alias.join(' ; ') : (pers ? c.noms.filter(n=>n!==c.nom).join(' ; ') : ''),
     adresse:fiche ? fiche.adresse : (pers ? (c.adresses[0]||'') : ''), ville:fiche ? fiche.ville : '', tel:fiche ? fiche.tel : (pers ? c.tel : ''),
     courriel:fiche ? fiche.courriel : (pers ? c.courriel : ''), notes:fiche ? fiche.notes : ''});
-  const sauver = () => ecrire([{...(fiche||{}), type:'Client', code, nom:edit.nom.trim()||c.nom, alias:edit.alias.split(/\s*;\s*/).map(x=>x.trim()).filter(Boolean),
+  const sauver = () => ecrire([{...(fiche||{}), type:'Client', code:ficheCode, nom:edit.nom.trim()||c.nom, alias:edit.alias.split(/\s*;\s*/).map(x=>x.trim()).filter(Boolean),
     adresse:edit.adresse, ville:edit.ville, tel:edit.tel, courriel:edit.courriel, notes:edit.notes}], 'Fiche de '+(edit.nom||c.nom)+' enregistrée.').then(ok=>ok&&setEdit(null));
   const masquer = () => ecrire([{type:'Masqué', code:'PART', nom:c.nom, alias:c.noms}], c.nom+' est masqué du répertoire.');
+  const basculer = () => ecrire([{...(fiche || {alias:c.noms.filter(n=>n!==c.nom), tel:c.tel, courriel:c.courriel}), type:'Client', code:c.commerce ? 'PART' : 'COMMERCE', nom:c.nom}],
+    c.nom+(c.commerce ? ' est maintenant dans les particuliers.' : ' est maintenant dans les commerces.'));
   const ligneJob = (jobs, nom) => {
     const fj = jobs.map(j=>j.ficheJob).find(Boolean);
     const lignes = [{...(fj||{}), type:'Job', code, nom, alias:[...new Set(jobs.flatMap(j=>[...j.cles, ...(j.ficheJob ? j.ficheJob.alias : [])]))].filter(Boolean),
@@ -8157,6 +8179,7 @@ function RepFicheClient({c, busy, ecrire, R}){
     <div className="card" style={{marginBottom:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',alignItems:'flex-start'}}>
         <div style={{minWidth:0}}>
+          {pers && <div className="muted" style={{fontSize:11,textTransform:'uppercase',letterSpacing:.5}}>{c.commerce ? '🏪 Commerce' : '👤 Particulier'}</div>}
           <h3 className="fh" style={{margin:'0 0 4px',fontSize:20}}>{pers ? c.nom : <><span style={{color:'var(--accent)'}}>{c.code}</span> {c.nom}</>}{fiche && <span title="Fiche enregistrée" style={{fontSize:13}}> 📇</span>}</h3>
           {!pers && c.contact && <div style={{fontSize:13}}>👤 {c.contact}</div>}
           {(fiche ? [fiche.adresse, fiche.ville].filter(Boolean).join(', ') : c.adresse) && <div style={{fontSize:13}}>📍 {fiche ? [fiche.adresse, fiche.ville].filter(Boolean).join(', ') : c.adresse}</div>}
@@ -8168,6 +8191,7 @@ function RepFicheClient({c, busy, ecrire, R}){
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end'}}>
           <button className="btn btn-sm" onClick={ouvrirEdit} disabled={busy}>✏️ Modifier la fiche</button>
+          {pers && <button className="btn btn-sm" onClick={basculer} disabled={busy}>{c.commerce ? '👤 C\'est un particulier' : '🏪 C\'est un commerce'}</button>}
           {pers && !fiche && !c.masque && <button className="btn btn-sm" onClick={masquer} disabled={busy} title="Ce n'est pas un client (ex. Lettrage du camion 14)">🙈 Masquer</button>}
         </div>
       </div>
