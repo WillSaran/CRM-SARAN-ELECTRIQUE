@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v167';
+const APP_VERSION = 'v168';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7998,6 +7998,9 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     p.cle = persCle(p.nom);
     // v167 : seulement une soumission (pas de job, pas de facture, pas d'achat, pas de fiche) = pas encore un client
     p.soumSeul = !fiche && p.soum.length>0 && !p.srcJobs.length && !p.facturesSans.length && !p.listeJobs.some(j=>j.factures.length || j.achats.length || j.events.length);
+    // v168 : seulement dans l'agenda En Attente (jamais visité, facturé ni acheté pour lui) = pas encore un client
+    p.attenteSeul = !fiche && p.srcJobs.length>0 && p.srcJobs.every(j=>j.events.every(e=>e.attente)) && !p.facturesSans.length && !p.listeJobs.some(j=>j.factures.length || j.achats.length);
+    p.soumSeul = p.soumSeul || p.attenteSeul;
     p.commerce = fiche && (fiche.code==='COMMERCE' || fiche.code==='PART') ? fiche.code==='COMMERCE' : repEstCommerce(p);
     // v161 : contact d'un contracteur → va sous le contracteur (ses factures, soumissions et jobs aussi)
     const fc = (F.contacts||[]).find(f=>trouve('c:'+f.row)===g);
@@ -8222,7 +8225,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   const champN = (k, l) => <input value={nouveau[k]} placeholder={l} onChange={e=>setNouveau({...nouveau,[k]:e.target.value})} style={{padding:'6px 9px'}}/>;
   return <div>{entete}
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
-      {chip('tous','Tous')}{totalAV>0 && chip('verif','⚠️ À vérifier ('+totalAV+')')}{chip('contr','🏗 Contracteurs ('+contr.length+')')}{chip('com','🏪 Commerces ('+commerces.length+')')}{chip('part','👤 Particuliers'+(soum ? '' : ' ('+pers.length+')'))}{nbSoumSeul>0 && chip('soum','📄 Soumissions sans job ('+nbSoumSeul+')')}
+      {chip('tous','Tous')}{totalAV>0 && chip('verif','⚠️ À vérifier ('+totalAV+')')}{chip('contr','🏗 Contracteurs ('+contr.length+')')}{chip('com','🏪 Commerces ('+commerces.length+')')}{chip('part','👤 Particuliers'+(soum ? '' : ' ('+pers.length+')'))}{nbSoumSeul>0 && chip('soum','⏳ En attente / soumissions ('+nbSoumSeul+')')}
       <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>setNouveau(nouveau ? null : {commerce:filtre==='com', nom:'', adresse:'', ville:'', tel:'', courriel:'', notes:''})}>＋ Ajouter un client</button>
       {!!nbMasques && <button className="btn btn-sm" onClick={()=>setMasques(!masques)} style={{fontSize:11.5}}>{masques ? 'Cacher les masqués' : '🙈 Masqués ('+nbMasques+')'}</button>}
     </div>
