@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v142';
+const APP_VERSION = 'v143';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1777,6 +1777,25 @@ function achatSur(a, clients){
   if(cles.length>1 && new Set(l.map(x=>x.c.code)).size===1) return l.sort((x,y)=>String(y.j.last||'').localeCompare(String(x.j.last||'')))[0].cle;
   return '';
 }
+// v143 : jobs proposées d'après un NOM dans la référence (« Yvan Larocque », « Y Larocque ») — tu cliques pour associer.
+const SUGG_STOP = new Set(['camion','cam','truck','crs','asc','sar','gou','goo','pay','bom','ggp','joy','rroy','part','po','job','chez','rue','avenue','ave','boul','ent','stock','entrepot','inventaire','shop','eclairage','ecl','saran','commande','cmd','pour','les','des','client','particulier','projet']);
+function suggestionsAchat(a, clients){
+  const n = x => String(x||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  const toks = n(a.ref).split(/[^a-z0-9]+/).filter(t=>t.length>=4 && !/\d/.test(t) && !SUGG_STOP.has(t));
+  if(!toks.length) return [];
+  const ini = (String(a.ref||'').match(/\b([A-Za-zÀ-ÿ])\.?\s+[A-Za-zÀ-ÿ]{3,}/)||[])[1];
+  const res = {};
+  Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{
+    const nt = n(j.name).split(/[^a-z0-9]+/).filter(Boolean); let sc = 0;
+    const proche = (x, y) => { if(Math.abs(x.length-y.length)>1 || x.length<6) return false; let i=0, j=0, d=0; while(i<x.length && j<y.length){ if(x[i]===y[j]){ i++; j++; continue; } if(++d>1) return false; if(x.length>y.length) i++; else if(y.length>x.length) j++; else { i++; j++; } } return d + (x.length-i) + (y.length-j) <= 1; };   // une lettre de différence (Laroque / Larocque)
+    toks.forEach(t=>{ if(nt.some(m=>m===t || (m.length>=5 && t.length>=5 && (m.startsWith(t) || t.startsWith(m))) || proche(m, t))) sc += 2; });
+    if(!sc) return;
+    if(ini && nt.some(m=>m[0]===n(ini))) sc += 1;
+    if(c.code==='PART') sc += 0.5;
+    const cle = cvJobCle(c, j); if(!res[cle] || res[cle].sc<sc) res[cle] = {cle, sc, last:j.last||''};
+  }));
+  return Object.values(res).sort((x,y)=>y.sc-x.sc || String(y.last).localeCompare(String(x.last))).slice(0,3).map(x=>x.cle);
+}
 // PO écrit dans la référence de commande : « CRS PO 3110 », « CRS 3110 », « P03110 », « ASC 123 », « ASC-123 », « GOO 045 »…
 function poDeRef(r){
   const t = String(r||'');
@@ -1855,7 +1874,7 @@ function CvListeJobs({jobs, onChoix}){
 }
 
 // Choix de destination : inventaire, shop, camions, puis contracteur → job, ou ton propre texte.
-function CvChoixJob({clients, propose, onChoix}){
+function CvChoixJob({clients, propose, suggestions, onChoix}){
   const [groupe,setGroupe]=useState('');
   const [autre,setAutre]=useState(null);
   const [emp,setEmp]=useState(false);
@@ -1866,6 +1885,7 @@ function CvChoixJob({clients, propose, onChoix}){
   return <div style={{marginTop:6}}>
     <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
       {propose && pill('✓ '+propose, ()=>onChoix(propose), {background:'var(--accent)',color:'#fff',border:'none'})}
+      {(suggestions||[]).filter(x=>x!==propose).map(x=>pill('👤 '+x, ()=>onChoix(x), {borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}))}
       {CV_DESTS.map(d=>pill(cvIconeDest(d)+d, ()=>onChoix(d)))}
       {pill('✏️ Autre…', ()=>setAutre(autre===null?'':null))}
     </div>
@@ -1965,7 +1985,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
         {!assoc && <button className="btn btn-sm" style={{marginLeft:10}} onClick={()=>setChanger(changer===a.row?null:a.row)}>Changer la destination</button>}
       </div>}
       {(assoc || changer===a.row) && (busy===a.row ? <div className="muted" style={{fontSize:12}}>Enregistrement…</div>
-        : <CvChoixJob clients={clients} propose={a.propose} onChoix={job=>enregistrer(a, job)}/>)}
+        : <CvChoixJob clients={clients} propose={a.propose} suggestions={suggestionsAchat(a, clients)} onChoix={job=>enregistrer(a, job)}/>)}
     </div>; };
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Fournisseurs</h2>
@@ -6127,7 +6147,7 @@ function CmdFournisseurs({cfg, refreshKey, clients, commandes, enregistrerComman
       {ouverte===c.cle && <div style={{fontSize:12,margin:'4px 0 2px',paddingLeft:8,borderLeft:'2px solid var(--border2)'}}>
         {c.articles.length ? c.articles.map((a,i)=><div key={i}>{a}</div>) : <span className="muted">Aucun article lu.</span>}
         <div className="muted" style={{marginTop:2}}>{c.source}</div></div>}
-      {choix===c.cle && <CvChoixJob clients={clients} propose={prop} onChoix={job=>attitrer(c, job)}/>}
+      {choix===c.cle && <CvChoixJob clients={clients} propose={prop} suggestions={suggestionsAchat({ref:c.ref}, clients)} onChoix={job=>attitrer(c, job)}/>}
       {choix===c.cle && c.job && <button className="btn btn-sm" style={{marginTop:5}} onClick={()=>attitrer(c, '')}>Retirer l'attribution</button>}
       {p && <div style={{fontSize:12,marginTop:4}}>Le passage du <b>{cvFmtDay(p.e.day)}</b>{p.e.phase?' ('+p.e.phase+')':''} n'est pas marqué commandé : <button className="btn btn-sm" onClick={()=>placer(c, p)}>📦 Marquer ✅ Placée</button></div>}
     </div>; };
