@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v157';
+const APP_VERSION = 'v158';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7733,7 +7733,8 @@ function lireFiches(rows){
       alias:String(r[3]||'').split(/\s*;\s*/).map(x=>x.trim()).filter(Boolean), adresse:r[4]||'', ville:r[5]||'', tel:r[6]||'', courriel:String(r[7]||'').trim(),
       notes:r[8]||'', po:String(r[9]||'').trim(), client:String(r[10]||'').trim()};
     if(f.code==='PY') f.code = 'PAY';
-    if(t==='job'){ f.canon = cvJobCle({code:f.code||'PART'}, {name:ficheNomJob(f), po:f.po}); f.aliasN = new Set([...f.alias, f.canon, ficheNomJob(f)].map(ficheNorm).filter(Boolean)); F.jobs.push(f); }
+    if(t==='job'){ f.ids = new Set(f.alias.filter(a=>/^id:/.test(a)).map(a=>a.slice(3))); f.alias = f.alias.filter(a=>!/^id:/.test(a));   // v158 : id exact de la job (même nom, autre adresse = autre job)
+      f.canon = cvJobCle({code:f.code||'PART'}, {name:ficheNomJob(f), po:f.po}); f.aliasN = new Set([...f.alias, f.canon, ficheNomJob(f)].map(ficheNorm).filter(Boolean)); F.jobs.push(f); }
     else if(t==='fournisseur') F.fourn.push(f);
     else if(t==='client') F.clients.push(f);
     else if(t==='masque') F.masques.push(f);
@@ -7750,7 +7751,8 @@ function ficheJobAlias(F){
 function ficheAppliquerJobs(jobs, F, regByPO){
   ((F && F.jobs)||[]).forEach(f=>{
     const code = f.code || 'PART';
-    const membres = Object.values(jobs).filter(j=>j.client===code && (f.aliasN.has(ficheNorm(cvJobCle({code}, j))) || f.aliasN.has(ficheNorm(j.name)) || (f.po && j.po===f.po)));
+    let membres = f.ids.size ? Object.values(jobs).filter(j=>j.client===code && (f.ids.has(j.id) || (f.po && j.po===f.po))) : [];
+    if(!membres.length) membres = Object.values(jobs).filter(j=>j.client===code && (f.aliasN.has(ficheNorm(cvJobCle({code}, j))) || f.aliasN.has(ficheNorm(j.name)) || (f.po && j.po===f.po)));
     if(!membres.length) return;
     const p = membres.find(j=>f.po && j.po===f.po) || membres.find(j=>j.po) || membres[0];
     membres.forEach(j=>{ if(j===p) return; p.events.push(...j.events); if(!p.reg && j.reg) p.reg = j.reg; delete jobs[j.id]; });
@@ -7765,7 +7767,7 @@ const REP_MOTS_JOB = new Set(['cuisine','cuisines','borne','bornes','sdb','salle
   'generatrice','agrandissement','extension','chalet','condo','app','appt','appartement','unite','luminaire','luminaires','exterieur','interieur','demo','rapup',
   'prep','soumission','estimation','phase','deck','patio','tempo','temporaire','raccordement','recharge','rdc','etage','sdb2','fixtures','thermostat','thermostats','prise','prises']);
 function repMots(nom){
-  const brut = String(nom||'').replace(/\s+—\s+/g,' ');
+  const brut = String(nom||'').split(/\s+—\s+/)[0];   // v158 : « Alain Robichaud — Néons » → le client est Alain Robichaud ; « Néons » est seulement le nom de la job
   const toks = cvSansInit(brut).split(/[\s,\/()+&.]+/).filter(Boolean);
   const garde = [], job = [];
   for(const t of toks){
@@ -7802,12 +7804,12 @@ function repProche(x, y){ if(x===y) return true; if(Math.abs(x.length-y.length)>
 function repConstruire({clients, registry, factures, achats, soumissions, F, contacts}){
   F = F || {clients:[], jobs:[], fourn:[], masques:[]};
   const today = cvDay(new Date().toISOString());
-  const jobFiche = (code, cle, po) => F.jobs.find(f=>(f.code||'PART')===code && ((f.po && po && f.po===po) || f.aliasN.has(ficheNorm(cle))));
+  const jobFiche = (code, cle, po, id) => F.jobs.find(f=>(f.code||'PART')===code && ((f.po && po && f.po===po) || (id && f.ids.has(id)) || ((!id || !f.ids.size) && f.aliasN.has(ficheNorm(cle)))));
   // ---- Jobs (communes aux contracteurs et aux particuliers) ----
-  const nouvelleJob = (code, key) => ({key, code, nom:'', po:'', adresse:'', cles:new Set(), events:[], factures:[], achats:[], reg:null, ficheJob:null, first:'', last:''});
+  const nouvelleJob = (code, key) => ({key, code, nom:'', po:'', adresse:'', cles:new Set(), ids:new Set(), events:[], factures:[], achats:[], reg:null, ficheJob:null, first:'', last:''});
   const ajouterJob = (jobsMap, code, src) => {        // src : {cle, nom, po, adresse, events, reg}
-    const fj = jobFiche(code, src.cle, src.po);
-    const key = fj ? 'F'+fj.row : src.po ? 'P'+src.po : 'N'+ficheNorm(src.nom || src.cle);
+    const fj = jobFiche(code, src.cle, src.po, src.id);
+    const key = fj ? 'F'+fj.row : src.po ? 'P'+src.po : src.id ? 'I'+src.id : 'N'+ficheNorm(src.nom || src.cle);
     const j = jobsMap[key] || (jobsMap[key] = nouvelleJob(code, key));
     if(fj){ j.ficheJob = fj; j.nom = fj.code==='PART' ? (fj.nom || '') : fj.nom; j.po = fj.po || j.po; }
     if(!j.nom && src.nom) j.nom = src.nom;
@@ -7815,14 +7817,20 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     if(!j.adresse && src.adresse) j.adresse = src.adresse;
     if(src.reg && !j.reg) j.reg = src.reg;
     if(src.cle) j.cles.add(src.cle);
+    if(src.id) j.ids.add(src.id);
     if(src.events) j.events.push(...src.events.filter(e=>!e.attente));
     return j;
   };
   // Une job nommée sans PO qui porte exactement le même nom qu'une job avec PO = la même
   const fusionNoms = jobsMap => {
     const avecPO = Object.values(jobsMap).filter(j=>j.key[0]==='P');
-    Object.values(jobsMap).filter(j=>j.key[0]==='N').forEach(j=>{
-      const c = avecPO.filter(p=>ficheNorm(p.nom)===ficheNorm(j.nom)); if(c.length!==1) return;
+    Object.values(jobsMap).filter(j=>j.key[0]==='N' || j.key[0]==='I').forEach(j=>{
+      let c = avecPO.filter(p=>ficheNorm(p.nom)===ficheNorm(j.nom));
+      if(!c.length && j.key[0]==='N') c = Object.values(jobsMap).filter(p=>p!==j && (p.key[0]==='I' || p.key[0]==='F') && [...p.cles, p.nom].some(x=>ficheNorm(x)===ficheNorm(j.nom)));
+      if(c.length>1 && j.key[0]==='N' && j.achats.length){   // même nom, deux adresses : la job dont les passages sont près de la date d'achat
+        const t = new Date(String(j.achats[0].date||j.achats[0].recue)+'T12:00:00').getTime();
+        const pres = c.filter(p=>p.events.some(e=>Math.abs(new Date(e.day+'T12:00:00').getTime()-t) <= 14*864e5)); if(pres.length===1) c = pres; }
+      if(c.length!==1) return;
       const p = c[0]; j.cles.forEach(x=>p.cles.add(x)); p.events.push(...j.events); p.factures.push(...j.factures); p.achats.push(...j.achats); if(!p.adresse) p.adresse = j.adresse; delete jobsMap[j.key];
     });
   };
@@ -7840,7 +7848,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   const C = code => contr[code] || (contr[code] = {type:'contr', id:'C:'+code, code, nom:CLIENT_CODES[code]||code, contact:CLIENT_CONTACT[code]||'',
     fiche:F.clients.find(f=>f.code===code)||null, jobs:{}, facturesSans:[], soum:[]});
   const codeDe = c => { c = String(c||'').toUpperCase(); if(c==='PY') c='PAY'; return CLIENT_CODES[c] ? c : ''; };
-  Object.values(clients||{}).forEach(c=>{ if(c.code==='PART') return; c.jobs.forEach(j=>ajouterJob(C(c.code).jobs, c.code, {cle:cvJobCle(c,j), nom:j.name, po:j.po, adresse:j.address, events:j.events, reg:j.reg})); });
+  Object.values(clients||{}).forEach(c=>{ if(c.code==='PART') return; c.jobs.forEach(j=>ajouterJob(C(c.code).jobs, c.code, {cle:cvJobCle(c,j), nom:j.name, po:j.po, adresse:j.address, events:j.events, reg:j.reg, id:j.id})); });
   (registry||[]).forEach(r=>{ const code = codeDe(r.code); if(!code) return;
     ajouterJob(C(code).jobs, code, {cle:cvJobCle({code}, {name:r.nom, po:r.po}), nom:cvTitleCase(r.nom||''), po:r.po, adresse:[r.adresse,r.ville].filter(Boolean).join(', '), reg:r}); });
   // ---- Personnes : union de noms et de courriels ----
@@ -7856,7 +7864,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     [f.nom, ...f.alias].forEach(a=>{ const k = nNom(a); if(k) unir(n, k); });
     String(f.courriel||'').split(/[\s,;]+/).forEach(e=>{ const m = nMail(e); if(m) unir(n, m); }); });
   const part = (clients||{}).PART;
-  if(part) part.jobs.forEach(j=>rec({nNom:nNom(j.name), nom:j.name, adresse:j.address, kind:'job', obj:j, tel:(j.reg&&j.reg.tel)||'', courriel:(j.reg&&j.reg.courriel)||''}));
+  if(part) part.jobs.forEach(j=>rec({nNom:nNom(j.name), nom:String(j.name||'').split(/\s+—\s+/)[0], adresse:j.address, kind:'job', obj:j, tel:(j.reg&&j.reg.tel)||'', courriel:(j.reg&&j.reg.courriel)||''}));
   (registry||[]).forEach(r=>{ if(codeDe(r.code) || !r.nom) return; rec({nNom:nNom(r.nom), nMail:nMail(r.courriel), nom:r.nom, tel:r.tel, courriel:r.courriel, adresse:[r.adresse,r.ville].filter(Boolean).join(', '), kind:'reg', obj:r}); });
   Object.values(factures||{}).forEach(f=>{
     const code = codeDe(f.client);
@@ -7908,7 +7916,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     p.masque = !fiche && [...new Set(rs.map(r=>persCle(r.nom)).filter(Boolean))].some(k=>masques.has(k));
     // Jobs du particulier
     rs.forEach(r=>{
-      if(r.kind==='job') ajouterJob(p.jobs, 'PART', {cle:cvJobCle({code:'PART'}, r.obj), nom:r.obj.name, po:r.obj.po, adresse:r.obj.address, events:r.obj.events, reg:r.obj.reg});
+      if(r.kind==='job') ajouterJob(p.jobs, 'PART', {cle:cvJobCle({code:'PART'}, r.obj), nom:r.obj.name, po:r.obj.po, adresse:r.obj.address, events:r.obj.events, reg:r.obj.reg, id:r.obj.id});
       else if(r.kind==='reg' && r.obj.po) ajouterJob(p.jobs, 'PART', {cle:r.obj.nom, nom:r.obj.nom, po:r.obj.po, adresse:r.adresse, reg:r.obj});
       else if(r.kind==='achat'){ const d = r.obj.job, po = cvPO(d); const j = ajouterJob(p.jobs, 'PART', {cle:d, nom:(po ? d.replace(po,'') : d).trim(), po}); j.achats.push(r.obj); }
       else if(r.kind==='soum') p.soum.push(r.obj);
@@ -8248,7 +8256,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi}){
     c.nom+(c.commerce ? ' est maintenant dans les particuliers.' : ' est maintenant dans les commerces.'));
   const ligneJob = (jobs, nom) => {
     const fj = jobs.map(j=>j.ficheJob).find(Boolean);
-    const lignes = [{...(fj||{}), type:'Job', code, nom, alias:[...new Set(jobs.flatMap(j=>[...j.cles, ...(j.ficheJob ? j.ficheJob.alias : [])]))].filter(Boolean),
+    const lignes = [{...(fj||{}), type:'Job', code, nom, alias:[...new Set(jobs.flatMap(j=>[...j.cles, ...(j.ficheJob ? j.ficheJob.alias : []), ...[...j.ids, ...(j.ficheJob ? [...j.ficheJob.ids] : [])].map(i=>'id:'+i)]))].filter(Boolean),
       po:(fj && fj.po) || (jobs.find(j=>j.po)||{}).po || '', client: pers ? c.nom : ''}];
     jobs.forEach(j=>{ if(j.ficheJob && (!fj || j.ficheJob.row!==fj.row)) lignes.push({...j.ficheJob, type:'Retiré'}); });
     return lignes;
@@ -8494,7 +8502,7 @@ function App(){
 
   const navItems = [
     {id:'dashboard',label:'Tableau de bord'},
-    {id:'repertoire',label:'Clients et fournisseurs'},
+    {id:'repertoire',label:'Répertoire'},
     {id:'projets',label:'Projets'},
     {id:'agenda',label:'Agenda'},
     {id:'fournisseurs',label:'Fournisseurs'},
