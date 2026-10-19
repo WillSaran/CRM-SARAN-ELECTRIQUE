@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v178';
+const APP_VERSION = 'v179';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8108,7 +8108,8 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   pers.forEach(p=>{ p.lies = [];
     p.courriels.forEach(e=>lier('e:'+e, p));
     p.tels.forEach(t=>{ const d = String(t).replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); if(d.length===10) lier('t:'+d, p); });
-    lier('n:'+persCle(p.nom), p); (p.fiche ? p.fiche.alias : []).forEach(a=>lier('a:'+persCle(a), p)); });
+    lier('n:'+persCle(p.nom), p); (p.fiche ? p.fiche.alias : []).forEach(a=>lier('a:'+persCle(a), p));
+    if(p.fiche && p.fiche.client) lier('a:'+persCle(p.fiche.client), p); });   // v179 : « contact de » (colonne Client de la fiche)
   Object.entries(parCle).forEach(([k, set])=>{ const l = [...set]; if(k[0]==='a') return;
     if(k[0]==='n'){ const al = parCle['a:'+k.slice(2)]; if(al) l.push(...al); }
     if(l.length<2 || l.length>4) return;
@@ -8543,7 +8544,16 @@ function RepContacts({c, busy, ecrire}){
     {!c.contacts.length && !ed && <div className="muted" style={{fontSize:12.5,marginTop:4}}>Aucun contact. Ajoute-en un, ou ouvre un particulier et clique « 🏗 Lier à un contracteur ».</div>}
   </div>;
 }
+const REP_NUM_ENT = /^\s*\d{4}[\s-]?\d{4}\s+qu[ée]?u?[ée]bec/i;   // « 9272-0473 Québec inc. »
 function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOuvrir}){
+  const [separe,setSepare]=useState(null);   // v179 : sortir un nom de « Aussi écrit » vers sa propre fiche liée
+  const numsEnt = c.type==='pers' ? [...new Set([...(c.noms||[]), ...((c.fiche&&c.fiche.alias)||[])].filter(n=>REP_NUM_ENT.test(n)).map(n=>n.trim()))] : [];
+  const autresNoms = c.type==='pers' ? [...new Set((c.noms||[]).filter(n=>persNomPropre(n)!==c.nom && n!==c.nom && !REP_NUM_ENT.test(n) && !/@/.test(n)))] : [];
+  const separer = () => { const nom = separe.nom.trim(), v = separe.variante;
+    const base = c.fiche || {type:'Client', code:c.commerce ? 'COMMERCE' : 'PART', tel:c.tel||'', courriel:(c.courriels||[]).join(', '), adresse:c.adresses[0]||''};
+    const alias = [...new Set([...(base.alias||[]), ...c.noms])].filter(n=>n && n!==c.nom && n!==v && persCle(n)!==persCle(v) && !/@/.test(n));
+    ecrire([{...base, type:'Client', code:base.code || (c.commerce ? 'COMMERCE' : 'PART'), nom:c.nom, alias},
+      {type:'Client', code:'PART', nom, alias:[v].filter(x=>x!==nom), client:c.nom}], nom+' a maintenant sa propre fiche, liée à '+c.nom+'.').then(ok=>{ if(ok) setSepare(null); }); };
   const [versContr,setVersContr]=useState(false);
   const [lier,setLier]=useState(null);           // texte de recherche, ou {autre}
   const [edit,setEdit]=useState(null);
@@ -8589,7 +8599,17 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
           {pers && c.entreprise && c.entreprise!==c.nom && <div style={{fontSize:13}}>🏢 {c.entreprise}</div>}
           {pers && c.contacts.filter(k=>k.notes).map((k,i)=><div key={i} style={{fontSize:12.5,marginTop:2,whiteSpace:'pre-wrap'}}>🗒 {k.notes}</div>)}
           {fiche && fiche.notes && <div style={{fontSize:12.5,marginTop:4,whiteSpace:'pre-wrap'}}>📝 {fiche.notes}</div>}
-          {pers && c.noms.filter(n=>persNomPropre(n)!==c.nom).length>0 && <div className="muted" style={{fontSize:11.5,marginTop:4}}>Aussi écrit : {c.noms.filter(n=>persNomPropre(n)!==c.nom).slice(0,8).join(' · ')}</div>}
+          {pers && numsEnt.length>0 && <div style={{fontSize:13}}>🏢 N° d'entreprise : {numsEnt.join(' · ')}</div>}
+          {pers && autresNoms.length>0 && <div className="muted" style={{fontSize:11.5,marginTop:4,display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>Aussi écrit :
+            {autresNoms.slice(0,10).map(n=><span key={n} style={{display:'inline-flex',alignItems:'center',gap:3,border:'1px solid var(--border)',borderRadius:6,padding:'1px 6px'}}>{n}
+              <button className="btn btn-sm" style={{padding:'0 5px',fontSize:10.5}} disabled={busy} title="En faire une fiche à part, liée à celle-ci (ex. un employé ou le propriétaire)" onClick={()=>setSepare({variante:n, nom:persNomPropre(n)||n})}>✂</button></span>)}</div>}
+          {separe && <div style={{marginTop:8,padding:8,border:'1px solid var(--border2)',borderRadius:8,fontSize:12.5}}>
+            <div style={{marginBottom:5}}>Faire de « {separe.variante} » une fiche à part (particulier), liée à <b>{c.nom}</b> :</div>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+              <input value={separe.nom} onChange={e=>setSepare({...separe, nom:e.target.value})} placeholder="Nom de la personne" style={{padding:'5px 8px',flex:'1 1 180px'}}/>
+              <button className="btn btn-sm btn-p" disabled={busy || !separe.nom.trim()} onClick={separer}>Créer la fiche</button>
+              <button className="btn btn-sm" onClick={()=>setSepare(null)}>Annuler</button>
+            </div></div>}
           {pers && (c.lies||[]).length>0 && <div style={{fontSize:12.5,marginTop:4}}>🔗 Aussi lié à : {c.lies.map((q,i)=><React.Fragment key={q.id}>{i ? ', ' : ''}<a href="#" onClick={e=>{ e.preventDefault(); onOuvrir && onOuvrir(q.id, q.nom); }} style={{color:'var(--accent)'}}>{q.commerce ? '🏪' : '👤'} {q.nom}</a></React.Fragment>)}</div>}
           {pers && c.adresses.length>1 && <div className="muted" style={{fontSize:11.5}}>Autres adresses : {c.adresses.slice(1,4).join(' · ')}</div>}
         </div>
