@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v158';
+const APP_VERSION = 'v159';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7864,7 +7864,6 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     [f.nom, ...f.alias].forEach(a=>{ const k = nNom(a); if(k) unir(n, k); });
     String(f.courriel||'').split(/[\s,;]+/).forEach(e=>{ const m = nMail(e); if(m) unir(n, m); }); });
   const part = (clients||{}).PART;
-  if(part) part.jobs.forEach(j=>rec({nNom:nNom(j.name), nom:String(j.name||'').split(/\s+—\s+/)[0], adresse:j.address, kind:'job', obj:j, tel:(j.reg&&j.reg.tel)||'', courriel:(j.reg&&j.reg.courriel)||''}));
   (registry||[]).forEach(r=>{ if(codeDe(r.code) || !r.nom) return; rec({nNom:nNom(r.nom), nMail:nMail(r.courriel), nom:r.nom, tel:r.tel, courriel:r.courriel, adresse:[r.adresse,r.ville].filter(Boolean).join(', '), kind:'reg', obj:r}); });
   Object.values(factures||{}).forEach(f=>{
     const code = codeDe(f.client);
@@ -7872,6 +7871,20 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     const cc = repCodeCourriel(f.client, F); if(cc){ C(cc).facturesSans.push(f); return; }
     if(!f.nom && !/@/.test(f.client)) return;
     rec({nNom:nNom(f.nom), nMail:nMail(f.client), nom:f.nom, courriel:/@/.test(f.client)?f.client:'', kind:'fac', obj:f});
+  });
+  // v159 : un « particulier » dont le nom est exactement celui d'une job de contracteur (« Arnoux » = CRS Arnoux, « Dollier » = SAR Dollier)
+  // est cette job, écrite sans le code dans l'agenda → on la range sous le contracteur (l'agenda n'est pas modifié).
+  const contrCle = nom => String(cvSansInit(String(nom||'').split(/\s+—\s+/)[0])).replace(/(\d)([A-Za-zÀ-ÿ])/g,'$1 $2').split(/[\s,\/()+&.\-]+/)
+    .map(cvNorm).filter(w=>w.length>=2 && !/\d/.test(w) && !REP_MOTS_JOB.has(w) && !/^(rough|finition|serv|service|ajust|demo|rapup|po)$/.test(w)).join(' ');
+  const jobsContr = {};
+  Object.values(contr).forEach(c=>Object.values(c.jobs).forEach(j=>[j.nom, ...j.cles].forEach(n=>{ const k = contrCle(String(n||'').replace(new RegExp('^'+c.code+'\\s+'),'')); if(k.replace(/\s/g,'').length>=4){ (jobsContr[k] = jobsContr[k] || new Set()).add(j); } })));
+  const jobContrDe = nom => { const k = contrCle(nom); const l = k && jobsContr[k] ? [...jobsContr[k]] : [];
+    const codes = new Set(l.map(j=>j.code)); if(codes.size!==1) return null;
+    return l.sort((a,b)=>(!!b.po)-(!!a.po) || String(b.last||'').localeCompare(String(a.last||'')))[0]; };
+  if(part) part.jobs.forEach(j=>{
+    const jc = jobContrDe(j.name);
+    if(jc){ jc.events.push(...j.events.filter(e=>!e.attente)); jc.cles.add(j.name); if(j.id) jc.ids.add(j.id); if(!jc.adresse && j.address) jc.adresse = jc.adresse || j.address; jc.sansCode = (jc.sansCode||[]).concat(j); return; }
+    rec({nNom:nNom(j.name), nom:String(j.name||'').split(/\s+—\s+/)[0], adresse:j.address, kind:'job', obj:j, tel:(j.reg&&j.reg.tel)||'', courriel:(j.reg&&j.reg.courriel)||''});
   });
   (soumissions||[]).forEach(s=>{
     const cc = repCodeCourriel(s.courriel, F) || repCodeCourriel(s.client, F); if(cc){ C(cc).soum.push(s); return; }
@@ -7889,6 +7902,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     const m = d.match(/^(\S+)\s+(.*)$/); const code = m ? codeDe(m[1]) : '';
     if(code){ const reste = m[2], po = cvPO(reste) || ((reste.match(/\b[A-Z0-9]{2,4}-\d{3}\b/)||[])[0]||''); const nom = (po ? reste.replace(po,'') : reste).trim();
       const j = ajouterJob(C(code).jobs, code, {cle:d, nom:cvTitleCase(nom), po}); j.achats.push(a); return; }
+    const jc = jobContrDe(d); if(jc){ jc.achats.push(a); jc.cles.add(d); return; }
     const k = nNom(d); if(k && persConnues.has(k)) rec({nNom:k, nom:d, kind:'achat', obj:a});
   });
   Object.values(contr).forEach(c=>{ fusionNoms(c.jobs); Object.values(c.jobs).forEach(finirJob);
