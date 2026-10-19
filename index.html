@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v151';
+const APP_VERSION = 'v152';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7779,9 +7779,11 @@ function persCle(nom){ const g = repMots(nom).garde.map(cvNorm).filter(Boolean);
 function persNomPropre(nom){ const g = repMots(nom).garde.join(' ').replace(/^[\s\-–—,]+|[\s\-–—,]+$/g,''); return g ? cvTitleCase(g) : ''; }
 function persLabelJob(nom){ const j = repMots(nom).job; return j.length ? cvTitleCase(j.join(' ')) : ''; }
 // Courriel d'une compagnie → contracteur (pour les factures/soumissions envoyées à leur courriel)
-const CLIENT_DOMAINES = {'payneconstruction.ca':'PAY','actiplus.ca':'ASC','gestiongp.ca':'GGP','immo2d.com':'GOU'};
+const CLIENT_DOMAINES = {'payneconstruction.ca':'PAY','actiplus.ca':'ASC','gestiongp.ca':'GGP','immo2d.com':'GOU','5piliers.ca':'5PIL'};
+const CLIENT_COURRIELS = {'infopayneconstruction@gmail.com':'PAY'};
 function repCodeCourriel(e, F){
   const d = String(e||'').toLowerCase().split('@')[1] || ''; if(!d) return '';
+  if(CLIENT_COURRIELS[String(e).trim().toLowerCase()]) return CLIENT_COURRIELS[String(e).trim().toLowerCase()];
   const f = ((F && F.clients)||[]).find(x=>x.code && x.code!=='PART' && String(x.courriel).toLowerCase().split(/[\s,;]+/).some(c=>c.split('@')[1]===d));
   return f ? f.code : (CLIENT_DOMAINES[d] || '');
 }
@@ -7944,16 +7946,17 @@ function repDoublonsPers(pers, ignores){
   }
   return out;
 }
-// Jobs d'un même client qui semblent être la même (ASC Colibri ×3)
-function repDoublonsJobs(c){
-  const out = [], L = c.listeJobs;
+// Jobs d'un même client qui semblent être la même (ASC Colibri ×3) — en groupes (« Queen » ×7 = un seul groupe)
+function repDoublonsJobs(c, ignores){
+  const L = c.listeJobs, par = L.map((_,i)=>i), tr = i => par[i]===i ? i : (par[i] = tr(par[i]));
   for(let i=0;i<L.length;i++) for(let k=i+1;k<L.length;k++){
     const a = L[i], b = L[k];
     if(a.po && b.po && a.po!==b.po) continue;
     if(!cvMotsNom(a.nom).size || !cvMotsNom(b.nom).size) continue;
-    if(cvMemeJob(a.nom, b.nom)) out.push([a, b]);
+    if(cvMemeJob(a.nom, b.nom)) par[tr(k)] = tr(i);
   }
-  return out;
+  const g = {}; L.forEach((j,i)=>{ (g[tr(i)] = g[tr(i)] || []).push(j); });
+  return Object.values(g).filter(x=>x.length>1).map(x=>({id:c.id+'|'+x.map(j=>j.key).sort().join(','), jobs:x})).filter(x=>!ignores || !ignores.has(x.id));
 }
 
 // Écrit (ou met à jour) une ligne de l'onglet « Fiches » — crée l'onglet au besoin.
@@ -8146,7 +8149,9 @@ function RepFicheClient({c, busy, ecrire, R}){
     jobs.forEach(j=>{ if(j.ficheJob && (!fj || j.ficheJob.row!==fj.row)) lignes.push({...j.ficheJob, type:'Retiré'}); });
     return lignes;
   };
-  const dupJobs = useMemo(()=>repDoublonsJobs(c),[c]);
+  const [ignJ,setIgnJ]=useState(repIgnores);
+  const dupJobs = useMemo(()=>repDoublonsJobs(c, ignJ),[c, ignJ]);
+  const [voirDup,setVoirDup]=useState(false);
   const champ = (k, l, ph) => <div className="field" style={{marginBottom:8}}><label>{l}</label><input value={edit[k]} placeholder={ph||''} onChange={e=>setEdit({...edit,[k]:e.target.value})}/></div>;
   return <div>
     <div className="card" style={{marginBottom:12}}>
@@ -8184,11 +8189,13 @@ function RepFicheClient({c, busy, ecrire, R}){
     </div>
 
     {dupJobs.length>0 && !regroupe && <div className="card" style={{marginBottom:12,borderColor:'var(--warning)',fontSize:13}}>
-      <b>🔁 Jobs qui semblent être la même</b>
-      {dupJobs.slice(0,10).map(([a,b],i)=><div key={i} style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',padding:'5px 0',borderTop:i?'1px solid var(--border)':'none'}}>
-        <span>{a.label}{a.po?' · '+a.po:''} &nbsp;≈&nbsp; {b.label}{b.po?' · '+b.po:''}</span>
-        <button className="btn btn-sm" disabled={busy} onClick={()=>{ setRegroupe(new Set([a.key,b.key])); setNomGroupe(a.po ? a.label : b.label); }}>Regrouper…</button>
-      </div>)}
+      <div style={{display:'flex',justifyContent:'space-between',cursor:'pointer',gap:8}} onClick={()=>setVoirDup(!voirDup)}><b>🔁 Jobs qui semblent être la même ({dupJobs.length} groupe{dupJobs.length>1?'s':''})</b><span className="muted" style={{fontSize:12}}>{voirDup?'▲ cacher':'▼ voir'}</span></div>
+      {voirDup && dupJobs.map((g,i)=>{ const p = g.jobs.find(j=>j.po) || g.jobs[0];
+        return <div key={g.id} style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',padding:'6px 0',borderTop:'1px solid var(--border)'}}>
+          <span style={{flex:'1 1 260px'}}>{g.jobs.map(j=>j.label+(j.po?' ('+j.po+')':'')).join('  ·  ')}</span>
+          <button className="btn btn-sm" disabled={busy} onClick={()=>{ setRegroupe(new Set(g.jobs.map(j=>j.key))); setNomGroupe(p.label); window.scrollTo(0, 0); }}>Regrouper…</button>
+          <button className="btn btn-sm" disabled={busy} onClick={()=>{ repIgnorer(g.id); setIgnJ(repIgnores()); }}>Pas la même</button>
+        </div>; })}
     </div>}
 
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',margin:'4px 0 6px'}}>
