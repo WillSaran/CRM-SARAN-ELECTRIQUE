@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v163';
+const APP_VERSION = 'v164';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1921,7 +1921,41 @@ function CvListeJobs({jobs, onChoix}){
 }
 
 // Choix de destination : inventaire, shop, camions, puis contracteur → job, ou ton propre texte.
-function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat, onChoix}){
+// v164 : destinations d'achat tirées du Répertoire (particuliers, commerces, contracteurs et leurs jobs)
+function repDestinations(R){
+  if(!R) return [];
+  const out = [];
+  R.contr.forEach(c=>out.push({id:c.id, icone:'🏗', nom:c.code+' '+c.nom, cherche:[c.code, c.nom, ...(c.contacts||[]).map(k=>k.nom)].join(' '), dest:c.code,
+    jobs:c.listeJobs.slice(0,40).map(j=>({label:j.label+(j.po?' · '+j.po:''), dest:j.ficheJob ? j.ficheJob.canon : cvJobCle({code:c.code}, {name:j.nom, po:j.po})}))}));
+  R.pers.filter(p=>!p.masque && !p.sansNom).forEach(p=>out.push({id:p.id, icone:p.commerce?'🏪':'👤', nom:p.nom, cherche:[p.nom, ...p.noms, ...p.courriels].join(' '), dest:p.nom,
+    jobs:p.listeJobs.map(j=>({label:j.label, dest:j.ficheJob ? j.ficheJob.canon : ([...j.cles][0] || p.nom)}))}));
+  return out;
+}
+function RepChoixDest({R, refAchat, onChoix}){
+  const [q,setQ]=useState('');
+  const [ouvert,setOuvert]=useState('');
+  const L = useMemo(()=>repDestinations(R),[R]);
+  if(!R) return null;
+  const nq = cvNorm(q);
+  const motsRef = String(refAchat||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=4 && !SUGG_STOP.has(w));
+  const auto = !nq && motsRef.length ? L.filter(x=>x.icone!=='🏗' && x.nom.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=4).some(w=>motsRef.includes(w))).slice(0,4) : [];
+  const liste = nq.length>=2 ? L.filter(x=>cvNorm(x.cherche).includes(nq)).slice(0,8) : auto;
+  return <div style={{marginTop:5,paddingLeft:8,borderLeft:'2px solid var(--border2)'}}>
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="📇 Chercher dans le Répertoire (client, commerce, contracteur)…" style={{width:'100%',padding:'5px 9px',fontSize:12.5}}/>
+    {!nq && auto.length>0 && <div className="muted" style={{fontSize:11,marginTop:3}}>Dans le Répertoire :</div>}
+    {liste.map(x=><div key={x.id} style={{padding:'4px 0',borderBottom:'1px dashed var(--border)'}}>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+        <button className="btn btn-sm" onMouseDown={e=>e.preventDefault()} onClick={()=>onChoix(x.dest)} title="Associer au client, sans job précise">{x.icone} {x.nom}</button>
+        {x.jobs.length>0 && <button className="btn btn-sm" style={{fontSize:11}} onMouseDown={e=>e.preventDefault()} onClick={()=>setOuvert(ouvert===x.id?'':x.id)}>{ouvert===x.id ? '▲' : '▼'} {x.jobs.length} job{x.jobs.length>1?'s':''}</button>}
+      </div>
+      {ouvert===x.id && <div style={{display:'flex',gap:5,flexWrap:'wrap',margin:'4px 0 2px 14px'}}>
+        {x.jobs.map((j,i)=><button key={i} className="btn btn-sm" style={{fontSize:11.5}} onMouseDown={e=>e.preventDefault()} onClick={()=>onChoix(j.dest)}>{j.label}</button>)}
+      </div>}
+    </div>)}
+    {nq.length>=2 && !liste.length && <div className="muted" style={{fontSize:12}}>Rien trouvé — ajoute le client dans le Répertoire, ou utilise ✏️ Autre….</div>}
+  </div>;
+}
+function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat, onChoix, R}){
   const [groupe,setGroupe]=useState('');
   const [autre,setAutre]=useState(null);
   const [emp,setEmp]=useState(false);
@@ -1936,6 +1970,7 @@ function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat
       {CV_DESTS.map(d=>pill(cvIconeDest(d)+d, ()=>onChoix(d)))}
       {pill('✏️ Autre…', ()=>setAutre(autre===null?'':null))}
     </div>
+    {R && <RepChoixDest R={R} refAchat={refAchat} onChoix={onChoix}/>}
     {(()=>{ const ag = agendaAchat(date, clients, refAchat).filter(x=>x.cle!==propose); if(!ag.length) return null;
       return <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,alignItems:'center'}}>
         <span className="muted" style={{fontSize:11.5}}>📅 À l'agenda :</span>
@@ -1983,11 +2018,12 @@ function CvDocuments({docs, type, setType, fournisseur}){
 
 function FournisseursView({cfg, refreshKey, isDesktop}){
   const [tick,setTick]=useState(0);
-  const {loading, err, events, registry, factures, achats, documents} = useClientsData(cfg, refreshKey+'|f'+tick);
+  const {loading, err, events, registry, factures, achats, documents, fiches, soumissions} = useClientsData(cfg, refreshKey+'|f'+tick);
   const [docType,setDocType]=useState('Soumission');
   const [seulAAssocier,setSeulAAssocier]=useState(false);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   const auto = useAutoAssociation(cfg, achats, clients);
+  const R = useMemo(()=>{ try{ return repConstruire({clients, registry:registry||[], factures:factures||{}, achats:achats||[], soumissions:soumissions||[], F:fiches}); }catch(e){ return null; } },[clients, registry, factures, achats, soumissions, fiches]);
   const [busy,setBusy]=useState('');
   const [ouvert,setOuvert]=useState(null);
   const [detail,setDetail]=useState(null);
@@ -2043,7 +2079,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
         {!assoc && <button className="btn btn-sm" style={{marginLeft:10}} onClick={()=>setChanger(changer===a.row?null:a.row)}>Changer la destination</button>}
       </div>}
       {(assoc || changer===a.row) && (busy===a.row ? <div className="muted" style={{fontSize:12}}>Enregistrement…</div>
-        : <CvChoixJob clients={clients} propose={proposeAchat(a, clients)} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients)} date={date(a)} refAchat={a.ref} onChoix={job=>enregistrer(a, job)}/>)}
+        : <CvChoixJob clients={clients} R={R} propose={proposeAchat(a, clients)} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients)} date={date(a)} refAchat={a.ref} onChoix={job=>enregistrer(a, job)}/>)}
     </div>; };
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Fournisseurs</h2>
@@ -7847,7 +7883,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   // ---- Contracteurs ----
   const contr = {};
   const C = code => contr[code] || (contr[code] = {type:'contr', id:'C:'+code, code, nom:CLIENT_CODES[code]||code, contact:CLIENT_CONTACT[code]||'',
-    fiche:F.clients.find(f=>f.code===code)||null, jobs:{}, facturesSans:[], soum:[], contacts:[]});
+    fiche:F.clients.find(f=>f.code===code)||null, jobs:{}, facturesSans:[], soum:[], contacts:[], achatsSans:[]});
   const codeDe = c => { c = String(c||'').toUpperCase(); if(c==='PY') c='PAY'; return CLIENT_CODES[c] ? c : ''; };
   Object.values(clients||{}).forEach(c=>{ if(c.code==='PART') return; c.jobs.forEach(j=>ajouterJob(C(c.code).jobs, c.code, {cle:cvJobCle(c,j), nom:j.name, po:j.po, adresse:j.address, events:j.events, reg:j.reg, id:j.id})); });
   (registry||[]).forEach(r=>{ const code = codeDe(r.code); if(!code) return;
@@ -7906,13 +7942,14 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     const m = d.match(/^(\S+)\s+(.*)$/); const code = m ? codeDe(m[1]) : '';
     if(code){ const reste = m[2], po = cvPO(reste) || ((reste.match(/\b[A-Z0-9]{2,4}-\d{3}\b/)||[])[0]||''); const nom = (po ? reste.replace(po,'') : reste).trim();
       const j = ajouterJob(C(code).jobs, code, {cle:d, nom:cvTitleCase(nom), po}); j.achats.push(a); return; }
+    if(codeDe(d)){ C(codeDe(d)).achatsSans.push(a); return; }   // v164 : facture associée au contracteur lui-même (« SAR »)
     const jc = jobContrDe(d); if(jc){ jc.achats.push(a); jc.cles.add(d); return; }
-    const k = nNom(d); if(k && persConnues.has(k)) rec({nNom:k, nom:d, kind:'achat', obj:a});
+    const k = nNom(d); if(k) rec({nNom:k, nom:d, kind:'achat', obj:a});   // v164 : tout nom inscrit sur une facture d'achat a sa fiche
   });
   Object.values(contr).forEach(c=>{ fusionNoms(c.jobs); Object.values(c.jobs).forEach(finirJob);
     c.listeJobs = Object.values(c.jobs).sort((a,b)=>String(b.last).localeCompare(String(a.last)));
     c.facture = c.listeJobs.reduce((t,j)=>t+j.facture,0) + c.facturesSans.filter(f=>!f.annulee).reduce((t,f)=>t+(f.ht||0),0);
-    c.cout = c.listeJobs.reduce((t,j)=>t+j.cout,0);
+    c.cout = c.listeJobs.reduce((t,j)=>t+j.cout,0) + c.achatsSans.reduce((t,a)=>t+(a.st||0)*((a.part==null?100:a.part)/100),0);
     c.last = [c.listeJobs[0]&&c.listeJobs[0].last, ...c.facturesSans.map(f=>f.date)].filter(Boolean).sort().pop() || '';
   });
   // Groupes de personnes
@@ -8471,6 +8508,10 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr}){
         </div>}
       </div>; })}
     {!c.listeJobs.length && <div className="muted" style={{fontSize:13,marginBottom:10}}>Aucune job connue.</div>}
+    {(c.achatsSans||[]).length>0 && <div className="card" style={{marginTop:10}}>
+      <b>Achats associés à {c.code} (sans job précise)</b>
+      {c.achatsSans.slice().sort((a,b)=>String(b.date||b.recue).localeCompare(String(a.date||a.recue))).map(a=><RepLigneAchat key={'s'+a.row} a={a}/>)}
+    </div>}
     {c.facturesSans.length>0 && <div className="card" style={{marginTop:10}}>
       <b>Factures envoyées {pers ? 'sans job précise' : 'à la compagnie'}</b>
       {c.facturesSans.sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(f=><RepLigneFacture key={f.num} f={f}/>)}
