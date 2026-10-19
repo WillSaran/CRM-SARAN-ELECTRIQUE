@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v181';
+const APP_VERSION = 'v182';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3682,7 +3682,7 @@ function SuiviTableur({rows, id, onChanged}){
 //   (ou une nouvelle ligne pour un paiement entré à la main). Rien n'est associé sans que tu confirmes (mode essai).
 const PAI_ENTETE = ['Id courriel','Date','Envoyé par','Montant','Message','Référence','Factures lues dans le message','Lien Gmail','Source','Factures confirmées','Statut','Note'];
 const PAI_MOTS_VIDES = new Set(['inc','ltee','ltd','limited','quebec','qc','canada','et','and','de','du','la','le','les','des','property','properties','gestion','construction','constructions','compagnie','cie','enr','senc','corp','corporation']);
-function paiNums(s){ return [...new Set(String(s||'').match(/\b\d{4}\b/g)||[])]; }
+function paiNums(s){ return [...new Set(String(s||'').replace(/\b(19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.](19|20)\d{2}\b/g,' ').match(/\b\d{4}\b/g)||[])]; }
 function paiMots(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3 && !PAI_MOTS_VIDES.has(w) && !/^\d+$/.test(w)); }
 function paiJours(d){ const t = Date.parse(String(d||'').slice(0,10)); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
 function paiLireFactures(rows){
@@ -3695,7 +3695,7 @@ function paiLireFactures(rows){
 }
 function paiLirePaiements(rows){
   return rows.slice(1).map((r,i)=>({row:i+2, id:String(r[0]||''), date:String(r[1]||''), de:String(r[2]||''), montant:cvNum(r[3])||0, message:String(r[4]||''), ref:String(r[5]||''),
-    lues:paiNums(r[6]), lien:String(r[7]||''), source:String(r[8]||'Interac'), confirmees:paiNums(r[9]), statut:String(r[10]||'').trim(), note:String(r[11]||'')}))
+    lues:paiNums(r[6]).filter(n=>!new RegExp('\\b'+n+'[-/.]\\d{1,2}[-/.]\\d{1,2}\\b').test(String(r[4]||''))), lien:String(r[7]||''), source:String(r[8]||'Interac'), confirmees:paiNums(r[9]), statut:String(r[10]||'').trim(), note:String(r[11]||'')}))
     .filter(p=>p.id || p.montant);
 }
 // Nom affiché du client d'une facture : contracteur (code) ou nom écrit sur la facture, sinon le courriel.
@@ -3738,7 +3738,14 @@ function paiementsAnalyser(factures, paiements){
     f.etat = f.annulee ? 'annulee' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
     f.age = paiJours(f.envoi || f.date); });
   const ouvertes = Object.values(F).filter(f=>f.etat==='impayee' || f.etat==='partielle');
-  const attente = paiements.filter(p=>!p.statut);
+  // v182 : paiement pour des factures plus vieilles que le registre (avant qu'il existe) : rangé à part, pas à confirmer
+  const nums = Object.keys(F).map(Number).filter(n=>n>0), minNum = nums.length ? Math.min(...nums) : 0;
+  const minDate = Object.values(F).map(f=>String(f.date).slice(0,10)).filter(Boolean).sort()[0] || '';
+  paiements.forEach(p=>{ const ns = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>!F[n]);
+    const connus = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>F[n]);
+    p.ancien = !p.statut && !connus.length && ((ns.length>0 && ns.every(n=>+n<minNum)) || (!ns.length && minDate && String(p.date).slice(0,10) < minDate)); });
+  const attente = paiements.filter(p=>!p.statut && !p.ancien);
+  const anciens = paiements.filter(p=>p.ancien);
   const propositions = {};
   attente.forEach(p=>{
     const opts = [], vu = new Set();
@@ -3751,7 +3758,10 @@ function paiementsAnalyser(factures, paiements){
     // 1. Numéros de facture écrits dans le message
     const lues = [...new Set([...p.lues, ...paiNums(p.message)])].map(n=>F[n]).filter(f=>f && f.etat!=='annulee');
     if(lues.length){ const tot = lues.reduce((s,f)=>s+(f.etat==='payee'?0:f.solde),0);
-      ajoute(lues, 'Numéro'+(lues.length>1?'s':'')+' écrit'+(lues.length>1?'s':'')+' dans le message', Math.abs(tot-p.montant)<=0.05 ? 'sur' : 'verifier'); }
+      const cle = lues.map(f=>f.num).sort().join(','), autres = attente.filter(q=>q!==p && [...new Set([...q.lues, ...paiNums(q.message)])].filter(n=>F[n]).sort().join(',')===cle);
+      const ensemble = autres.length && Math.abs(autres.reduce((s,q)=>s+q.montant,0)+p.montant-tot)<=0.05;   // ex. 220,00 $ + 32,95 $ pour la même facture
+      ajoute(lues, 'Numéro'+(lues.length>1?'s':'')+' écrit'+(lues.length>1?'s':'')+' dans le message'+(ensemble ? ' · avec '+(autres.length>1?'les autres paiements':'l\'autre paiement du '+String(autres[0].date).slice(0,10))+', ça fait le total' : ''), Math.abs(tot-p.montant)<=0.05 || ensemble ? 'sur' : 'verifier');
+      if(ensemble && opts.length) opts[opts.length-1].ecart = 0; }
     // 2. Une facture du même montant exact
     const exacts = cands.filter(f=>Math.abs(f.solde-p.montant)<=0.02);
     exacts.filter(nomOk).forEach(f=>ajoute([f], 'Même montant et même client', 'sur'));
@@ -3770,7 +3780,7 @@ function paiementsAnalyser(factures, paiements){
     if(opts.filter(o=>o.niveau==='sur').length>1) opts.forEach(o=>{ if(o.niveau==='sur') o.niveau='probable'; });
     propositions[p.row] = opts.slice(0,4);
   });
-  return {F, ouvertes, attente, propositions};
+  return {F, ouvertes, attente, anciens, propositions};
 }
 async function paiOnglet(id){
   const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:id, fields:'sheets.properties.title'});
@@ -3867,7 +3877,7 @@ function PaiementsView({cfg, refreshKey, q}){
     </div>}
 
     {sous==='confirmer' && <div className="card">
-      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Virements reçus pas encore associés à une facture. Rien n'est associé tant que tu ne confirmes pas.</div>
+      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Virements reçus pas encore associés à une facture. Rien n'est associé tant que tu ne confirmes pas.{A.anciens.length>0 && <> {A.anciens.length} paiement{A.anciens.length>1?'s':''} pour des factures d'avant le registre (avant le {(Object.values(A.F).map(f=>String(f.date).slice(0,10)).filter(Boolean).sort()[0])}) {A.anciens.length>1?'sont rangés':'est rangé'} dans « Tous les paiements ».</>}</div>
       {!attente.length && <div className="muted" style={{padding:'8px 0'}}>Rien à confirmer.</div>}
       {attente.map(p=>{ const opts = A.propositions[p.row]||[]; const b = busy==='p'+p.row;
         return <div key={p.row} style={{padding:'10px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
@@ -3883,11 +3893,11 @@ function PaiementsView({cfg, refreshKey, q}){
             <button className="btn btn-sm btn-p" disabled={b} onClick={()=>confirmer(p, o.factures, 'Confirmé')}>{b?'…':'✓ Confirmer'}</button>
           </div>)}
           {(()=>{ const inc = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>!A.F[n]); return inc.length>0 && <div style={{fontSize:12.5,marginTop:6,color:'var(--warning)'}}>Le message parle de la facture {inc.join(', ')}, qui n'est pas (encore) dans le registre des factures.</div>; })()}
-          {!opts.length && <div className="muted" style={{fontSize:12.5,marginTop:6}}>Aucune facture ne correspond. Indique le numéro ci-dessous, ou « Pas une facture ».</div>}
+          {!opts.length && <div className="muted" style={{fontSize:12.5,marginTop:6}}>Aucune facture ne correspond. Indique le numéro ci-dessous, ou « Ignorer ».</div>}
           <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6,alignItems:'center'}}>
             <input value={autre[p.row]||''} onChange={e=>setAutre({...autre, [p.row]:e.target.value})} placeholder="Autre(s) facture(s) : 1234, 1235" style={{flex:'1 1 180px',width:'auto',minWidth:0,padding:'5px 9px',fontSize:12.5}}/>
             <button className="btn btn-sm" disabled={b || !paiNums(autre[p.row]).length} onClick={()=>confirmer(p, paiNums(autre[p.row]), 'Confirmé')}>Confirmer ces factures</button>
-            <button className="btn btn-sm" disabled={b} title="Ex. : argent personnel, remboursement — ne compte pour aucune facture" onClick={()=>confirmer(p, [], 'Ignoré')}>Pas une facture</button>
+            <button className="btn btn-sm" disabled={b} title="Ne compte pour aucune facture du registre (vieille facture, argent personnel, remboursement…)" onClick={()=>confirmer(p, [], 'Ignoré')}>Ignorer</button>
           </div>
           {paiNums(autre[p.row]).length>0 && <div className="muted" style={{fontSize:12,marginTop:3}}>{paiNums(autre[p.row]).map(descF).join(' + ')}</div>}
         </div>; })}
@@ -3926,7 +3936,7 @@ function PaiementsView({cfg, refreshKey, q}){
       {tous.map(p=><div key={p.row} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'5px 0',borderBottom:'1px dashed var(--border)',opacity:/^(ignor|annul)/i.test(p.statut)?.55:1}}>
         <span><b>{String(p.date).slice(0,10)}</b> · {p.de||'—'} · <b>{cvMoney(p.montant)}</b> <span className="muted">· {p.source}</span>{p.message ? <span className="muted"> · « {p.message} »</span> : ''}</span>
         <span style={{display:'flex',gap:8,alignItems:'center'}}>
-          {/^confirm/i.test(p.statut) ? <span style={{color:'var(--success)'}}>→ {p.confirmees.map(n=>'#'+n).join(', ')}</span> : p.statut ? <span className="muted">{p.statut}</span> : <span style={{color:'var(--warning)'}}>à confirmer</span>}
+          {/^confirm/i.test(p.statut) ? <span style={{color:'var(--success)'}}>→ {p.confirmees.map(n=>'#'+n).join(', ')}</span> : p.statut ? <span className="muted">{p.statut}</span> : p.ancien ? <span className="muted">avant le registre</span> : <span style={{color:'var(--warning)'}}>à confirmer</span>}
           {p.statut && !/^annul/i.test(p.statut) && <button className="btn btn-sm" disabled={busy==='p'+p.row} onClick={()=>annuler(p)}>↩</button>}
           {p.lien && <a href={p.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>↗</a>}
         </span>
