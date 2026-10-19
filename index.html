@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v173';
+const APP_VERSION = 'v174';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8157,6 +8157,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   const setFiltre = k => { setFiltreS(k); try{ localStorage.setItem('crm_rep_filtre', k); }catch(e){} };
   const masques = false;
   const [nouveau,setNouveau]=useState(null);   // v163 : ajout manuel d'un particulier ou commerce
+  const [attendu,setAttendu]=useState(null);   // v174 : client qu'on vient d'ajouter — on vérifie qu'il apparaît
   const [coches,setCoches]=useState(()=>new Set());   // v172 : sélection de plusieurs particuliers/commerces
   const [garde,setGarde]=useState('');
   const [supprConf,setSupprConf]=useState(false);
@@ -8167,6 +8168,12 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   const clients = useMemo(()=>cvBuildClients(d.events||[], d.registry||[], d.factures||{}),[d.events, d.registry, d.factures]);
   const R = useMemo(()=>repConstruire({clients, registry:d.registry||[], factures:d.factures||{}, achats:d.achats||[], soumissions:d.soumissions||[], F, contacts, gcmeq:d.gcmeq||[]}),[clients, d.registry, d.factures, d.achats, d.soumissions, d.fiches, contacts, d.gcmeq]);
   const doublons = useMemo(()=>repDoublonsPers(R.pers, ignores),[R, ignores]);
+  useEffect(()=>{ if(!attendu || d.maj || d.loading) return;
+    const ok = R.pers.some(p=>p.nom===attendu.nom) || R.contr.some(c=>(c.contacts||[]).some(k=>k.nom===attendu.nom));
+    if(ok){ setAttendu(null); return; }
+    if(Date.now()-attendu.t > 4000){ const nf = (F.clients||[]).filter(f=>cvNorm(f.nom)===cvNorm(attendu.nom)).length;
+      toast && toast(nf ? attendu.nom+' est bien enregistré, mais il est caché par une autre fiche (contact de contracteur ou supprimé). Cherche-le dans la recherche ou dis-le à Claude.' : attendu.nom+' n\'a pas été relu dans l\'onglet Fiches. Clique ⟳ Refresh.','err');
+      setAttendu(null); } },[R, d.maj, d.loading, attendu]);
   // À vérifier (passages pas facturés, factures en double…) — même calcul que l'ancien onglet Clients
   const aVerif = useMemo(()=>{ const m = {};
     Object.values(clients).forEach(c=>{ if(c.code!=='PART') m['C:'+c.code] = cvAVerifierClient(c, reglees, d.archives).n; });
@@ -8320,7 +8327,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   </div>;
   const ajouterClient = () => { const n = nouveau.nom.trim(); if(!n) return;
     ecrire([{type:'Client', code:nouveau.commerce ? 'COMMERCE' : 'PART', nom:n, alias:[], adresse:nouveau.adresse, ville:nouveau.ville, tel:nouveau.tel, courriel:nouveau.courriel, notes:nouveau.notes}],
-      n+' ajouté aux '+(nouveau.commerce ? 'commerces.' : 'particuliers.')).then(ok=>{ if(ok){ setNouveau(null); setSel('', n); } }); };
+      n+' ajouté aux '+(nouveau.commerce ? 'commerces.' : 'particuliers.')).then(ok=>{ if(ok){ setNouveau(null); setQ(''); setFiltre(nouveau.commerce ? 'com' : 'part'); setSel('', n); setAttendu({nom:n, t:Date.now()}); } }); };
   const champN = (k, l) => <input value={nouveau[k]} placeholder={l} onChange={e=>setNouveau({...nouveau,[k]:e.target.value})} style={{padding:'6px 9px'}}/>;
   return <div>{entete}
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
