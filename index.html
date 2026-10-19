@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v154';
+const APP_VERSION = 'v155';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7991,7 +7991,9 @@ function RepertoireView({cfg, refreshKey, toast}){
   const K = useContactsFournisseurs(cfg);
   const [onglet,setOnglet]=useState(()=>{ try{ return localStorage.getItem('crm_rep_onglet')||'clients'; }catch(e){ return 'clients'; } });
   const [q,setQ]=useState('');
-  const [sel,setSel]=useState(null);         // id d'un client ou 'F:<fournisseur>'
+  const [sel,setSelId]=useState(null);       // id d'un client ou 'F:<fournisseur>'
+  const [selNom,setSelNom]=useState('');      // pour retrouver le client après une fusion (son id change)
+  const setSel = (id, nom) => { setSelId(id); setSelNom(nom || (R && (R.pers.find(p=>p.id===id)||{}).nom) || ''); };
   const [busy,setBusy]=useState(false);
   const [filtre,setFiltreS]=useState(()=>{ try{ return localStorage.getItem('crm_rep_filtre')||'tous'; }catch(e){ return 'tous'; } });
   const setFiltre = k => { setFiltreS(k); try{ localStorage.setItem('crm_rep_filtre', k); }catch(e){} };
@@ -8031,7 +8033,7 @@ function RepertoireView({cfg, refreshKey, toast}){
     ? [c.code, c.nom, c.contact, c.fiche&&c.fiche.tel, c.fiche&&c.fiche.courriel, ...c.listeJobs.flatMap(j=>[j.nom, j.po, j.adresse, ...j.factures.map(f=>f.num)])].join(' ')
     : [c.nom, ...c.noms, ...c.courriels, ...c.tels, ...c.adresses, c.fiche&&c.fiche.notes, ...c.listeJobs.flatMap(j=>[j.po, j.label, ...j.factures.map(f=>f.num), ...j.achats.map(a=>a.num)]), ...c.facturesSans.map(f=>f.num), ...c.soum.map(s=>s.no)].join(' ');
   const tous = [...R.contr, ...R.pers];
-  const choisi = sel && sel.startsWith('F:') ? fourn.find(f=>'F:'+f.nom===sel) : tous.find(c=>c.id===sel);
+  const choisi = sel && sel.startsWith('F:') ? fourn.find(f=>'F:'+f.nom===sel) : (tous.find(c=>c.id===sel) || (selNom && R.pers.find(p=>p.nom===selNom)));
 
   const entete = <div style={{marginBottom:12}}>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Répertoire</h2>
@@ -8047,7 +8049,7 @@ function RepertoireView({cfg, refreshKey, toast}){
   if(choisi) return <div>{entete}
     <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>setSel(null)}>← Retour à la liste</button>
     {sel.startsWith('F:') ? <RepFicheFournisseur f={choisi} K={K} toast={toast}/>
-      : <RepFicheClient c={choisi} busy={busy} ecrire={ecrire} R={R}/>}
+      : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onLie={nom=>setSel('', nom)}/>}
   </div>;
 
   if(onglet==='fourn'){
@@ -8105,17 +8107,19 @@ function RepertoireView({cfg, refreshKey, toast}){
   </div>;
 }
 
+// Lier deux clients (particuliers ou commerces) : la fiche gardée reçoit les autres noms ; l'autre fiche est retirée.
+function repLignesFusion(garde, autre){
+  const base = garde.fiche || {type:'Client', code:garde.commerce ? 'COMMERCE' : 'PART'};
+  const alias = [...new Set([...(base.alias||[]), ...garde.noms, ...autre.noms, autre.nom, ...(autre.fiche ? [autre.fiche.nom, ...autre.fiche.alias] : [])].filter(n=>n && n!==garde.nom))];
+  const pick = k => (garde.fiche && garde.fiche[k]) || (autre.fiche && autre.fiche[k]) || '';
+  const lignes = [{...base, type:'Client', code:base.code || (garde.commerce ? 'COMMERCE' : 'PART'), nom:garde.nom, alias, adresse:pick('adresse') || (garde.fiche ? '' : (garde.adresses[0]||autre.adresses[0]||'')), ville:pick('ville'),
+    tel:pick('tel') || garde.tels[0] || autre.tels[0] || '', courriel:pick('courriel') || garde.courriels[0] || autre.courriels[0] || '', notes:[pick('notes'), autre.fiche && garde.fiche && autre.fiche.notes!==garde.fiche.notes ? autre.fiche.notes : ''].filter(Boolean).join('\n')}];
+  if(autre.fiche && (!garde.fiche || autre.fiche.row!==garde.fiche.row)) lignes.push({...autre.fiche, type:'Retiré'});
+  return lignes;
+}
 function RepDoublons({doublons, busy, ecrire, onIgnorer}){
   const [ouvert,setOuvert]=useState(false);
-  const fusionner = (garde, autre) => {
-    const base = garde.fiche || {type:'Client', code:garde.commerce ? 'COMMERCE' : 'PART'};
-    const alias = [...new Set([...(base.alias||[]), ...garde.noms, ...autre.noms, ...(autre.fiche ? [autre.fiche.nom, ...autre.fiche.alias] : [])].filter(n=>n && n!==garde.nom))];
-    const pick = k => (garde.fiche && garde.fiche[k]) || (autre.fiche && autre.fiche[k]) || '';
-    const lignes = [{...base, type:'Client', code:base.code || (garde.commerce ? 'COMMERCE' : 'PART'), nom:garde.nom, alias, adresse:pick('adresse') || (garde.fiche ? '' : (garde.adresses[0]||autre.adresses[0]||'')), ville:pick('ville'),
-      tel:pick('tel') || garde.tels[0] || autre.tels[0] || '', courriel:pick('courriel') || garde.courriels[0] || autre.courriels[0] || '', notes:pick('notes')}];
-    if(autre.fiche && (!garde.fiche || autre.fiche.row!==garde.fiche.row)) lignes.push({...autre.fiche, type:'Retiré'});
-    ecrire(lignes, autre.nom+' regroupé sous '+garde.nom+'.');
-  };
+  const fusionner = (garde, autre) => ecrire(repLignesFusion(garde, autre), autre.nom+' regroupé sous '+garde.nom+'.');
   return <div className="card" style={{marginBottom:14,borderColor:'var(--warning)'}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',gap:8}} onClick={()=>setOuvert(!ouvert)}>
       <b>🔁 Possibles doublons ({doublons.length})</b><span className="muted" style={{fontSize:12}}>{ouvert ? '▲ cacher' : '▼ voir'} — rien n'est fusionné sans ton clic</span>
@@ -8148,7 +8152,8 @@ function RepLigneAchat({a, montrerJob}){
   </div>;
 }
 
-function RepFicheClient({c, busy, ecrire, R}){
+function RepFicheClient({c, busy, ecrire, R, onLie}){
+  const [lier,setLier]=useState(null);           // texte de recherche, ou {autre}
   const [edit,setEdit]=useState(null);
   const [ouverte,setOuverte]=useState(()=>c.listeJobs[0] ? c.listeJobs[0].key : '');
   const [regroupe,setRegroupe]=useState(null);   // Set de clés de jobs cochées
@@ -8191,6 +8196,7 @@ function RepFicheClient({c, busy, ecrire, R}){
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end'}}>
           <button className="btn btn-sm" onClick={ouvrirEdit} disabled={busy}>✏️ Modifier la fiche</button>
+          {pers && <button className="btn btn-sm" onClick={()=>setLier(lier===null ? '' : null)} disabled={busy}>🔗 Lier à…</button>}
           {pers && <button className="btn btn-sm" onClick={basculer} disabled={busy}>{c.commerce ? '👤 C\'est un particulier' : '🏪 C\'est un commerce'}</button>}
           {pers && !fiche && !c.masque && <button className="btn btn-sm" onClick={masquer} disabled={busy} title="Ce n'est pas un client (ex. Lettrage du camion 14)">🙈 Masquer</button>}
         </div>
@@ -8200,6 +8206,28 @@ function RepFicheClient({c, busy, ecrire, R}){
         <span>Achats : <b>{cvMoney(c.cout)}</b> <span className="muted" style={{fontSize:11}}>avant taxes</span></span>
         <span>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''}</span>
       </div>
+      {lier!==null && pers && (()=>{
+        if(typeof lier==='object'){ const a = lier.autre;
+          const lierEt = (garde, autre) => ecrire(repLignesFusion(garde, autre), autre.nom+' lié à '+garde.nom+'.').then(ok=>{ if(ok){ setLier(null); onLie && onLie(garde.nom); } });
+          return <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border)',fontSize:13}}>
+            <div style={{marginBottom:6}}>Lier <b>{c.nom}</b> et <b>{a.nom}</b> ({a.listeJobs.length} job{a.listeJobs.length>1?'s':''}). Leurs jobs, factures et achats seront ensemble. Quel nom garder ?</div>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+              <button className="btn btn-sm btn-p" disabled={busy} onClick={()=>lierEt(c, a)}>Garder « {c.nom} »</button>
+              <button className="btn btn-sm btn-p" disabled={busy} onClick={()=>lierEt(a, c)}>Garder « {a.nom} »</button>
+              <button className="btn btn-sm" onClick={()=>setLier('')}>← Choisir un autre</button>
+            </div>
+          </div>; }
+        const nq = cvNorm(lier);
+        const cands = R.pers.filter(p=>p.id!==c.id && (nq.length<2 ? p.cle.split(' ').some(w=>w.length>=4 && c.cle.split(' ').includes(w)) : cvNorm([p.nom, ...p.noms, ...p.courriels].join(' ')).includes(nq))).slice(0,12);
+        return <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border)'}}>
+          <input autoFocus value={lier} onChange={e=>setLier(e.target.value)} placeholder="Chercher le client ou commerce à lier…" style={{width:'100%',padding:'6px 10px',marginBottom:6}}/>
+          {nq.length<2 && cands.length>0 && <div className="muted" style={{fontSize:11.5,marginBottom:4}}>Noms qui se ressemblent :</div>}
+          {cands.map(p=><div key={p.id} onMouseDown={e=>e.preventDefault()} onClick={()=>setLier({autre:p})} style={{padding:'6px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13,display:'flex',justifyContent:'space-between',gap:8}}>
+            <span><b>{p.nom}</b> <span className="muted">{p.commerce ? '🏪' : '👤'} {[p.adresse, p.courriel].filter(Boolean).join(' · ')}</span></span>
+            <span className="muted" style={{fontSize:12}}>{p.listeJobs.length} job{p.listeJobs.length>1?'s':''}</span></div>)}
+          {nq.length>=2 && !cands.length && <div className="muted" style={{fontSize:12.5}}>Aucun client trouvé.</div>}
+          <button className="btn btn-sm" style={{marginTop:6}} onClick={()=>setLier(null)}>Annuler</button>
+        </div>; })()}
       {edit && <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border)'}}>
         {champ('nom', pers ? 'Nom du client' : 'Nom de la compagnie')}
         {champ('alias', 'Aussi écrit (séparé par ;) — ces noms seront reconnus comme ce client', 'Alain Cuisine Robichaud ; A Robichaud')}
