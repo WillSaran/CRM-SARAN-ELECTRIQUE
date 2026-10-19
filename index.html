@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v156';
+const APP_VERSION = 'v157';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7799,7 +7799,7 @@ const REP_SPECIAL = j => !j || CV_DESTS.includes(j) || j==='Éclairage Saran' ||
 function repProche(x, y){ if(x===y) return true; if(Math.abs(x.length-y.length)>1 || Math.min(x.length,y.length)<5) return false; let i=0, j=0, d=0; while(i<x.length && j<y.length){ if(x[i]===y[j]){ i++; j++; continue; } if(++d>1) return false; if(x.length>y.length) i++; else if(y.length>x.length) j++; else { i++; j++; } } return d + (x.length-i) + (y.length-j) <= 1; }
 
 // Construit le répertoire à partir de tout ce que le CRM connaît (agenda, registre des jobs, factures envoyées, achats, soumissions, fiches).
-function repConstruire({clients, registry, factures, achats, soumissions, F}){
+function repConstruire({clients, registry, factures, achats, soumissions, F, contacts}){
   F = F || {clients:[], jobs:[], fourn:[], masques:[]};
   const today = cvDay(new Date().toISOString());
   const jobFiche = (code, cle, po) => F.jobs.find(f=>(f.code||'PART')===code && ((f.po && po && f.po===po) || f.aliasN.has(ficheNorm(cle))));
@@ -7870,6 +7870,10 @@ function repConstruire({clients, registry, factures, achats, soumissions, F}){
     const nom = /@/.test(s.client) ? '' : s.client;
     rec({nNom:nNom(nom), nMail:nMail(s.courriel || (/@/.test(s.client)?s.client:'')), nom, courriel:s.courriel, kind:'soum', obj:s});
   });
+  // v157 : contacts de l'ancien onglet Contacts (nom, entreprise, téléphone, courriel, adresse, notes)
+  (contacts||[]).forEach(k=>{ const nom = String(k.nom||'').trim() || String(k.entreprise||'').trim(); if(!nom && !k.email) return;
+    const cc = repCodeCourriel(k.email, F); if(cc) return;
+    rec({nNom:nNom(nom), nMail:nMail(k.email), nom, tel:k.telephone||'', courriel:k.email||'', adresse:k.adresse||'', kind:'contact', obj:k}); });
   // Achats : destination « CODE nom PO » → job du contracteur ; sinon le nom d'un particulier déjà connu
   const persConnues = new Set(Object.keys(parent).filter(x=>x[0]==='k'));
   (achats||[]).forEach(a=>{
@@ -7894,11 +7898,12 @@ function repConstruire({clients, registry, factures, achats, soumissions, F}){
     const fiche = ficheDe(g);
     const variantes = {}; rs.forEach(r=>{ if(r.nom && !/@/.test(r.nom)){ const p = persNomPropre(r.nom); if(p) variantes[p] = (variantes[p]||0) + (r.kind==='reg'||r.kind==='fac'||r.kind==='soum' ? 2 : 1); } });
     const meilleur = Object.entries(variantes).sort((a,b)=>b[1]-a[1] || b[0].split(' ').length-a[0].split(' ').length || b[0].length-a[0].length)[0];
-    const courriels = [...new Set(rs.map(r=>String(r.courriel||'').toLowerCase()).filter(e=>/@/.test(e)))];
+    const courriels = [...new Set([...rs.map(r=>String(r.courriel||'').toLowerCase()), ...String((fiche&&fiche.courriel)||'').toLowerCase().split(/[\s,;]+/)].filter(e=>/@/.test(e)))];
     const nom = (fiche && fiche.nom) || (meilleur && meilleur[0]) || courriels[0] || '';
     if(!nom) return;
     const p = {type:'pers', id:'P:'+g, nom, fiche, srcJobs:rs.filter(r=>r.kind==='job').map(r=>r.obj), noms:[...new Set(rs.map(r=>r.nom).filter(Boolean))], courriels,
-      tels:[...new Set(rs.map(r=>r.tel).filter(Boolean))], adresses:[...new Set(rs.map(r=>r.adresse).filter(Boolean))],
+      tels:[...new Set(rs.map(r=>r.tel).filter(Boolean))], adresses:[...new Set(rs.map(r=>r.adresse).filter(Boolean))], sansNom:!fiche && !meilleur,
+      contacts:rs.filter(r=>r.kind==='contact').map(r=>r.obj), entreprise:(rs.find(r=>r.kind==='contact' && r.obj.entreprise)||{obj:{}}).obj.entreprise||'',
       jobs:{}, facturesSans:[], soum:[], masque:false};
     p.masque = !fiche && [...new Set(rs.map(r=>persCle(r.nom)).filter(Boolean))].some(k=>masques.has(k));
     // Jobs du particulier
@@ -7938,6 +7943,15 @@ function repConstruire({clients, registry, factures, achats, soumissions, F}){
   }));
   Object.values(contr).forEach(c=>c.listeJobs.forEach(j=>{ j.label = cvSansInit(j.nom) || j.po || 'Job'; }));
   pers.sort((a,b)=>a.nom.localeCompare(b.nom,'fr',{sensitivity:'base'}));   // v154 : ordre alphabétique
+  // v157 : un courriel sans nom → le client dont le nom se lit dans le courriel (olivierboudreau25@… → Olivier Boudreau, cgagneleclerc@… → Catherine Gagné-Leclerc)
+  const nommes = pers.filter(p=>!p.sansNom && !p.masque);
+  pers.filter(p=>p.sansNom).forEach(p=>{
+    const loc = cvNorm(String(p.courriels[0]||'').split('@')[0]); if(loc.length<4) return;
+    const ok = q => { const w = q.cle.split(' ').map(cvNorm).filter(x=>x.length>=3); if(w.length<2) return false;
+      const fam = w.slice(1);
+      return w.every(x=>loc.includes(x)) || (loc[0]===w[0][0] && fam.every(x=>loc.includes(x)) && fam.join('').length>=5); };
+    const c = nommes.filter(ok); if(c.length===1) p.suggere = c[0];
+  });
   return {contr:Object.values(contr).sort((a,b)=>String(b.last).localeCompare(String(a.last))), pers};
 }
 // Possibles doublons : même nom de famille et prénom pareil / initiale / une lettre de différence
@@ -7985,7 +7999,7 @@ const repTel = t => 'tel:'+String(t||'').replace(/[^\d+]/g,'');
 function repIgnores(){ try{ return new Set(JSON.parse(localStorage.getItem('crm_rep_ignores')||'[]')); }catch(e){ return new Set(); } }
 function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.setItem('crm_rep_ignores', JSON.stringify([...s])); }catch(e){} }
 
-function RepertoireView({cfg, refreshKey, toast, isDesktop}){
+function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   const [tick,setTick]=useState(0);
   const d = useClientsData(cfg, refreshKey+'|r'+tick);
   const [reglees] = useVerifsReglees(cfg);
@@ -8004,7 +8018,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop}){
   const changerOnglet = o => { setOnglet(o); setSel(null); try{ localStorage.setItem('crm_rep_onglet', o); }catch(e){} };
   const F = d.fiches || {clients:[], jobs:[], fourn:[], masques:[]};
   const clients = useMemo(()=>cvBuildClients(d.events||[], d.registry||[], d.factures||{}),[d.events, d.registry, d.factures]);
-  const R = useMemo(()=>repConstruire({clients, registry:d.registry||[], factures:d.factures||{}, achats:d.achats||[], soumissions:d.soumissions||[], F}),[clients, d.registry, d.factures, d.achats, d.soumissions, d.fiches]);
+  const R = useMemo(()=>repConstruire({clients, registry:d.registry||[], factures:d.factures||{}, achats:d.achats||[], soumissions:d.soumissions||[], F, contacts}),[clients, d.registry, d.factures, d.achats, d.soumissions, d.fiches, contacts]);
   const doublons = useMemo(()=>repDoublonsPers(R.pers, ignores),[R, ignores]);
   // À vérifier (passages pas facturés, factures en double…) — même calcul que l'ancien onglet Clients
   const aVerif = useMemo(()=>{ const m = {};
@@ -8092,7 +8106,8 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop}){
 
   const contr = R.contr.filter(c=>trouve(texteClient(c)) && (filtre!=='verif' || aVerif['C:'+c.code])).sort((a,b)=>a.code.localeCompare(b.code,'fr'));
   const av = filtre==='verif';
-  const visibles = R.pers.filter(p=>(masques || !p.masque) && trouve(texteClient(p)) && (!av || aVerif[p.id]));
+  const visibles = R.pers.filter(p=>!p.sansNom && (masques || !p.masque) && trouve(texteClient(p)) && (!av || aVerif[p.id]));
+  const sansNom = R.pers.filter(p=>p.sansNom && !p.masque && trouve(texteClient(p)));
   const commerces = visibles.filter(p=>p.commerce), pers = visibles.filter(p=>!p.commerce);
   const nbMasques = R.pers.filter(p=>p.masque).length;
   const montre = k => filtre==='tous' || filtre==='verif' || filtre===k;
@@ -8129,6 +8144,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop}){
     {montre('com') && <>{titre('Commerces', commerces.length)}<Liste l={commerces}/>
       <div className="muted" style={{fontSize:11,margin:'4px 2px 0'}}>Classés selon le nom ou le courriel de compagnie. Mal classé ? Ouvre la fiche et clique « C'est un particulier ».</div></>}
     {montre('part') && <>{titre('Particuliers', pers.length)}<Liste l={pers}/></>}
+    {(montre('part') || montre('com')) && filtre!=='verif' && sansNom.length>0 && <RepSansNom l={sansNom} R={R} busy={busy} ecrire={ecrire} onOuvrir={p=>setSel(p.id)}/>}
     {clients.PART && filtre!=='contr' && <div style={{marginTop:10}}><button className="btn btn-sm" onClick={()=>setSuivi('PART')}>🔎 Suivi de toutes les jobs de particuliers{aVerif.PART ? ' · '+aVerif.PART+' à vérifier' : ''}</button></div>}
     <div style={{height:16}}/>
     <CvAnomalies cfg={cfg} factures={d.factures} clients={clients} appels={d.appels || {parNumero:{}, parFacture:{}, liste:[]}} onOpen={code=>setSuivi(code)} onChanged={()=>setTick(t=>t+1)}/>
@@ -8138,12 +8154,45 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop}){
 // Lier deux clients (particuliers ou commerces) : la fiche gardée reçoit les autres noms ; l'autre fiche est retirée.
 function repLignesFusion(garde, autre){
   const base = garde.fiche || {type:'Client', code:garde.commerce ? 'COMMERCE' : 'PART'};
-  const alias = [...new Set([...(base.alias||[]), ...garde.noms, ...autre.noms, autre.nom, ...(autre.fiche ? [autre.fiche.nom, ...autre.fiche.alias] : [])].filter(n=>n && n!==garde.nom))];
+  const alias = [...new Set([...(base.alias||[]), ...garde.noms, ...autre.noms, autre.nom, ...(autre.fiche ? [autre.fiche.nom, ...autre.fiche.alias] : [])].filter(n=>n && n!==garde.nom && !/@/.test(n)))];
   const pick = k => (garde.fiche && garde.fiche[k]) || (autre.fiche && autre.fiche[k]) || '';
   const lignes = [{...base, type:'Client', code:base.code || (garde.commerce ? 'COMMERCE' : 'PART'), nom:garde.nom, alias, adresse:pick('adresse') || (garde.fiche ? '' : (garde.adresses[0]||autre.adresses[0]||'')), ville:pick('ville'),
-    tel:pick('tel') || garde.tels[0] || autre.tels[0] || '', courriel:pick('courriel') || garde.courriels[0] || autre.courriels[0] || '', notes:[pick('notes'), autre.fiche && garde.fiche && autre.fiche.notes!==garde.fiche.notes ? autre.fiche.notes : ''].filter(Boolean).join('\n')}];
+    tel:pick('tel') || garde.tels[0] || autre.tels[0] || '', courriel:[...new Set([...String(pick('courriel')).split(/[\s,;]+/), ...garde.courriels, ...autre.courriels].map(e=>String(e).trim().toLowerCase()).filter(e=>/@/.test(e)))].join(', '), notes:[pick('notes'), autre.fiche && garde.fiche && autre.fiche.notes!==garde.fiche.notes ? autre.fiche.notes : ''].filter(Boolean).join('\n')}];
   if(autre.fiche && (!garde.fiche || autre.fiche.row!==garde.fiche.row)) lignes.push({...autre.fiche, type:'Retiré'});
   return lignes;
+}
+// v157 : courriels sans nom (factures ou soumissions envoyées à un courriel seulement) — à rattacher au bon client
+function RepSansNom({l, R, busy, ecrire, onOuvrir}){
+  const [ouvert,setOuvert]=useState(true);
+  const [lier,setLier]=useState(null);   // {p, q}
+  const [nom,setNom]=useState(null);     // {p, v}
+  const rattacher = (garde, autre) => ecrire(repLignesFusion(garde, autre), autre.courriels[0]+' rattaché à '+garde.nom+'.').then(ok=>{ if(ok){ setLier(null); } });
+  const nommer = (p, v) => ecrire([{type:'Client', code:p.commerce ? 'COMMERCE' : 'PART', nom:v, alias:[], courriel:p.courriels.join(', '), tel:p.tels[0]||''}], p.courriels[0]+' → '+v+'.').then(ok=>{ if(ok) setNom(null); });
+  return <div className="card" style={{marginTop:14}}>
+    <div style={{display:'flex',justifyContent:'space-between',cursor:'pointer',gap:8}} onClick={()=>setOuvert(!ouvert)}>
+      <b>📧 Courriels sans nom ({l.length})</b><span className="muted" style={{fontSize:12}}>{ouvert?'▲':'▼'} rattache-les au bon client ou donne-leur un nom</span>
+    </div>
+    {ouvert && l.map(p=>{ const nq = lier && lier.p.id===p.id ? cvNorm(lier.q) : '';
+      const cands = lier && lier.p.id===p.id && nq.length>=2 ? R.pers.filter(x=>!x.sansNom && x.id!==p.id && cvNorm([x.nom, ...x.noms].join(' ')).includes(nq)).slice(0,8) : [];
+      return <div key={p.id} style={{padding:'8px 0',borderTop:'1px solid var(--border)',fontSize:13}}>
+        <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+          <span style={{cursor:'pointer'}} onClick={()=>onOuvrir(p)}><b>{p.courriels[0]}</b> <span className="muted">· {[p.facturesSans.length+p.listeJobs.reduce((t,j)=>t+j.factures.length,0) ? (p.facturesSans.length+p.listeJobs.reduce((t,j)=>t+j.factures.length,0))+' facture(s)' : '', p.soum.length ? p.soum.length+' soumission(s)' : '', p.facture ? cvMoney(p.facture) : ''].filter(Boolean).join(' · ')}</span></span>
+        </div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:5}}>
+          {p.suggere && <button className="btn btn-sm btn-p" disabled={busy} onClick={()=>rattacher(p.suggere, p)}>Rattacher à « {p.suggere.nom} »</button>}
+          <button className="btn btn-sm" disabled={busy} onClick={()=>setLier(lier && lier.p.id===p.id ? null : {p, q:''})}>🔗 Rattacher à…</button>
+          <button className="btn btn-sm" disabled={busy} onClick={()=>setNom(nom && nom.p.id===p.id ? null : {p, v:''})}>✏️ Donner un nom</button>
+        </div>
+        {lier && lier.p.id===p.id && <div style={{marginTop:6}}>
+          <input autoFocus value={lier.q} onChange={e=>setLier({...lier, q:e.target.value})} placeholder="Nom du client…" style={{width:'100%',padding:'5px 9px'}}/>
+          {cands.map(x=><div key={x.id} onMouseDown={e=>e.preventDefault()} onClick={()=>rattacher(x, p)} style={{padding:'5px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer'}}><b>{x.nom}</b> <span className="muted">{x.commerce?'🏪':'👤'} {x.adresse}</span></div>)}
+        </div>}
+        {nom && nom.p.id===p.id && <div style={{display:'flex',gap:6,marginTop:6}}>
+          <input autoFocus value={nom.v} onChange={e=>setNom({...nom, v:e.target.value})} placeholder="Nom du client ou du commerce" style={{flex:1,padding:'5px 9px'}}/>
+          <button className="btn btn-sm btn-p" disabled={busy || !nom.v.trim()} onClick={()=>nommer(p, nom.v.trim())}>OK</button>
+        </div>}
+      </div>; })}
+  </div>;
 }
 function RepDoublons({doublons, busy, ecrire, onIgnorer}){
   const [ouvert,setOuvert]=useState(false);
@@ -8216,8 +8265,10 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi}){
           <h3 className="fh" style={{margin:'0 0 4px',fontSize:20}}>{pers ? c.nom : <><span style={{color:'var(--accent)'}}>{c.code}</span> {c.nom}</>}{fiche && <span title="Fiche enregistrée" style={{fontSize:13}}> 📇</span>}</h3>
           {!pers && c.contact && <div style={{fontSize:13}}>👤 {c.contact}</div>}
           {(fiche ? [fiche.adresse, fiche.ville].filter(Boolean).join(', ') : c.adresse) && <div style={{fontSize:13}}>📍 {fiche ? [fiche.adresse, fiche.ville].filter(Boolean).join(', ') : c.adresse}</div>}
-          {(fiche ? fiche.tel : c.tel) && <div style={{fontSize:13}}>📞 <a href={repTel(fiche ? fiche.tel : c.tel)} style={{color:'var(--accent)'}}>{fiche ? fiche.tel : c.tel}</a></div>}
-          {(fiche ? fiche.courriel : c.courriel) && <div style={{fontSize:13}}>✉️ <a href={'mailto:'+(fiche ? fiche.courriel : c.courriel)} style={{color:'var(--accent)'}}>{fiche ? fiche.courriel : c.courriel}</a></div>}
+          {(pers ? [...new Set([fiche && fiche.tel, ...c.tels].filter(Boolean))] : [fiche && fiche.tel].filter(Boolean)).map(t=><div key={t} style={{fontSize:13}}>📞 <a href={repTel(t)} style={{color:'var(--accent)'}}>{t}</a></div>)}
+          {(pers ? c.courriels : String((fiche && fiche.courriel)||'').split(/[\s,;]+/).filter(Boolean)).map(e=><div key={e} style={{fontSize:13}}>✉️ <a href={'mailto:'+e} style={{color:'var(--accent)'}}>{e}</a></div>)}
+          {pers && c.entreprise && c.entreprise!==c.nom && <div style={{fontSize:13}}>🏢 {c.entreprise}</div>}
+          {pers && c.contacts.filter(k=>k.notes).map((k,i)=><div key={i} style={{fontSize:12.5,marginTop:2,whiteSpace:'pre-wrap'}}>🗒 {k.notes}</div>)}
           {fiche && fiche.notes && <div style={{fontSize:12.5,marginTop:4,whiteSpace:'pre-wrap'}}>📝 {fiche.notes}</div>}
           {pers && c.noms.filter(n=>persNomPropre(n)!==c.nom).length>0 && <div className="muted" style={{fontSize:11.5,marginTop:4}}>Aussi écrit : {c.noms.filter(n=>persNomPropre(n)!==c.nom).slice(0,8).join(' · ')}</div>}
           {pers && c.adresses.length>1 && <div className="muted" style={{fontSize:11.5}}>Autres adresses : {c.adresses.slice(1,4).join(' · ')}</div>}
@@ -8450,7 +8501,6 @@ function App(){
     {id:'courriels',label:'Courriels'},
     {id:'heures',label:'Employés'},
     {id:'factures',label:'Factures'},
-    {id:'contacts',label:'Contacts'},
     {id:'rappels',label:'Rappels & Suivi'},
     {id:'soumissions',label:'Soumissions'},
     {id:'appel',label:'Appel de service'},
@@ -8493,10 +8543,10 @@ function App(){
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
-        {(nav==='repertoire' || nav==='clients') && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop}/>}
+        {(nav==='repertoire' || nav==='clients') && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts}/>}
         {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey}/>}
         {nav==='fournisseurs' && <FournisseursView key={'f'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
-        {nav==='contacts' && <ContactsView data={data} toast={show}/>}
+        {nav==='contacts' && <RepertoireView key={'rc'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts}/>}
         {nav==='projets' && <ProjetsView key={'p'+navKey} data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='agenda' && <AgendaView cfg={effectiveCfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
         {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
