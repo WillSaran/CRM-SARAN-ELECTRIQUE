@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v155';
+const APP_VERSION = 'v156';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7897,7 +7897,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F}){
     const courriels = [...new Set(rs.map(r=>String(r.courriel||'').toLowerCase()).filter(e=>/@/.test(e)))];
     const nom = (fiche && fiche.nom) || (meilleur && meilleur[0]) || courriels[0] || '';
     if(!nom) return;
-    const p = {type:'pers', id:'P:'+g, nom, fiche, noms:[...new Set(rs.map(r=>r.nom).filter(Boolean))], courriels,
+    const p = {type:'pers', id:'P:'+g, nom, fiche, srcJobs:rs.filter(r=>r.kind==='job').map(r=>r.obj), noms:[...new Set(rs.map(r=>r.nom).filter(Boolean))], courriels,
       tels:[...new Set(rs.map(r=>r.tel).filter(Boolean))], adresses:[...new Set(rs.map(r=>r.adresse).filter(Boolean))],
       jobs:{}, facturesSans:[], soum:[], masque:false};
     p.masque = !fiche && [...new Set(rs.map(r=>persCle(r.nom)).filter(Boolean))].some(k=>masques.has(k));
@@ -7985,9 +7985,11 @@ const repTel = t => 'tel:'+String(t||'').replace(/[^\d+]/g,'');
 function repIgnores(){ try{ return new Set(JSON.parse(localStorage.getItem('crm_rep_ignores')||'[]')); }catch(e){ return new Set(); } }
 function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.setItem('crm_rep_ignores', JSON.stringify([...s])); }catch(e){} }
 
-function RepertoireView({cfg, refreshKey, toast}){
+function RepertoireView({cfg, refreshKey, toast, isDesktop}){
   const [tick,setTick]=useState(0);
   const d = useClientsData(cfg, refreshKey+'|r'+tick);
+  const [reglees] = useVerifsReglees(cfg);
+  const [suivi,setSuivi]=useState(null);       // v156 : suivi et vérifications (ancien onglet Clients) : code contracteur, 'PART' ou id d'un particulier
   const K = useContactsFournisseurs(cfg);
   const [onglet,setOnglet]=useState(()=>{ try{ return localStorage.getItem('crm_rep_onglet')||'clients'; }catch(e){ return 'clients'; } });
   const [q,setQ]=useState('');
@@ -8004,6 +8006,12 @@ function RepertoireView({cfg, refreshKey, toast}){
   const clients = useMemo(()=>cvBuildClients(d.events||[], d.registry||[], d.factures||{}),[d.events, d.registry, d.factures]);
   const R = useMemo(()=>repConstruire({clients, registry:d.registry||[], factures:d.factures||{}, achats:d.achats||[], soumissions:d.soumissions||[], F}),[clients, d.registry, d.factures, d.achats, d.soumissions, d.fiches]);
   const doublons = useMemo(()=>repDoublonsPers(R.pers, ignores),[R, ignores]);
+  // À vérifier (passages pas facturés, factures en double…) — même calcul que l'ancien onglet Clients
+  const aVerif = useMemo(()=>{ const m = {};
+    Object.values(clients).forEach(c=>{ if(c.code!=='PART') m['C:'+c.code] = cvAVerifierClient(c, reglees, d.archives).n; });
+    R.pers.forEach(p=>{ if(p.srcJobs.length){ const n = cvAVerifierClient({jobs:p.srcJobs}, reglees, d.archives).n; if(n) m[p.id] = n; } });
+    m.PART = clients.PART ? cvAVerifierClient(clients.PART, reglees, d.archives).n : 0;
+    return m; },[clients, R, reglees, d.archives]);
   const ecrire = async (lignes, msg) => {
     setBusy(true);
     try{ for(const l of lignes) await ficheEcrire(cfg, l); toast && toast(msg||'Fiche enregistrée.','ok'); setTick(t=>t+1); return true; }
@@ -8027,6 +8035,16 @@ function RepertoireView({cfg, refreshKey, toast}){
   },[d.achats, d.documents, K.map, d.fiches]);
 
   if(d.loading && !d.events.length) return <div className="card"><div className="spin"></div> Chargement du répertoire…</div>;
+  if(suivi){
+    let cl = null;
+    if(suivi==='PART') cl = clients.PART;
+    else if(suivi.startsWith('P:')){ const p = R.pers.find(x=>x.id===suivi);
+      if(p && clients.PART){ const jobs = p.srcJobs; cl = {...clients.PART, label:p.nom, contact:'', jobs, active:jobs.filter(j=>j.status!=='done').length,
+        poTotal:jobs.reduce((t,j)=>t+((j.reg&&j.reg.ht)||0),0), billed:jobs.reduce((t,j)=>t+(j.billed||0),0), lastDay:jobs.reduce((m,j)=>j.last>m?j.last:m,'')}; } }
+    else cl = clients[suivi];
+    if(cl) return <ClientDetailView client={cl} clients={clients} factures={d.factures} appels={d.appels || {parNumero:{}, parFacture:{}, liste:[]}} courriels={d.courriels} achats={d.achats}
+      facLignes={d.facLignes} archives={d.archives} cfg={cfg} registry={d.registry} events={d.events} onChanged={()=>setTick(t=>t+1)} onBack={()=>setSuivi(null)} isDesktop={isDesktop}/>;
+  }
   const nq = cvNorm(q);
   const trouve = txt => !nq || cvNorm(txt).includes(nq);
   const texteClient = c => c.type==='contr'
@@ -8036,7 +8054,11 @@ function RepertoireView({cfg, refreshKey, toast}){
   const choisi = sel && sel.startsWith('F:') ? fourn.find(f=>'F:'+f.nom===sel) : (tous.find(c=>c.id===sel) || (selNom && R.pers.find(p=>p.nom===selNom)));
 
   const entete = <div style={{marginBottom:12}}>
-    <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Répertoire</h2>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,margin:'0 0 4px',flexWrap:'wrap'}}>
+      <h2 className="fh" style={{margin:0,fontSize:22}}>Répertoire</h2>
+      {cfg.memoireMajUrl && <button className="btn btn-sm" title="Va chercher les nouveaux PO et factures, met le registre à jour et range tout (prêt dans environ 15 min)" onClick={()=>window.open(cfg.memoireMajUrl,'_blank')}>⟳ Mettre à jour La mémoire</button>}
+    </div>
+    {d.lent && d.lent.length>0 && <div className="card" style={{margin:'8px 0',fontSize:13,borderColor:'var(--warning)'}}>⚠️ Trop long à lire : {d.lent.join(', ')}. Les données affichées sont incomplètes — essaie ⟳ Refresh.</div>}
     <div className="muted" style={{fontSize:13,marginBottom:10}}>Tout ce qui se rattache à un client ou à un fournisseur : coordonnées, jobs, factures envoyées, achats et soumissions.</div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
       <button className={'btn btn-sm'+(onglet==='clients'?' btn-p':'')} onClick={()=>changerOnglet('clients')}>👥 Clients ({R.contr.length + R.pers.filter(p=>!p.masque).length})</button>
@@ -8049,7 +8071,8 @@ function RepertoireView({cfg, refreshKey, toast}){
   if(choisi) return <div>{entete}
     <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>setSel(null)}>← Retour à la liste</button>
     {sel.startsWith('F:') ? <RepFicheFournisseur f={choisi} K={K} toast={toast}/>
-      : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onLie={nom=>setSel('', nom)}/>}
+      : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onLie={nom=>setSel('', nom)}
+          nbAV={aVerif[choisi.type==='contr' ? 'C:'+choisi.code : choisi.id]||0} onSuivi={(choisi.type==='contr' ? clients[choisi.code] : choisi.srcJobs.length) ? ()=>setSuivi(choisi.type==='contr' ? choisi.code : choisi.id) : null}/>}
   </div>;
 
   if(onglet==='fourn'){
@@ -8067,11 +8090,13 @@ function RepertoireView({cfg, refreshKey, toast}){
     </div>;
   }
 
-  const contr = R.contr.filter(c=>trouve(texteClient(c))).sort((a,b)=>a.code.localeCompare(b.code,'fr'));
-  const visibles = R.pers.filter(p=>(masques || !p.masque) && trouve(texteClient(p)));
+  const contr = R.contr.filter(c=>trouve(texteClient(c)) && (filtre!=='verif' || aVerif['C:'+c.code])).sort((a,b)=>a.code.localeCompare(b.code,'fr'));
+  const av = filtre==='verif';
+  const visibles = R.pers.filter(p=>(masques || !p.masque) && trouve(texteClient(p)) && (!av || aVerif[p.id]));
   const commerces = visibles.filter(p=>p.commerce), pers = visibles.filter(p=>!p.commerce);
   const nbMasques = R.pers.filter(p=>p.masque).length;
-  const montre = k => filtre==='tous' || filtre===k;
+  const montre = k => filtre==='tous' || filtre==='verif' || filtre===k;
+  const totalAV = Object.entries(aVerif).filter(([k])=>k!=='PART').reduce((t,[,n])=>t+n,0);
   const titre = (t, n) => <div className="muted" style={{fontSize:12,fontWeight:700,margin:'12px 0 6px',textTransform:'uppercase',letterSpacing:.5}}>{t} ({n})</div>;
   const lettre = n => { const l = String(n||'').normalize('NFD').replace(/[̀-ͯ]/g,'').charAt(0).toUpperCase(); return /[A-Z]/.test(l) ? l : '#'; };
   const Liste = ({l}) => <div className="card" style={{padding:0}}>
@@ -8079,7 +8104,7 @@ function RepertoireView({cfg, refreshKey, toast}){
       return <React.Fragment key={p.id}>
         {nouv && l.length>15 && <div style={{padding:'3px 14px',fontSize:11.5,fontWeight:800,color:'var(--accent)',background:'var(--bg3)',borderBottom:'1px solid var(--border)'}}>{L}</div>}
         <div onClick={()=>setSel(p.id)} style={{padding:'9px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',opacity:p.masque?.55:1}}>
-          <div style={{minWidth:0}}><b>{p.nom}</b>{p.fiche && <span title="Fiche enregistrée" style={{fontSize:11}}> 📇</span>}
+          <div style={{minWidth:0}}><b>{p.nom}</b>{p.fiche && <span title="Fiche enregistrée" style={{fontSize:11}}> 📇</span>}{aVerif[p.id] ? <span className="badge" style={{background:'rgba(248,81,73,0.12)',color:'var(--danger)',marginLeft:8}}>{aVerif[p.id]} à vérifier</span> : null}
             <div className="muted" style={{fontSize:12}}>{[p.adresse, p.tel, p.courriel].filter(Boolean).join(' · ') || '—'}</div></div>
           <div style={{textAlign:'right',fontSize:12}}>{p.listeJobs.length} job{p.listeJobs.length>1?'s':''}{p.facture ? <> · <b>{cvMoney(p.facture)}</b></> : ''}<div className="muted" style={{fontSize:11}}>{p.last ? cvFmtDay(p.last)+' '+p.last.slice(0,4) : ''}</div></div>
         </div>
@@ -8089,14 +8114,14 @@ function RepertoireView({cfg, refreshKey, toast}){
   const chip = (k, t) => <button key={k} className={'btn btn-sm'+(filtre===k?' btn-p':'')} onClick={()=>setFiltre(k)}>{t}</button>;
   return <div>{entete}
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
-      {chip('tous','Tous')}{chip('contr','🏗 Contracteurs ('+contr.length+')')}{chip('com','🏪 Commerces ('+commerces.length+')')}{chip('part','👤 Particuliers ('+pers.length+')')}
+      {chip('tous','Tous')}{totalAV>0 && chip('verif','⚠️ À vérifier ('+totalAV+')')}{chip('contr','🏗 Contracteurs ('+contr.length+')')}{chip('com','🏪 Commerces ('+commerces.length+')')}{chip('part','👤 Particuliers ('+pers.length+')')}
       {!!nbMasques && <button className="btn btn-sm" onClick={()=>setMasques(!masques)} style={{fontSize:11.5,marginLeft:'auto'}}>{masques ? 'Cacher les masqués' : '🙈 Masqués ('+nbMasques+')'}</button>}
     </div>
     {!!doublons.length && !nq && (montre('part') || montre('com')) && <RepDoublons doublons={doublons} busy={busy} ecrire={ecrire} onIgnorer={id=>{ repIgnorer(id); setIgnores(repIgnores()); }}/>}
     {montre('contr') && !!contr.length && <>{titre('Contracteurs', contr.length)}
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(230px,1fr))',gap:8,marginBottom:8}}>
         {contr.map(c=><div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0}} onClick={()=>setSel(c.id)}>
-          <div><b style={{color:'var(--accent)'}}>{c.code}</b> {c.nom}</div>
+          <div><b style={{color:'var(--accent)'}}>{c.code}</b> {c.nom}{aVerif['C:'+c.code] ? <span className="badge" style={{background:'rgba(248,81,73,0.12)',color:'var(--danger)',marginLeft:6}}>{aVerif['C:'+c.code]} à vérifier</span> : null}</div>
           <div className="muted" style={{fontSize:12}}>{c.contact || (c.fiche&&c.fiche.tel) || ''}</div>
           <div style={{fontSize:12,marginTop:4}}>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''} · facturé <b>{cvMoney(c.facture)}</b></div>
         </div>)}
@@ -8104,6 +8129,9 @@ function RepertoireView({cfg, refreshKey, toast}){
     {montre('com') && <>{titre('Commerces', commerces.length)}<Liste l={commerces}/>
       <div className="muted" style={{fontSize:11,margin:'4px 2px 0'}}>Classés selon le nom ou le courriel de compagnie. Mal classé ? Ouvre la fiche et clique « C'est un particulier ».</div></>}
     {montre('part') && <>{titre('Particuliers', pers.length)}<Liste l={pers}/></>}
+    {clients.PART && filtre!=='contr' && <div style={{marginTop:10}}><button className="btn btn-sm" onClick={()=>setSuivi('PART')}>🔎 Suivi de toutes les jobs de particuliers{aVerif.PART ? ' · '+aVerif.PART+' à vérifier' : ''}</button></div>}
+    <div style={{height:16}}/>
+    <CvAnomalies cfg={cfg} factures={d.factures} clients={clients} appels={d.appels || {parNumero:{}, parFacture:{}, liste:[]}} onOpen={code=>setSuivi(code)} onChanged={()=>setTick(t=>t+1)}/>
   </div>;
 }
 
@@ -8152,7 +8180,7 @@ function RepLigneAchat({a, montrerJob}){
   </div>;
 }
 
-function RepFicheClient({c, busy, ecrire, R, onLie}){
+function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi}){
   const [lier,setLier]=useState(null);           // texte de recherche, ou {autre}
   const [edit,setEdit]=useState(null);
   const [ouverte,setOuverte]=useState(()=>c.listeJobs[0] ? c.listeJobs[0].key : '');
@@ -8195,6 +8223,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie}){
           {pers && c.adresses.length>1 && <div className="muted" style={{fontSize:11.5}}>Autres adresses : {c.adresses.slice(1,4).join(' · ')}</div>}
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end'}}>
+          {onSuivi && <button className="btn btn-sm" onClick={onSuivi} style={nbAV ? {borderColor:'var(--danger)',color:'var(--danger)',fontWeight:700} : null}>🔎 Suivi des jobs{nbAV ? ' · '+nbAV+' à vérifier' : ''}</button>}
           <button className="btn btn-sm" onClick={ouvrirEdit} disabled={busy}>✏️ Modifier la fiche</button>
           {pers && <button className="btn btn-sm" onClick={()=>setLier(lier===null ? '' : null)} disabled={busy}>🔗 Lier à…</button>}
           {pers && <button className="btn btn-sm" onClick={basculer} disabled={busy}>{c.commerce ? '👤 C\'est un particulier' : '🏪 C\'est un commerce'}</button>}
@@ -8414,9 +8443,8 @@ function App(){
 
   const navItems = [
     {id:'dashboard',label:'Tableau de bord'},
-    {id:'repertoire',label:'Répertoire'},
+    {id:'repertoire',label:'Clients et fournisseurs'},
     {id:'projets',label:'Projets'},
-    {id:'clients',label:'Clients'},
     {id:'agenda',label:'Agenda'},
     {id:'fournisseurs',label:'Fournisseurs'},
     {id:'courriels',label:'Courriels'},
@@ -8465,8 +8493,7 @@ function App(){
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
-        {nav==='repertoire' && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show}/>}
-        {nav==='clients' && <ClientsView key={'c'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
+        {(nav==='repertoire' || nav==='clients') && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop}/>}
         {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey}/>}
         {nav==='fournisseurs' && <FournisseursView key={'f'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
         {nav==='contacts' && <ContactsView data={data} toast={show}/>}
