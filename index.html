@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v164';
+const APP_VERSION = 'v165';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8268,26 +8268,41 @@ function RepSansNom({l, R, busy, ecrire, onOuvrir}){
   const [lier,setLier]=useState(null);   // {p, q}
   const [nom,setNom]=useState(null);     // {p, v}
   const rattacher = (garde, autre) => ecrire(repLignesFusion(garde, autre), autre.courriels[0]+' rattaché à '+garde.nom+'.').then(ok=>{ if(ok){ setLier(null); } });
+  // v165 : rattacher à un contracteur = devient un de ses contacts (nom facultatif)
+  const versContr = (c, p, nomP) => ecrire([{type:'Contact', code:c.code, nom:(nomP||'').trim() || p.courriels[0], alias:[], courriel:p.courriels.join(', '), tel:p.tels[0]||'', notes:''}],
+    p.courriels[0]+' ajouté aux contacts de '+c.code+'.').then(ok=>{ if(ok) setLier(null); });
   const nommer = (p, v) => ecrire([{type:'Client', code:p.commerce ? 'COMMERCE' : 'PART', nom:v, alias:[], courriel:p.courriels.join(', '), tel:p.tels[0]||''}], p.courriels[0]+' → '+v+'.').then(ok=>{ if(ok) setNom(null); });
   return <div className="card" style={{marginTop:14}}>
     <div style={{display:'flex',justifyContent:'space-between',cursor:'pointer',gap:8}} onClick={()=>setOuvert(!ouvert)}>
       <b>📧 Courriels sans nom ({l.length})</b><span className="muted" style={{fontSize:12}}>{ouvert?'▲':'▼'} rattache-les au bon client ou donne-leur un nom</span>
     </div>
     {ouvert && l.map(p=>{ const nq = lier && lier.p.id===p.id ? cvNorm(lier.q) : '';
-      const cands = lier && lier.p.id===p.id && nq.length>=2 ? R.pers.filter(x=>!x.sansNom && x.id!==p.id && cvNorm([x.nom, ...x.noms].join(' ')).includes(nq)).slice(0,8) : [];
       return <div key={p.id} style={{padding:'8px 0',borderTop:'1px solid var(--border)',fontSize:13}}>
         <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
           <span style={{cursor:'pointer'}} onClick={()=>onOuvrir(p)}><b>{p.courriels[0]}</b> <span className="muted">· {[p.facturesSans.length+p.listeJobs.reduce((t,j)=>t+j.factures.length,0) ? (p.facturesSans.length+p.listeJobs.reduce((t,j)=>t+j.factures.length,0))+' facture(s)' : '', p.soum.length ? p.soum.length+' soumission(s)' : '', p.facture ? cvMoney(p.facture) : ''].filter(Boolean).join(' · ')}</span></span>
         </div>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:5}}>
           {p.suggere && <button className="btn btn-sm btn-p" disabled={busy} onClick={()=>rattacher(p.suggere, p)}>Rattacher à « {p.suggere.nom} »</button>}
-          <button className="btn btn-sm" disabled={busy} onClick={()=>setLier(lier && lier.p.id===p.id ? null : {p, q:''})}>🔗 Rattacher à…</button>
+          <button className="btn btn-sm" disabled={busy} onClick={()=>setLier(lier && lier.p.id===p.id ? null : {p, q:'', type:'part', nom:''})}>🔗 Rattacher à…</button>
           <button className="btn btn-sm" disabled={busy} onClick={()=>setNom(nom && nom.p.id===p.id ? null : {p, v:''})}>✏️ Donner un nom</button>
         </div>
-        {lier && lier.p.id===p.id && <div style={{marginTop:6}}>
-          <input autoFocus value={lier.q} onChange={e=>setLier({...lier, q:e.target.value})} placeholder="Nom du client…" style={{width:'100%',padding:'5px 9px'}}/>
-          {cands.map(x=><div key={x.id} onMouseDown={e=>e.preventDefault()} onClick={()=>rattacher(x, p)} style={{padding:'5px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer'}}><b>{x.nom}</b> <span className="muted">{x.commerce?'🏪':'👤'} {x.adresse}</span></div>)}
-        </div>}
+        {lier && lier.p.id===p.id && (()=>{ const t = lier.type || 'part';
+          const src = t==='contr' ? R.contr.map(c=>({id:c.id, nom:c.code+' '+c.nom, info:c.contact||'', obj:c}))
+            : R.pers.filter(x=>!x.sansNom && !x.masque && x.id!==p.id && (t==='com' ? x.commerce : !x.commerce)).map(x=>({id:x.id, nom:x.nom, info:[x.adresse, x.courriel].filter(Boolean).join(' · '), obj:x}));
+          const l = src.filter(x=>!nq || cvNorm(x.nom+' '+x.info).includes(nq)).slice(0, 12);
+          const choix = x => t==='contr' ? versContr(x.obj, p, lier.nom) : rattacher(x.obj, p);
+          return <div style={{marginTop:6,padding:8,border:'1px solid var(--border2)',borderRadius:8}}>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
+              {[['part','👤 Particulier'],['com','🏪 Commerce'],['contr','🏗 Contracteur']].map(([k,l])=><button key={k} className={'btn btn-sm'+(t===k?' btn-p':'')} onClick={()=>setLier({...lier, type:k, q:''})}>{l}</button>)}
+            </div>
+            {t==='contr' && <input value={lier.nom||''} onChange={e=>setLier({...lier, nom:e.target.value})} placeholder="Nom de la personne chez le contracteur (facultatif)" style={{width:'100%',padding:'5px 9px',marginBottom:5}}/>}
+            <input autoFocus value={lier.q} onChange={e=>setLier({...lier, q:e.target.value})} placeholder={t==='contr' ? 'Choisir le contracteur…' : t==='com' ? 'Choisir le commerce…' : 'Choisir le particulier…'} style={{width:'100%',padding:'5px 9px'}}/>
+            <div style={{maxHeight:240,overflowY:'auto',border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 6px 6px'}}>
+              {l.map(x=><div key={x.id} onMouseDown={e=>e.preventDefault()} onClick={()=>!busy && choix(x)} style={{padding:'6px 9px',borderBottom:'1px solid var(--border)',cursor:'pointer'}}>
+                <b>{x.nom}</b>{x.info && <span className="muted" style={{fontSize:12}}> · {x.info}</span>}</div>)}
+              {!l.length && <div className="muted" style={{padding:8,fontSize:12.5}}>Aucun résultat.</div>}
+            </div>
+          </div>; })()}
         {nom && nom.p.id===p.id && <div style={{display:'flex',gap:6,marginTop:6}}>
           <input autoFocus value={nom.v} onChange={e=>setNom({...nom, v:e.target.value})} placeholder="Nom du client ou du commerce" style={{flex:1,padding:'5px 9px'}}/>
           <button className="btn btn-sm btn-p" disabled={busy || !nom.v.trim()} onClick={()=>nommer(p, nom.v.trim())}>OK</button>
