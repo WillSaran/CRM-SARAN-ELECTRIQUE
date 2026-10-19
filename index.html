@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v139';
+const APP_VERSION = 'v140';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1820,7 +1820,10 @@ function CvListeJobs({jobs, onChoix}){
   // Ordre alphabétique des noms ; celles avec un PO d'abord, puis (après la double ligne) celles sans PO.
   const trouve = jobs.filter(j=>!q || cvNorm(j.label+' '+(j.po||'')).includes(cvNorm(q))).sort((a,b)=>a.label.localeCompare(b.label,'fr'));
   const avecPO = trouve.filter(j=>j.po), sansPO = trouve.filter(j=>!j.po), liste = [...avecPO, ...sansPO];
-  const Ligne = ({j})=><div onClick={()=>onChoix(j.cle)} style={{padding:'7px 10px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13,display:'flex',justifyContent:'space-between',gap:8}}>
+  // v140 : on garde le focus dans la recherche au clic (sinon, sur téléphone, le clavier se ferme, la liste remonte
+  // et le clic tombe sur le nom juste avant). Ligne = simple fonction (pas un composant recréé à chaque frappe).
+  const garderFocus = e => e.preventDefault();
+  const Ligne = ({j})=><div key={j.cle} onMouseDown={garderFocus} onClick={()=>onChoix(j.cle)} style={{padding:'7px 10px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13,display:'flex',justifyContent:'space-between',gap:8}}>
     <span>{j.label}{j.po && <b style={{color:'var(--accent)'}}> · {j.po}</b>}</span>
     <span className="muted" style={{fontSize:11.5,whiteSpace:'nowrap'}}>{j.info}</span>
   </div>;
@@ -1828,10 +1831,10 @@ function CvListeJobs({jobs, onChoix}){
   return <div style={{marginTop:5,paddingLeft:8,borderLeft:'2px solid var(--accent)'}}>
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder={'Chercher parmi '+jobs.length+' jobs (nom ou PO)…'} style={{width:'100%',boxSizing:'border-box',marginBottom:4}}/>
     <div style={{maxHeight:260,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
-      {avecPO.map(j=><Ligne key={j.cle} j={j}/>)}
+      {avecPO.map(j=>Ligne({j}))}
       {avecPO.length>0 && sansPO.length>0 && <div style={{borderTop:'3px double var(--muted)',margin:'2px 0'}}/>}
       {sansPO.length>0 && <div className="muted" style={{fontSize:11.5,padding:'4px 10px'}}>Sans PO</div>}
-      {sansPO.map(j=><Ligne key={j.cle} j={j}/>)}
+      {sansPO.map(j=>Ligne({j}))}
     </div>
     {!liste.length && <div className="muted" style={{fontSize:12}}>Aucune job ne correspond.</div>}
   </div>;
