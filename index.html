@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v172';
+const APP_VERSION = 'v173';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7775,7 +7775,7 @@ function lireFiches(rows){
       f.canon = cvJobCle({code:f.code||'PART'}, {name:ficheNomJob(f), po:f.po}); f.aliasN = new Set([...f.alias, f.canon, ficheNomJob(f)].map(ficheNorm).filter(Boolean)); F.jobs.push(f); }
     else if(t==='fournisseur') F.fourn.push(f);
     else if(t==='client') F.clients.push(f);
-    else if(t==='masque') F.masques.push(f);
+    else if(t==='masque' || t==='supprime') F.masques.push(f);   // v173 : « Supprimé » (ancien « Masqué ») = n'apparaît plus nulle part
     else if(t==='contact') F.contacts.push(f);   // v161 : employé d'un contracteur (Code = ASC, CRS…) ; Notes = rôle
   });
   return F;
@@ -7999,7 +7999,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   const groupes = {};
   recs.forEach(r=>{ const g = trouve(r.noeud); (groupes[g] = groupes[g] || []).push(r); });
   const ficheDe = g => F.clients.find(f=>(f.code==='PART' || f.code==='COMMERCE' || !f.code) && trouve('f:'+f.row)===g) || null;
-  const pers = [], vus = new Set();
+  let pers = []; const vus = new Set();
   Object.entries(groupes).forEach(([g, rs])=>{
     const fiche = ficheDe(g);
     const variantes = {}; rs.forEach(r=>{ if(r.nom && !/@/.test(r.nom)){ const p = r.kind==='compta' ? r.nom.replace(/\s+/g,' ').trim() : persNomPropre(r.nom); if(p) variantes[p] = (variantes[p]||0) + (r.kind==='compta' ? 3 : r.kind==='reg'||r.kind==='fac'||r.kind==='soum' ? 2 : 1); } });
@@ -8093,6 +8093,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
       return w.every(x=>loc.includes(x)) || (loc[0]===w[0][0] && fam.every(x=>loc.includes(x)) && fam.join('').length>=5); };
     const c = nommes.filter(ok); if(c.length===1) p.suggere = c[0];
   });
+  pers = pers.filter(p=>!p.masque);   // v173 : supprimés = retirés partout (liste, recherche, choix de destination)
   return {contr:Object.values(contr).sort((a,b)=>String(b.last).localeCompare(String(a.last))), pers};
 }
 // Possibles doublons : même nom de famille et prénom pareil / initiale / une lettre de différence
@@ -8154,10 +8155,11 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   const [busy,setBusy]=useState(false);
   const [filtre,setFiltreS]=useState(()=>{ try{ return localStorage.getItem('crm_rep_filtre')||'tous'; }catch(e){ return 'tous'; } });
   const setFiltre = k => { setFiltreS(k); try{ localStorage.setItem('crm_rep_filtre', k); }catch(e){} };
-  const [masques,setMasques]=useState(false);
+  const masques = false;
   const [nouveau,setNouveau]=useState(null);   // v163 : ajout manuel d'un particulier ou commerce
   const [coches,setCoches]=useState(()=>new Set());   // v172 : sélection de plusieurs particuliers/commerces
   const [garde,setGarde]=useState('');
+  const [supprConf,setSupprConf]=useState(false);
   const cocher = id => setCoches(s=>{ const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const [ignores,setIgnores]=useState(repIgnores);
   const changerOnglet = o => { setOnglet(o); setSel(null); try{ localStorage.setItem('crm_rep_onglet', o); }catch(e){} };
@@ -8281,8 +8283,9 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   const chip = (k, t) => <button key={k} className={'btn btn-sm'+(filtre===k?' btn-p':'')} onClick={()=>setFiltre(k)}>{t}</button>;
   const choisis = R.pers.filter(p=>coches.has(p.id));
   const finLot = ok => { if(ok){ setCoches(new Set()); setGarde(''); } };
-  const lotMasquer = () => ecrire(choisis.flatMap(p=>[{type:'Masqué', code:'PART', nom:p.nom, alias:p.noms.filter(n=>!/@/.test(n))}, ...(p.fiche ? [{...p.fiche, type:'Retiré'}] : [])]),
-    choisis.length+' masqué'+(choisis.length>1?'s':'')+'.').then(finLot);
+  const [confSuppr,setConfSuppr]=[supprConf, setSupprConf];
+  const lotMasquer = () => ecrire(choisis.flatMap(p=>[{type:'Supprimé', code:'PART', nom:p.nom, alias:p.noms.filter(n=>!/@/.test(n))}, ...(p.fiche ? [{...p.fiche, type:'Retiré'}] : [])]),
+    choisis.length+' supprimé'+(choisis.length>1?'s':'')+' du répertoire.').then(ok=>{ setConfSuppr(false); finLot(ok); });
   const lotType = com => ecrire(choisis.filter(p=>!!p.commerce!==com).map(p=>({...(p.fiche || {alias:p.noms.filter(n=>n!==p.nom && !/@/.test(n)), tel:p.tels[0]||'', courriel:p.courriels.join(', ')}), type:'Client', code:com ? 'COMMERCE' : 'PART', nom:p.nom})),
     choisis.length+(com ? ' dans les commerces.' : ' dans les particuliers.')).then(finLot);
   const lotLier = () => { const g = choisis.find(p=>p.id===garde) || choisis[0]; const autres = choisis.filter(p=>p!==g);
@@ -8298,7 +8301,11 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   const barreLot = choisis.length>0 && <div className="card" style={{position:'sticky',top:0,zIndex:5,margin:'0 0 10px',borderColor:'var(--accent)',fontSize:13}}>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
       <b>{choisis.length} sélectionné{choisis.length>1?'s':''}</b>
-      <button className="btn btn-sm" disabled={busy} onClick={lotMasquer}>🙈 Masquer</button>
+      {!confSuppr ? <button className="btn btn-sm" disabled={busy} onClick={()=>setConfSuppr(true)}>🗑 Supprimer</button>
+        : <span style={{display:'inline-flex',gap:6,alignItems:'center',padding:'2px 8px',border:'1px solid var(--danger)',borderRadius:8}}>
+            <span style={{color:'var(--danger)',fontSize:12.5}}>Supprimer {choisis.length} du répertoire ? Tu ne les reverras plus.</span>
+            <button className="btn btn-sm" style={{background:'var(--danger)',color:'#fff',border:'none'}} disabled={busy} onClick={lotMasquer}>Oui, supprimer</button>
+            <button className="btn btn-sm" onClick={()=>setConfSuppr(false)}>Non</button></span>}
       <button className="btn btn-sm" disabled={busy || choisis.length<2} onClick={lotLier} title="Réunir en une seule fiche">🔗 Lier ensemble</button>
       <button className="btn btn-sm" disabled={busy} onClick={()=>lotType(false)}>👤 C'est un particulier</button>
       <button className="btn btn-sm" disabled={busy} onClick={()=>lotType(true)}>🏪 C'est un commerce</button>
@@ -8319,7 +8326,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
       {chip('tous','Tous')}{totalAV>0 && chip('verif','⚠️ À vérifier ('+totalAV+')')}{chip('contr','🏗 Contracteurs ('+contr.length+')')}{chip('com','🏪 Commerces ('+commerces.length+')')}{chip('part','👤 Particuliers'+(soum ? '' : ' ('+pers.length+')'))}{nbSoumSeul>0 && chip('soum','⏳ En attente / soumissions ('+nbSoumSeul+')')}
       <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>setNouveau(nouveau ? null : {commerce:filtre==='com', nom:'', adresse:'', ville:'', tel:'', courriel:'', notes:''})}>＋ Ajouter un client</button>
-      {!!nbMasques && <button className="btn btn-sm" onClick={()=>setMasques(!masques)} style={{fontSize:11.5}}>{masques ? 'Cacher les masqués' : '🙈 Masqués ('+nbMasques+')'}</button>}
+
     </div>
     {barreLot}
     {nouveau && <div className="card" style={{marginBottom:12}}>
@@ -8546,7 +8553,8 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr}){
     const alias = [...new Set([...edit.alias.split(/\s*;\s*/).map(x=>x.trim()), ...(pers ? [c.nom, ...c.noms] : [])].filter(x=>x && !/@/.test(x) && x!==nouveau))];
     return ecrire([{...(fiche||{}), type:'Client', code:ficheCode, nom:nouveau, alias,
     adresse:edit.adresse, ville:edit.ville, tel:edit.tel, courriel:edit.courriel, notes:edit.notes}], 'Fiche de '+nouveau+' enregistrée.').then(ok=>ok&&setEdit(null)); };
-  const masquer = () => ecrire([{type:'Masqué', code:'PART', nom:c.nom, alias:c.noms}], c.nom+' est masqué du répertoire.');
+  const [confSup,setConfSup]=useState(false);
+  const masquer = () => ecrire([{type:'Supprimé', code:'PART', nom:c.nom, alias:c.noms.filter(n=>!/@/.test(n))}, ...(fiche ? [{...fiche, type:'Retiré'}] : [])], c.nom+' est supprimé du répertoire.').then(ok=>{ if(ok && onLie) onLie(''); });
   const basculer = () => ecrire([{...(fiche || {alias:c.noms.filter(n=>n!==c.nom), tel:c.tel, courriel:c.courriel}), type:'Client', code:c.commerce ? 'PART' : 'COMMERCE', nom:c.nom}],
     c.nom+(c.commerce ? ' est maintenant dans les particuliers.' : ' est maintenant dans les commerces.'));
   const ligneJob = (jobs, nom) => {
@@ -8582,7 +8590,11 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr}){
           {pers && <button className="btn btn-sm" onClick={()=>setLier(lier===null ? '' : null)} disabled={busy}>🔗 Lier à…</button>}
           {pers && <button className="btn btn-sm" onClick={()=>setVersContr(!versContr)} disabled={busy}>🏗 Lier à un contracteur</button>}
           {pers && <button className="btn btn-sm" onClick={basculer} disabled={busy}>{c.commerce ? '👤 C\'est un particulier' : '🏪 C\'est un commerce'}</button>}
-          {pers && !fiche && !c.masque && <button className="btn btn-sm" onClick={masquer} disabled={busy} title="Ce n'est pas un client (ex. Lettrage du camion 14)">🙈 Masquer</button>}
+          {pers && (!confSup ? <button className="btn btn-sm" onClick={()=>setConfSup(true)} disabled={busy} title="Ce n'est pas un client (ex. Lettrage du camion 14)">🗑 Supprimer</button>
+            : <span style={{display:'flex',flexDirection:'column',gap:4,alignItems:'flex-end',padding:6,border:'1px solid var(--danger)',borderRadius:8}}>
+                <span style={{color:'var(--danger)',fontSize:12}}>Supprimer {c.nom} du répertoire ?</span>
+                <span style={{display:'flex',gap:4}}><button className="btn btn-sm" style={{background:'var(--danger)',color:'#fff',border:'none'}} disabled={busy} onClick={masquer}>Oui, supprimer</button><button className="btn btn-sm" onClick={()=>setConfSup(false)}>Non</button></span>
+              </span>)}
         </div>
       </div>
       <div style={{display:'flex',gap:16,flexWrap:'wrap',marginTop:10,fontSize:13,fontVariantNumeric:'tabular-nums'}}>
