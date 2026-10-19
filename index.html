@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v162';
+const APP_VERSION = 'v163';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7970,6 +7970,14 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
       return; }
     pers.push(p);
   });
+  // v163 : clients ajoutés à la main (fiche sans facture, job ni soumission)
+  F.clients.filter(f=>f.code==='PART' || f.code==='COMMERCE' || !f.code).forEach(f=>{
+    if(groupes[trouve('f:'+f.row)] || !f.nom) return;
+    pers.push({type:'pers', id:'P:f:'+f.row, nom:f.nom, fiche:f, srcJobs:[], noms:[f.nom], courriels:String(f.courriel||'').toLowerCase().split(/[\s,;]+/).filter(e=>/@/.test(e)),
+      tels:[f.tel].filter(Boolean), adresses:[[f.adresse, f.ville].filter(Boolean).join(', ')].filter(Boolean), sansNom:false, contacts:[], entreprise:'', jobs:{}, listeJobs:[], facturesSans:[], soum:[],
+      masque:false, facture:0, cout:0, last:'', adresse:[f.adresse, f.ville].filter(Boolean).join(', '), tel:f.tel||'', courriel:String(f.courriel||'').split(/[\s,;]+/)[0]||'',
+      cle:persCle(f.nom), commerce:f.code==='COMMERCE'});
+  });
   // contacts ajoutés à la main (sans facture ni job)
   (F.contacts||[]).forEach(fc=>{ if(vus.has('c:'+fc.row) || !CLIENT_CODES[fc.code]) return;
     C(fc.code).contacts.push({fiche:fc, nom:fc.nom, role:fc.notes||'', courriels:String(fc.courriel||'').toLowerCase().split(/[\s,;]+/).filter(e=>/@/.test(e)), tels:[fc.tel].filter(Boolean), noms:[]}); });
@@ -8053,6 +8061,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   const [filtre,setFiltreS]=useState(()=>{ try{ return localStorage.getItem('crm_rep_filtre')||'tous'; }catch(e){ return 'tous'; } });
   const setFiltre = k => { setFiltreS(k); try{ localStorage.setItem('crm_rep_filtre', k); }catch(e){} };
   const [masques,setMasques]=useState(false);
+  const [nouveau,setNouveau]=useState(null);   // v163 : ajout manuel d'un particulier ou commerce
   const [ignores,setIgnores]=useState(repIgnores);
   const changerOnglet = o => { setOnglet(o); setSel(null); try{ localStorage.setItem('crm_rep_onglet', o); }catch(e){} };
   const F = d.fiches || {clients:[], jobs:[], fourn:[], masques:[]};
@@ -8166,11 +8175,27 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
     {!l.length && <div className="muted" style={{padding:14}}>Aucun résultat.</div>}
   </div>;
   const chip = (k, t) => <button key={k} className={'btn btn-sm'+(filtre===k?' btn-p':'')} onClick={()=>setFiltre(k)}>{t}</button>;
+  const ajouterClient = () => { const n = nouveau.nom.trim(); if(!n) return;
+    ecrire([{type:'Client', code:nouveau.commerce ? 'COMMERCE' : 'PART', nom:n, alias:[], adresse:nouveau.adresse, ville:nouveau.ville, tel:nouveau.tel, courriel:nouveau.courriel, notes:nouveau.notes}],
+      n+' ajouté aux '+(nouveau.commerce ? 'commerces.' : 'particuliers.')).then(ok=>{ if(ok){ setNouveau(null); setSel('', n); } }); };
+  const champN = (k, l) => <input value={nouveau[k]} placeholder={l} onChange={e=>setNouveau({...nouveau,[k]:e.target.value})} style={{padding:'6px 9px'}}/>;
   return <div>{entete}
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
       {chip('tous','Tous')}{totalAV>0 && chip('verif','⚠️ À vérifier ('+totalAV+')')}{chip('contr','🏗 Contracteurs ('+contr.length+')')}{chip('com','🏪 Commerces ('+commerces.length+')')}{chip('part','👤 Particuliers ('+pers.length+')')}
-      {!!nbMasques && <button className="btn btn-sm" onClick={()=>setMasques(!masques)} style={{fontSize:11.5,marginLeft:'auto'}}>{masques ? 'Cacher les masqués' : '🙈 Masqués ('+nbMasques+')'}</button>}
+      <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>setNouveau(nouveau ? null : {commerce:filtre==='com', nom:'', adresse:'', ville:'', tel:'', courriel:'', notes:''})}>＋ Ajouter un client</button>
+      {!!nbMasques && <button className="btn btn-sm" onClick={()=>setMasques(!masques)} style={{fontSize:11.5}}>{masques ? 'Cacher les masqués' : '🙈 Masqués ('+nbMasques+')'}</button>}
     </div>
+    {nouveau && <div className="card" style={{marginBottom:12}}>
+      <b>Nouveau client</b>
+      <div style={{display:'flex',gap:6,margin:'8px 0'}}>
+        <button className={'btn btn-sm'+(!nouveau.commerce?' btn-p':'')} onClick={()=>setNouveau({...nouveau, commerce:false})}>👤 Particulier</button>
+        <button className={'btn btn-sm'+(nouveau.commerce?' btn-p':'')} onClick={()=>setNouveau({...nouveau, commerce:true})}>🏪 Commerce</button>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:6}}>
+        {champN('nom', nouveau.commerce ? 'Nom du commerce' : 'Prénom et nom')}{champN('adresse','Adresse')}{champN('ville','Ville')}{champN('tel','Téléphone')}{champN('courriel','Courriel')}{champN('notes','Notes')}
+      </div>
+      <div style={{display:'flex',gap:6,marginTop:8}}><button className="btn btn-sm btn-p" disabled={busy || !nouveau.nom.trim()} onClick={ajouterClient}>{busy ? 'Enregistrement…' : 'Ajouter'}</button><button className="btn btn-sm" onClick={()=>setNouveau(null)}>Annuler</button></div>
+    </div>}
     {!!doublons.length && !nq && (montre('part') || montre('com')) && <RepDoublons doublons={doublons} busy={busy} ecrire={ecrire} onIgnorer={id=>{ repIgnorer(id); setIgnores(repIgnores()); }}/>}
     {montre('contr') && !!contr.length && <>{titre('Contracteurs', contr.length)}
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(230px,1fr))',gap:8,marginBottom:8}}>
