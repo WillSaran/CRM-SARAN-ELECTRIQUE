@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v148';
+const APP_VERSION = 'v149';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1869,7 +1869,13 @@ const CV_EMPLOYES = ['William','Daniel','Philippe','Brandon','Adèle','Maude'];
 const cvAutreDest = j => j==='Éclairage Saran' || /^Employé — /.test(j||'');
 const cvIconeDest = d => d==='Entrepôt' ? '📦 ' : d==='Éclairage Saran' ? '💡 ' : /^Employé/.test(d) ? '👷 ' : '🚚 ';
 // « Inventaire » s'appelle maintenant Entrepôt (code ENT) — les anciennes lignes « Inventaire » sont lues comme Entrepôt.
-function cvDest(j){ return /^(inventaire|shop|atelier)$/i.test(String(j||'').trim()) ? 'Entrepôt' : (j||''); }   // anciennes factures « Shop » → Entrepôt
+// v149 : initiales d'employés à la fin d'un nom (« Michael Bourne AU », « Bourne AU/PB ») = même job que « Michael Bourne »
+function cvSansInit(x){
+  let t = String(x||'');
+  for(let k=0; k<6; k++){ const m = t.match(/[\s\/,+&(]+([A-Za-z]{2})[\s\/,+&).]*$/); if(!m || !CREW_INITIALS[m[1].toUpperCase()]) break; t = t.slice(0, m.index); }
+  return t.trim();
+}
+function cvDest(j){ return /^(inventaire|shop|atelier)$/i.test(String(j||'').trim()) ? 'Entrepôt' : cvSansInit(j||''); }   // anciennes factures « Shop » → Entrepôt
 const CV_DEST_REF = {'Entrepôt':'ENT'};   // référence écrite sur la commande au fournisseur
 function cvMateriel(job, achats){
   const l = (achats||[]).filter(a=>a.job && !CV_DESTS.includes(a.job) && ((job.po && a.job.includes(job.po)) || cvNorm(a.job).endsWith(cvNorm(job.name))));
@@ -6459,7 +6465,7 @@ function cvPO(text){
 // Décortique le titre d'un événement : code client, phase, PO, initiales, nom.
 function cvParseEvent(e){
   const title = String(e.title||'').trim();
-  const toks = title.replace(new RegExp(CV_NOJOB_RE.source,'ig'),' ').replace(/[()]/g,' ').split(/[\s\-–]+/).filter(Boolean);
+  const toks = title.replace(new RegExp(CV_NOJOB_RE.source,'ig'),' ').replace(/[()]/g,' ').split(/[\s\-–\/,+&]+/).filter(Boolean);
   let code='', phase='', initials=[], nameParts=[], apresServ=false, servType='';
   toks.forEach(t=>{
     const T=t.toUpperCase();
@@ -6473,6 +6479,7 @@ function cvParseEvent(e){
     if(T==='CUI') return;
     nameParts.push(t);
   });
+  while(nameParts.length>1 && CREW_INITIALS[nameParts[nameParts.length-1].toUpperCase().replace(/\.$/,'')]) initials.push(nameParts.pop().toUpperCase().replace(/\.$/,''));   // « Bourne Au » à la fin = initiales
   const po = cvPO(title) || cvPO(e.description);
   const name = cvTitleCase(nameParts.join(' ').trim());
   const crew = new Set(initials.map(i=>CREW_INITIALS[i]));
@@ -6586,6 +6593,7 @@ function cvBuildClients(events, registry, factures){
   const regByPO = {}; registry.forEach(r=>{ if(r.po) regByPO[r.po]=r; });
   const jobs = {};
   const getJob = (id, base)=> jobs[id] || (jobs[id] = {id, events:[], ...base});
+  const partNom = {};
   events.forEach(raw=>{
     if(CLIENT_IGNORE.test(String(raw.title||'').trim())) return;
     const p = cvParseEvent(raw);
@@ -6607,7 +6615,10 @@ function cvBuildClients(events, registry, factures){
       j.events.push(p);
     } else {
       if(raw.calendarId !== CREW_CAL && raw.calendarId !== EN_ATTENTE_CAL) return; // particuliers : calendrier de l'équipe + En Attente
-      const k = p.po || cvNorm(p.location).slice(0,24) || p.key || cvNorm(p.title);
+      let k = p.po || cvNorm(p.location).slice(0,24) || p.key || cvNorm(p.title);
+      const pn = !p.po && p.key && partNom[p.key];                                    // v149 : même nom de particulier, une des deux sans adresse = même job
+      if(pn && pn.k!==k && !jobs['PART|'+k] && (!pn.loc || !p.location)) k = pn.k;
+      if(!p.po && p.key && !partNom[p.key]) partNom[p.key] = {k, loc:!!p.location};
       const reg = p.po ? regByPO[p.po] : null;
       const j = getJob('PART|'+k, {client:'PART', po:p.po||'', name: reg ? reg.nom : (p.name || p.title), reg});
       j.events.push(p);
