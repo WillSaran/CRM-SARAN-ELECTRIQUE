@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v174';
+const APP_VERSION = 'v175';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7910,7 +7910,10 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     ajouterJob(C(code).jobs, code, {cle:cvJobCle({code}, {name:r.nom, po:r.po}), nom:cvTitleCase(r.nom||''), po:r.po, adresse:[r.adresse,r.ville].filter(Boolean).join(', '), reg:r}); });
   // ---- Personnes : union de noms et de courriels ----
   const parent = {}; const trouve = x => { while(parent[x] && parent[x]!==x){ parent[x] = parent[parent[x]] || parent[x]; x = parent[x]; } return x; };
-  const unir = (a, b) => { if(!a || !b) return; parent[a] = parent[a] || a; parent[b] = parent[b] || b; const ra = trouve(a), rb = trouve(b); if(ra!==rb) parent[rb] = ra; };
+  // v175 : deux fiches différentes ne se fusionnent jamais toutes seules (ex. « Robert Rondeau » et son commerce « Le jardin de la gaieté » ont le même courriel)
+  const ficheR = {};
+  const unir = (a, b) => { if(!a || !b) return; parent[a] = parent[a] || a; parent[b] = parent[b] || b; const ra = trouve(a), rb = trouve(b); if(ra===rb) return;
+    const fa = ficheR[ra], fb = ficheR[rb]; if(fa && fb && fa!==fb) return; parent[rb] = ra; if(fb && !fa) ficheR[ra] = fb; };
   const noeud = x => { if(x) parent[x] = parent[x] || x; return x; };
   // v171 : « Robichaud Alain » = « Alain Robichaud » (mots triés) ; même téléphone = même client
   const nNom = nom => { const k = persCle(nom); return k && k.replace(/\s/g,'').length>=3 ? 'k:'+k.split(' ').sort().join(' ') : ''; };
@@ -7931,12 +7934,12 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   const telSur = t => { const l = gcTel[t] ? [...gcTel[t]] : []; if(l.length<=1) return true;
     const ws = l.map(n=>new Set(n.split(' ').filter(w=>w.length>=4))); return [...ws[0]].some(w=>ws.every(x=>x.has(w))); };
   const masques = new Set(F.masques.flatMap(f=>[f.nom, ...f.alias]).map(x=>persCle(x)).filter(Boolean));
-  (F.contacts||[]).forEach(f=>{ const n = 'c:'+f.row; noeud(n);
-    [f.nom, ...f.alias].forEach(a=>{ const k = nNom(a); if(k) unir(n, k); });
-    String(f.courriel||'').split(/[\s,;]+/).forEach(e=>{ const m = nMail(e); if(m) unir(n, m); }); });
-  F.clients.filter(f=>f.code==='PART' || f.code==='COMMERCE' || !f.code).forEach(f=>{ const n = 'f:'+f.row; noeud(n);
-    [f.nom, ...f.alias].forEach(a=>{ const k = nNom(a); if(k) unir(n, k); });
-    String(f.courriel||'').split(/[\s,;]+/).forEach(e=>{ const m = nMail(e); if(m) unir(n, m); }); });
+  const fichesTous = [...(F.contacts||[]).map(f=>({f, n:'c:'+f.row, id:'C:'+f.code+':'+cvNorm(f.nom)})),
+    ...F.clients.filter(f=>f.code==='PART' || f.code==='COMMERCE' || !f.code).map(f=>({f, n:'f:'+f.row, id:'F:'+cvNorm(f.nom)}))];
+  fichesTous.forEach(x=>{ noeud(x.n); ficheR[x.n] = x.id; });
+  fichesTous.forEach(x=>{ const k = nNom(x.f.nom); if(k) unir(x.n, k); });   // le nom d'une fiche passe avant le « aussi écrit » d'une autre
+  fichesTous.forEach(x=>{ x.f.alias.forEach(a=>{ const k = nNom(a); if(k) unir(x.n, k); });
+    String(x.f.courriel||'').split(/[\s,;]+/).forEach(e=>{ const m = nMail(e); if(m) unir(x.n, m); }); });
   const part = (clients||{}).PART;
   (registry||[]).forEach(r=>{ if(codeDe(r.code) || !r.nom) return; rec({nNom:nNom(r.nom), nMail:nMail(r.courriel), nom:r.nom, tel:r.tel, courriel:r.courriel, adresse:[r.adresse,r.ville].filter(Boolean).join(', '), kind:'reg', obj:r}); });
   Object.values(factures||{}).forEach(f=>{
@@ -8056,8 +8059,9 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     pers.push(p);
   });
   // v163 : clients ajoutés à la main (fiche sans facture, job ni soumission)
+  const seuls = new Set();
   F.clients.filter(f=>f.code==='PART' || f.code==='COMMERCE' || !f.code).forEach(f=>{
-    if(groupes[trouve('f:'+f.row)] || !f.nom) return;
+    const rac = trouve('f:'+f.row); if(groupes[rac] || !f.nom || seuls.has(rac)) return; seuls.add(rac);
     pers.push({type:'pers', id:'P:f:'+f.row, nom:f.nom, fiche:f, srcJobs:[], noms:[f.nom], courriels:String(f.courriel||'').toLowerCase().split(/[\s,;]+/).filter(e=>/@/.test(e)),
       tels:[f.tel].filter(Boolean), adresses:[[f.adresse, f.ville].filter(Boolean).join(', ')].filter(Boolean), sansNom:false, contacts:[], entreprise:'', jobs:{}, listeJobs:[], facturesSans:[], soum:[],
       masque:false, facture:0, cout:0, last:'', adresse:[f.adresse, f.ville].filter(Boolean).join(', '), tel:f.tel||'', courriel:String(f.courriel||'').split(/[\s,;]+/)[0]||'',
