@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v170';
+const APP_VERSION = 'v171';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7912,10 +7912,13 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   const parent = {}; const trouve = x => { while(parent[x] && parent[x]!==x){ parent[x] = parent[parent[x]] || parent[x]; x = parent[x]; } return x; };
   const unir = (a, b) => { if(!a || !b) return; parent[a] = parent[a] || a; parent[b] = parent[b] || b; const ra = trouve(a), rb = trouve(b); if(ra!==rb) parent[rb] = ra; };
   const noeud = x => { if(x) parent[x] = parent[x] || x; return x; };
-  const nNom = nom => { const k = persCle(nom); return k && k.replace(/\s/g,'').length>=3 ? 'k:'+k : ''; };
+  // v171 : « Robichaud Alain » = « Alain Robichaud » (mots triés) ; même téléphone = même client
+  const nNom = nom => { const k = persCle(nom); return k && k.replace(/\s/g,'').length>=3 ? 'k:'+k.split(' ').sort().join(' ') : ''; };
+  const nTel = t => { const d = String(t||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); return d.length===10 ? 't:'+d : ''; };
   const nMail = e => { e = String(e||'').trim().toLowerCase(); return /@/.test(e) ? 'e:'+e : ''; };
   const recs = [];   // {noeud, nom, courriel, tel, adresse, kind, obj}
-  const rec = r => { r.noeud = noeud(r.nNom || r.nMail || r.nAdr); if(r.nNom && r.nMail) unir(r.nNom, r.nMail); if(r.nAdr && r.noeud) unir(r.noeud, r.nAdr); if(r.noeud) recs.push(r); return r; };
+  const rec = r => { r.noeud = noeud(r.nNom || r.nMail || r.nAdr); if(r.nNom && r.nMail) unir(r.nNom, r.nMail); if(r.nAdr && r.noeud) unir(r.noeud, r.nAdr);
+    const t = nTel(r.tel); if(t && r.noeud && telSur(t)) unir(r.noeud, t); if(r.noeud) recs.push(r); return r; };
   // v170 : adresses du logiciel comptable — une adresse qui appartient à UN seul client relie les jobs de l'agenda à ce client
   const gcLignes = (gcmeq||[]).map(r=>({nom:String(r[0]||'').trim(), lien:String(r[1]||'').trim(), adresse:[[r[2], r[3]].filter(Boolean).join(' ').trim(), r[4] ? 'app. '+r[4] : ''].filter(Boolean).join(', '),
     ville:String(r[5]||'').trim(), cp:String(r[7]||'').trim(), tel:String(r[8]||'').trim(), courriel:String(r[10]||'').trim().toLowerCase()})).filter(g=>g.nom && !/\?/.test(g.nom));
@@ -7924,6 +7927,9 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   const adrSure = k => { const l = gcAdr[k] ? [...gcAdr[k]] : []; if(l.length===1) return true; if(!l.length) return false;
     const ws = l.map(n=>new Set(n.split(' ').filter(w=>w.length>=4))); return [...ws[0]].some(w=>ws.every(x=>x.has(w))); };
   const nAdresse = a => { const k = repCleAdresse(a); return k && adrSure(k) ? 'a:'+k : ''; };
+  const gcTel = {}; gcLignes.forEach(g=>{ const t = nTel(g.tel); if(t) (gcTel[t] = gcTel[t] || new Set()).add(persCle(g.nom)); });
+  const telSur = t => { const l = gcTel[t] ? [...gcTel[t]] : []; if(l.length<=1) return true;
+    const ws = l.map(n=>new Set(n.split(' ').filter(w=>w.length>=4))); return [...ws[0]].some(w=>ws.every(x=>x.has(w))); };
   const masques = new Set(F.masques.flatMap(f=>[f.nom, ...f.alias]).map(x=>persCle(x)).filter(Boolean));
   (F.contacts||[]).forEach(f=>{ const n = 'c:'+f.row; noeud(n);
     [f.nom, ...f.alias].forEach(a=>{ const k = nNom(a); if(k) unir(n, k); });
