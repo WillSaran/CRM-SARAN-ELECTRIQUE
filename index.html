@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v168';
+const APP_VERSION = 'v169';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7878,6 +7878,9 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     j.facture = j.factures.filter(f=>!f.annulee).reduce((t,f)=>t+(f.ht||0),0);
     j.cout = j.achats.reduce((t,a)=>t+(a.st||0)*((a.part==null?100:a.part)/100),0);
     j.passages = new Set(j.events.map(e=>e.day)).size;
+    // v169 : dernière visite (passé) et prochaine visite (à venir) — pour l'ordre des jobs
+    const jours = [...new Set(j.events.map(e=>e.day))].sort();
+    j.derniere = jours.filter(d=>d<=today).pop() || ''; j.prochaine = jours.find(d=>d>today) || '';
     j.equipe = [...new Set(j.events.flatMap(e=>e.crew||[]))];
   };
   // ---- Contracteurs ----
@@ -8031,6 +8034,14 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     j.label = (j.ficheJob && j.ficheJob.nom) || [...j.cles].map(persLabelJob).find(Boolean) || (j.first ? MOIS[+j.first.slice(5,7)]+' '+j.first.slice(0,4) : 'Job');
   }));
   Object.values(contr).forEach(c=>c.listeJobs.forEach(j=>{ j.label = cvSansInit(j.nom) || j.po || 'Job'; }));
+  // v169 : jobs en ordre de visite — à venir d'abord (la plus proche en premier), puis de la visite la plus récente à la plus ancienne ; sans visite à la fin
+  const ordreVisite = l => l.sort((a,b)=>{ const ra = a.prochaine && !a.derniere ? 0 : a.derniere ? 1 : 2, rb = b.prochaine && !b.derniere ? 0 : b.derniere ? 1 : 2;
+    if(ra!==rb) return ra-rb;
+    if(ra===0) return a.prochaine.localeCompare(b.prochaine);
+    if(ra===1) return b.derniere.localeCompare(a.derniere);
+    return String(b.last||'').localeCompare(String(a.last||'')); });
+  Object.values(contr).forEach(c=>ordreVisite(c.listeJobs));
+  pers.forEach(p=>ordreVisite(p.listeJobs));
   pers.sort((a,b)=>a.nom.localeCompare(b.nom,'fr',{sensitivity:'base'}));   // v154 : ordre alphabétique
   // v157 : un courriel sans nom → le client dont le nom se lit dans le courriel (olivierboudreau25@… → Olivier Boudreau, cgagneleclerc@… → Catherine Gagné-Leclerc)
   const nommes = pers.filter(p=>!p.sansNom && !p.masque);
@@ -8513,7 +8524,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr}){
           <div style={{minWidth:0}}>
             {regroupe && <input type="checkbox" readOnly checked={regroupe.has(j.key)} style={{width:15,height:15,marginRight:6,verticalAlign:'middle'}}/>}
             <b>{j.label}</b>{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}{j.ficheJob && <span title="Nom choisi par toi" style={{fontSize:11}}> 📇</span>}
-            <div className="muted" style={{fontSize:12}}>{[j.adresse, j.first ? cvFmtDay(j.first)+(j.last && j.last!==j.first ? ' → '+cvFmtDay(j.last) : '')+' '+j.last.slice(0,4) : '', j.passages ? j.passages+' passage'+(j.passages>1?'s':'') : '', j.equipe.length ? j.equipe.map(n=>n.split(' ')[0]).join(', ') : ''].filter(Boolean).join(' · ')}</div>
+            <div className="muted" style={{fontSize:12}}>{[j.adresse, j.derniere ? 'dernière visite '+cvFmtDay(j.derniere)+' '+j.derniere.slice(0,4) : '', j.prochaine ? 'prochaine '+cvFmtDay(j.prochaine) : '', !j.derniere && !j.prochaine && j.first ? cvFmtDay(j.first)+(j.last && j.last!==j.first ? ' → '+cvFmtDay(j.last) : '')+' '+j.last.slice(0,4) : '', j.passages ? j.passages+' passage'+(j.passages>1?'s':'') : '', j.equipe.length ? j.equipe.map(n=>n.split(' ')[0]).join(', ') : ''].filter(Boolean).join(' · ')}</div>
           </div>
           <div style={{textAlign:'right',fontSize:12.5,fontVariantNumeric:'tabular-nums'}}>Facturé <b>{cvMoney(j.facture)}</b><div className="muted" style={{fontSize:11.5}}>Achats {cvMoney(j.cout)}{j.reg && j.reg.ht ? ' · PO '+cvMoney(j.reg.ht) : ''}</div></div>
         </div>
