@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v159';
+const APP_VERSION = 'v160';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6441,7 +6441,7 @@ function equipeNom(k){ if(k==='autre') return 'À attitrer'; const n = CREW_COLO
 function equipeCouleur(k){ return k==='autre' ? 'var(--muted)' : (GCAL_COLOR_MAP[k]||'var(--muted)'); }
 function equipeRang(k){ const i = EQUIPES_ORDRE.indexOf(k); return i<0 ? (k==='autre' ? 99 : 50) : i; }
 const PHASES = [['ROUGH','ROUGH'],['FINITION','FINITION'],['FINALE','FINITION'],['SERV','SERV'],['SERVICE','SERV'],['AJUSTEMENTS','AJUST'],['AJUSTEMENT','AJUST'],['RAPUP','RAPUP'],['DÉMO','DÉMO'],['DEMO','DÉMO']];
-const CLIENT_IGNORE = /^(mon plan|plan de la semaine|topo|ma journée|congé|vacances|prep|préparation)/i;
+const CLIENT_IGNORE = /^(off\b|mon plan|plan de la semaine|topo|ma journée|congé|vacances|prep|préparation)/i;   // v160 : « OFF Adèle », « OFF WILL » = congés, pas des jobs
 const CREW_CAL = 'saranelectrique@gmail.com';
 // Calendrier « En Attente » : jobs à faire mais pas encore cédulées (la date est un samedi provisoire).
 const EN_ATTENTE_CAL = 'c_7d3dd0732b25a3afd30d0f2c453bef2d31a41b08a6d7112b08accea16ff49daf@group.calendar.google.com';
@@ -8263,8 +8263,11 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi}){
   const ouvrirEdit = () => setEdit({nom:c.nom, alias:fiche ? fiche.alias.join(' ; ') : (pers ? c.noms.filter(n=>n!==c.nom).join(' ; ') : ''),
     adresse:fiche ? fiche.adresse : (pers ? (c.adresses[0]||'') : ''), ville:fiche ? fiche.ville : '', tel:fiche ? fiche.tel : (pers ? c.tel : ''),
     courriel:fiche ? fiche.courriel : (pers ? c.courriel : ''), notes:fiche ? fiche.notes : ''});
-  const sauver = () => ecrire([{...(fiche||{}), type:'Client', code:ficheCode, nom:edit.nom.trim()||c.nom, alias:edit.alias.split(/\s*;\s*/).map(x=>x.trim()).filter(Boolean),
-    adresse:edit.adresse, ville:edit.ville, tel:edit.tel, courriel:edit.courriel, notes:edit.notes}], 'Fiche de '+(edit.nom||c.nom)+' enregistrée.').then(ok=>ok&&setEdit(null));
+  // v160 : l'ancien nom reste dans « Aussi écrit », sinon la fiche ne retrouve plus les jobs et factures écrites sous l'ancien nom
+  const sauver = () => { const nouveau = edit.nom.trim()||c.nom;
+    const alias = [...new Set([...edit.alias.split(/\s*;\s*/).map(x=>x.trim()), ...(pers ? [c.nom, ...c.noms] : [])].filter(x=>x && !/@/.test(x) && x!==nouveau))];
+    return ecrire([{...(fiche||{}), type:'Client', code:ficheCode, nom:nouveau, alias,
+    adresse:edit.adresse, ville:edit.ville, tel:edit.tel, courriel:edit.courriel, notes:edit.notes}], 'Fiche de '+nouveau+' enregistrée.').then(ok=>ok&&setEdit(null)); };
   const masquer = () => ecrire([{type:'Masqué', code:'PART', nom:c.nom, alias:c.noms}], c.nom+' est masqué du répertoire.');
   const basculer = () => ecrire([{...(fiche || {alias:c.noms.filter(n=>n!==c.nom), tel:c.tel, courriel:c.courriel}), type:'Client', code:c.commerce ? 'PART' : 'COMMERCE', nom:c.nom}],
     c.nom+(c.commerce ? ' est maintenant dans les particuliers.' : ' est maintenant dans les commerces.'));
