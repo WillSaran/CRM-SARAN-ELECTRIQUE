@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v150';
+const APP_VERSION = 'v151';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6521,7 +6521,7 @@ function useClientsData(cfg, refreshKey){
         const readSheet = (id, nom, range) => id
           ? delai(Promise.resolve(window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:range||'A1:Z'})).then(r=>r.result.values||[], ()=>[]), nom, [])
           : Promise.resolve([]);
-        const [events, regRows, facRows, apRows, coRows, acRows, liRows, flRows, arRows, doRows] = await Promise.all([
+        const [events, regRows, facRows, apRows, coRows, acRows, liRows, flRows, arRows, doRows, fiRows, soRows] = await Promise.all([
           delai(listCalendarEventsRange(calIds, min.toISOString(), max.toISOString()), 'agenda', []),
           readSheet(cfg.memoireJobsSpreadsheetId, 'registre des jobs'),
           readSheet(cfg.memoireFacturesSpreadsheetId, 'registre des factures'),
@@ -6531,8 +6531,13 @@ function useClientsData(cfg, refreshKey){
           readSheet(cfg.memoireAchatsSpreadsheetId, 'articles', 'Lignes!A1:F'),
           readSheet(cfg.memoireFacturesSpreadsheetId, 'articles facturés', 'Lignes!A1:F'),
           readSheet(cfg.memoireJobsSpreadsheetId, 'archives', 'Archives!A1:C'),
-          readSheet(cfg.memoireAchatsSpreadsheetId, 'soumissions', 'Documents!A1:J')
+          readSheet(cfg.memoireAchatsSpreadsheetId, 'soumissions', 'Documents!A1:J'),
+          readSheet(cfg.memoireJobsSpreadsheetId, 'fiches', 'Fiches!A1:L'),
+          readSheet(cfg.memoireJobsSpreadsheetId, 'soumissions envoyées', 'Soumissions!A1:M')
         ]);
+        // v151 : fiches clients/jobs (onglet privé « Fiches ») et soumissions/OT envoyés (pour le Répertoire)
+        const fiches = lireFiches(fiRows);
+        const soumissions = soRows.slice(1).filter(r=>r[3]||r[0]).map(r=>({cle:r[0]||'', type:r[1]||'', date:r[2]||'', no:r[3]||'', client:r[4]||'', courriel:r[5]||'', sujet:r[6]||'', extrait:r[7]||'', montant:cvNum(r[8]), pdf:r[9]||'', lien:r[10]||'', statut:r[12]||''}));
         // Soumissions, relevés de compte, confirmations des fournisseurs (onglet « Documents » du registre des achats)
         const documents = doRows.slice(1).filter(r=>r[0]).map(r=>({fournisseur:r[0], type:r[1]||'', num:r[2]||'', date:r[3]||'', ref:r[4]||'', total:cvNum(r[5]), pdf:r[6]||'', fichier:r[7]||''}));
         // Fils de courriels par PO (onglet « Courriels », rempli par Apps Script)
@@ -6543,7 +6548,9 @@ function useClientsData(cfg, refreshKey){
         const archives = {}; arRows.slice(1).forEach((r,i)=>{ if(r[0]) archives[r[0]]=i+2; });
         const facLignes = {}; flRows.slice(1).forEach(r=>{ if(r[0]) (facLignes[r[0]]=facLignes[r[0]]||[]).push({codes:r[1]||'', desc:r[2]||'', qte:cvNum(r[3])||0, prix:cvNum(r[4])||0, montant:cvNum(r[5])||0}); });
         const articles = {}; liRows.slice(1).forEach(r=>{ if(r[0]&&r[1]) (articles[r[0]+'|'+r[1]]=articles[r[0]+'|'+r[1]]||[]).push({code:r[2]||'', desc:r[3]||'', qte:cvNum(r[4])||0, montant:cvNum(r[5])||0}); });
+        const jobAlias = ficheJobAlias(fiches);
         const achats = acRows.slice(1).map((r,i)=>({row:i+2, fournisseur:r[0]||'', num:r[1]||'', date:r[2]||'', ref:r[3]||'', st:cvNum(r[4])||0, total:cvNum(r[5])||0, pdf:r[6]||'', propose:cvDest(r[7]), job:cvDest(r[8]), part: r[9]!==undefined && r[9]!=='' ? cvNum(r[9]) : 100, statut:r[10]||'', recue:r[11]||''})).filter(a=>a.fournisseur).map(a=>({...a, articles: articles[a.fournisseur+'|'+a.num]||null}));
+        achats.forEach(a=>{ const c = jobAlias[ficheNorm(a.job)]; if(c) a.job = c; const pr = jobAlias[ficheNorm(a.propose)]; if(pr) a.propose = pr; });   // jobs regroupées (fiches)
         if(lent.length && alive) setState(s=>({...s, lent}));
         // Appels de service / OT papier : numéro -> photo, et facture -> appels
         const ah=(apRows[0]||[]).map(h=>cvNorm(h)), ac=re=>ah.findIndex(h=>re.test(h));
@@ -6577,8 +6584,9 @@ function useClientsData(cfg, refreshKey){
           client:g(r,'cli'), tel:g(r,'tel'), courriel:g(r,'mail'), projet:g(r,'proj'), note:g(r,'note')
         })).filter(r=>!/^fusionn/i.test(cvNorm(r.statut)));
         Object.defineProperty(registry,'__colStatut',{value: ix.st>=0 ? ix.st : Math.max(head.length, 12), enumerable:false});
-        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent, t:Date.now(), force};
-        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent});
+        Object.defineProperty(registry,'__fiches',{value: fiches, enumerable:false});
+        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent, fiches, soumissions, t:Date.now(), force};
+        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent, fiches, soumissions});
       }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}, appels:{}}); }
     })();
     return ()=>{alive=false};
@@ -6629,6 +6637,7 @@ function cvBuildClients(events, registry, factures){
       j.events.push(p);
     }
   });
+  ficheAppliquerJobs(jobs, registry.__fiches, regByPO);   // v151 : jobs regroupées / renommées dans le Répertoire
   // Facture inscrite sur plus d'une job = à vérifier.
   const facJobs = {};
   Object.values(jobs).forEach(j=>j.events.forEach(e=>String(e.fac).split(/[\s,–-]+/).filter(t=>/\d/.test(t)).forEach(f=>{ (facJobs[f]=facJobs[f]||new Set()).add(j.id); })));
@@ -7705,6 +7714,563 @@ function SettingsView({cfg, setCfg, toast}){
   </div>;
 }
 
+// ── v151 : Répertoire — fiches clients (particuliers + contracteurs) et fournisseurs ─────────────────
+// Onglet privé « Fiches » de La mémoire — Jobs (jamais dans le code) :
+//   Type | Nom | Code | Aussi écrit | Adresse | Ville | Téléphone | Courriel | Notes | PO | Client | Mis à jour
+//   Type « Client »      : un particulier (Code PART) ou un contracteur (Code ASC…) — Aussi écrit = autres façons d'écrire son nom
+//   Type « Job »         : regroupe/renomme des jobs (Aussi écrit = les noms d'origine) ; pour un particulier, Client = son nom
+//   Type « Fournisseur » : notes sur un fournisseur
+//   Type « Masqué »      : un nom à cacher du répertoire (ex. « Lettrage du camion 14 ») ; « Retiré » = ligne désactivée
+// L'agenda n'est jamais modifié : le CRM lit seulement cette table.
+const FICHE_ENTETE = ['Type','Nom','Code','Aussi écrit','Adresse','Ville','Téléphone','Courriel','Notes','PO','Client','Mis à jour'];
+const ficheNorm = x => cvNorm(cvSansInit(String(x||'')));
+function ficheNomJob(f){ return f.code==='PART' ? [f.client, f.nom].filter(Boolean).join(' — ') : f.nom; }
+function lireFiches(rows){
+  const F = {clients:[], jobs:[], fourn:[], masques:[]};
+  (rows||[]).slice(1).forEach((r,i)=>{
+    const t = cvNorm(r[0]); if(!t) return;
+    const f = {row:i+2, type:String(r[0]||''), nom:String(r[1]||'').trim(), code:String(r[2]||'').trim().toUpperCase(),
+      alias:String(r[3]||'').split(/\s*;\s*/).map(x=>x.trim()).filter(Boolean), adresse:r[4]||'', ville:r[5]||'', tel:r[6]||'', courriel:String(r[7]||'').trim(),
+      notes:r[8]||'', po:String(r[9]||'').trim(), client:String(r[10]||'').trim()};
+    if(f.code==='PY') f.code = 'PAY';
+    if(t==='job'){ f.canon = cvJobCle({code:f.code||'PART'}, {name:ficheNomJob(f), po:f.po}); f.aliasN = new Set([...f.alias, f.canon, ficheNomJob(f)].map(ficheNorm).filter(Boolean)); F.jobs.push(f); }
+    else if(t==='fournisseur') F.fourn.push(f);
+    else if(t==='client') F.clients.push(f);
+    else if(t==='masque') F.masques.push(f);
+  });
+  return F;
+}
+// Nom d'origine d'une destination d'achat → nom de la job regroupée (« ASC Colibri » → « ASC Le Colibri ASC-012 »)
+function ficheJobAlias(F){
+  const m = {};
+  ((F && F.jobs)||[]).forEach(f=>f.aliasN.forEach(a=>{ m[a] = f.canon; }));
+  return m;
+}
+// Regroupe dans cvBuildClients les jobs que tu as regroupées / renommées (fiches « Job »).
+function ficheAppliquerJobs(jobs, F, regByPO){
+  ((F && F.jobs)||[]).forEach(f=>{
+    const code = f.code || 'PART';
+    const membres = Object.values(jobs).filter(j=>j.client===code && (f.aliasN.has(ficheNorm(cvJobCle({code}, j))) || f.aliasN.has(ficheNorm(j.name)) || (f.po && j.po===f.po)));
+    if(!membres.length) return;
+    const p = membres.find(j=>f.po && j.po===f.po) || membres.find(j=>j.po) || membres[0];
+    membres.forEach(j=>{ if(j===p) return; p.events.push(...j.events); if(!p.reg && j.reg) p.reg = j.reg; delete jobs[j.id]; });
+    p.name = ficheNomJob(f); p.po = f.po; p.reg = (f.po && regByPO[f.po]) || p.reg; p.ficheJob = f.row;
+  });
+}
+
+// ── Personnes (particuliers) ────────────────────────────────────────────
+// « Alain Cuisine Robichaud », « Alain Borne Robichaud » → même personne (alain robichaud), job « Cuisine » / « Borne ».
+const REP_MOTS_JOB = new Set(['cuisine','cuisines','borne','bornes','sdb','salle','bain','bains','garage','spa','piscine','thermopompe','panneau','entree','electrique',
+  'extra','rough','finition','finale','serv','service','ajustement','ajustements','ajust','soussol','ssol','chauffage','plinthe','plinthes','reno','renovation','cabanon',
+  'generatrice','agrandissement','extension','chalet','condo','app','appt','appartement','unite','luminaire','luminaires','eclairage','exterieur','interieur','demo','rapup',
+  'prep','soumission','estimation','phase','deck','patio','tempo','temporaire','raccordement','recharge','rdc','etage','sdb2','fixtures','thermostat','thermostats','prise','prises']);
+function repMots(nom){
+  const brut = String(nom||'').replace(/\s+—\s+/g,' ');
+  const toks = cvSansInit(brut).split(/[\s,\/()+&.]+/).filter(Boolean);
+  const garde = [], job = [];
+  for(const t of toks){
+    if(/\d/.test(t)) break;                                  // une adresse commence : on arrête (« Guy Bergeron 123 rue… »)
+    const n = cvNorm(t); if(!n) continue;
+    if(REP_MOTS_JOB.has(n)) job.push(t); else garde.push(t);
+  }
+  return {garde, job};
+}
+function persCle(nom){ const g = repMots(nom).garde.map(cvNorm).filter(Boolean); return g.join(' '); }
+function persNomPropre(nom){ const g = repMots(nom).garde.join(' ').replace(/^[\s\-–—,]+|[\s\-–—,]+$/g,''); return g ? cvTitleCase(g) : ''; }
+function persLabelJob(nom){ const j = repMots(nom).job; return j.length ? cvTitleCase(j.join(' ')) : ''; }
+// Courriel d'une compagnie → contracteur (pour les factures/soumissions envoyées à leur courriel)
+const CLIENT_DOMAINES = {'payneconstruction.ca':'PAY','actiplus.ca':'ASC','gestiongp.ca':'GGP','immo2d.com':'GOU'};
+function repCodeCourriel(e, F){
+  const d = String(e||'').toLowerCase().split('@')[1] || ''; if(!d) return '';
+  const f = ((F && F.clients)||[]).find(x=>x.code && x.code!=='PART' && String(x.courriel).toLowerCase().split(/[\s,;]+/).some(c=>c.split('@')[1]===d));
+  return f ? f.code : (CLIENT_DOMAINES[d] || '');
+}
+const REP_SPECIAL = j => !j || CV_DESTS.includes(j) || j==='Éclairage Saran' || /^Employé — /.test(j);
+function repProche(x, y){ if(x===y) return true; if(Math.abs(x.length-y.length)>1 || Math.min(x.length,y.length)<5) return false; let i=0, j=0, d=0; while(i<x.length && j<y.length){ if(x[i]===y[j]){ i++; j++; continue; } if(++d>1) return false; if(x.length>y.length) i++; else if(y.length>x.length) j++; else { i++; j++; } } return d + (x.length-i) + (y.length-j) <= 1; }
+
+// Construit le répertoire à partir de tout ce que le CRM connaît (agenda, registre des jobs, factures envoyées, achats, soumissions, fiches).
+function repConstruire({clients, registry, factures, achats, soumissions, F}){
+  F = F || {clients:[], jobs:[], fourn:[], masques:[]};
+  const today = cvDay(new Date().toISOString());
+  const jobFiche = (code, cle, po) => F.jobs.find(f=>(f.code||'PART')===code && ((f.po && po && f.po===po) || f.aliasN.has(ficheNorm(cle))));
+  // ---- Jobs (communes aux contracteurs et aux particuliers) ----
+  const nouvelleJob = (code, key) => ({key, code, nom:'', po:'', adresse:'', cles:new Set(), events:[], factures:[], achats:[], reg:null, ficheJob:null, first:'', last:''});
+  const ajouterJob = (jobsMap, code, src) => {        // src : {cle, nom, po, adresse, events, reg}
+    const fj = jobFiche(code, src.cle, src.po);
+    const key = fj ? 'F'+fj.row : src.po ? 'P'+src.po : 'N'+ficheNorm(src.nom || src.cle);
+    const j = jobsMap[key] || (jobsMap[key] = nouvelleJob(code, key));
+    if(fj){ j.ficheJob = fj; j.nom = fj.code==='PART' ? (fj.nom || '') : fj.nom; j.po = fj.po || j.po; }
+    if(!j.nom && src.nom) j.nom = src.nom;
+    if(!j.po && src.po) j.po = src.po;
+    if(!j.adresse && src.adresse) j.adresse = src.adresse;
+    if(src.reg && !j.reg) j.reg = src.reg;
+    if(src.cle) j.cles.add(src.cle);
+    if(src.events) j.events.push(...src.events.filter(e=>!e.attente));
+    return j;
+  };
+  // Une job nommée sans PO qui porte exactement le même nom qu'une job avec PO = la même
+  const fusionNoms = jobsMap => {
+    const avecPO = Object.values(jobsMap).filter(j=>j.key[0]==='P');
+    Object.values(jobsMap).filter(j=>j.key[0]==='N').forEach(j=>{
+      const c = avecPO.filter(p=>ficheNorm(p.nom)===ficheNorm(j.nom)); if(c.length!==1) return;
+      const p = c[0]; j.cles.forEach(x=>p.cles.add(x)); p.events.push(...j.events); p.factures.push(...j.factures); p.achats.push(...j.achats); if(!p.adresse) p.adresse = j.adresse; delete jobsMap[j.key];
+    });
+  };
+  const finirJob = j => {
+    j.events.sort((a,b)=>a.day.localeCompare(b.day));
+    const dates = [...j.events.map(e=>e.day), ...j.factures.map(f=>f.date), ...j.achats.map(a=>a.date||a.recue)].filter(Boolean).sort();
+    j.first = dates[0] || ''; j.last = dates[dates.length-1] || '';
+    j.facture = j.factures.filter(f=>!f.annulee).reduce((t,f)=>t+(f.ht||0),0);
+    j.cout = j.achats.reduce((t,a)=>t+(a.st||0)*((a.part==null?100:a.part)/100),0);
+    j.passages = new Set(j.events.map(e=>e.day)).size;
+    j.equipe = [...new Set(j.events.flatMap(e=>e.crew||[]))];
+  };
+  // ---- Contracteurs ----
+  const contr = {};
+  const C = code => contr[code] || (contr[code] = {type:'contr', id:'C:'+code, code, nom:CLIENT_CODES[code]||code, contact:CLIENT_CONTACT[code]||'',
+    fiche:F.clients.find(f=>f.code===code)||null, jobs:{}, facturesSans:[], soum:[]});
+  const codeDe = c => { c = String(c||'').toUpperCase(); if(c==='PY') c='PAY'; return CLIENT_CODES[c] ? c : ''; };
+  Object.values(clients||{}).forEach(c=>{ if(c.code==='PART') return; c.jobs.forEach(j=>ajouterJob(C(c.code).jobs, c.code, {cle:cvJobCle(c,j), nom:j.name, po:j.po, adresse:j.address, events:j.events, reg:j.reg})); });
+  (registry||[]).forEach(r=>{ const code = codeDe(r.code); if(!code) return;
+    ajouterJob(C(code).jobs, code, {cle:cvJobCle({code}, {name:r.nom, po:r.po}), nom:cvTitleCase(r.nom||''), po:r.po, adresse:[r.adresse,r.ville].filter(Boolean).join(', '), reg:r}); });
+  // ---- Personnes : union de noms et de courriels ----
+  const parent = {}; const trouve = x => { while(parent[x] && parent[x]!==x){ parent[x] = parent[parent[x]] || parent[x]; x = parent[x]; } return x; };
+  const unir = (a, b) => { if(!a || !b) return; parent[a] = parent[a] || a; parent[b] = parent[b] || b; const ra = trouve(a), rb = trouve(b); if(ra!==rb) parent[rb] = ra; };
+  const noeud = x => { if(x) parent[x] = parent[x] || x; return x; };
+  const nNom = nom => { const k = persCle(nom); return k && k.replace(/\s/g,'').length>=3 ? 'k:'+k : ''; };
+  const nMail = e => { e = String(e||'').trim().toLowerCase(); return /@/.test(e) ? 'e:'+e : ''; };
+  const recs = [];   // {noeud, nom, courriel, tel, adresse, kind, obj}
+  const rec = r => { r.noeud = noeud(r.nNom || r.nMail); if(r.nNom && r.nMail) unir(r.nNom, r.nMail); if(r.noeud) recs.push(r); return r; };
+  const masques = new Set(F.masques.flatMap(f=>[f.nom, ...f.alias]).map(x=>persCle(x)).filter(Boolean));
+  F.clients.filter(f=>f.code==='PART' || !f.code).forEach(f=>{ const n = 'f:'+f.row; noeud(n);
+    [f.nom, ...f.alias].forEach(a=>{ const k = nNom(a); if(k) unir(n, k); });
+    String(f.courriel||'').split(/[\s,;]+/).forEach(e=>{ const m = nMail(e); if(m) unir(n, m); }); });
+  const part = (clients||{}).PART;
+  if(part) part.jobs.forEach(j=>rec({nNom:nNom(j.name), nom:j.name, adresse:j.address, kind:'job', obj:j, tel:(j.reg&&j.reg.tel)||'', courriel:(j.reg&&j.reg.courriel)||''}));
+  (registry||[]).forEach(r=>{ if(codeDe(r.code) || !r.nom) return; rec({nNom:nNom(r.nom), nMail:nMail(r.courriel), nom:r.nom, tel:r.tel, courriel:r.courriel, adresse:[r.adresse,r.ville].filter(Boolean).join(', '), kind:'reg', obj:r}); });
+  Object.values(factures||{}).forEach(f=>{
+    const code = codeDe(f.client);
+    if(code){ const po = /^aucun$/i.test(f.po) ? '' : f.po; const j = ajouterJob(C(code).jobs, code, {cle:cvJobCle({code}, {name:cvTitleCase(f.nom||''), po}), nom:cvTitleCase(f.nom||''), po}); j.factures.push(f); return; }
+    const cc = repCodeCourriel(f.client, F); if(cc){ C(cc).facturesSans.push(f); return; }
+    if(!f.nom && !/@/.test(f.client)) return;
+    rec({nNom:nNom(f.nom), nMail:nMail(f.client), nom:f.nom, courriel:/@/.test(f.client)?f.client:'', kind:'fac', obj:f});
+  });
+  (soumissions||[]).forEach(s=>{
+    const cc = repCodeCourriel(s.courriel, F) || repCodeCourriel(s.client, F); if(cc){ C(cc).soum.push(s); return; }
+    const nom = /@/.test(s.client) ? '' : s.client;
+    rec({nNom:nNom(nom), nMail:nMail(s.courriel || (/@/.test(s.client)?s.client:'')), nom, courriel:s.courriel, kind:'soum', obj:s});
+  });
+  // Achats : destination « CODE nom PO » → job du contracteur ; sinon le nom d'un particulier déjà connu
+  const persConnues = new Set(Object.keys(parent).filter(x=>x[0]==='k'));
+  (achats||[]).forEach(a=>{
+    const d = String(a.job||'').trim(); if(REP_SPECIAL(d)) return;
+    const m = d.match(/^(\S+)\s+(.*)$/); const code = m ? codeDe(m[1]) : '';
+    if(code){ const reste = m[2], po = cvPO(reste) || ((reste.match(/\b[A-Z0-9]{2,4}-\d{3}\b/)||[])[0]||''); const nom = (po ? reste.replace(po,'') : reste).trim();
+      const j = ajouterJob(C(code).jobs, code, {cle:d, nom:cvTitleCase(nom), po}); j.achats.push(a); return; }
+    const k = nNom(d); if(k && persConnues.has(k)) rec({nNom:k, nom:d, kind:'achat', obj:a});
+  });
+  Object.values(contr).forEach(c=>{ fusionNoms(c.jobs); Object.values(c.jobs).forEach(finirJob);
+    c.listeJobs = Object.values(c.jobs).sort((a,b)=>String(b.last).localeCompare(String(a.last)));
+    c.facture = c.listeJobs.reduce((t,j)=>t+j.facture,0) + c.facturesSans.filter(f=>!f.annulee).reduce((t,f)=>t+(f.ht||0),0);
+    c.cout = c.listeJobs.reduce((t,j)=>t+j.cout,0);
+    c.last = [c.listeJobs[0]&&c.listeJobs[0].last, ...c.facturesSans.map(f=>f.date)].filter(Boolean).sort().pop() || '';
+  });
+  // Groupes de personnes
+  const groupes = {};
+  recs.forEach(r=>{ const g = trouve(r.noeud); (groupes[g] = groupes[g] || []).push(r); });
+  const ficheDe = g => F.clients.find(f=>(f.code==='PART' || !f.code) && trouve('f:'+f.row)===g) || null;
+  const pers = [];
+  Object.entries(groupes).forEach(([g, rs])=>{
+    const fiche = ficheDe(g);
+    const variantes = {}; rs.forEach(r=>{ if(r.nom && !/@/.test(r.nom)){ const p = persNomPropre(r.nom); if(p) variantes[p] = (variantes[p]||0) + (r.kind==='reg'||r.kind==='fac'||r.kind==='soum' ? 2 : 1); } });
+    const meilleur = Object.entries(variantes).sort((a,b)=>b[1]-a[1] || b[0].split(' ').length-a[0].split(' ').length || b[0].length-a[0].length)[0];
+    const courriels = [...new Set(rs.map(r=>String(r.courriel||'').toLowerCase()).filter(e=>/@/.test(e)))];
+    const nom = (fiche && fiche.nom) || (meilleur && meilleur[0]) || courriels[0] || '';
+    if(!nom) return;
+    const p = {type:'pers', id:'P:'+g, nom, fiche, noms:[...new Set(rs.map(r=>r.nom).filter(Boolean))], courriels,
+      tels:[...new Set(rs.map(r=>r.tel).filter(Boolean))], adresses:[...new Set(rs.map(r=>r.adresse).filter(Boolean))],
+      jobs:{}, facturesSans:[], soum:[], masque:false};
+    p.masque = !fiche && [...new Set(rs.map(r=>persCle(r.nom)).filter(Boolean))].some(k=>masques.has(k));
+    // Jobs du particulier
+    rs.forEach(r=>{
+      if(r.kind==='job') ajouterJob(p.jobs, 'PART', {cle:cvJobCle({code:'PART'}, r.obj), nom:r.obj.name, po:r.obj.po, adresse:r.obj.address, events:r.obj.events, reg:r.obj.reg});
+      else if(r.kind==='reg' && r.obj.po) ajouterJob(p.jobs, 'PART', {cle:r.obj.nom, nom:r.obj.nom, po:r.obj.po, adresse:r.adresse, reg:r.obj});
+      else if(r.kind==='achat'){ const d = r.obj.job, po = cvPO(d); const j = ajouterJob(p.jobs, 'PART', {cle:d, nom:(po ? d.replace(po,'') : d).trim(), po}); j.achats.push(r.obj); }
+      else if(r.kind==='soum') p.soum.push(r.obj);
+    });
+    fusionNoms(p.jobs);
+    const lj = Object.values(p.jobs);
+    lj.forEach(j=>{ const per = j.events.map(e=>e.day).sort(); j.d0 = per[0]||''; j.d1 = per[per.length-1]||''; });
+    // Factures envoyées : même nom qu'une job, sinon la job dont les passages entourent la date, sinon la seule job
+    rs.filter(r=>r.kind==='fac').forEach(r=>{ const f = r.obj;
+      let j = f.nom && lj.find(x=>[...x.cles, x.nom].some(c=>ficheNorm(c)===ficheNorm(f.nom)));
+      if(!j && f.date) j = lj.filter(x=>x.d0 && f.date>=cvDay(new Date(new Date(x.d0+'T12:00:00').getTime()-7*864e5).toISOString()) && f.date<=cvDay(new Date(new Date(x.d1+'T12:00:00').getTime()+30*864e5).toISOString()))
+        .sort((a,b)=>Math.abs(new Date(a.d1)-new Date(f.date))-Math.abs(new Date(b.d1)-new Date(f.date)))[0];
+      if(!j && lj.length===1) j = lj[0];
+      if(j) j.factures.push(f); else p.facturesSans.push(f);
+    });
+    lj.forEach(finirJob);
+    p.listeJobs = lj.sort((a,b)=>String(b.last).localeCompare(String(a.last)));
+    p.facture = lj.reduce((t,j)=>t+j.facture,0) + p.facturesSans.filter(f=>!f.annulee).reduce((t,f)=>t+(f.ht||0),0);
+    p.cout = lj.reduce((t,j)=>t+j.cout,0);
+    p.last = [...lj.map(j=>j.last), ...p.facturesSans.map(f=>f.date), ...p.soum.map(s=>s.date)].filter(Boolean).sort().pop() || '';
+    p.adresse = (fiche && [fiche.adresse, fiche.ville].filter(Boolean).join(', ')) || p.adresses[0] || (lj.find(j=>j.adresse)||{}).adresse || '';
+    p.tel = (fiche && fiche.tel) || p.tels[0] || '';
+    p.courriel = (fiche && fiche.courriel) || courriels[0] || '';
+    p.cle = persCle(p.nom);
+    pers.push(p);
+  });
+  // Étiquette d'une job de particulier : ce que tu as écrit (« Cuisine »), sinon le mois (« Août 2026 »)
+  const MOIS = ['','Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+  pers.forEach(p=>p.listeJobs.forEach(j=>{
+    j.label = (j.ficheJob && j.ficheJob.nom) || [...j.cles].map(persLabelJob).find(Boolean) || (j.first ? MOIS[+j.first.slice(5,7)]+' '+j.first.slice(0,4) : 'Job');
+  }));
+  Object.values(contr).forEach(c=>c.listeJobs.forEach(j=>{ j.label = cvSansInit(j.nom) || j.po || 'Job'; }));
+  pers.sort((a,b)=>String(b.last).localeCompare(String(a.last)) || a.nom.localeCompare(b.nom,'fr'));
+  return {contr:Object.values(contr).sort((a,b)=>String(b.last).localeCompare(String(a.last))), pers};
+}
+// Possibles doublons : même nom de famille et prénom pareil / initiale / une lettre de différence
+function repDoublonsPers(pers, ignores){
+  const out = [], L = pers.filter(p=>!p.masque).map(p=>({p, w:p.cle.split(' ').filter(Boolean)})).filter(x=>x.w.length);
+  for(let i=0;i<L.length;i++) for(let k=i+1;k<L.length;k++){
+    const a = L[i], b = L[k]; if(a.p.fiche && b.p.fiche && a.p.fiche.row===b.p.fiche.row) continue;
+    const id = [a.p.id, b.p.id].sort().join('|'); if(ignores && ignores.has(id)) continue;
+    const la = a.w[a.w.length-1], lb = b.w[b.w.length-1], fa = a.w[0], fb = b.w[0];
+    let ok = false;
+    if(a.w.length>=2 && b.w.length>=2 && la.length>=4 && repProche(la, lb)) ok = fa===fb || repProche(fa, fb) || (fa.length===1 && fb[0]===fa) || (fb.length===1 && fa[0]===fb);
+    else if(a.w.length===1 && b.w.length>=2 && la.length>=5) ok = false;
+    else ok = a.p.cle.replace(/\s/g,'').length>=8 && repProche(a.p.cle.replace(/\s/g,''), b.p.cle.replace(/\s/g,''));
+    if(ok) out.push({id, a:a.p, b:b.p});
+  }
+  return out;
+}
+// Jobs d'un même client qui semblent être la même (ASC Colibri ×3)
+function repDoublonsJobs(c){
+  const out = [], L = c.listeJobs;
+  for(let i=0;i<L.length;i++) for(let k=i+1;k<L.length;k++){
+    const a = L[i], b = L[k];
+    if(a.po && b.po && a.po!==b.po) continue;
+    if(!cvMotsNom(a.nom).size || !cvMotsNom(b.nom).size) continue;
+    if(cvMemeJob(a.nom, b.nom)) out.push([a, b]);
+  }
+  return out;
+}
+
+// Écrit (ou met à jour) une ligne de l'onglet « Fiches » — crée l'onglet au besoin.
+async function ficheEcrire(cfg, f){
+  const id = cfg.memoireJobsSpreadsheetId; if(!id) throw new Error('ID de La mémoire — Jobs manquant (Réglages).');
+  const ligne = [f.type, f.nom||'', f.code||'', (f.alias||[]).filter(Boolean).join(' ; '), f.adresse||'', f.ville||'', f.tel||'', f.courriel||'', f.notes||'', f.po||'', f.client||'', new Date().toLocaleString('fr-CA')];
+  if(f.row) return sheetsUpdateRow(id, 'Fiches', f.row, ligne);
+  const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:id, fields:'sheets.properties.title'});
+  if(!(meta.result.sheets||[]).some(x=>x.properties.title==='Fiches')){
+    await window.gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId:id, resource:{requests:[{addSheet:{properties:{title:'Fiches'}}}]}});
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Fiches!A1', valueInputOption:'RAW', resource:{values:[FICHE_ENTETE]}});
+  }
+  return sheetsAppendRow(id, 'Fiches', ligne);
+}
+const repPdf = id => id ? 'https://drive.google.com/file/d/'+id+'/view' : '';
+const repTel = t => 'tel:'+String(t||'').replace(/[^\d+]/g,'');
+function repIgnores(){ try{ return new Set(JSON.parse(localStorage.getItem('crm_rep_ignores')||'[]')); }catch(e){ return new Set(); } }
+function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.setItem('crm_rep_ignores', JSON.stringify([...s])); }catch(e){} }
+
+function RepertoireView({cfg, refreshKey, toast}){
+  const [tick,setTick]=useState(0);
+  const d = useClientsData(cfg, refreshKey+'|r'+tick);
+  const K = useContactsFournisseurs(cfg);
+  const [onglet,setOnglet]=useState(()=>{ try{ return localStorage.getItem('crm_rep_onglet')||'clients'; }catch(e){ return 'clients'; } });
+  const [q,setQ]=useState('');
+  const [sel,setSel]=useState(null);         // id d'un client ou 'F:<fournisseur>'
+  const [busy,setBusy]=useState(false);
+  const [voirTout,setVoirTout]=useState(false);
+  const [masques,setMasques]=useState(false);
+  const [ignores,setIgnores]=useState(repIgnores);
+  const changerOnglet = o => { setOnglet(o); setSel(null); try{ localStorage.setItem('crm_rep_onglet', o); }catch(e){} };
+  const F = d.fiches || {clients:[], jobs:[], fourn:[], masques:[]};
+  const clients = useMemo(()=>cvBuildClients(d.events||[], d.registry||[], d.factures||{}),[d.events, d.registry, d.factures]);
+  const R = useMemo(()=>repConstruire({clients, registry:d.registry||[], factures:d.factures||{}, achats:d.achats||[], soumissions:d.soumissions||[], F}),[clients, d.registry, d.factures, d.achats, d.soumissions, d.fiches]);
+  const doublons = useMemo(()=>repDoublonsPers(R.pers, ignores),[R, ignores]);
+  const ecrire = async (lignes, msg) => {
+    setBusy(true);
+    try{ for(const l of lignes) await ficheEcrire(cfg, l); toast && toast(msg||'Fiche enregistrée.','ok'); setTick(t=>t+1); return true; }
+    catch(e){ toast && toast('Erreur : '+apiErrMsg(e),'err'); return false; }
+    finally{ setBusy(false); }
+  };
+  // ---- Fournisseurs ----
+  const fourn = useMemo(()=>{
+    const m = {};
+    const F0 = n => m[n] || (m[n] = {nom:n, achats:[], docs:[], fiche:F.fourn.find(f=>cvNorm(f.nom)===cvNorm(n))||null});
+    (d.achats||[]).forEach(a=>F0(a.fournisseur).achats.push(a));
+    (d.documents||[]).forEach(x=>F0(x.fournisseur).docs.push(x));
+    Object.keys(K.map||{}).forEach(n=>F0(n));
+    const an = String(new Date().getFullYear());
+    return Object.values(m).map(f=>{ const dt = a => a.date||a.recue||'';
+      f.achats.sort((a,b)=>dt(b).localeCompare(dt(a)));
+      f.annee = f.achats.filter(a=>dt(a).startsWith(an)).reduce((t,a)=>t+(a.st||0),0);
+      f.total = f.achats.reduce((t,a)=>t+(a.st||0),0);
+      f.last = f.achats[0] ? dt(f.achats[0]) : '';
+      return f; }).sort((a,b)=>b.annee-a.annee || String(b.last).localeCompare(String(a.last)));
+  },[d.achats, d.documents, K.map, d.fiches]);
+
+  if(d.loading && !d.events.length) return <div className="card"><div className="spin"></div> Chargement du répertoire…</div>;
+  const nq = cvNorm(q);
+  const trouve = txt => !nq || cvNorm(txt).includes(nq);
+  const texteClient = c => c.type==='contr'
+    ? [c.code, c.nom, c.contact, c.fiche&&c.fiche.tel, c.fiche&&c.fiche.courriel, ...c.listeJobs.flatMap(j=>[j.nom, j.po, j.adresse, ...j.factures.map(f=>f.num)])].join(' ')
+    : [c.nom, ...c.noms, ...c.courriels, ...c.tels, ...c.adresses, c.fiche&&c.fiche.notes, ...c.listeJobs.flatMap(j=>[j.po, j.label, ...j.factures.map(f=>f.num), ...j.achats.map(a=>a.num)]), ...c.facturesSans.map(f=>f.num), ...c.soum.map(s=>s.no)].join(' ');
+  const tous = [...R.contr, ...R.pers];
+  const choisi = sel && sel.startsWith('F:') ? fourn.find(f=>'F:'+f.nom===sel) : tous.find(c=>c.id===sel);
+
+  const entete = <div style={{marginBottom:12}}>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Répertoire</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Tout ce qui se rattache à un client ou à un fournisseur : coordonnées, jobs, factures envoyées, achats et soumissions.</div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+      <button className={'btn btn-sm'+(onglet==='clients'?' btn-p':'')} onClick={()=>changerOnglet('clients')}>👤 Clients ({R.contr.length + R.pers.filter(p=>!p.masque).length})</button>
+      <button className={'btn btn-sm'+(onglet==='fourn'?' btn-p':'')} onClick={()=>changerOnglet('fourn')}>🏭 Fournisseurs ({fourn.length})</button>
+      {!choisi && <input value={q} onChange={e=>setQ(e.target.value)} placeholder={onglet==='clients' ? 'Nom, courriel, téléphone, adresse, PO, no de facture…' : 'Fournisseur…'} style={{flex:'1 1 220px',width:'auto',minWidth:0,padding:'6px 10px'}}/>}
+      {d.maj && <span className="muted" style={{fontSize:11.5}}>mise à jour…</span>}
+    </div>
+  </div>;
+
+  if(choisi) return <div>{entete}
+    <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>setSel(null)}>← Retour à la liste</button>
+    {sel.startsWith('F:') ? <RepFicheFournisseur f={choisi} K={K} toast={toast}/>
+      : <RepFicheClient c={choisi} busy={busy} ecrire={ecrire} R={R}/>}
+  </div>;
+
+  if(onglet==='fourn'){
+    const l = fourn.filter(f=>trouve(f.nom+' '+((K.map[f.nom]||{}).nom||'')));
+    return <div>{entete}
+      <div className="card" style={{padding:0}}>
+        {l.map(f=>{ const k = K.map[f.nom];
+          return <div key={f.nom} onClick={()=>setSel('F:'+f.nom)} style={{padding:'10px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
+            <div><b>{f.nom}</b>{k && k.nom && <span className="muted" style={{fontSize:12}}> · {k.nom}{k.role?' ('+k.role+')':''}</span>}
+              <div className="muted" style={{fontSize:12}}>{f.achats.length} facture{f.achats.length>1?'s':''}{f.docs.length ? ' · '+f.docs.length+' document'+(f.docs.length>1?'s':'') : ''}{f.last ? ' · dernier achat '+cvFmtDay(f.last) : ''}</div></div>
+            <div style={{textAlign:'right',fontSize:12.5}}><b>{cvMoney(f.annee)}</b><div className="muted" style={{fontSize:11}}>cette année (avant taxes)</div></div>
+          </div>; })}
+        {!l.length && <div className="muted" style={{padding:14}}>Aucun fournisseur trouvé.</div>}
+      </div>
+    </div>;
+  }
+
+  const contr = R.contr.filter(c=>trouve(texteClient(c)));
+  const pers = R.pers.filter(p=>(masques || !p.masque) && trouve(texteClient(p)));
+  const montres = voirTout || nq ? pers : pers.slice(0,60);
+  const nbMasques = R.pers.filter(p=>p.masque).length;
+  return <div>{entete}
+    {!!doublons.length && !nq && <RepDoublons doublons={doublons} busy={busy} ecrire={ecrire} onIgnorer={id=>{ repIgnorer(id); setIgnores(repIgnores()); }}/>}
+    {!!contr.length && <><div className="muted" style={{fontSize:12,fontWeight:700,margin:'4px 0 6px',textTransform:'uppercase',letterSpacing:.5}}>Contracteurs</div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(230px,1fr))',gap:8,marginBottom:16}}>
+        {contr.map(c=><div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0}} onClick={()=>setSel(c.id)}>
+          <div><b style={{color:'var(--accent)'}}>{c.code}</b> {c.nom}</div>
+          <div className="muted" style={{fontSize:12}}>{c.contact || (c.fiche&&c.fiche.tel) || ''}</div>
+          <div style={{fontSize:12,marginTop:4}}>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''} · facturé <b>{cvMoney(c.facture)}</b></div>
+        </div>)}
+      </div></>}
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,flexWrap:'wrap',margin:'4px 0 6px'}}>
+      <div className="muted" style={{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:.5}}>Particuliers ({pers.length})</div>
+      {!!nbMasques && <button className="btn btn-sm" onClick={()=>setMasques(!masques)} style={{fontSize:11.5}}>{masques ? 'Cacher les masqués' : '🙈 Voir les masqués ('+nbMasques+')'}</button>}
+    </div>
+    <div className="card" style={{padding:0}}>
+      {montres.map(p=><div key={p.id} onClick={()=>setSel(p.id)} style={{padding:'9px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',opacity:p.masque?.55:1}}>
+        <div style={{minWidth:0}}><b>{p.nom}</b>{p.fiche && <span title="Fiche enregistrée" style={{fontSize:11}}> 📇</span>}
+          <div className="muted" style={{fontSize:12}}>{[p.adresse, p.tel, p.courriel].filter(Boolean).join(' · ') || '—'}</div></div>
+        <div style={{textAlign:'right',fontSize:12}}>{p.listeJobs.length} job{p.listeJobs.length>1?'s':''}{p.facture ? <> · <b>{cvMoney(p.facture)}</b></> : ''}<div className="muted" style={{fontSize:11}}>{p.last ? cvFmtDay(p.last)+' '+p.last.slice(0,4) : ''}</div></div>
+      </div>)}
+      {!pers.length && <div className="muted" style={{padding:14}}>Aucun client trouvé.</div>}
+      {!voirTout && !nq && pers.length>60 && <div style={{padding:10,textAlign:'center'}}><button className="btn btn-sm" onClick={()=>setVoirTout(true)}>Voir les {pers.length-60} autres</button></div>}
+    </div>
+  </div>;
+}
+
+function RepDoublons({doublons, busy, ecrire, onIgnorer}){
+  const [ouvert,setOuvert]=useState(false);
+  const fusionner = (garde, autre) => {
+    const base = garde.fiche || {type:'Client', code:'PART'};
+    const alias = [...new Set([...(base.alias||[]), ...garde.noms, ...autre.noms, ...(autre.fiche ? [autre.fiche.nom, ...autre.fiche.alias] : [])].filter(n=>n && n!==garde.nom))];
+    const pick = k => (garde.fiche && garde.fiche[k]) || (autre.fiche && autre.fiche[k]) || '';
+    const lignes = [{...base, type:'Client', code:'PART', nom:garde.nom, alias, adresse:pick('adresse') || (garde.fiche ? '' : (garde.adresses[0]||autre.adresses[0]||'')), ville:pick('ville'),
+      tel:pick('tel') || garde.tels[0] || autre.tels[0] || '', courriel:pick('courriel') || garde.courriels[0] || autre.courriels[0] || '', notes:pick('notes')}];
+    if(autre.fiche && (!garde.fiche || autre.fiche.row!==garde.fiche.row)) lignes.push({...autre.fiche, type:'Retiré'});
+    ecrire(lignes, autre.nom+' regroupé sous '+garde.nom+'.');
+  };
+  return <div className="card" style={{marginBottom:14,borderColor:'var(--warning)'}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',gap:8}} onClick={()=>setOuvert(!ouvert)}>
+      <b>🔁 Possibles doublons ({doublons.length})</b><span className="muted" style={{fontSize:12}}>{ouvert ? '▲ cacher' : '▼ voir'} — rien n'est fusionné sans ton clic</span>
+    </div>
+    {ouvert && doublons.slice(0,40).map(x=><div key={x.id} style={{padding:'8px 0',borderTop:'1px solid var(--border)',fontSize:13}}>
+      <div><b>{x.a.nom}</b> <span className="muted">({x.a.listeJobs.length} job{x.a.listeJobs.length>1?'s':''}{x.a.courriel?' · '+x.a.courriel:''})</span> &nbsp;≈&nbsp; <b>{x.b.nom}</b> <span className="muted">({x.b.listeJobs.length} job{x.b.listeJobs.length>1?'s':''}{x.b.courriel?' · '+x.b.courriel:''})</span></div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:5}}>
+        <button className="btn btn-sm" disabled={busy} onClick={()=>fusionner(x.a, x.b)}>Même personne : garder « {x.a.nom} »</button>
+        <button className="btn btn-sm" disabled={busy} onClick={()=>fusionner(x.b, x.a)}>Garder « {x.b.nom} »</button>
+        <button className="btn btn-sm" disabled={busy} onClick={()=>onIgnorer(x.id)}>Pas la même personne</button>
+      </div>
+    </div>)}
+  </div>;
+}
+
+function RepLigneFacture({f}){
+  return <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'4px 0',borderBottom:'1px dashed var(--border)',fontSize:12.5,opacity:f.annulee?.5:1}}>
+    <span>🧾 <b>#{f.num}</b> <span className="muted">· {cvFmtDay(f.date)} {String(f.date).slice(0,4)}</span>{f.desc ? ' · '+f.desc : ''}{f.annulee ? <span style={{color:'var(--danger)'}}> · annulée</span> : ''}</span>
+    <span style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(f.ht)} <span className="muted">/ {cvMoney(f.ttc)} tx incl.</span>{f.pdf && <> · <a href={repPdf(f.pdf)} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} style={{color:'var(--accent)'}}>PDF</a></>}</span>
+  </div>;
+}
+function RepLigneAchat({a, montrerJob}){
+  const [ouv,setOuv]=useState(false);
+  return <div style={{padding:'4px 0',borderBottom:'1px dashed var(--border)',fontSize:12.5}}>
+    <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setOuv(!ouv)}>
+      <span>📦 <b>{a.fournisseur} #{a.num}</b> <span className="muted">· {cvFmtDay(a.date||a.recue)} {String(a.date||a.recue).slice(0,4)} · réf. « {a.ref||'—'} »</span>{montrerJob && <> → {a.job ? <b>{a.job}</b> : <span style={{color:'var(--warning)'}}>à associer</span>}</>}{a.part!=null && a.part!==100 ? <span className="muted"> ({a.part} %)</span> : ''}</span>
+      <span style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(a.st)} <span className="muted">/ {a.total ? cvMoney(a.total) : '—'} tx incl.</span>{a.pdf && <> · <a href={repPdf(a.pdf)} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} style={{color:'var(--accent)'}}>PDF</a></>}</span>
+    </div>
+    {ouv && <div style={{paddingLeft:16}}><CvArticles a={a}/></div>}
+  </div>;
+}
+
+function RepFicheClient({c, busy, ecrire, R}){
+  const [edit,setEdit]=useState(null);
+  const [ouverte,setOuverte]=useState(()=>c.listeJobs[0] ? c.listeJobs[0].key : '');
+  const [regroupe,setRegroupe]=useState(null);   // Set de clés de jobs cochées
+  const [nomGroupe,setNomGroupe]=useState('');
+  const [renomme,setRenomme]=useState(null);     // {key, nom}
+  const pers = c.type==='pers', code = pers ? 'PART' : c.code;
+  const fiche = c.fiche;
+  const ouvrirEdit = () => setEdit({nom:c.nom, alias:fiche ? fiche.alias.join(' ; ') : (pers ? c.noms.filter(n=>n!==c.nom).join(' ; ') : ''),
+    adresse:fiche ? fiche.adresse : (pers ? (c.adresses[0]||'') : ''), ville:fiche ? fiche.ville : '', tel:fiche ? fiche.tel : (pers ? c.tel : ''),
+    courriel:fiche ? fiche.courriel : (pers ? c.courriel : ''), notes:fiche ? fiche.notes : ''});
+  const sauver = () => ecrire([{...(fiche||{}), type:'Client', code, nom:edit.nom.trim()||c.nom, alias:edit.alias.split(/\s*;\s*/).map(x=>x.trim()).filter(Boolean),
+    adresse:edit.adresse, ville:edit.ville, tel:edit.tel, courriel:edit.courriel, notes:edit.notes}], 'Fiche de '+(edit.nom||c.nom)+' enregistrée.').then(ok=>ok&&setEdit(null));
+  const masquer = () => ecrire([{type:'Masqué', code:'PART', nom:c.nom, alias:c.noms}], c.nom+' est masqué du répertoire.');
+  const ligneJob = (jobs, nom) => {
+    const fj = jobs.map(j=>j.ficheJob).find(Boolean);
+    const lignes = [{...(fj||{}), type:'Job', code, nom, alias:[...new Set(jobs.flatMap(j=>[...j.cles, ...(j.ficheJob ? j.ficheJob.alias : [])]))].filter(Boolean),
+      po:(fj && fj.po) || (jobs.find(j=>j.po)||{}).po || '', client: pers ? c.nom : ''}];
+    jobs.forEach(j=>{ if(j.ficheJob && (!fj || j.ficheJob.row!==fj.row)) lignes.push({...j.ficheJob, type:'Retiré'}); });
+    return lignes;
+  };
+  const dupJobs = useMemo(()=>repDoublonsJobs(c),[c]);
+  const champ = (k, l, ph) => <div className="field" style={{marginBottom:8}}><label>{l}</label><input value={edit[k]} placeholder={ph||''} onChange={e=>setEdit({...edit,[k]:e.target.value})}/></div>;
+  return <div>
+    <div className="card" style={{marginBottom:12}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',alignItems:'flex-start'}}>
+        <div style={{minWidth:0}}>
+          <h3 className="fh" style={{margin:'0 0 4px',fontSize:20}}>{pers ? c.nom : <><span style={{color:'var(--accent)'}}>{c.code}</span> {c.nom}</>}{fiche && <span title="Fiche enregistrée" style={{fontSize:13}}> 📇</span>}</h3>
+          {!pers && c.contact && <div style={{fontSize:13}}>👤 {c.contact}</div>}
+          {(fiche ? [fiche.adresse, fiche.ville].filter(Boolean).join(', ') : c.adresse) && <div style={{fontSize:13}}>📍 {fiche ? [fiche.adresse, fiche.ville].filter(Boolean).join(', ') : c.adresse}</div>}
+          {(fiche ? fiche.tel : c.tel) && <div style={{fontSize:13}}>📞 <a href={repTel(fiche ? fiche.tel : c.tel)} style={{color:'var(--accent)'}}>{fiche ? fiche.tel : c.tel}</a></div>}
+          {(fiche ? fiche.courriel : c.courriel) && <div style={{fontSize:13}}>✉️ <a href={'mailto:'+(fiche ? fiche.courriel : c.courriel)} style={{color:'var(--accent)'}}>{fiche ? fiche.courriel : c.courriel}</a></div>}
+          {fiche && fiche.notes && <div style={{fontSize:12.5,marginTop:4,whiteSpace:'pre-wrap'}}>📝 {fiche.notes}</div>}
+          {pers && c.noms.filter(n=>persNomPropre(n)!==c.nom).length>0 && <div className="muted" style={{fontSize:11.5,marginTop:4}}>Aussi écrit : {c.noms.filter(n=>persNomPropre(n)!==c.nom).slice(0,8).join(' · ')}</div>}
+          {pers && c.adresses.length>1 && <div className="muted" style={{fontSize:11.5}}>Autres adresses : {c.adresses.slice(1,4).join(' · ')}</div>}
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end'}}>
+          <button className="btn btn-sm" onClick={ouvrirEdit} disabled={busy}>✏️ Modifier la fiche</button>
+          {pers && !fiche && !c.masque && <button className="btn btn-sm" onClick={masquer} disabled={busy} title="Ce n'est pas un client (ex. Lettrage du camion 14)">🙈 Masquer</button>}
+        </div>
+      </div>
+      <div style={{display:'flex',gap:16,flexWrap:'wrap',marginTop:10,fontSize:13,fontVariantNumeric:'tabular-nums'}}>
+        <span>Facturé : <b>{cvMoney(c.facture)}</b> <span className="muted" style={{fontSize:11}}>avant taxes</span></span>
+        <span>Achats : <b>{cvMoney(c.cout)}</b> <span className="muted" style={{fontSize:11}}>avant taxes</span></span>
+        <span>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''}</span>
+      </div>
+      {edit && <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border)'}}>
+        {champ('nom', pers ? 'Nom du client' : 'Nom de la compagnie')}
+        {champ('alias', 'Aussi écrit (séparé par ;) — ces noms seront reconnus comme ce client', 'Alain Cuisine Robichaud ; A Robichaud')}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:8}}>
+          {champ('adresse','Adresse')}{champ('ville','Ville')}{champ('tel','Téléphone')}{champ('courriel','Courriel')}
+        </div>
+        <div className="field" style={{marginBottom:8}}><label>Notes</label><textarea value={edit.notes} rows={2} onChange={e=>setEdit({...edit,notes:e.target.value})}/></div>
+        <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={busy} onClick={sauver}>{busy ? 'Enregistrement…' : 'Enregistrer'}</button><button className="btn btn-sm" onClick={()=>setEdit(null)}>Annuler</button></div>
+        <div className="muted" style={{fontSize:11,marginTop:6}}>Enregistré dans La mémoire — Jobs › Fiches (privé). Ton agenda n'est pas modifié.</div>
+      </div>}
+    </div>
+
+    {dupJobs.length>0 && !regroupe && <div className="card" style={{marginBottom:12,borderColor:'var(--warning)',fontSize:13}}>
+      <b>🔁 Jobs qui semblent être la même</b>
+      {dupJobs.slice(0,10).map(([a,b],i)=><div key={i} style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',padding:'5px 0',borderTop:i?'1px solid var(--border)':'none'}}>
+        <span>{a.label}{a.po?' · '+a.po:''} &nbsp;≈&nbsp; {b.label}{b.po?' · '+b.po:''}</span>
+        <button className="btn btn-sm" disabled={busy} onClick={()=>{ setRegroupe(new Set([a.key,b.key])); setNomGroupe(a.po ? a.label : b.label); }}>Regrouper…</button>
+      </div>)}
+    </div>}
+
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',margin:'4px 0 6px'}}>
+      <b>Jobs</b>
+      {c.listeJobs.length>1 && (regroupe
+        ? <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+            <input value={nomGroupe} onChange={e=>setNomGroupe(e.target.value)} placeholder={pers ? 'Nom de la job (ex. Cuisine, Août 2026)' : 'Nom de la job'} style={{width:200,padding:'5px 8px'}}/>
+            <button className="btn btn-sm btn-p" disabled={busy || regroupe.size<2 || !nomGroupe.trim()} onClick={()=>ecrire(ligneJob(c.listeJobs.filter(j=>regroupe.has(j.key)), nomGroupe.trim()), regroupe.size+' jobs regroupées sous « '+nomGroupe.trim()+' ».').then(ok=>ok&&setRegroupe(null))}>Regrouper ({regroupe.size})</button>
+            <button className="btn btn-sm" onClick={()=>setRegroupe(null)}>Annuler</button></span>
+        : <button className="btn btn-sm" onClick={()=>{ setRegroupe(new Set()); setNomGroupe(''); }}>🔗 Regrouper des jobs</button>)}
+    </div>
+    {c.listeJobs.map(j=>{ const o = ouverte===j.key;
+      return <div key={j.key} className="card" style={{marginBottom:8,padding:'10px 12px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',cursor:'pointer'}} onClick={()=>regroupe ? setRegroupe(s=>{ const n = new Set(s); n.has(j.key) ? n.delete(j.key) : n.add(j.key); return n; }) : setOuverte(o?'':j.key)}>
+          <div style={{minWidth:0}}>
+            {regroupe && <input type="checkbox" readOnly checked={regroupe.has(j.key)} style={{width:15,height:15,marginRight:6,verticalAlign:'middle'}}/>}
+            <b>{j.label}</b>{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}{j.ficheJob && <span title="Nom choisi par toi" style={{fontSize:11}}> 📇</span>}
+            <div className="muted" style={{fontSize:12}}>{[j.adresse, j.first ? cvFmtDay(j.first)+(j.last && j.last!==j.first ? ' → '+cvFmtDay(j.last) : '')+' '+j.last.slice(0,4) : '', j.passages ? j.passages+' passage'+(j.passages>1?'s':'') : '', j.equipe.length ? j.equipe.map(n=>n.split(' ')[0]).join(', ') : ''].filter(Boolean).join(' · ')}</div>
+          </div>
+          <div style={{textAlign:'right',fontSize:12.5,fontVariantNumeric:'tabular-nums'}}>Facturé <b>{cvMoney(j.facture)}</b><div className="muted" style={{fontSize:11.5}}>Achats {cvMoney(j.cout)}{j.reg && j.reg.ht ? ' · PO '+cvMoney(j.reg.ht) : ''}</div></div>
+        </div>
+        {o && !regroupe && <div style={{marginTop:8}}>
+          {renomme && renomme.key===j.key
+            ? <div style={{display:'flex',gap:6,marginBottom:6,flexWrap:'wrap'}}><input value={renomme.nom} onChange={e=>setRenomme({...renomme, nom:e.target.value})} style={{width:220,padding:'5px 8px'}} placeholder={pers ? 'Cuisine, Borne, Août 2026…' : 'Nom de la job'}/>
+                <button className="btn btn-sm btn-p" disabled={busy || !renomme.nom.trim()} onClick={()=>ecrire(ligneJob([j], renomme.nom.trim()), 'Job renommée « '+renomme.nom.trim()+' ».').then(ok=>ok&&setRenomme(null))}>OK</button>
+                <button className="btn btn-sm" onClick={()=>setRenomme(null)}>Annuler</button></div>
+            : <button className="btn btn-sm" style={{marginBottom:6}} onClick={()=>setRenomme({key:j.key, nom:j.label})}>✏️ Nommer la job</button>}
+          {j.cles.size>1 && <div className="muted" style={{fontSize:11.5,marginBottom:4}}>Écrit dans l'agenda/les achats : {[...j.cles].slice(0,6).join(' · ')}</div>}
+          {j.factures.sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(f=><RepLigneFacture key={'f'+f.num} f={f}/>)}
+          {j.achats.sort((a,b)=>String(b.date||b.recue).localeCompare(String(a.date||a.recue))).map(a=><RepLigneAchat key={'a'+a.row} a={a}/>)}
+          {!j.factures.length && !j.achats.length && <div className="muted" style={{fontSize:12}}>Aucune facture ni achat rattaché à cette job.</div>}
+        </div>}
+      </div>; })}
+    {!c.listeJobs.length && <div className="muted" style={{fontSize:13,marginBottom:10}}>Aucune job connue.</div>}
+    {c.facturesSans.length>0 && <div className="card" style={{marginTop:10}}>
+      <b>Factures envoyées {pers ? 'sans job précise' : 'à la compagnie'}</b>
+      {c.facturesSans.sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(f=><RepLigneFacture key={f.num} f={f}/>)}
+    </div>}
+    {c.soum.length>0 && <div className="card" style={{marginTop:10}}>
+      <b>Soumissions et ordres de travail</b>
+      {c.soum.sort((a,b)=>String(b.date).localeCompare(String(a.date))).map((s,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'4px 0',borderBottom:'1px dashed var(--border)',fontSize:12.5}}>
+        <span>📄 <b>#{s.no}</b> <span className="muted">· {cvFmtDay(s.date)} {String(s.date).slice(0,4)}{s.statut ? ' · '+s.statut : ''}</span>{s.extrait ? ' · '+s.extrait : ''}</span>
+        <span>{s.montant ? cvMoney(s.montant) : ''}{s.pdf && <> · <a href={repPdf(s.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>PDF</a></>}</span>
+      </div>)}
+    </div>}
+  </div>;
+}
+
+function RepFicheFournisseur({f, K, toast}){
+  const [q,setQ]=useState('');
+  const [n,setN]=useState(40);
+  const parAn = {}; f.achats.forEach(a=>{ const y = String(a.date||a.recue||'').slice(0,4)||'?'; parAn[y] = (parAn[y]||0) + (a.st||0); });
+  const l = f.achats.filter(a=>!q || rechercheOk([a.num, a.ref, a.job, (a.articles||[]).map(x=>x.code+' '+x.desc).join(' ')].join(' '), q));
+  return <div>
+    <div className="card" style={{marginBottom:12}}>
+      <h3 className="fh" style={{margin:'0 0 6px',fontSize:20}}>{f.nom}</h3>
+      <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:13,marginBottom:8,fontVariantNumeric:'tabular-nums'}}>
+        {Object.entries(parAn).sort((a,b)=>b[0].localeCompare(a[0])).map(([y,t])=><span key={y}>{y} : <b>{cvMoney(t)}</b></span>)}
+        <span className="muted">{f.achats.length} facture{f.achats.length>1?'s':''} · avant taxes</span>
+      </div>
+      {K.map[f.nom] && K.map[f.nom].courriel && <div style={{fontSize:13}}>✉️ <a href={'mailto:'+K.map[f.nom].courriel} style={{color:'var(--accent)'}}>{K.map[f.nom].courriel}</a></div>}
+      <ContactFournisseur f={f.nom} K={K} toast={toast} onCourriel={()=>{}}/>
+    </div>
+    <div className="card" style={{marginBottom:12}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:6}}>
+        <b>Factures d'achat</b>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="No, référence, job, produit…" style={{flex:'1 1 180px',width:'auto',minWidth:0,padding:'5px 9px',maxWidth:320}}/>
+      </div>
+      {l.slice(0,n).map(a=><RepLigneAchat key={a.row} a={a} montrerJob/>)}
+      {l.length>n && <div style={{textAlign:'center',padding:8}}><button className="btn btn-sm" onClick={()=>setN(n+60)}>Voir plus ({l.length-n})</button></div>}
+      {!l.length && <div className="muted" style={{fontSize:12.5}}>Aucune facture.</div>}
+    </div>
+    {f.docs.length>0 && <div className="card">
+      <b>Soumissions, relevés et confirmations</b>
+      {f.docs.sort((a,b)=>String(b.date).localeCompare(String(a.date))).map((x,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'4px 0',borderBottom:'1px dashed var(--border)',fontSize:12.5}}>
+        <span>{x.type} <b>{x.num}</b> <span className="muted">· {cvFmtDay(x.date)} {String(x.date).slice(0,4)}{x.ref ? ' · « '+x.ref+' »' : ''}</span></span>
+        <span>{x.total ? cvMoney(x.total) : ''}{x.pdf && <> · <a href={repPdf(x.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>PDF</a></>}</span>
+      </div>)}
+    </div>}
+  </div>;
+}
+
 // ── App root ──────────────────────────────────────────────────────────────
 function App(){
   const [cfg,setCfg]=useState(loadCfg);
@@ -7789,6 +8355,7 @@ function App(){
 
   const navItems = [
     {id:'dashboard',label:'Tableau de bord'},
+    {id:'repertoire',label:'Répertoire'},
     {id:'projets',label:'Projets'},
     {id:'clients',label:'Clients'},
     {id:'agenda',label:'Agenda'},
@@ -7839,6 +8406,7 @@ function App(){
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
+        {nav==='repertoire' && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show}/>}
         {nav==='clients' && <ClientsView key={'c'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
         {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey}/>}
         {nav==='fournisseurs' && <FournisseursView key={'f'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
