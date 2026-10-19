@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v137';
+const APP_VERSION = 'v138';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1756,6 +1756,36 @@ function CvCourriels({liste}){
 function cvJobCle(c, j){ return (c.code!=='PART' ? c.code+' ' : '')+j.name+(j.po?' '+j.po:''); }
 // Matériel d'une job : sous-total des achats associés à la job.
 const CV_DESTS = ['Entrepôt','Camion 7','Camion 14','Camion 25'];   // v137 : la shop = l'entrepôt
+// v138 : association automatique SEULEMENT quand c'est sûr — camion nommé, entrepôt, ou un PO qui correspond à UNE seule job.
+// Un nom de job seul (ou deux jobs possibles) reste « à associer ». Colonne K = « Auto <date> » pour les reconnaître.
+const AUTO_ASSOC = {fait:{}, enCours:false};
+function achatSur(a, clients){
+  const r = String(a.ref||''); if(!r.trim()) return '';
+  const cam = r.match(/\bcamion\s*#?\s*0?(7|14|25)\b/i); if(cam) return 'Camion '+cam[1];
+  if(/\b(entrep[oô]t|inventaire|shop|atelier|stock)\b/i.test(r) || /\bENT\b/.test(r)) return 'Entrepôt';
+  const po = cvPO(r); if(!po) return '';
+  const l = new Set(); Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{ if(j.po===po) l.add(cvJobCle(c,j)); }));
+  return l.size===1 ? [...l][0] : '';
+}
+// Mode essai : tant que tu n'as pas cliqué « Activer », on te montre seulement ce qui serait associé.
+const autoAssocActif = () => { try{ return localStorage.getItem('crm_auto_assoc')==='1'; }catch(e){ return false; } };
+function useAutoAssociation(cfg, achats, clients){
+  const [fait,setFait]=useState(()=>({...AUTO_ASSOC.fait}));
+  const [actif,setActif]=useState(autoAssocActif);
+  const essai = useMemo(()=>(!achats || !clients) ? [] : achats.filter(a=>!a.job).map(a=>({a, job:achatSur(a, clients)})).filter(x=>x.job),[achats, clients]);
+  useEffect(()=>{ if(!actif || !achats || !achats.length || !clients || !Object.keys(clients).length || AUTO_ASSOC.enCours || !cfg.memoireAchatsSpreadsheetId) return;
+    const l = achats.filter(a=>!a.job && AUTO_ASSOC.fait[a.row]===undefined).map(a=>({a, job:achatSur(a, clients)})).filter(x=>x.job);
+    if(!l.length) return;
+    AUTO_ASSOC.enCours = true; const le = new Date().toLocaleDateString('fr-CA');
+    Promise.resolve(window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:cfg.memoireAchatsSpreadsheetId,
+      resource:{valueInputOption:'RAW', data:l.map(x=>({range:'I'+x.a.row+':K'+x.a.row, values:[[x.job, '', 'Auto '+le]]}))}}))
+      .then(()=>{ l.forEach(x=>{ AUTO_ASSOC.fait[x.a.row]=x.job; }); setFait({...AUTO_ASSOC.fait}); })
+      .catch(()=>{}).finally(()=>{ AUTO_ASSOC.enCours = false; });
+  },[achats, clients, actif]);
+  fait.actif = actif; fait.essai = actif ? [] : essai.filter(x=>fait[x.a.row]===undefined);
+  fait.activer = ()=>{ try{ localStorage.setItem('crm_auto_assoc','1'); }catch(e){} setActif(true); };
+  return fait;
+}
 // v136 : autres destinations d'achat — Éclairage Saran et un employé (« Employé — Daniel »)
 const CV_EMPLOYES = ['William','Daniel','Philippe','Brandon','Adèle','Maude'];
 const cvAutreDest = j => j==='Éclairage Saran' || /^Employé — /.test(j||'');
@@ -1863,6 +1893,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
   const [docType,setDocType]=useState('Soumission');
   const [seulAAssocier,setSeulAAssocier]=useState(false);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
+  const auto = useAutoAssociation(cfg, achats, clients);
   const [busy,setBusy]=useState('');
   const [ouvert,setOuvert]=useState(null);
   const [detail,setDetail]=useState(null);
@@ -1871,7 +1902,8 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
   const [q,setQ]=useState('');
   if(loading && !(achats||[]).length) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des achats…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les achats : {err}</div>;
-  const A = (achats||[]).map(a=>fait[a.row]!==undefined ? {...a, job:fait[a.row]} : a);
+  const A = (achats||[]).map(a=>fait[a.row]!==undefined ? {...a, job:fait[a.row]} : auto[a.row]!==undefined && !a.job ? {...a, job:auto[a.row], statut:'Auto'} : a);
+  const autoRecents = A.filter(a=>/^Auto/.test(a.statut||'') && a.job).sort((x,y)=>String(y.date||y.recue).localeCompare(String(x.date||x.recue)));
   const today = cvDay(new Date().toISOString());
   const enregistrer = async (a, job)=>{
     const avant = a.job;
@@ -1952,6 +1984,18 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
       {(seulAAssocier ? vue.liste.filter(a=>!a.job) : vue.liste).map(a=><Facture key={a.row} a={a} assoc={!a.job}/>)}
       {!vue.liste.length && <div className="muted" style={{fontSize:13}}>Aucune facture.</div>}
     </div>}
+    {!vue && !auto.actif && auto.essai.length>0 && <div className="card" style={{marginBottom:16,borderColor:'var(--accent)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+        <div style={{fontSize:13.5}}>🧪 <b>Essai :</b> je peux associer <b>{auto.essai.length}</b> factures tout seul (camion nommé, entrepôt, ou PO qui correspond à une seule job). Vérifie la liste, puis active.</div>
+        <button className="btn btn-sm btn-p" onClick={auto.activer}>✓ Activer l'association automatique</button>
+      </div>
+      <div style={{fontSize:12.5,marginTop:6,maxHeight:260,overflowY:'auto'}}>{auto.essai.map(x=><div key={x.a.row} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+        <span><b>{x.a.fournisseur} #{x.a.num}</b> <span className="muted">· réf. « {x.a.ref} » · {cvMoney(x.a.st)}</span></span><span>→ <b>{x.job}</b></span></div>)}</div>
+    </div>}
+    {!vue && autoRecents.length>0 && <details className="card" style={{marginBottom:16}}>
+      <summary style={{cursor:'pointer',fontSize:13.5}}>✓ <b>{autoRecents.length}</b> factures associées automatiquement (camion, entrepôt ou PO identique) — clique pour vérifier</summary>
+      {autoRecents.slice(0,60).map(a=><Facture key={a.row} a={a}/>)}
+    </details>}
     {!vue && <div className="card" style={{marginBottom:16,borderColor:aAssocier.length?'var(--warning)':undefined}}>
       <div className="fh" style={{fontSize:15}}>À associer {aAssocier.length>0 && <span className="badge" style={{background:'rgba(210,153,34,0.15)',color:'var(--warning)'}}>{aAssocier.length}</span>}</div>
       {aAssocier.length ? aAssocier.slice(0,30).map(a=><Facture key={a.row} a={a} assoc/>) : <div className="muted" style={{fontSize:13}}>✅ Toutes les factures sont associées.</div>}
@@ -2601,6 +2645,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
     getAllSuiviTravaux(cfg.suiviTravauxSpreadsheetId).then(r=>{ if(ok) setSuivi(r); }).catch(()=>{ if(ok) setSuivi([]); });
     return ()=>{ ok=false; }; },[cfg.suiviTravauxSpreadsheetId, refreshKey]);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
+  const autoD = useAutoAssociation(cfg, achats, clients);
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture de l'agenda et de La mémoire…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les données : {err}</div>;
   const urlAdresses = cfg.memoireMajUrl ? cfg.memoireMajUrl+(cfg.memoireMajUrl.includes('?')?'&':'?')+'quoi=adresses' : '';
@@ -2628,7 +2673,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const aCommander = tous.flatMap(x=>x.j.events.filter(e=>!e.attente && e.day>=today && e.day<=dans14 && !cvCmd(cmds, x.j, e).fait).map(e=>({...x, e}))).sort((a,b)=>a.e.day.localeCompare(b.e.day));
   const nomPO = po => { const x = tous.find(t=>t.j.po===po); return x ? (x.c.code!=='PART'?x.c.code+' ':'')+x.j.name : po; };
   const aRepondre = Object.entries(courriels||{}).flatMap(([po,l])=>l.filter(f=>/toi de r/i.test(f.statut) && !((reglés[f.lien||(po+'|'+f.sujet)]||{}).le >= String(f.dernier).slice(0,10))).map(f=>({...f, po}))).sort((a,b)=>String(a.dernier).localeCompare(String(b.dernier)));
-  const A = achats || [];
+  const A = (achats || []).map(a=>!a.job && autoD[a.row]!==undefined ? {...a, job:autoD[a.row]} : a);
   const aAssocier = A.filter(a=>!a.job);
   const achatsMois = A.filter(a=>String(a.date||a.recue).startsWith(mois)).reduce((t,a)=>t+(a.st||0),0);
   const heure = e => e.allDay || !/T/.test(e.start) ? '' : new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'});
