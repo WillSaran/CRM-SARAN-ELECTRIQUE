@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v144';
+const APP_VERSION = 'v145';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1782,22 +1782,40 @@ function achatSur(a, clients){
 }
 // v143 : jobs proposées d'après un NOM dans la référence (« Yvan Larocque », « Y Larocque ») — tu cliques pour associer.
 const SUGG_STOP = new Set(['perso','personnel','camion','cam','truck','crs','asc','sar','gou','goo','pay','bom','ggp','joy','rroy','part','po','job','chez','rue','avenue','ave','boul','ent','stock','entrepot','inventaire','shop','eclairage','ecl','saran','commande','cmd','pour','les','des','client','particulier','projet']);
-function suggestionsAchat(a, clients){
-  const n = x => String(x||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-  const toks = n(a.ref).split(/[^a-z0-9]+/).filter(t=>t.length>=4 && !/\d/.test(t) && !SUGG_STOP.has(t));
+// v145 : nom complet d'abord. « Guy Bergeron » → le particulier Guy Bergeron (mot identique = 3 pts, 1 lettre de diff. = 2, début de mot = 1, prénom ≥3 lettres = +1)
+function scoresAchat(ref, clients){
+  const n = x => String(x||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
+  const mots = n(ref).split(/[^a-z0-9]+/).filter(t=>t.length>=3 && !/\d/.test(t) && !SUGG_STOP.has(t));
+  const toks = mots.filter(t=>t.length>=4), courts = mots.filter(t=>t.length===3);
   if(!toks.length) return [];
-  const ini = (String(a.ref||'').match(/\b([A-Za-zÀ-ÿ])\.?\s+[A-Za-zÀ-ÿ]{3,}/)||[])[1];
+  const ini = (String(ref||'').match(/\b([A-Za-zÀ-ÿ])\.?\s+[A-Za-zÀ-ÿ]{3,}/)||[])[1];
+  const proche = (x, y) => { if(Math.abs(x.length-y.length)>1 || x.length<6) return false; let i=0, j=0, d=0; while(i<x.length && j<y.length){ if(x[i]===y[j]){ i++; j++; continue; } if(++d>1) return false; if(x.length>y.length) i++; else if(y.length>x.length) j++; else { i++; j++; } } return d + (x.length-i) + (y.length-j) <= 1; };   // une lettre de différence (Laroque / Larocque)
   const res = {};
   Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{
-    const nt = n(j.name).split(/[^a-z0-9]+/).filter(Boolean); let sc = 0;
-    const proche = (x, y) => { if(Math.abs(x.length-y.length)>1 || x.length<6) return false; let i=0, j=0, d=0; while(i<x.length && j<y.length){ if(x[i]===y[j]){ i++; j++; continue; } if(++d>1) return false; if(x.length>y.length) i++; else if(y.length>x.length) j++; else { i++; j++; } } return d + (x.length-i) + (y.length-j) <= 1; };   // une lettre de différence (Laroque / Larocque)
-    toks.forEach(t=>{ if(nt.some(m=>m===t || (m.length>=5 && t.length>=5 && (m.startsWith(t) || t.startsWith(m))) || proche(m, t))) sc += 2; });
+    const nt = n(j.name).split(/[^a-z0-9]+/).filter(Boolean); let sc = 0, fort = 0;
+    toks.forEach(t=>{ let p = 0;
+      nt.forEach(m=>{ const q = m===t ? 3 : proche(m, t) ? 2 : (m.length>=5 && t.length>=5 && (m.startsWith(t) || t.startsWith(m))) ? 1 : 0; if(q>p) p = q; });
+      sc += p; if(p>=2) fort++; });
     if(!sc) return;
-    if(ini && nt.some(m=>m[0]===n(ini))) sc += 1;
+    if(fort) courts.forEach(t=>{ if(nt.includes(t)) sc += 1; });                       // prénom court (Guy, Luc…) seulement si le nom de famille concorde
+    if(fort && ini && nt.some(m=>m[0]===n(ini))) sc += 1;
     if(c.code==='PART') sc += 0.5;
-    const cle = cvJobCle(c, j); if(!res[cle] || res[cle].sc<sc) res[cle] = {cle, sc, last:j.last||''};
+    const cle = cvJobCle(c, j); if(!res[cle] || res[cle].sc<sc) res[cle] = {cle, sc, fort, last:j.last||''};
   }));
-  return Object.values(res).sort((x,y)=>y.sc-x.sc || String(y.last).localeCompare(String(x.last))).slice(0,3).map(x=>x.cle);
+  return Object.values(res).sort((x,y)=>y.sc-x.sc || String(y.last).localeCompare(String(x.last)));
+}
+function suggestionsAchat(a, clients){
+  const l = scoresAchat(a.ref, clients); if(!l.length) return [];
+  const best = l[0].fort ? l.filter(x=>x.fort) : l;                                  // si un nom concorde vraiment, on oublie les « 3 lettres pareilles »
+  return best.slice(0,3).map(x=>x.cle);
+}
+// La proposition ✓ (de La mémoire) cède sa place si un nom de la référence concorde mieux avec une autre job
+function proposeAchat(a, clients){
+  const p = a.propose || ''; if(!p) return '';
+  const l = scoresAchat(a.ref, clients); if(!l.length || !l[0].fort) return p;
+  const sp = (l.find(x=>x.cle===p)||{sc:0}).sc;
+  if(l[0].sc <= sp) return p;
+  return l[1] && l[1].fort && l[1].sc===l[0].sc ? '' : l[0].cle;               // deux Bergeron à égalité : pas de ✓, tu choisis parmi les 👤
 }
 // PO écrit dans la référence de commande : « CRS PO 3110 », « CRS 3110 », « P03110 », « ASC 123 », « ASC-123 », « GOO 045 »…
 function poDeRef(r){
@@ -1877,7 +1895,7 @@ function CvListeJobs({jobs, onChoix}){
 }
 
 // Choix de destination : inventaire, shop, camions, puis contracteur → job, ou ton propre texte.
-function CvChoixJob({clients, propose, suggestions, onChoix}){
+function CvChoixJob({clients, propose, autrePropose, suggestions, onChoix}){
   const [groupe,setGroupe]=useState('');
   const [autre,setAutre]=useState(null);
   const [emp,setEmp]=useState(false);
@@ -1888,7 +1906,7 @@ function CvChoixJob({clients, propose, suggestions, onChoix}){
   return <div style={{marginTop:6}}>
     <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
       {propose && pill('✓ '+propose, ()=>onChoix(propose), {background:'var(--accent)',color:'#fff',border:'none'})}
-      {(suggestions||[]).filter(x=>x!==propose).map(x=>pill('👤 '+x, ()=>onChoix(x), {borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}))}
+      {[...(suggestions||[]), ...(autrePropose && autrePropose!==propose ? [autrePropose] : [])].filter((x,i,t)=>x!==propose && t.indexOf(x)===i).map(x=>pill('👤 '+x, ()=>onChoix(x), {borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}))}
       {CV_DESTS.map(d=>pill(cvIconeDest(d)+d, ()=>onChoix(d)))}
       {pill('✏️ Autre…', ()=>setAutre(autre===null?'':null))}
     </div>
@@ -1988,7 +2006,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
         {!assoc && <button className="btn btn-sm" style={{marginLeft:10}} onClick={()=>setChanger(changer===a.row?null:a.row)}>Changer la destination</button>}
       </div>}
       {(assoc || changer===a.row) && (busy===a.row ? <div className="muted" style={{fontSize:12}}>Enregistrement…</div>
-        : <CvChoixJob clients={clients} propose={a.propose} suggestions={suggestionsAchat(a, clients)} onChoix={job=>enregistrer(a, job)}/>)}
+        : <CvChoixJob clients={clients} propose={proposeAchat(a, clients)} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients)} onChoix={job=>enregistrer(a, job)}/>)}
     </div>; };
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Fournisseurs</h2>
@@ -6150,7 +6168,7 @@ function CmdFournisseurs({cfg, refreshKey, clients, commandes, enregistrerComman
       {ouverte===c.cle && <div style={{fontSize:12,margin:'4px 0 2px',paddingLeft:8,borderLeft:'2px solid var(--border2)'}}>
         {c.articles.length ? c.articles.map((a,i)=><div key={i}>{a}</div>) : <span className="muted">Aucun article lu.</span>}
         <div className="muted" style={{marginTop:2}}>{c.source}</div></div>}
-      {choix===c.cle && <CvChoixJob clients={clients} propose={prop} suggestions={suggestionsAchat({ref:c.ref}, clients)} onChoix={job=>attitrer(c, job)}/>}
+      {choix===c.cle && <CvChoixJob clients={clients} propose={proposeAchat({ref:c.ref, propose:prop}, clients)} autrePropose={prop} suggestions={suggestionsAchat({ref:c.ref}, clients)} onChoix={job=>attitrer(c, job)}/>}
       {choix===c.cle && c.job && <button className="btn btn-sm" style={{marginTop:5}} onClick={()=>attitrer(c, '')}>Retirer l'attribution</button>}
       {p && <div style={{fontSize:12,marginTop:4}}>Le passage du <b>{cvFmtDay(p.e.day)}</b>{p.e.phase?' ('+p.e.phase+')':''} n'est pas marqué commandé : <button className="btn btn-sm" onClick={()=>placer(c, p)}>📦 Marquer ✅ Placée</button></div>}
     </div>; };
