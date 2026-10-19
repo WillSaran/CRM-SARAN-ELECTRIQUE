@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v145';
+const APP_VERSION = 'v146';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1809,6 +1809,19 @@ function suggestionsAchat(a, clients){
   const best = l[0].fort ? l.filter(x=>x.fort) : l;                                  // si un nom concorde vraiment, on oublie les « 3 lettres pareilles »
   return best.slice(0,3).map(x=>x.cle);
 }
+// v146 : ce qui était à l'agenda le jour de la facture (et le lendemain : on achète souvent la veille). Jamais associé tout seul.
+function agendaAchat(date, clients){
+  let d0 = String(date||'').slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(d0)){ const x = new Date(date); if(isNaN(x)) return []; d0 = cvDay(new Date(x.getFullYear(), x.getMonth(), x.getDate(), 12).toISOString()); }
+  const jour = k => { const x = new Date(d0+'T12:00:00'); x.setDate(x.getDate()+k); return cvDay(x.toISOString()); };
+  const jours = [d0, jour(1)]; if(new Date(d0+'T12:00:00').getDay()===5) jours.push(jour(3));    // facture du vendredi → lundi aussi
+  const res = [];
+  Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{
+    const ev = j.events.filter(e=>!e.attente && jours.includes(e.day)).sort((a,b)=>a.day.localeCompare(b.day))[0];
+    if(ev) res.push({cle:cvJobCle(c,j), jour:ev.day, mm:ev.day===d0, phase:ev.phase||'', crew:(ev.crew||[]).join(' ')});
+  }));
+  return res.sort((a,b)=>(b.mm-a.mm) || a.cle.localeCompare(b.cle,'fr')).slice(0,8);
+}
 // La proposition ✓ (de La mémoire) cède sa place si un nom de la référence concorde mieux avec une autre job
 function proposeAchat(a, clients){
   const p = a.propose || ''; if(!p) return '';
@@ -1895,7 +1908,7 @@ function CvListeJobs({jobs, onChoix}){
 }
 
 // Choix de destination : inventaire, shop, camions, puis contracteur → job, ou ton propre texte.
-function CvChoixJob({clients, propose, autrePropose, suggestions, onChoix}){
+function CvChoixJob({clients, propose, autrePropose, suggestions, date, onChoix}){
   const [groupe,setGroupe]=useState('');
   const [autre,setAutre]=useState(null);
   const [emp,setEmp]=useState(false);
@@ -1910,6 +1923,12 @@ function CvChoixJob({clients, propose, autrePropose, suggestions, onChoix}){
       {CV_DESTS.map(d=>pill(cvIconeDest(d)+d, ()=>onChoix(d)))}
       {pill('✏️ Autre…', ()=>setAutre(autre===null?'':null))}
     </div>
+    {(()=>{ const ag = agendaAchat(date, clients).filter(x=>x.cle!==propose); if(!ag.length) return null;
+      return <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,alignItems:'center'}}>
+        <span className="muted" style={{fontSize:11.5}}>📅 À l'agenda :</span>
+        {ag.map(x=><button key={x.cle} className="btn btn-sm" onClick={()=>onChoix(x.cle)} title={x.crew} style={(suggestions||[]).includes(x.cle)?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null}>
+          {x.cle}<span className="muted" style={{fontSize:10.5}}> · {x.mm?'même jour':cvFmtDay(x.jour)}{x.phase?' · '+x.phase:''}{x.crew?' · '+x.crew:''}</span></button>)}
+      </div>; })()}
     <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5}}>
       {groupes.map(c=>pill(c.code==='PART'?'Particuliers':c.code, ()=>setGroupe(groupe===c.code?'':c.code), groupe===c.code?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null))}
       {pill('💡 Éclairage Saran', ()=>onChoix('Éclairage Saran'))}
@@ -2006,7 +2025,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
         {!assoc && <button className="btn btn-sm" style={{marginLeft:10}} onClick={()=>setChanger(changer===a.row?null:a.row)}>Changer la destination</button>}
       </div>}
       {(assoc || changer===a.row) && (busy===a.row ? <div className="muted" style={{fontSize:12}}>Enregistrement…</div>
-        : <CvChoixJob clients={clients} propose={proposeAchat(a, clients)} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients)} onChoix={job=>enregistrer(a, job)}/>)}
+        : <CvChoixJob clients={clients} propose={proposeAchat(a, clients)} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients)} date={date(a)} onChoix={job=>enregistrer(a, job)}/>)}
     </div>; };
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Fournisseurs</h2>
@@ -6168,7 +6187,7 @@ function CmdFournisseurs({cfg, refreshKey, clients, commandes, enregistrerComman
       {ouverte===c.cle && <div style={{fontSize:12,margin:'4px 0 2px',paddingLeft:8,borderLeft:'2px solid var(--border2)'}}>
         {c.articles.length ? c.articles.map((a,i)=><div key={i}>{a}</div>) : <span className="muted">Aucun article lu.</span>}
         <div className="muted" style={{marginTop:2}}>{c.source}</div></div>}
-      {choix===c.cle && <CvChoixJob clients={clients} propose={proposeAchat({ref:c.ref, propose:prop}, clients)} autrePropose={prop} suggestions={suggestionsAchat({ref:c.ref}, clients)} onChoix={job=>attitrer(c, job)}/>}
+      {choix===c.cle && <CvChoixJob clients={clients} propose={proposeAchat({ref:c.ref, propose:prop}, clients)} autrePropose={prop} suggestions={suggestionsAchat({ref:c.ref}, clients)} date={c.date} onChoix={job=>attitrer(c, job)}/>}
       {choix===c.cle && c.job && <button className="btn btn-sm" style={{marginTop:5}} onClick={()=>attitrer(c, '')}>Retirer l'attribution</button>}
       {p && <div style={{fontSize:12,marginTop:4}}>Le passage du <b>{cvFmtDay(p.e.day)}</b>{p.e.phase?' ('+p.e.phase+')':''} n'est pas marqué commandé : <button className="btn btn-sm" onClick={()=>placer(c, p)}>📦 Marquer ✅ Placée</button></div>}
     </div>; };
