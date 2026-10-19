@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v171';
+const APP_VERSION = 'v172';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8156,6 +8156,9 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   const setFiltre = k => { setFiltreS(k); try{ localStorage.setItem('crm_rep_filtre', k); }catch(e){} };
   const [masques,setMasques]=useState(false);
   const [nouveau,setNouveau]=useState(null);   // v163 : ajout manuel d'un particulier ou commerce
+  const [coches,setCoches]=useState(()=>new Set());   // v172 : sélection de plusieurs particuliers/commerces
+  const [garde,setGarde]=useState('');
+  const cocher = id => setCoches(s=>{ const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const [ignores,setIgnores]=useState(repIgnores);
   const changerOnglet = o => { setOnglet(o); setSel(null); try{ localStorage.setItem('crm_rep_onglet', o); }catch(e){} };
   const F = d.fiches || {clients:[], jobs:[], fourn:[], masques:[]};
@@ -8265,15 +8268,49 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
     {l.map((p,i)=>{ const L = lettre(p.nom), nouv = !i || lettre(l[i-1].nom)!==L;
       return <React.Fragment key={p.id}>
         {nouv && l.length>15 && <div style={{padding:'3px 14px',fontSize:11.5,fontWeight:800,color:'var(--accent)',background:'var(--bg3)',borderBottom:'1px solid var(--border)'}}>{L}</div>}
-        <div onClick={()=>setSel(p.id)} style={{padding:'9px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',opacity:p.masque?.55:1}}>
-          <div style={{minWidth:0}}><b>{p.nom}</b>{p.fiche && <span title="Fiche enregistrée" style={{fontSize:11}}> 📇</span>}{aVerif[p.id] ? <span className="badge" style={{background:'rgba(248,81,73,0.12)',color:'var(--danger)',marginLeft:8}}>{aVerif[p.id]} à vérifier</span> : null}
-            <div className="muted" style={{fontSize:12}}>{[p.adresse, p.tel, p.courriel].filter(Boolean).join(' · ') || '—'}</div></div>
+        <div onClick={()=>setSel(p.id)} style={{padding:'9px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',opacity:p.masque?.55:1,background:coches.has(p.id)?'var(--bg3)':undefined}}>
+          <div style={{minWidth:0,display:'flex',gap:9,alignItems:'flex-start'}}>
+            <input type="checkbox" checked={coches.has(p.id)} onClick={e=>e.stopPropagation()} onChange={()=>cocher(p.id)} style={{width:17,height:17,marginTop:2,flex:'none'}} title="Sélectionner"/>
+            <div style={{minWidth:0}}><b>{p.nom}</b>{p.fiche && <span title="Fiche enregistrée" style={{fontSize:11}}> 📇</span>}{aVerif[p.id] ? <span className="badge" style={{background:'rgba(248,81,73,0.12)',color:'var(--danger)',marginLeft:8}}>{aVerif[p.id]} à vérifier</span> : null}
+            <div className="muted" style={{fontSize:12}}>{[p.adresse, p.tel, p.courriel].filter(Boolean).join(' · ') || '—'}</div></div></div>
           <div style={{textAlign:'right',fontSize:12}}>{p.listeJobs.length} job{p.listeJobs.length>1?'s':''}{p.facture ? <> · <b>{cvMoney(p.facture)}</b></> : ''}<div className="muted" style={{fontSize:11}}>{p.last ? cvFmtDay(p.last)+' '+p.last.slice(0,4) : ''}</div></div>
         </div>
       </React.Fragment>; })}
     {!l.length && <div className="muted" style={{padding:14}}>Aucun résultat.</div>}
   </div>;
   const chip = (k, t) => <button key={k} className={'btn btn-sm'+(filtre===k?' btn-p':'')} onClick={()=>setFiltre(k)}>{t}</button>;
+  const choisis = R.pers.filter(p=>coches.has(p.id));
+  const finLot = ok => { if(ok){ setCoches(new Set()); setGarde(''); } };
+  const lotMasquer = () => ecrire(choisis.flatMap(p=>[{type:'Masqué', code:'PART', nom:p.nom, alias:p.noms.filter(n=>!/@/.test(n))}, ...(p.fiche ? [{...p.fiche, type:'Retiré'}] : [])]),
+    choisis.length+' masqué'+(choisis.length>1?'s':'')+'.').then(finLot);
+  const lotType = com => ecrire(choisis.filter(p=>!!p.commerce!==com).map(p=>({...(p.fiche || {alias:p.noms.filter(n=>n!==p.nom && !/@/.test(n)), tel:p.tels[0]||'', courriel:p.courriels.join(', ')}), type:'Client', code:com ? 'COMMERCE' : 'PART', nom:p.nom})),
+    choisis.length+(com ? ' dans les commerces.' : ' dans les particuliers.')).then(finLot);
+  const lotLier = () => { const g = choisis.find(p=>p.id===garde) || choisis[0]; const autres = choisis.filter(p=>p!==g);
+    const base = g.fiche || {type:'Client', code:g.commerce ? 'COMMERCE' : 'PART'};
+    const tous = [g, ...autres], pick = k => (tous.map(p=>p.fiche && p.fiche[k]).find(Boolean)) || '';
+    const lignes = [{...base, type:'Client', code:base.code || (g.commerce ? 'COMMERCE' : 'PART'), nom:g.nom,
+      alias:[...new Set([...(base.alias||[]), ...tous.flatMap(p=>[p.nom, ...p.noms, ...(p.fiche ? [p.fiche.nom, ...p.fiche.alias] : [])])].filter(n=>n && n!==g.nom && !/@/.test(n)))],
+      adresse:pick('adresse') || (g.fiche ? '' : (tous.flatMap(p=>p.adresses)[0]||'')), ville:pick('ville'), tel:pick('tel') || tous.flatMap(p=>p.tels)[0] || '',
+      courriel:[...new Set([...String(pick('courriel')).split(/[\s,;]+/), ...tous.flatMap(p=>p.courriels)].map(e=>String(e).trim().toLowerCase()).filter(e=>/@/.test(e)))].join(', '),
+      notes:[...new Set(tous.map(p=>p.fiche && p.fiche.notes).filter(Boolean))].join('\n')}];
+    autres.forEach(p=>{ if(p.fiche && (!g.fiche || p.fiche.row!==g.fiche.row)) lignes.push({...p.fiche, type:'Retiré'}); });
+    ecrire(lignes, autres.length+' lié'+(autres.length>1?'s':'')+' sous '+g.nom+'.').then(finLot); };
+  const barreLot = choisis.length>0 && <div className="card" style={{position:'sticky',top:0,zIndex:5,margin:'0 0 10px',borderColor:'var(--accent)',fontSize:13}}>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+      <b>{choisis.length} sélectionné{choisis.length>1?'s':''}</b>
+      <button className="btn btn-sm" disabled={busy} onClick={lotMasquer}>🙈 Masquer</button>
+      <button className="btn btn-sm" disabled={busy || choisis.length<2} onClick={lotLier} title="Réunir en une seule fiche">🔗 Lier ensemble</button>
+      <button className="btn btn-sm" disabled={busy} onClick={()=>lotType(false)}>👤 C'est un particulier</button>
+      <button className="btn btn-sm" disabled={busy} onClick={()=>lotType(true)}>🏪 C'est un commerce</button>
+      <button className="btn btn-sm" onClick={()=>{ setCoches(new Set()); setGarde(''); }}>Tout désélectionner</button>
+    </div>
+    {choisis.length>1 && <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+      <span className="muted" style={{fontSize:12}}>Nom à garder si tu lies :</span>
+      <select value={garde || choisis[0].id} onChange={e=>setGarde(e.target.value)} style={{padding:'4px 8px',maxWidth:'100%'}}>
+        {choisis.map(p=><option key={p.id} value={p.id}>{p.nom}</option>)}
+      </select>
+    </div>}
+  </div>;
   const ajouterClient = () => { const n = nouveau.nom.trim(); if(!n) return;
     ecrire([{type:'Client', code:nouveau.commerce ? 'COMMERCE' : 'PART', nom:n, alias:[], adresse:nouveau.adresse, ville:nouveau.ville, tel:nouveau.tel, courriel:nouveau.courriel, notes:nouveau.notes}],
       n+' ajouté aux '+(nouveau.commerce ? 'commerces.' : 'particuliers.')).then(ok=>{ if(ok){ setNouveau(null); setSel('', n); } }); };
@@ -8284,6 +8321,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
       <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>setNouveau(nouveau ? null : {commerce:filtre==='com', nom:'', adresse:'', ville:'', tel:'', courriel:'', notes:''})}>＋ Ajouter un client</button>
       {!!nbMasques && <button className="btn btn-sm" onClick={()=>setMasques(!masques)} style={{fontSize:11.5}}>{masques ? 'Cacher les masqués' : '🙈 Masqués ('+nbMasques+')'}</button>}
     </div>
+    {barreLot}
     {nouveau && <div className="card" style={{marginBottom:12}}>
       <b>Nouveau client</b>
       <div style={{display:'flex',gap:6,margin:'8px 0'}}>
