@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v175';
+const APP_VERSION = 'v176';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1928,6 +1928,7 @@ function repDestinations(R){
   R.contr.forEach(c=>out.push({id:c.id, icone:'🏗', nom:c.code+' '+c.nom, cherche:[c.code, c.nom, ...(c.contacts||[]).map(k=>k.nom)].join(' '), dest:c.code,
     jobs:c.listeJobs.slice(0,40).map(j=>({label:j.label+(j.po?' · '+j.po:''), dest:j.ficheJob ? j.ficheJob.canon : cvJobCle({code:c.code}, {name:j.nom, po:j.po})}))}));
   R.pers.filter(p=>!p.masque && !p.sansNom).forEach(p=>out.push({id:p.id, icone:p.commerce?'🏪':'👤', nom:p.nom, cherche:[p.nom, ...p.noms, ...p.courriels].join(' '), dest:p.nom,
+    lies:(p.lies||[]).filter(q=>!q.sansNom).map(q=>({id:q.id, icone:q.commerce?'🏪':'👤', nom:q.nom, dest:q.nom})),
     jobs:p.listeJobs.map(j=>({label:j.label, dest:j.ficheJob ? j.ficheJob.canon : ([...j.cles][0] || p.nom)}))}));
   return out;
 }
@@ -1950,6 +1951,10 @@ function RepChoixDest({R, refAchat, onChoix}){
       </div>
       {ouvert===x.id && <div style={{display:'flex',gap:5,flexWrap:'wrap',margin:'4px 0 2px 14px'}}>
         {x.jobs.map((j,i)=><button key={i} className="btn btn-sm" style={{fontSize:11.5}} onMouseDown={e=>e.preventDefault()} onClick={()=>onChoix(j.dest)}>{j.label}</button>)}
+      </div>}
+      {(x.lies||[]).length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',margin:'4px 0 2px 14px'}}>
+        <span className="muted" style={{fontSize:11.5}}>↳ aussi lié :</span>
+        {x.lies.map(y=><button key={y.id} className="btn btn-sm" style={{fontSize:11.5}} onMouseDown={e=>e.preventDefault()} onClick={()=>onChoix(y.dest)} title="Associer plutôt à cette fiche">{y.icone} {y.nom}</button>)}
       </div>}
     </div>)}
     {nq.length>=2 && !liste.length && <div className="muted" style={{fontSize:12}}>Rien trouvé — ajoute le client dans le Répertoire, ou utilise ✏️ Autre….</div>}
@@ -8098,6 +8103,16 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     const c = nommes.filter(ok); if(c.length===1) p.suggere = c[0];
   });
   pers = pers.filter(p=>!p.masque);   // v173 : supprimés = retirés partout (liste, recherche, choix de destination)
+  // v176 : fiches liées (même courriel ou téléphone, ou nom dans l'« aussi écrit » de l'autre) — ex. Robert Rondeau ↔ son commerce Le jardin de la gaieté
+  const parCle = {}; const lier = (k, p) => { if(k) (parCle[k] = parCle[k] || new Set()).add(p); };
+  pers.forEach(p=>{ p.lies = [];
+    p.courriels.forEach(e=>lier('e:'+e, p));
+    p.tels.forEach(t=>{ const d = String(t).replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); if(d.length===10) lier('t:'+d, p); });
+    lier('n:'+persCle(p.nom), p); (p.fiche ? p.fiche.alias : []).forEach(a=>lier('a:'+persCle(a), p)); });
+  Object.entries(parCle).forEach(([k, set])=>{ const l = [...set]; if(k[0]==='a') return;
+    if(k[0]==='n'){ const al = parCle['a:'+k.slice(2)]; if(al) l.push(...al); }
+    if(l.length<2 || l.length>4) return;
+    l.forEach(a=>l.forEach(b=>{ if(a!==b && !a.lies.includes(b)) a.lies.push(b); })); });
   return {contr:Object.values(contr).sort((a,b)=>String(b.last).localeCompare(String(a.last))), pers};
 }
 // Possibles doublons : même nom de famille et prénom pareil / initiale / une lettre de différence
@@ -8246,7 +8261,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   if(choisi) return <div>{entete}
     <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>setSel(null)}>← Retour à la liste</button>
     {sel.startsWith('F:') ? <RepFicheFournisseur f={choisi} K={K} toast={toast}/>
-      : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onLie={nom=>setSel('', nom)} onContr={code=>setSel('C:'+code)}
+      : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onLie={nom=>setSel('', nom)} onContr={code=>setSel('C:'+code)} onOuvrir={(id, nom)=>setSel(id, nom)}
           nbAV={aVerif[choisi.type==='contr' ? 'C:'+choisi.code : choisi.id]||0} onSuivi={(choisi.type==='contr' ? clients[choisi.code] : choisi.srcJobs.length) ? ()=>setSuivi(choisi.type==='contr' ? choisi.code : choisi.id) : null}/>}
   </div>;
 
@@ -8546,7 +8561,7 @@ function RepContacts({c, busy, ecrire}){
     {!c.contacts.length && !ed && <div className="muted" style={{fontSize:12.5,marginTop:4}}>Aucun contact. Ajoute-en un, ou ouvre un particulier et clique « 🏗 Lier à un contracteur ».</div>}
   </div>;
 }
-function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr}){
+function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOuvrir}){
   const [versContr,setVersContr]=useState(false);
   const [lier,setLier]=useState(null);           // texte de recherche, ou {autre}
   const [edit,setEdit]=useState(null);
@@ -8593,6 +8608,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr}){
           {pers && c.contacts.filter(k=>k.notes).map((k,i)=><div key={i} style={{fontSize:12.5,marginTop:2,whiteSpace:'pre-wrap'}}>🗒 {k.notes}</div>)}
           {fiche && fiche.notes && <div style={{fontSize:12.5,marginTop:4,whiteSpace:'pre-wrap'}}>📝 {fiche.notes}</div>}
           {pers && c.noms.filter(n=>persNomPropre(n)!==c.nom).length>0 && <div className="muted" style={{fontSize:11.5,marginTop:4}}>Aussi écrit : {c.noms.filter(n=>persNomPropre(n)!==c.nom).slice(0,8).join(' · ')}</div>}
+          {pers && (c.lies||[]).length>0 && <div style={{fontSize:12.5,marginTop:4}}>🔗 Aussi lié à : {c.lies.map((q,i)=><React.Fragment key={q.id}>{i ? ', ' : ''}<a href="#" onClick={e=>{ e.preventDefault(); onOuvrir && onOuvrir(q.id, q.nom); }} style={{color:'var(--accent)'}}>{q.commerce ? '🏪' : '👤'} {q.nom}</a></React.Fragment>)}</div>}
           {pers && c.adresses.length>1 && <div className="muted" style={{fontSize:11.5}}>Autres adresses : {c.adresses.slice(1,4).join(' · ')}</div>}
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end'}}>
