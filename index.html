@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v165';
+const APP_VERSION = 'v166';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6464,7 +6464,7 @@ function StockView({data}){
 //  - le registre « La mémoire — Jobs » (montant du PO, client, dossier Drive), rempli par La mémoire.
 const CLIENT_CODES = {
   CRS:'Cuisines Rive-Sud', PAY:'Payne Construction', PY:'Payne Construction', ASC:'Ascension', SAR:'Saran Construction',
-  GOU:'Goulet', '5PIL':'Cinq Piliers', BOM:'Bomont', JOY:'JOY', GGP:'GGP', RROY:'RROY'
+  GOU:'Goulet', '5PIL':'Cinq Piliers', BOM:'Bomont', JOY:'JOY', GGP:'GGP', RROY:'RROY', DUL:'DUL'
 };
 const CLIENT_CONTACT = {CRS:'Jonathan Asselin', PAY:'Danny', ASC:'Cédric Gagnon'};
 const CREW_INITIALS = {PB:'Philippe Bernier', MC:'Maude Charest', AU:'Adèle Underhill', DW:'Daniel Wenning', BP:'Brandon Pereira', AD:'AD (ancien employé)'};
@@ -7823,7 +7823,7 @@ const CLIENT_COURRIELS = {'infopayneconstruction@gmail.com':'PAY'};
 function repCodeCourriel(e, F){
   const d = String(e||'').toLowerCase().split('@')[1] || ''; if(!d) return '';
   if(CLIENT_COURRIELS[String(e).trim().toLowerCase()]) return CLIENT_COURRIELS[String(e).trim().toLowerCase()];
-  const f = ((F && F.clients)||[]).find(x=>x.code && x.code!=='PART' && String(x.courriel).toLowerCase().split(/[\s,;]+/).some(c=>c.split('@')[1]===d));
+  const f = ((F && F.clients)||[]).find(x=>x.code && CLIENT_CODES[x.code] && String(x.courriel).toLowerCase().split(/[\s,;]+/).some(c=>c.split('@')[1]===d));
   return f ? f.code : (CLIENT_DOMAINES[d] || '');
 }
 // v154 : commerce (Éclairage Saran, St-Jean Pizzeria, dentiste, Actiforme…) ou particulier — deviné par des mots, corrigeable dans la fiche
@@ -7882,7 +7882,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   };
   // ---- Contracteurs ----
   const contr = {};
-  const C = code => contr[code] || (contr[code] = {type:'contr', id:'C:'+code, code, nom:CLIENT_CODES[code]||code, contact:CLIENT_CONTACT[code]||'',
+  const C = code => contr[code] || (contr[code] = {type:'contr', id:'C:'+code, code, nom:((F.clients.find(f=>f.code===code)||{}).nom) || CLIENT_CODES[code] || code, contact:CLIENT_CONTACT[code]||'',
     fiche:F.clients.find(f=>f.code===code)||null, jobs:{}, facturesSans:[], soum:[], contacts:[], achatsSans:[]});
   const codeDe = c => { c = String(c||'').toUpperCase(); if(c==='PY') c='PAY'; return CLIENT_CODES[c] ? c : ''; };
   Object.values(clients||{}).forEach(c=>{ if(c.code==='PART') return; c.jobs.forEach(j=>ajouterJob(C(c.code).jobs, c.code, {cle:cvJobCle(c,j), nom:j.name, po:j.po, adresse:j.address, events:j.events, reg:j.reg, id:j.id})); });
