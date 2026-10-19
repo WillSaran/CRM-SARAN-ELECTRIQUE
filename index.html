@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v179';
+const APP_VERSION = 'v180';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3676,6 +3676,265 @@ function SuiviTableur({rows, id, onChanged}){
 // ── UI: Factures — suivi des factures à partir du Sheet « SUIVI TRAVAUX SARAN ÉLECTRIQUE » (colonnes K/L/M).
 // À facturer = passages faits sans appel de service (manquant) ou avec appel mais sans facture (en traitement).
 // « Pas à facturer » écrit « ** » dans K et M : la ligne sort de la liste (et « Remettre » l'y ramène).
+// ── v180 : Paiements reçus (virements Interac lus dans Gmail par La mémoire + chèques / comptant entrés à la main) ──
+// Onglet « Paiements » de La mémoire — Factures : A Id courriel | B Date | C Envoyé par | D Montant | E Message | F Référence
+//   | G Factures lues | H Lien Gmail | I Source | J Factures confirmées | K Statut | L Note.  Le CRM écrit seulement J à L
+//   (ou une nouvelle ligne pour un paiement entré à la main). Rien n'est associé sans que tu confirmes (mode essai).
+const PAI_ENTETE = ['Id courriel','Date','Envoyé par','Montant','Message','Référence','Factures lues dans le message','Lien Gmail','Source','Factures confirmées','Statut','Note'];
+const PAI_MOTS_VIDES = new Set(['inc','ltee','ltd','limited','quebec','qc','canada','et','and','de','du','la','le','les','des','property','properties','gestion','construction','constructions','compagnie','cie','enr','senc','corp','corporation']);
+function paiNums(s){ return [...new Set(String(s||'').match(/\b\d{4}\b/g)||[])]; }
+function paiMots(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3 && !PAI_MOTS_VIDES.has(w) && !/^\d+$/.test(w)); }
+function paiJours(d){ const t = Date.parse(String(d||'').slice(0,10)); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
+function paiLireFactures(rows){
+  const fh=(rows[0]||[]).map(h=>cvNorm(h)), fc=re=>fh.findIndex(h=>re.test(h));
+  const fx={num:fc(/^facture/),date:fc(/^date/),cli:fc(/^client/),po:fc(/^po$/),nom:fc(/^nom/),desc:fc(/^description/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/),st:fc(/^statut/)};
+  const g=(r,k)=> fx[k]>=0 ? String(r[fx[k]]||'').trim() : '';
+  const out={}; rows.slice(1).forEach(r=>{ const n=g(r,'num'); if(!n) return;
+    out[n]={num:n, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, envoi:g(r,'env'), pdf:g(r,'pdf'), annulee:/^annul/.test(cvNorm(g(r,'st')))}; });
+  return out;
+}
+function paiLirePaiements(rows){
+  return rows.slice(1).map((r,i)=>({row:i+2, id:String(r[0]||''), date:String(r[1]||''), de:String(r[2]||''), montant:cvNum(r[3])||0, message:String(r[4]||''), ref:String(r[5]||''),
+    lues:paiNums(r[6]), lien:String(r[7]||''), source:String(r[8]||'Interac'), confirmees:paiNums(r[9]), statut:String(r[10]||'').trim(), note:String(r[11]||'')}))
+    .filter(p=>p.id || p.montant);
+}
+// Nom affiché du client d'une facture : contracteur (code) ou nom écrit sur la facture, sinon le courriel.
+function paiClientNom(f){ const c = String(f.client||'').trim(); const code = c.toUpperCase();
+  if(CLIENT_CODES[code]) return CLIENT_CODES[code]; return f.nom || c || '—'; }
+function paiClientCle(f){ return cvNorm(f.client) || cvNorm(f.nom) || 'f'+f.num; }
+// Mots qui représentent le client d'une facture (nom, courriel, nom du contracteur).
+function paiMotsFacture(f){ const c = String(f.client||''), code = c.toUpperCase();
+  return {mots:new Set([...paiMots(f.nom), ...paiMots(CLIENT_CODES[code]||''), ...paiMots(c.split('@')[0])]), courriel: c.includes('@') ? cvNorm(c.split('@')[0]) : ''}; }
+// Ressemblance entre « Envoyé par » d'un virement et le client d'une facture (0 = rien).
+function paiScoreNom(de, f){
+  const m = paiMots(de); if(!m.length) return 0; const {mots, courriel} = paiMotsFacture(f);
+  let s = 0; m.forEach((w,i)=>{ if(mots.has(w) || (w.length>=4 && courriel.includes(w))) s += (i===m.length-1 ? 2 : 1); });
+  return s;
+}
+// Toutes les combinaisons de 2 à maxN factures dont la somme = montant (± 2 ¢), au plus 3 solutions.
+function paiSommes(liste, montant, maxN){
+  const out=[], n=liste.length, cible=Math.round(montant*100), v=liste.map(f=>Math.round(f.solde*100));
+  const rec=(i, pris, tot)=>{ if(out.length>=3) return;
+    if(pris.length>=2 && Math.abs(tot-cible)<=2){ out.push(pris.map(k=>liste[k])); return; }
+    if(pris.length>=maxN || tot>cible+2) return;
+    for(let k=i;k<n;k++){ pris.push(k); rec(k+1, pris, tot+v[k]); pris.pop(); if(out.length>=3) return; } };
+  rec(0, [], 0); return out;
+}
+// Analyse : solde de chaque facture (paiements confirmés) et propositions pour les paiements pas encore confirmés.
+function paiementsAnalyser(factures, paiements){
+  const F = {}; Object.values(factures).forEach(f=>{ F[f.num] = {...f, paye:0, paiements:[]}; });
+  const conf = paiements.filter(p=>/^confirm/i.test(p.statut) && p.confirmees.length).sort((a,b)=>a.date.localeCompare(b.date));
+  // Ce qu'on a appris : tel « Envoyé par » paie pour tel client.
+  const appris = {};
+  conf.forEach(p=>{ let reste = p.montant; const fs = p.confirmees.map(n=>F[n]).filter(Boolean);
+    fs.forEach((f,i)=>{ const du = Math.max(0, f.ttc - f.paye); const part = i===fs.length-1 ? reste : Math.min(reste, du);
+      f.paye += part; reste -= part; f.paiements.push({date:p.date, de:p.de, montant:part, source:p.source, row:p.row}); });
+    const k = cvNorm(p.de); if(k) fs.forEach(f=>{ (appris[k]=appris[k]||new Set()).add(paiClientCle(f)); }); });
+  // Nom du client appris des paiements confirmés (factures où il n'y a qu'un courriel).
+  const nomsAppris = {}, titre = t => String(t||'').toLowerCase().replace(/(^|[\s'’-])\p{L}/gu, m=>m.toUpperCase());
+  conf.forEach(p=>{ if(!p.de || /^manuel-/.test(p.id)) return; p.confirmees.forEach(n=>{ if(F[n]) nomsAppris[paiClientCle(F[n])] = titre(p.de); }); });
+  Object.values(F).forEach(f=>{ f.solde = Math.round((f.ttc - f.paye)*100)/100;
+    const nn = paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
+    f.etat = f.annulee ? 'annulee' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
+    f.age = paiJours(f.envoi || f.date); });
+  const ouvertes = Object.values(F).filter(f=>f.etat==='impayee' || f.etat==='partielle');
+  const attente = paiements.filter(p=>!p.statut);
+  const propositions = {};
+  attente.forEach(p=>{
+    const opts = [], vu = new Set();
+    const ajoute = (fs, raison, niveau)=>{ const k = fs.map(f=>f.num).sort().join('+'); if(!fs.length || vu.has(k)) return; vu.add(k);
+      const total = fs.reduce((s,f)=>s+(f.etat==='payee'?0:f.solde),0); opts.push({factures:fs.map(f=>f.num), raison, niveau, ecart:Math.round((p.montant-total)*100)/100}); };
+    const dmax = Date.parse(String(p.date).slice(0,10)) + 10*864e5;
+    const cands = ouvertes.filter(f=>isNaN(dmax) || !Date.parse(f.date) || Date.parse(f.date)<=dmax);
+    const appr = appris[cvNorm(p.de)] || new Set();
+    const nomOk = f => paiScoreNom(p.de, f)>=2 || appr.has(paiClientCle(f));
+    // 1. Numéros de facture écrits dans le message
+    const lues = [...new Set([...p.lues, ...paiNums(p.message)])].map(n=>F[n]).filter(f=>f && f.etat!=='annulee');
+    if(lues.length){ const tot = lues.reduce((s,f)=>s+(f.etat==='payee'?0:f.solde),0);
+      ajoute(lues, 'Numéro'+(lues.length>1?'s':'')+' écrit'+(lues.length>1?'s':'')+' dans le message', Math.abs(tot-p.montant)<=0.05 ? 'sur' : 'verifier'); }
+    // 2. Une facture du même montant exact
+    const exacts = cands.filter(f=>Math.abs(f.solde-p.montant)<=0.02);
+    exacts.filter(nomOk).forEach(f=>ajoute([f], 'Même montant et même client', 'sur'));
+    // 3. Plusieurs factures du même client qui donnent le montant
+    const groupes = {}; cands.forEach(f=>{ (groupes[paiClientCle(f)]=groupes[paiClientCle(f)]||[]).push(f); });
+    Object.values(groupes).forEach(g=>{ const ok = g.some(nomOk); if(!ok && g.length>6) return;
+      const l = g.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).slice(0, ok ? 22 : 6);
+      paiSommes(l, p.montant, l.length>16 ? 3 : 5).forEach(fs=>ajoute(fs, fs.length+' factures du même client = le montant', ok ? 'sur' : 'probable')); });
+    exacts.filter(f=>!nomOk(f)).forEach(f=>ajoute([f], 'Même montant (nom différent)', 'probable'));
+    // 4. Le client ressemble mais le montant ne balance pas : paiement partiel ou acompte ?
+    if(!opts.some(o=>o.niveau==='sur')) cands.filter(nomOk).sort((a,b)=>String(a.date).localeCompare(String(b.date))).slice(0,3)
+      .forEach(f=>ajoute([f], f.solde>p.montant ? 'Même client — paiement partiel ?' : 'Même client — montant différent', 'verifier'));
+    const rang = {sur:0, probable:1, verifier:2};
+    opts.sort((a,b)=>rang[a.niveau]-rang[b.niveau] || Math.abs(a.ecart)-Math.abs(b.ecart));
+    // Deux propositions « sûres » différentes = pas sûr : on te laisse choisir.
+    if(opts.filter(o=>o.niveau==='sur').length>1) opts.forEach(o=>{ if(o.niveau==='sur') o.niveau='probable'; });
+    propositions[p.row] = opts.slice(0,4);
+  });
+  return {F, ouvertes, attente, propositions};
+}
+async function paiOnglet(id){
+  const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:id, fields:'sheets.properties.title'});
+  if(!(meta.result.sheets||[]).some(x=>x.properties.title==='Paiements')){
+    await window.gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId:id, resource:{requests:[{addSheet:{properties:{title:'Paiements'}}}]}});
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Paiements!A1', valueInputOption:'RAW', resource:{values:[PAI_ENTETE]}});
+  }
+}
+async function paiEcrireStatut(id, row, nums, statut, note){
+  suivreEcritures();
+  return window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Paiements!J'+row+':L'+row, valueInputOption:'RAW',
+    resource:{values:[[nums.join(', '), statut, note]]}});
+}
+const paiAujourdhui = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+
+function PaiementsView({cfg, refreshKey, q}){
+  const id = cfg.memoireFacturesSpreadsheetId;
+  const [tick,setTick]=useState(0);
+  const [data,setData]=useState(null);
+  const [err,setErr]=useState('');
+  const [sous,setSous]=useState('confirmer');
+  const [busy,setBusy]=useState('');
+  const [autre,setAutre]=useState({});          // row -> numéros tapés à la main
+  const [manuel,setManuel]=useState(null);       // {nums, montant, date, mode, note}
+  useEffect(()=>{ if(!id) return; let ok=true;
+    Promise.all([lireCache(id, 'A1:K', refreshKey>0||tick>0), lireCache(id, 'Paiements!A1:L', refreshKey>0||tick>0).catch(()=>null)])
+      .then(([f,p])=>{ if(ok){ setData({factures:paiLireFactures(f.result.values||[]), paiements: p ? paiLirePaiements(p.result.values||[]) : [], onglet: !!p}); setErr(''); } })
+      .catch(e=>{ if(ok) setErr(apiErrMsg(e)); });
+    return ()=>{ ok=false; }; },[id, refreshKey, tick]);
+  if(!id) return <div className="card">Configure l'ID du Sheet « La mémoire — Factures » dans Réglages.</div>;
+  if(err) return <div className="card" style={{color:'var(--danger)'}}>{err}</div>;
+  if(!data) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des factures et des paiements…</span></div>;
+  const A = paiementsAnalyser(data.factures, data.paiements);
+  const qq = cvNorm(q||'');
+  const filtreF = f => !qq || cvNorm([f.num, f.nom, f.client, f.nomAffiche, f.desc, f.po].join(' ')).includes(qq);
+  const filtreP = p => !qq || cvNorm([p.de, p.message, p.montant, p.confirmees.join(' ')].join(' ')).includes(qq);
+  const confirmer = async (p, nums, statut)=>{ setBusy('p'+p.row);
+    try{ await paiEcrireStatut(id, p.row, nums, statut, (statut==='Ignoré'?'Ignoré':'Confirmé')+' dans le CRM le '+paiAujourdhui()); setTick(t=>t+1); }
+    catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } setBusy(''); };
+  const ajouterManuel = async ()=>{ const m = manuel; const nums = paiNums(m.nums); const mt = cvNum(m.montant);
+    if(!nums.length || !mt){ alert('Indique le ou les numéros de facture et le montant.'); return; }
+    const inconnus = nums.filter(n=>!A.F[n]); if(inconnus.length && !confirm('Facture(s) introuvable(s) dans le registre : '+inconnus.join(', ')+'. Inscrire quand même ?')) return;
+    setBusy('manuel');
+    try{ await paiOnglet(id);
+      const f0 = A.F[nums[0]];
+      await sheetsAppendRow(id, 'Paiements', ['manuel-'+Date.now(), m.date||paiAujourdhui(), f0 ? f0.nomAffiche : '', mt, m.note||'', '', nums.join(', '), '', m.mode, nums.join(', '), 'Confirmé', 'Entré à la main dans le CRM le '+paiAujourdhui()]);
+      setManuel(null); setTick(t=>t+1); }
+    catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } setBusy(''); };
+  const annuler = async p => { if(!confirm('Remettre ce paiement « à confirmer » ?')) return; setBusy('p'+p.row);
+    try{ if(/^manuel-/.test(p.id)) await paiEcrireStatut(id, p.row, p.confirmees, 'Annulé', 'Annulé dans le CRM le '+paiAujourdhui()); else await paiEcrireStatut(id, p.row, [], '', ''); setTick(t=>t+1); }
+    catch(e){ alert('Impossible : '+apiErrMsg(e)); } setBusy(''); };
+  const ouvrirManuel = fs => setManuel({nums:fs.map(f=>f.num).join(', '), montant:fs.reduce((s,f)=>s+f.solde,0).toFixed(2), date:paiAujourdhui(), mode:'Chèque', note:''});
+
+  const aRecevoir = A.ouvertes.filter(filtreF);
+  const totalDu = aRecevoir.reduce((s,f)=>s+f.solde,0);
+  const tranche = (a,b)=>aRecevoir.filter(f=>f.age!=null && f.age>=a && f.age<=b).reduce((s,f)=>s+f.solde,0);
+  const attente = A.attente.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
+  const payees = Object.values(A.F).filter(f=>(f.etat==='payee') && filtreF(f)).sort((a,b)=>String(b.num).localeCompare(String(a.num)));
+  const tous = data.paiements.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
+  const descF = n => { const f = A.F[n]; return f ? '#'+n+' '+f.nomAffiche+(f.nom && f.nomAffiche!==f.nom ? ' — '+f.nom : '')+' ('+cvMoney(f.etat==='payee'?f.ttc:f.solde)+')' : '#'+n+' (pas dans le registre)'; };
+  const couleur = {sur:'var(--success)', probable:'var(--warning)', verifier:'var(--muted)'};
+  const etiquette = {sur:'Sûr', probable:'Probable', verifier:'À vérifier'};
+  const Tuile = ({v, l, c, onClick}) => <div className="card" style={{padding:12,cursor:onClick?'pointer':'default'}} onClick={onClick}><div style={{fontSize:20,fontWeight:800,color:c||'inherit',fontVariantNumeric:'tabular-nums'}}>{v}</div><div className="muted" style={{fontSize:12}}>{l}</div></div>;
+
+  return <div>
+    {!data.onglet && <div className="card" style={{marginBottom:10,borderColor:'var(--warning)'}}>
+      <b>L'onglet « Paiements » n'existe pas encore dans La mémoire — Factures.</b>
+      <div className="muted" style={{fontSize:12.5,marginTop:4}}>Colle le script « paiements.gs » dans La mémoire et exécute « paiementsInteracInstaller » : les virements Interac reçus vont s'ajouter tout seuls toutes les heures. En attendant, tu peux déjà marquer une facture payée à la main (chèque, comptant).</div>
+    </div>}
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:10,marginBottom:10}}>
+      <Tuile v={attente.length} l="paiements reçus à confirmer" c={attente.length?'var(--warning)':'var(--success)'} onClick={()=>setSous('confirmer')}/>
+      <Tuile v={cvMoney(totalDu)} l={aRecevoir.length+' facture'+(aRecevoir.length>1?'s':'')+' à recevoir'} c="var(--accent)" onClick={()=>setSous('recevoir')}/>
+      <Tuile v={cvMoney(tranche(0,30))} l="envoyées il y a 0 à 30 jours"/>
+      <Tuile v={cvMoney(tranche(31,60))} l="31 à 60 jours" c={tranche(31,60)>0?'var(--warning)':null}/>
+      <Tuile v={cvMoney(tranche(61,99999))} l="plus de 60 jours" c={tranche(61,99999)>0?'var(--danger)':null}/>
+    </div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+      {[['confirmer','À confirmer ('+attente.length+')'],['recevoir','À recevoir ('+aRecevoir.length+')'],['payees','Payées ('+payees.length+')'],['tous','Tous les paiements']].map(([k,l])=>
+        <button key={k} className={'btn btn-sm'+(sous===k?' btn-p':'')} onClick={()=>setSous(k)}>{l}</button>)}
+      <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>ouvrirManuel([])}>💵 Paiement chèque / comptant</button>
+    </div>
+
+    {manuel && <div className="card" style={{marginBottom:10,borderColor:'var(--accent)'}}>
+      <b>💵 Inscrire un paiement reçu</b>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:8,marginTop:8}}>
+        <div className="field"><label>Facture(s)</label><input value={manuel.nums} onChange={e=>setManuel({...manuel, nums:e.target.value})} placeholder="1234, 1235"/></div>
+        <div className="field"><label>Montant reçu</label><input value={manuel.montant} onChange={e=>setManuel({...manuel, montant:e.target.value})} inputMode="decimal"/></div>
+        <div className="field"><label>Date</label><input type="date" value={manuel.date} onChange={e=>setManuel({...manuel, date:e.target.value})}/></div>
+        <div className="field"><label>Mode</label><select value={manuel.mode} onChange={e=>setManuel({...manuel, mode:e.target.value})}>{['Chèque','Comptant','Dépôt direct','Interac','Autre'].map(m=><option key={m}>{m}</option>)}</select></div>
+      </div>
+      <div className="field" style={{marginTop:6}}><label>Note (no de chèque, etc.)</label><input value={manuel.note} onChange={e=>setManuel({...manuel, note:e.target.value})}/></div>
+      {paiNums(manuel.nums).length>0 && <div className="muted" style={{fontSize:12,marginTop:4}}>{paiNums(manuel.nums).map(descF).join(' · ')}</div>}
+      <div style={{display:'flex',gap:6,marginTop:8}}><button className="btn btn-sm btn-p" disabled={busy==='manuel'} onClick={ajouterManuel}>{busy==='manuel'?'…':'Inscrire'}</button><button className="btn btn-sm" onClick={()=>setManuel(null)}>Annuler</button></div>
+    </div>}
+
+    {sous==='confirmer' && <div className="card">
+      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Virements reçus pas encore associés à une facture. Rien n'est associé tant que tu ne confirmes pas.</div>
+      {!attente.length && <div className="muted" style={{padding:'8px 0'}}>Rien à confirmer.</div>}
+      {attente.map(p=>{ const opts = A.propositions[p.row]||[]; const b = busy==='p'+p.row;
+        return <div key={p.row} style={{padding:'10px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+          <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
+            <div style={{minWidth:0}}><b>{p.de||'—'}</b> <span className="muted">· {p.source} · {String(p.date).slice(0,10)}</span>
+              {p.message && <div style={{fontSize:12.5,marginTop:2}}>💬 « {p.message} »</div>}</div>
+            <div style={{textAlign:'right'}}><b style={{fontSize:15,fontVariantNumeric:'tabular-nums'}}>{cvMoney(p.montant)}</b>
+              {p.lien && <div><a href={p.lien} target="_blank" rel="noopener" style={{fontSize:12,color:'var(--accent)'}}>Courriel ↗</a></div>}</div>
+          </div>
+          {opts.map((o,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:6}}>
+            <span style={{fontSize:11,fontWeight:700,color:couleur[o.niveau],border:'1px solid',borderRadius:6,padding:'1px 6px'}}>{etiquette[o.niveau]}</span>
+            <span style={{fontSize:12.5,flex:'1 1 220px'}}>{o.factures.map(descF).join(' + ')}<span className="muted"> — {o.raison}{Math.abs(o.ecart)>0.05 ? ' · écart '+cvMoney(o.ecart) : ''}</span></span>
+            <button className="btn btn-sm btn-p" disabled={b} onClick={()=>confirmer(p, o.factures, 'Confirmé')}>{b?'…':'✓ Confirmer'}</button>
+          </div>)}
+          {(()=>{ const inc = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>!A.F[n]); return inc.length>0 && <div style={{fontSize:12.5,marginTop:6,color:'var(--warning)'}}>Le message parle de la facture {inc.join(', ')}, qui n'est pas (encore) dans le registre des factures.</div>; })()}
+          {!opts.length && <div className="muted" style={{fontSize:12.5,marginTop:6}}>Aucune facture ne correspond. Indique le numéro ci-dessous, ou « Pas une facture ».</div>}
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6,alignItems:'center'}}>
+            <input value={autre[p.row]||''} onChange={e=>setAutre({...autre, [p.row]:e.target.value})} placeholder="Autre(s) facture(s) : 1234, 1235" style={{flex:'1 1 180px',width:'auto',minWidth:0,padding:'5px 9px',fontSize:12.5}}/>
+            <button className="btn btn-sm" disabled={b || !paiNums(autre[p.row]).length} onClick={()=>confirmer(p, paiNums(autre[p.row]), 'Confirmé')}>Confirmer ces factures</button>
+            <button className="btn btn-sm" disabled={b} title="Ex. : argent personnel, remboursement — ne compte pour aucune facture" onClick={()=>confirmer(p, [], 'Ignoré')}>Pas une facture</button>
+          </div>
+          {paiNums(autre[p.row]).length>0 && <div className="muted" style={{fontSize:12,marginTop:3}}>{paiNums(autre[p.row]).map(descF).join(' + ')}</div>}
+        </div>; })}
+    </div>}
+
+    {sous==='recevoir' && <div className="card">
+      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Factures envoyées pas encore payées (ou payées en partie), la plus vieille en premier. Les factures annulées et à 0 $ ne sont pas comptées.</div>
+      {!aRecevoir.length && <div className="muted" style={{padding:'8px 0'}}>Tout est payé.</div>}
+      {(()=>{ const g = {}; aRecevoir.forEach(f=>{ const k = f.nomAffiche; (g[k]=g[k]||[]).push(f); });
+        return Object.entries(g).map(([k,fs])=>[k, fs.sort((a,b)=>(b.age||0)-(a.age||0))]).sort((a,b)=>(b[1][0].age||0)-(a[1][0].age||0)).map(([k,fs])=>
+          <div key={k} style={{padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}><b style={{color:'var(--accent)'}}>{k}</b><b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(fs.reduce((s,f)=>s+f.solde,0))}</b></div>
+            {fs.map(f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'3px 0'}}>
+              <span>🧾 <b>#{f.num}</b> <span className="muted">· {f.date}</span>{f.nom && f.nom!==k ? ' · '+f.nom : ''}{f.desc ? <span className="muted"> · {f.desc}</span> : ''}
+                {f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}</span>
+              <span style={{display:'flex',gap:8,alignItems:'center'}}>
+                <span style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(f.solde)}</span>
+                {f.age!=null && <span style={{fontWeight:700,color:f.age>60?'var(--danger)':f.age>30?'var(--warning)':'var(--muted)'}}>{f.age} j</span>}
+                {f.pdf && <a href={repPdf(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>PDF</a>}
+                <button className="btn btn-sm" onClick={()=>ouvrirManuel([f])}>💵 Payée</button>
+              </span>
+            </div>)}
+          </div>); })()}
+    </div>}
+
+    {sous==='payees' && <div className="card">
+      {!payees.length && <div className="muted" style={{padding:'8px 0'}}>Aucune facture confirmée payée pour l'instant.</div>}
+      {payees.map(f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'5px 0',borderBottom:'1px dashed var(--border)'}}>
+        <span>✅ <b>#{f.num}</b> {f.nomAffiche}{f.nom && f.nom!==f.nomAffiche ? ' — '+f.nom : ''} <span className="muted">· {cvMoney(f.ttc)}</span></span>
+        <span className="muted">{f.paiements.map(x=>x.source+' '+String(x.date).slice(0,10)+(x.de?' ('+x.de+')':'')).join(' · ')}</span>
+      </div>)}
+    </div>}
+
+    {sous==='tous' && <div className="card">
+      {!tous.length && <div className="muted" style={{padding:'8px 0'}}>Aucun paiement inscrit.</div>}
+      {tous.map(p=><div key={p.row} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'5px 0',borderBottom:'1px dashed var(--border)',opacity:/^(ignor|annul)/i.test(p.statut)?.55:1}}>
+        <span><b>{String(p.date).slice(0,10)}</b> · {p.de||'—'} · <b>{cvMoney(p.montant)}</b> <span className="muted">· {p.source}</span>{p.message ? <span className="muted"> · « {p.message} »</span> : ''}</span>
+        <span style={{display:'flex',gap:8,alignItems:'center'}}>
+          {/^confirm/i.test(p.statut) ? <span style={{color:'var(--success)'}}>→ {p.confirmees.map(n=>'#'+n).join(', ')}</span> : p.statut ? <span className="muted">{p.statut}</span> : <span style={{color:'var(--warning)'}}>à confirmer</span>}
+          {p.statut && !/^annul/i.test(p.statut) && <button className="btn btn-sm" disabled={busy==='p'+p.row} onClick={()=>annuler(p)}>↩</button>}
+          {p.lien && <a href={p.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>↗</a>}
+        </span>
+      </div>)}
+    </div>}
+  </div>;
+}
+
 function FacturesView({cfg, refreshKey}){
   const [loading,setLoading]=useState(true);
   const [rows,setRows]=useState([]);
@@ -3808,21 +4067,22 @@ function FacturesView({cfg, refreshKey}){
     {!id && <div className="card">Configure l'ID du Sheet "SUIVI TRAVAUX" dans Réglages.</div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {id && (loading ? <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture du suivi des travaux…</span></div> : <>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginBottom:12}}>
+      {vue!=='paiements' && <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginBottom:12}}>
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('afacturer')}><div style={{fontSize:24,fontWeight:800,color:manquantes.length?'var(--danger)':'var(--success)'}}>{manquantes.length}</div><div className="muted" style={{fontSize:12}}>rien d'inscrit (ni appel ni facture)</div></div>
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('afacturer')}><div style={{fontSize:24,fontWeight:800,color:'var(--warning)'}}>{traitement.length}</div><div className="muted" style={{fontSize:12}}>appel fait, facture à faire</div></div>
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('papiers')}><div style={{fontSize:24,fontWeight:800,color:'var(--accent)'}}>{papiers.length}</div><div className="muted" style={{fontSize:12}}>papiers à traiter (AP / OT déposés)</div></div>
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('annulees')}><div style={{fontSize:24,fontWeight:800}}>{annulees.length}</div><div className="muted" style={{fontSize:12}}>pas à facturer (**)</div></div>
-      </div>
+      </div>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
-        {[['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['tableur','📊 Mode tableur'],['papiers','Papiers à traiter ('+papiers.length+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
+        {[['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['tableur','📊 Mode tableur'],['papiers','Papiers à traiter ('+papiers.length+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes'],['paiements','💵 Paiements reçus']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (projet, adresse, no)…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
       </div>
-      <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:10}}>
+      {vue!=='paiements' && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:10}}>
         <button className="btn btn-sm" style={!filterC?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(null)}>Tous</button>
         {contracteurs.map(c=><button key={c} className="btn btn-sm" style={filterC===c?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(filterC===c?null:c)}>{nom(c)}</button>)}
-      </div>
-      {vue==='tableur' ? <SuiviTableur rows={rows} id={id} onChanged={()=>setTick(t=>t+1)}/> :
+      </div>}
+      {vue==='paiements' ? <PaiementsView cfg={cfg} refreshKey={refreshKey} q={q}/> :
+      vue==='tableur' ? <SuiviTableur rows={rows} id={id} onChanged={()=>setTick(t=>t+1)}/> :
       vue==='papiers' ? <div className="card">
         <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Ce qui est dans le dossier partagé <a href={'https://drive.google.com/drive/folders/'+PAD_DOSSIER} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>1-PAD SERVICE À TRAITER ↗</a> : papiers déposés par les gars, pas encore traités. Ce n'est pas une erreur. Pour chacun : où il en est dans le Suivi Travaux.</div>
         {padErr==='acces' && <div style={{fontSize:13,color:'var(--warning)',marginBottom:6}}>Le CRM n'a pas encore accès au Drive : déconnecte-toi puis reconnecte-toi (Google va demander d'autoriser la lecture du Drive).</div>}
@@ -6562,7 +6822,7 @@ function useClientsData(cfg, refreshKey){
         const readSheet = (id, nom, range) => id
           ? delai(Promise.resolve(window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:range||'A1:Z'})).then(r=>r.result.values||[], ()=>[]), nom, [])
           : Promise.resolve([]);
-        const [events, regRows, facRows, apRows, coRows, acRows, liRows, flRows, arRows, doRows, fiRows, soRows, gcRows] = await Promise.all([
+        const [events, regRows, facRows, apRows, coRows, acRows, liRows, flRows, arRows, doRows, fiRows, soRows, gcRows, paRows] = await Promise.all([
           delai(listCalendarEventsRange(calIds, min.toISOString(), max.toISOString()), 'agenda', []),
           readSheet(cfg.memoireJobsSpreadsheetId, 'registre des jobs'),
           readSheet(cfg.memoireFacturesSpreadsheetId, 'registre des factures'),
@@ -6575,7 +6835,8 @@ function useClientsData(cfg, refreshKey){
           readSheet(cfg.memoireAchatsSpreadsheetId, 'soumissions', 'Documents!A1:J'),
           readSheet(cfg.memoireJobsSpreadsheetId, 'fiches', 'Fiches!A1:L'),
           readSheet(cfg.memoireJobsSpreadsheetId, 'soumissions envoyées', 'Soumissions!A1:M'),
-          readSheet(cfg.memoireJobsSpreadsheetId, 'clients du logiciel comptable', "'Clients GCMEQ'!A1:K")
+          readSheet(cfg.memoireJobsSpreadsheetId, 'clients du logiciel comptable', "'Clients GCMEQ'!A1:K"),
+          readSheet(cfg.memoireFacturesSpreadsheetId, 'paiements', 'Paiements!A1:L')
         ]);
         const gcmeq = gcRows.slice(1).filter(r=>r[0]);   // v170 : liste d'adresses du logiciel comptable (GCMEQ)
         // v151 : fiches clients/jobs (onglet privé « Fiches ») et soumissions/OT envoyés (pour le Répertoire)
@@ -6615,6 +6876,8 @@ function useClientsData(cfg, refreshKey){
           factures[n]={num:n, row:i+2, date:fg(r,'date'), client:fg(r,'cli'), po:fg(r,'po'), nom:fg(r,'nom'), desc:fg(r,'desc'), ht:cvNum(fg(r,'ht')), ttc:cvNum(fg(r,'ttc')), envoi:fg(r,'env'), pdf:fg(r,'pdf'),
             statut:fg(r,'st'), annulee:/^annul/.test(st), ok:/^(ok|correct|verifie)/.test(st)}; });
         // Colonne « Statut » du registre (créée par le CRM au premier clic si elle n'existe pas encore).
+        // v180 : payée / partielle / à recevoir (onglet « Paiements », confirmés seulement)
+        try{ Object.values(paiementsAnalyser(factures, paiLirePaiements(paRows||[])).F).forEach(x=>{ if(factures[x.num]){ factures[x.num].etatPaie = x.etat; factures[x.num].paye = x.paye; } }); }catch(e){}
         Object.defineProperty(factures,'__statutCol',{value: fx.st>=0 ? fx.st : Math.max(fh.length, 10), enumerable:false});
         Object.defineProperty(factures,'__statutHeader',{value: fx.st>=0, enumerable:false});
         const head=(regRows[0]||[]).map(h=>cvNorm(h));
@@ -8446,7 +8709,7 @@ function RepDoublons({doublons, busy, ecrire, onIgnorer}){
 
 function RepLigneFacture({f}){
   return <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'4px 0',borderBottom:'1px dashed var(--border)',fontSize:12.5,opacity:f.annulee?.5:1}}>
-    <span>🧾 <b>#{f.num}</b> <span className="muted">· {cvFmtDay(f.date)} {String(f.date).slice(0,4)}</span>{f.desc ? ' · '+f.desc : ''}{f.annulee ? <span style={{color:'var(--danger)'}}> · annulée</span> : ''}</span>
+    <span>🧾 <b>#{f.num}</b> <span className="muted">· {cvFmtDay(f.date)} {String(f.date).slice(0,4)}</span>{f.desc ? ' · '+f.desc : ''}{f.annulee ? <span style={{color:'var(--danger)'}}> · annulée</span> : ''}{f.etatPaie==='payee' ? <span style={{color:'var(--success)'}}> · ✅ payée</span> : f.etatPaie==='partielle' ? <span style={{color:'var(--warning)'}}> · payée en partie</span> : f.etatPaie==='impayee' && f.envoi ? <span className="muted"> · à recevoir</span> : ''}</span>
     <span style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(f.ht)} <span className="muted">/ {cvMoney(f.ttc)} tx incl.</span>{f.pdf && <> · <a href={repPdf(f.pdf)} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} style={{color:'var(--accent)'}}>PDF</a></>}</span>
   </div>;
 }
