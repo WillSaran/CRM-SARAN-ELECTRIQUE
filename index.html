@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v198';
+const APP_VERSION = 'v199';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3986,6 +3986,9 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
 
   const aRecevoir = A.ouvertes.filter(filtreF);
   const totalDu = aRecevoir.reduce((s,f)=>s+f.solde,0);
+  // v199 : argent reçu depuis le 1er juin (virements, dépôts, chèques, comptant) — sauf les paiements marqués « Ignoré » (argent personnel, remboursement…)
+  const recus = data.paiements.filter(p=>!p.archive && p.statut!=='Ignoré' && String(p.date).slice(0,10)>=PAI_DEBUT);
+  const totalRecu = recus.reduce((s,p)=>s+(p.montant||0),0);
   const attente = A.attente.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
   const seuls = A.seuls.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
   const groupesV = A.groupes.filter(g=>g.membres.some(filtreP));
@@ -4008,6 +4011,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
     </div>}
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:10,marginBottom:10}}>
       <Tuile v={attente.length} l="paiements reçus à confirmer" c={attente.length?'var(--warning)':'var(--success)'} onClick={()=>setSous('confirmer')}/>
+      <Tuile v={'+ '+cvMoney(totalRecu)} l={'reçus depuis le 1er juin · '+recus.length+' paiement'+(recus.length>1?'s':'')} c="var(--success)" onClick={()=>setSous('tous')}/>
       <Tuile v={cvMoney(totalDu)} l={'En attente de paiement / en souffrance · '+aRecevoir.length+' facture'+(aRecevoir.length>1?'s':'')} c="var(--accent)" onClick={()=>setSous('recevoir')}/>
     </div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
