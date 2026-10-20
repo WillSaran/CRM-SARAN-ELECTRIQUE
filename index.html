@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v200';
+const APP_VERSION = 'v201';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5014,7 +5014,7 @@ function descFil(s, couleurUtile){
 // Tout est dans « La mémoire — Jobs » (privé) : onglet « Produits » (sans prix) et onglet « Prix fournisseurs ».
 // STOCK PUNCH PRO (ce que les gars voient) n'est pas touché par l'import.
 const PROD_ENTETE = ['Code','Description','Catégorie','Sous-catégorie','Unité','Photo','Code fabricant','Notes','Source','Mis à jour','Code PunchPro','Regroupé sous'];
-const OFFRE_ENTETE = ['Fournisseur','Code fournisseur','Code fabricant','Marque','Description','Catégorie','Unité','Mon prix','Prix de liste','Stock','Succursale','URL','Photo','Vendu par','Code CRM','Correspondance','Date'];
+const OFFRE_ENTETE = ['Fournisseur','Code fournisseur','Code fabricant','Marque','Description','Catégorie','Unité','Mon prix','Prix de liste','Stock','Succursale','URL','Photo','Vendu par','Code CRM','Correspondance','Date',"Prix d'ami"];   // v201 : colonne R = ton vrai prix payé (prix d'ami), jamais écrasée par les imports
 const CAT_ORDRE = ['FIL','CONDUIT','CONNECTEURS','BOÎTES','DÉCORA','ENTRÉE ÉLECTRIQUE','PANNEAUX','DISJONCTEURS','CHAUFFAGE','ÉCLAIRAGE','BORNES','CONNEXIONS / MALT','CONTRÔLE','DÉTECTION','QUINCAILLERIE','DIVERS','Stock personnalisé','SERVICES','À CLASSER','ADMINISTRATIF'];
 const FOURN_ORDRE = ['Dubo','Lumen','Gagnon'];
 function catSimple(c){
@@ -5092,7 +5092,7 @@ function useCatalogue(cfg){
     // v122 : tout est lu en même temps (au lieu d'un onglet après l'autre)
     const tot = f => { try{ return f().then(r=>({r}), e=>({e})); }catch(e){ return Promise.resolve({e}); } };
     const att = pr => pr.then(x=>{ if(x.e) throw x.e; return x.r; });
-    const pFiches = tot(()=>lireCache(idJ, 'Produits!A1:L', force)), pOffres = tot(()=>lireCache(idJ, "'Prix fournisseurs'!A1:Q", force));
+    const pFiches = tot(()=>lireCache(idJ, 'Produits!A1:L', force)), pOffres = tot(()=>lireCache(idJ, "'Prix fournisseurs'!A1:R", force));
     const pPrix = tot(()=>lireCache(idJ, 'Prix!A1:C', force)), pLiens = tot(()=>lireCache(idJ, 'Correspondances!A1:D', force));
     const pFact = tot(()=>lireCache(cfg.memoireFacturesSpreadsheetId, 'Lignes!A1:F', force)), pAch = tot(()=>sheetsBatchGet(cfg.memoireAchatsSpreadsheetId, ['A1:C', 'Lignes!A1:F']));
     try{
@@ -5131,7 +5131,7 @@ function useCatalogue(cfg){
       produits.forEach(p=>{ const u = uniteNorm(p.unite); if(estFil(p.code, p.desc, p.cat) && (u==='pi' || u==='m' || !u)){ if(u!=='m') p.unitePunch = p.unite || 'pi'; p.unite = 'm'; } });
       let offres = [];
       try{ const op = await att(pOffres);
-        offres = (op.result.values||[]).slice(1).map((r,i)=>({row:i+2, f:r[0]||'', codeF:r[1]||'', fab:r[2]||'', marque:r[3]||'', desc:r[4]||'', cat:r[5]||'', unite:r[6]||'', prix:cvNum(r[7]),
+        offres = (op.result.values||[]).slice(1).map((r,i)=>({row:i+2, f:r[0]||'', codeF:r[1]||'', fab:r[2]||'', marque:r[3]||'', desc:r[4]||'', cat:r[5]||'', unite:r[6]||'', prixSite:cvNum(r[7]), ami:cvNum(r[17]), prix:cvNum(r[17])>0 ? cvNum(r[17]) : cvNum(r[7]),
           liste:cvNum(r[8]), stock:r[9]||'', succ:r[10]||'', url:r[11]||'', photo:r[12]||'', vendu:r[13]||'', saran:r[14]||'', corr:r[15]||'', date:r[16]||''})).filter(o=>o.f && o.codeF); }catch(e){}
       const ordre = c => { const i = CAT_ORDRE.indexOf(c); return i<0 ? 50 : i; };
       const toutesCats = [...new Set([...cats, ...produits.map(p=>p.cat), ...CAT_ORDRE.filter(c=>c!=='Stock personnalisé')])].sort((a,b)=>ordre(a)-ordre(b) || a.localeCompare(b));
@@ -5250,6 +5250,18 @@ function useCatalogue(cfg){
     await ecrirePrix(code, valeur, ex && ex.row);
     if(!ex) await lire(true);
   };
+  // v201 : prix d'ami — ton vrai prix chez un fournisseur (colonne R de « Prix fournisseurs ») ; vide = on reprend le prix du site
+  const majPrixAmi = async (o, valeur)=>{ const v = String(valeur||'').trim().replace(',','.');
+    suivreEcritures();
+    await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:idJ, resource:{valueInputOption:'RAW', data:[
+      {range:qSheet('Prix fournisseurs')+'!R1', values:[["Prix d'ami"]]}, {range:qSheet('Prix fournisseurs')+'!R'+o.row, values:[[v]]}]}});
+    await lire(true); };
+  const ajouterPrixAmi = async (p, fournisseur, valeur)=>{ const v = String(valeur||'').trim().replace(',','.'); if(!fournisseur || !(cvNum(v)>0)) return;
+    await ensureOnglet('Prix fournisseurs', OFFRE_ENTETE);
+    const l = offreLigne({f:fournisseur, codeF:p.code, desc:p.desc, cat:p.cat, unite:p.unite, saran:p.code, date:new Date().toISOString().slice(0,10)}).map(x=>x==null?'':x); l[17] = v;
+    suivreEcritures();
+    await window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:idJ, range:qSheet('Prix fournisseurs')+'!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:[l]}});
+    await lire(true); };
   const majProfil = async (profil)=>{
     setEtat(s=>({...s, profil}));
     await ecrirePrix('PROFIL', profil, etat.prix.PROFIL && etat.prix.PROFIL.row);
@@ -5307,7 +5319,7 @@ function useCatalogue(cfg){
   };
   // Prix des sites fournisseurs : un prix par fournisseur + code fournisseur ; les prix, stocks et dates sont remplacés par les plus récents.
   const importerOffres = async (liste, photosSeulement)=>{
-    const rows = await lireOnglet('Prix fournisseurs', 'A1:Q'); const cle = (f,c)=>cvNorm(f)+'|'+codeNorm(c); const idx = {};
+    const rows = await lireOnglet('Prix fournisseurs', 'A1:R'); const cle = (f,c)=>cvNorm(f)+'|'+codeNorm(c); const idx = {};   // v201 : lit aussi R (prix d'ami) pour ne pas l'effacer
     rows.forEach((r,i)=>{ idx[cle(r[0],r[1])] = i; });
     let nouveaux=0, maj=0;
     liste.forEach(o=>{ if(!o.f || !o.codeF) return; const k = cle(o.f, o.codeF); const l = offreLigne(o);
@@ -5414,7 +5426,7 @@ function useCatalogue(cfg){
   };
   const pasPareil = async membres=>{ await assurerColL(); for(const p of membres) await marquer(p, '≠'); };
   const retirerDuGroupe = async p=>{ await marquer(p, ''); };
-  return {...etat, lire, coutDe, coutsDe, factureDe, suggereDe, prixDe, produitDe, aConfirmer, majPrix, majProfil, ajouterProduit, lier, modifierProduit,
+  return {...etat, lire, coutDe, coutsDe, factureDe, suggereDe, prixDe, produitDe, aConfirmer, majPrix, majPrixAmi, ajouterPrixAmi, majProfil, ajouterProduit, lier, modifierProduit,
     offresDe, meilleureOffre, monPrix, codeMaitre, offresLibres:liensOffres.libres, fournisseurs, comparaison, importerProduits, importerOffres, ajouterFiche, modifierFiche,
     propositions, trouverProduit, regrouper, pasPareil, retirerDuGroupe, aClasser, classerEnLot, lierEnLot, ajouterFichesEnLot};
 }
@@ -5478,6 +5490,7 @@ function ProduitsView({cfg, toast}){
     return <div title={os.map(x=>x.codeF+(x.vendu?' — '+x.vendu:'')+(x.prix>0?' — '+cvMoney(x.prix)+(x.unite?'/'+x.unite:''):'')).join('\n')+(o && o.date?'\nlu le '+o.date:'')} style={{whiteSpace:'nowrap'}}>
       <span style={vert ? {color:'var(--success, #2e9e5b)',fontWeight:700} : null}>{o ? cvMoney(prixEnUnite(o.prix,o.unite,u)) : '—'}</span>
       <span className="muted" style={{fontSize:10.5}}>{u ? '/'+u : ''}{aStock ? ' · '+stock+' en stock' : ''}</span>
+      {o && o.ami>0 && <div style={{fontSize:10.5,color:'var(--accent)'}} title={o.prixSite>0 ? 'Prix du site : '+cvMoney(o.prixSite) : ''}>prix d'ami{o.prixSite>0 ? ' (site '+cvMoney(o.prixSite)+')' : ''}</div>}
       <div className="muted" style={{fontSize:10.5}}>{fm.unite && <span style={{color:'var(--success, #2e9e5b)',fontWeight:700}}>✓ {u==='m' ? 'au mètre' : 'à l\'unité'}</span>}{fm.unite && (fm.rouleaux.length || fm.autres.length) ? ' · ' : ''}{fm.rouleaux.length ? 'rouleaux '+fm.rouleaux.join(', ')+' '+fm.u : ''}{fm.autres.length ? (fm.rouleaux.length?' · ':'')+fm.autres.join(', ') : ''}</div>
     </div>; };
   // Fil : prix au mètre (et au pied), tous fournisseurs — une seule ligne
@@ -5513,7 +5526,7 @@ function ProduitsView({cfg, toast}){
       <button className={'btn btn-sm'+(vue==='confirmer'?' btn-p':'')} onClick={()=>setVue('confirmer')}>❓ Achats hors liste ({C.aConfirmer.length})</button>
     </div>
     <div className="muted" style={{fontSize:11.5,marginBottom:8}}>
-      {vue==='catalogue' && <>Prix des sites fournisseurs (tes prix de compte, lus par Manus) ; le plus bas est en vert. Suggéré = meilleur coût ÷ (1 − profit %), grille « {C.profil} ». « Mon prix » remplace le suggéré. Les prix ne sont jamais dans PunchPro.</>}
+      {vue==='catalogue' && <>Prix des sites fournisseurs (tes prix de compte, lus par Manus) ; le plus bas est en vert. Suggéré = meilleur coût ÷ (1 − profit %), grille « {C.profil} ». « Mon prix » remplace le suggéré. Clique sur un produit pour entrer ton prix d'ami chez un fournisseur (il remplace le prix du site). Les prix ne sont jamais dans PunchPro.</>}
       {vue==='comparer' && <>Produits offerts par au moins deux fournisseurs, dans la même unité. Écart = combien tu paies de plus chez le plus cher.</>}
       {vue==='regrouper' && <>Un produit = <b>ton code</b> (ex. NMD2C6). Ici, les codes qui semblent être le même produit (logiciel comptable, PunchPro, Lumen « CAB… ») : choisis ton code, coche ceux qui vont dessous, puis ✓. Les prix, achats et factures suivent. PunchPro ne change pas pour les gars.</>}
       {vue==='relier' && <>Prix lus sur les sites qui ne correspondent à aucun de tes produits — surtout des produits que tu n'as pas encore dans ta liste.</>}
@@ -5778,6 +5791,9 @@ function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
   const ref = useRef(null);
   const offres = C.offresDe(p.code);
   const photoFourn = offres.filter(o=>o.photo);
+  const [ajout,setAjout]=useState(null);   // v201 : {f, prix} — prix d'ami chez un fournisseur qui n'a pas encore de prix pour ce produit
+  const sauverAmi = async (o, v)=>{ if(String(v).trim().replace(',','.')===String(o.ami>0 ? o.ami : '')) return;
+    try{ setOccupe('Enregistrement du prix…'); await C.majPrixAmi(o, v); setOccupe(''); toast&&toast(String(v).trim() ? "Prix d'ami enregistré : "+o.f+' '+o.codeF : 'Prix du site remis : '+o.f+' '+o.codeF); }catch(e){ setOccupe(''); err(e); } };
   const deposer = async f => { if(!f) return;
     try{ if(!peutDeposer()){ await requestToken('consent'); if(!peutDeposer()){ toast&&toast('Permission Drive refusée'); return; } }
       setOccupe('Envoi de la photo…'); const d = await driveDossier('Saran CRM — Photos produits');
@@ -5811,12 +5827,25 @@ function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
     </div>
     {offres.length>0 && <div style={{fontSize:12.5}}>
       {offres.map(o=><div key={o.f+o.codeF} style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',padding:'2px 0'}}>
-        <b style={{minWidth:52}}>{o.f}</b><span>{o.codeF}</span><span>{o.prix>0 ? cvMoney(o.prix)+(o.unite?'/'+o.unite:'') : '—'}</span>
+        <b style={{minWidth:52}}>{o.f}</b><span>{o.codeF}</span><span className={o.ami>0 ? 'muted' : ''} style={o.ami>0 ? {textDecoration:'line-through'} : null}>{o.prixSite>0 ? 'site '+cvMoney(o.prixSite)+(o.unite?'/'+o.unite:'') : 'site —'}</span>
+        <label style={{display:'inline-flex',gap:4,alignItems:'center'}}>Mon prix d'ami
+          <input key={o.row+'|'+(o.ami||'')} defaultValue={o.ami>0 ? o.ami : ''} placeholder={o.prixSite>0 ? String(o.prixSite) : 'prix'} inputMode="decimal" disabled={!!occupe}
+            onBlur={e=>sauverAmi(o, e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') e.target.blur(); }} style={{width:80,textAlign:'right',padding:'2px 6px'}}/>{o.unite ? <span className="muted">/{o.unite}</span> : null}</label>
         {o.stock!=='' && o.stock!=null && <span className="muted">{o.stock} en stock{o.succ?' ('+o.succ+')':''}</span>}{o.vendu && <span className="muted">vendu par {o.vendu}</span>}
         {o.url && <a href={o.url} target="_blank" rel="noopener">voir</a>}
         <button className="btn btn-sm" style={{padding:'1px 6px',fontSize:11}} title="Ce prix n'est pas pour ce produit" onClick={async()=>{ try{ await C.lier(o.codeF, o.f, ''); toast&&toast('Délié : '+o.codeF); }catch(e){ err(e); } }}>délier</button>
       </div>)}
     </div>}
+    <div style={{fontSize:12.5}}>
+      {ajout===null ? <button className="btn btn-sm" style={{fontSize:11.5}} disabled={!!occupe} onClick={()=>setAjout({f:FOURN_ORDRE.find(f=>!offres.some(o=>o.f===f)) || FOURN_ORDRE[0], prix:''})}>＋ Prix d'ami chez un fournisseur</button>
+        : <span style={{display:'inline-flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+            <input list="prix-ami-fourn" value={ajout.f} onChange={e=>setAjout({...ajout, f:e.target.value})} placeholder="Fournisseur" style={{width:120,padding:'3px 6px'}}/>
+            <datalist id="prix-ami-fourn">{[...new Set([...FOURN_ORDRE, ...C.fournisseurs||[]])].map(f=><option key={f} value={f}/>)}</datalist>
+            <input autoFocus value={ajout.prix} onChange={e=>setAjout({...ajout, prix:e.target.value})} placeholder="Ton prix" inputMode="decimal" style={{width:90,textAlign:'right',padding:'3px 6px'}}/>
+            <span className="muted">/{p.unite||'un'}</span>
+            <button className="btn btn-sm btn-p" disabled={!!occupe || !ajout.f.trim() || !(cvNum(ajout.prix.replace(',','.'))>0)} onClick={async()=>{ try{ setOccupe('Enregistrement du prix…'); await C.ajouterPrixAmi(p, ajout.f.trim(), ajout.prix); setOccupe(''); setAjout(null); toast&&toast("Prix d'ami ajouté : "+ajout.f.trim()); }catch(e){ setOccupe(''); err(e); } }}>OK</button>
+            <button className="btn btn-sm" onClick={()=>setAjout(null)}>Annuler</button></span>}
+    </div>
     <div style={{display:'flex',gap:6}}>
       <button className="btn btn-sm btn-p" disabled={!edit.code.trim() || !!occupe} onClick={async()=>{ try{ await C.modifierFiche(p, {...edit, code:edit.code.trim()}); setEdit(null); await C.lire(true); toast&&toast('Fiche enregistrée'); }catch(e){ err(e); } }}>Enregistrer</button>
       <button className="btn btn-sm" onClick={()=>setEdit(null)}>Annuler</button>
