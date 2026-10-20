@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v199';
+const APP_VERSION = 'v200';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3748,9 +3748,13 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   // Nom du client appris des paiements confirmés (factures où il n'y a qu'un courriel).
   const nomsAppris = {}, titre = t => String(t||'').toLowerCase().replace(/(^|[\s'’-])\p{L}/gu, m=>m.toUpperCase());
   conf.forEach(p=>{ if(!p.de || /^manuel-/.test(p.id)) return; p.confirmees.forEach(n=>{ if(F[n]) nomsAppris[paiClientCle(F[n])] = titre(p.de); }); });
-  Object.values(F).forEach(f=>{ f.solde = Math.round((f.ttc - f.paye)*100)/100;
+  // v200 : note de crédit (facture négative) — annule la facture ouverte du même client au même montant (ex. #2320 annule #2319)
+  Object.values(F).filter(f=>f.ttc < -0.05 && !f.annulee).sort((a,b)=>+a.num - +b.num).forEach(nc=>{
+    const cible = Object.values(F).filter(f=>!f.creditee && !f.annulee && f.ttc>0.05 && f.paye<0.05 && +f.num < +nc.num && paiClientCle(f)===paiClientCle(nc) && Math.abs(f.ttc + nc.ttc)<=0.02).sort((a,b)=>+a.num - +b.num)[0];
+    if(cible) cible.creditee = nc.num; });
+  Object.values(F).forEach(f=>{ f.solde = f.creditee ? 0 : Math.round((f.ttc - f.paye)*100)/100;
     const nn = f.nomRep || paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
-    f.etat = f.annulee ? 'annulee' : f.ouverte ? 'ouverte' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
+    f.etat = f.annulee || f.creditee ? 'annulee' : f.ouverte ? 'ouverte' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
     f.age = paiJours(f.envoi || f.date); });
   const ouvertes = Object.values(F).filter(f=>(f.etat==='impayee' || f.etat==='partielle') && (String(f.date).slice(0,10) >= PAI_DEBUT || String(f.envoi||'').slice(0,10) >= PAI_DEBUT));
   // v182 : paiement pour des factures plus vieilles que le registre (avant qu'il existe) : rangé à part, pas à confirmer
@@ -3769,12 +3773,16 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
     const opts = [], vu = new Set(), noms = p.noms || [p.de];
     const ajoute = (fs, raison, niveau)=>{ const k = fs.map(f=>f.num).sort().join('+'); if(!fs.length || vu.has(k)) return; vu.add(k);
       const total = fs.reduce((s,f)=>s+(f.etat==='payee'?0:f.solde),0); opts.push({factures:fs.map(f=>f.num), raison, niveau, ecart:Math.round((p.montant-total)*100)/100}); };
-    const dmax = Date.parse(String(p.date).slice(0,10)) + 10*864e5;
-    const cands = ouvertes.filter(f=>isNaN(dmax) || !Date.parse(f.date) || Date.parse(f.date)<=dmax);
     const appr = new Set(noms.flatMap(n=>[...(appris[cvNorm(n)] || [])]));
-    const conj = new Set(adr && adr.conjoint ? noms.flatMap(n=>[...(adr.conjoint[persCle(n)] || []), ...(adr.payeur ? [...adr.payeur(n)] : [])]) : []);
+    // v200 : « Paie aussi pour… » comparé mot à mot (ex. « Gestion M2RT+ » = « GESTION M2RT+ INC. »)
+    const conj = new Set(adr && adr.conjoint ? noms.flatMap(n=>{ const k = persCle(n), pm = paiMots(n);
+      return [...(k.split(' ').length>=2 ? (adr.conjoint[k] || []) : []), ...(adr.payeur ? [...adr.payeur(n)] : []),
+        ...(adr.conjMots||[]).filter(c=>c.mots.length && pm.length && c.mots.every(w=>pm.includes(w))).flatMap(c=>c.ids)]; }) : []);
     const conjOk = f => conj.size>0 && [persCle(f.nom||''), persCle(f.nomRep||''), String(f.client||'').trim().toLowerCase()].some(k=>k && conj.has(k));
     const nomOk = f => noms.some(n=>paiScoreNom(n, f)>=2) || appr.has(paiClientCle(f)) || conjOk(f);
+    // v200 : une facture datée après le paiement compte aussi si c'est le même client (facture refaite ou rectifiée après le paiement, jusqu'à 60 jours)
+    const d0 = Date.parse(String(p.date).slice(0,10)), dmax = d0 + 10*864e5;
+    const cands = ouvertes.filter(f=>isNaN(dmax) || !Date.parse(f.date) || Date.parse(f.date)<=dmax || (Date.parse(f.date)<=d0+60*864e5 && nomOk(f)));
     // v192 : payeur et client de la facture à la même adresse dans le Répertoire (ex. un conjoint qui paie la facture de l'autre)
     const adrP = new Set(adr ? noms.flatMap(n=>[...(adr.parNom[persCle(n)] || [])]) : []);
     const adrOk = f => { if(!adrP.size || !adr) return false; const c = String(f.client||'').trim().toLowerCase();
@@ -3792,6 +3800,9 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
     exacts.filter(nomOk).forEach(f=>ajoute([f], 'Même montant et même client', 'sur'));
     // v191 : le client a arrondi (ex. 1 034,00 $ pour 1 033,63 $) — même client, moins de 1 $ d'écart
     cands.filter(f=>nomOk(f) && Math.abs(f.solde-p.montant)>0.02 && Math.abs(f.solde-p.montant)<1).forEach(f=>ajoute([f], 'Même client, montant arrondi', 'sur'));
+    // v200 : même client, il manque un peu (au plus 5 %) : escompte accordé ? — un clic pour confirmer et fermer la facture
+    cands.filter(f=>nomOk(f) && f.solde-p.montant>=1 && f.solde-p.montant<=Math.max(5, f.solde*0.05)).forEach(f=>{ const d = Math.round((f.solde-p.montant)*100)/100;
+      ajoute([f], 'Même client — il manque '+cvMoney(d)+' (escompte ?)', 'probable'); const o = opts[opts.length-1]; if(o && o.factures[0]===f.num) o.escompte = d; });
     // 3. Plusieurs factures du même client qui donnent le montant
     const groupes = {}; cands.forEach(f=>{ (groupes[paiClientCle(f)]=groupes[paiClientCle(f)]||[]).push(f); });
     Object.values(groupes).forEach(g=>{ const ok = g.some(nomOk); if(!ok && g.length>6) return;
@@ -3865,6 +3876,9 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
     const conjoint = {}; R.pers.forEach(p=>{ const cj = (p.fiche && p.fiche.conjoints) || []; if(!cj.length) return;
       const idsP = [...new Set([p.nom, ...(p.noms||[])].map(persCle).filter(Boolean).concat((p.courriels||[]).map(e=>String(e).toLowerCase())))];
       cj.forEach(n=>{ const k = persCle(n); if(!k) return; idsP.forEach(i=>aj(conjoint, k, i)); [p.nom, ...(p.noms||[])].forEach(m=>aj(conjoint, persCle(m), k)); }); });
+    // v200 : même chose, mot à mot (garde les chiffres : M2RT+), et vaut aussi pour les fiches liées
+    const idsF = p => [...new Set([p.nom, ...(p.noms||[]), ...((p.fiche && p.fiche.alias)||[])].map(persCle).filter(Boolean).concat((p.courriels||[]).map(e=>String(e).toLowerCase())))];
+    const conjMots = []; R.pers.forEach(p=>((p.fiche && p.fiche.conjoints) || []).forEach(n=>{ const mots = paiMots(n); if(mots.length) conjMots.push({mots, ids:[p, ...(p.lies||[])].flatMap(idsF)}); }));
     // v195 : fiches liées (particulier ↔ son commerce, ex. Marc-André Roy ↔ Garage André Roy) — le payeur peut payer pour l'autre fiche
     const idsDe = p => [...new Set([p.nom, ...(p.noms||[]), ...((p.fiche && p.fiche.alias)||[])].map(persCle).filter(Boolean).concat((p.courriels||[]).map(e=>String(e).toLowerCase())))];
     const motsP = R.pers.map(p=>({p, mots:new Set([p.nom, ...(p.noms||[]), ...((p.fiche && p.fiche.alias)||[])].flatMap(paiMots))}));
@@ -3873,7 +3887,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       if(m.length) motsP.forEach(({p, mots})=>{ const communs = m.filter(w=>mots.has(w)).length;
         if(communs>=2 || (m.length===1 && communs===1)) [p, ...(p.lies||[])].forEach(q=>idsDe(q).forEach(i=>out.add(i))); });
       return (cache[k] = out); };
-    return {parNom, parCourriel, conjoint, payeur}; },[R]);
+    return {parNom, parCourriel, conjoint, conjMots, payeur}; },[R]);
   const nomDe = useCallback(e => parCourriel[e] || (()=>{ const code = repCodeCourriel(e, FR); return code ? {nom:CLIENT_CODES[code]||code} : null; })(),[parCourriel, FR]);
   const [assoc,setAssoc]=useState(null);   // {courriel, q, nom}
   const associer = async (courriel, cible, nomNouveau) => { setBusy('as'+courriel);
@@ -3948,6 +3962,14 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:g.membres.map(p=>({range:'Paiements!J'+p.row+':L'+p.row, values:[[nums.join(', '), statut, note]]}))}});
       setTick(t=>t+1); }
     catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } setBusy(''); };
+  // v200 : confirmer le paiement et inscrire l'escompte accordé (ligne « Escompte » dans Paiements) : la facture est fermée
+  const confirmerEscompte = async (cible, num, montant) => { const f = A.F[num]; if(!f) return;
+    if(!confirm('Confirmer le paiement pour la facture #'+num+' et accorder un escompte de '+cvMoney(montant)+' ? La facture sera fermée (payée).')) return;
+    setBusy(cible.id || 'p'+cible.row);
+    try{ const date = String(cible.date || (cible.membres||[{}]).slice(-1)[0].date || paiAujourdhui()).slice(0,10);
+      await sheetsAppendRow(id, 'Paiements', ['escompte-'+Date.now(), date, f.nomAffiche, montant.toFixed(2), 'Escompte accordé', '', num, '', 'Escompte', num, 'Confirmé', 'Escompte inscrit dans le CRM le '+paiAujourdhui()]);
+      if(cible.membres) await confirmerGroupe(cible, [num], 'Confirmé'); else await confirmer(cible, [num], 'Confirmé'); }
+    catch(e){ alert('Impossible : '+apiErrMsg(e)); setBusy(''); } };
   const ajouterManuel = async ()=>{ const m = manuel; const nums = paiNums(m.nums); const mt = cvNum(m.montant);
     if(!nums.length || !mt){ alert('Indique le ou les numéros de facture et le montant.'); return; }
     const inconnus = nums.filter(n=>!A.F[n]); if(inconnus.length && !confirm('Facture(s) introuvable(s) dans le registre : '+inconnus.join(', ')+'. Inscrire quand même ?')) return;
@@ -3987,7 +4009,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const aRecevoir = A.ouvertes.filter(filtreF);
   const totalDu = aRecevoir.reduce((s,f)=>s+f.solde,0);
   // v199 : argent reçu depuis le 1er juin (virements, dépôts, chèques, comptant) — sauf les paiements marqués « Ignoré » (argent personnel, remboursement…)
-  const recus = data.paiements.filter(p=>!p.archive && p.statut!=='Ignoré' && String(p.date).slice(0,10)>=PAI_DEBUT);
+  const recus = data.paiements.filter(p=>!p.archive && p.statut!=='Ignoré' && !/^escompte/i.test(p.source) && String(p.date).slice(0,10)>=PAI_DEBUT);
   const totalRecu = recus.reduce((s,p)=>s+(p.montant||0),0);
   const attente = A.attente.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
   const seuls = A.seuls.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
@@ -4083,6 +4105,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
             <span style={{fontSize:12.5,flex:'1 1 220px'}}>{o.factures.map(descF).join(' + ')}<span className="muted"> — {o.raison}{Math.abs(o.ecart)>0.05 ? ' · écart '+cvMoney(o.ecart) : ''}</span></span>
             <button className="btn btn-sm btn-p" disabled={b} onClick={()=>confirmerGroupe(g, o.factures, 'Confirmé')}>{b?'…':'✓ Confirmer les '+g.membres.length+' virements'}</button>
             {o.corriger && <button className="btn btn-sm" disabled={b} title="La facture importée avait un montant calculé ; on le remplace par le montant payé" onClick={()=>corrigerEtConfirmer(g, o.factures[0], o.corriger)}>✓ Confirmer et corriger la facture à {cvMoney(o.corriger)}</button>}
+            {o.escompte && <button className="btn btn-sm" disabled={b} title="Le reste est un escompte accordé : la facture est fermée" onClick={()=>confirmerEscompte(g, o.factures[0], o.escompte)}>✓ Confirmer avec escompte de {cvMoney(o.escompte)}</button>}
           </div>)}
           <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6,alignItems:'center'}}>
             <input value={autre[g.id]||''} onChange={e=>setAutre({...autre, [g.id]:e.target.value})} placeholder="Autre(s) facture(s) : 1234, 1235" style={{flex:'1 1 180px',width:'auto',minWidth:0,padding:'5px 9px',fontSize:12.5}}/>
@@ -4104,6 +4127,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
             <span style={{fontSize:12.5,flex:'1 1 220px'}}>{o.factures.map(descF).join(' + ')}<span className="muted"> — {o.raison}{Math.abs(o.ecart)>0.05 ? ' · écart '+cvMoney(o.ecart) : ''}</span></span>
             <button className="btn btn-sm btn-p" disabled={b} onClick={()=>confirmer(p, o.factures, 'Confirmé')}>{b?'…':'✓ Confirmer'}</button>
             {o.corriger && <button className="btn btn-sm" disabled={b} title="La facture importée avait un montant calculé ; on le remplace par le montant payé" onClick={()=>corrigerEtConfirmer(p, o.factures[0], o.corriger)}>✓ Confirmer et corriger la facture à {cvMoney(o.corriger)}</button>}
+            {o.escompte && <button className="btn btn-sm" disabled={b} title="Le reste est un escompte accordé : la facture est fermée" onClick={()=>confirmerEscompte(p, o.factures[0], o.escompte)}>✓ Confirmer avec escompte de {cvMoney(o.escompte)}</button>}
           </div>)}
           {(()=>{ const inc = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>!A.F[n]); return inc.length>0 && <div style={{fontSize:12.5,marginTop:6,color:'var(--warning)'}}>Le message parle de la facture {inc.join(', ')}, qui n'est pas (encore) dans le registre des factures.</div>; })()}
           {doublonsDe(p).map(([a,b])=><div key={a.num+b.num} style={{marginTop:6,padding:8,border:'1px solid var(--warning)',borderRadius:8,fontSize:12.5}}>
