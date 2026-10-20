@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v191';
+const APP_VERSION = 'v192';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3735,7 +3735,7 @@ function paiSommes(liste, montant, maxN){
 }
 // Analyse : solde de chaque facture (paiements confirmés) et propositions pour les paiements pas encore confirmés.
 // v186 : nomDe(courriel) = {nom} trouvé dans le Répertoire (fiche du particulier / commerce, contact d'un contracteur)
-function paiementsAnalyser(factures, paiements, nomDe, separes){
+function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   const F = {}; Object.values(factures).forEach(f=>{ F[f.num] = {...f, paye:0, paiements:[]};
     const c = String(f.client||'').trim().toLowerCase(); if(nomDe && c.includes('@')){ const r = nomDe(c); if(r) F[f.num].nomRep = r.nom; else F[f.num].sansFiche = c; } });
   const conf = paiements.filter(p=>/^confirm/i.test(p.statut) && p.confirmees.length).sort((a,b)=>a.date.localeCompare(b.date));
@@ -3773,6 +3773,10 @@ function paiementsAnalyser(factures, paiements, nomDe, separes){
     const cands = ouvertes.filter(f=>isNaN(dmax) || !Date.parse(f.date) || Date.parse(f.date)<=dmax);
     const appr = new Set(noms.flatMap(n=>[...(appris[cvNorm(n)] || [])]));
     const nomOk = f => noms.some(n=>paiScoreNom(n, f)>=2) || appr.has(paiClientCle(f));
+    // v192 : payeur et client de la facture à la même adresse dans le Répertoire (ex. un conjoint qui paie la facture de l'autre)
+    const adrP = new Set(adr ? noms.flatMap(n=>[...(adr.parNom[persCle(n)] || [])]) : []);
+    const adrOk = f => { if(!adrP.size || !adr) return false; const c = String(f.client||'').trim().toLowerCase();
+      return [...(adr.parCourriel[c] || []), ...(adr.parNom[persCle(f.nom||'')] || []), ...(adr.parNom[persCle(f.nomRep||'')] || [])].some(a=>adrP.has(a)); };
     // 1. Numéros de facture écrits dans le message
     const lues = [...new Set([...p.lues, ...paiNums(p.message)])].map(n=>F[n]).filter(f=>f && f.etat!=='annulee');
     if(lues.length){ const tot = lues.reduce((s,f)=>s+(f.etat==='payee'?0:f.solde),0);
@@ -3789,9 +3793,11 @@ function paiementsAnalyser(factures, paiements, nomDe, separes){
     Object.values(groupes).forEach(g=>{ const ok = g.some(nomOk); if(!ok && g.length>6) return;
       const l = g.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).slice(0, ok ? 22 : 6);
       paiSommes(l, p.montant, l.length>16 ? 3 : 5).forEach(fs=>ajoute(fs, fs.length+' factures du même client = le montant', ok ? 'sur' : 'probable')); });
-    exacts.filter(f=>!nomOk(f)).forEach(f=>ajoute([f], 'Même montant (nom différent)', 'probable'));
+    exacts.filter(f=>!nomOk(f) && adrOk(f)).forEach(f=>ajoute([f], 'Même montant · même adresse (conjoint ?)', 'sur'));
+    exacts.filter(f=>!nomOk(f) && !adrOk(f)).forEach(f=>ajoute([f], 'Même montant (nom différent)', 'probable'));
     // 4. Le client ressemble mais le montant ne balance pas : paiement partiel ou acompte ?
-    if(!opts.some(o=>o.niveau==='sur')){ const memes = cands.filter(nomOk).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    if(!opts.some(o=>o.niveau==='sur')){ cands.filter(f=>!nomOk(f) && adrOk(f)).slice(0,3).forEach(f=>ajoute([f], 'Même adresse (conjoint ?) — montant différent', 'verifier'));
+      const memes = cands.filter(nomOk).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
       if(memes.length>1 && memes.length<=6 && paiClientCle(memes[0])===paiClientCle(memes[memes.length-1])) ajoute(memes, 'Toutes les factures ouvertes de ce client', 'verifier');
       memes.slice(0,3).forEach(f=>ajoute([f], f.solde>p.montant ? 'Même client — paiement partiel ?' : 'Même client — montant différent', 'verifier')); }
     const rang = {sur:0, probable:1, verifier:2};
@@ -3847,6 +3853,10 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
     R.pers.forEach(p=>p.courriels.forEach(e=>{ e = String(e).toLowerCase(); if(!m[e]) m[e] = {nom:p.nom, p}; }));
     R.contr.forEach(c=>(c.contacts||[]).forEach(k=>[...(k.courriels||[]), ...String(k.courriel||'').split(/[\s,;]+/)].filter(e=>/@/.test(e)).forEach(e=>{ e = e.toLowerCase(); if(!m[e]) m[e] = {nom:(CLIENT_CODES[c.code]||c.nom||c.code)+' ('+k.nom+')', contr:c}; })));
     return m; },[R]);
+  const adr = useMemo(()=>{ const parNom = {}, parCourriel = {}; const aj = (m, k, a) => { if(k && a) (m[k] = m[k] || new Set()).add(a); };
+    R.pers.forEach(p=>{ const as = [...new Set([...(p.adresses||[]), p.adresse].map(repCleAdresse).filter(Boolean))]; if(!as.length) return;
+      [p.nom, ...(p.noms||[])].forEach(n=>as.forEach(a=>aj(parNom, persCle(n), a))); (p.courriels||[]).forEach(e=>as.forEach(a=>aj(parCourriel, String(e).toLowerCase(), a))); });
+    return {parNom, parCourriel}; },[R]);
   const nomDe = useCallback(e => parCourriel[e] || (()=>{ const code = repCodeCourriel(e, FR); return code ? {nom:CLIENT_CODES[code]||code} : null; })(),[parCourriel, FR]);
   const [assoc,setAssoc]=useState(null);   // {courriel, q, nom}
   const associer = async (courriel, cible, nomNouveau) => { setBusy('as'+courriel);
@@ -3874,7 +3884,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const essayes = useRef(new Set());
   const [autoConf,setAutoConf]=useState([]);   // [{de, montant, factures}]
   useEffect(()=>{ if(!data || !data.onglet || !id) return;
-    const A0 = paiementsAnalyser(data.factures, data.paiements, nomDe, separes), pris = new Set(), lot = [];
+    const A0 = paiementsAnalyser(data.factures, data.paiements, nomDe, separes, adr), pris = new Set(), lot = [];
     A0.attente.forEach(p=>{ if(essayes.current.has(p.row)) return; const o = A0.propositions[p.row]||[]; const surs = o.filter(x=>x.niveau==='sur');
       if(surs.length!==1 || o[0]!==surs[0] || surs[0].factures.some(n=>pris.has(n))) return;
       surs[0].factures.forEach(n=>pris.add(n)); lot.push({p, factures:surs[0].factures}); });
@@ -3889,7 +3899,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       data:lot.map(x=>({range:'Paiements!J'+x.p.row+':L'+x.p.row, values:[[x.factures.join(', '), 'Confirmé', note+(x.groupe ? ' — '+x.groupe+' virements ensemble' : '')]]}))}})
       .then(()=>{ setAutoConf(a=>[...a, ...lot.map(x=>({de:x.p.de, montant:x.p.montant, factures:x.factures}))]); setTick(t=>t+1); })
       .catch(e=>setErr('Confirmation automatique impossible : '+apiErrMsg(e)));
-  },[data, nomDe, separes]);
+  },[data, nomDe, separes, adr]);
   useEffect(()=>{ if(!id) return; let ok=true;
     Promise.all([lireCache(id, 'A1:K', refreshKey>0||tick>0), lireCache(id, 'Paiements!A1:L', refreshKey>0||tick>0).catch(()=>null)])
       .then(([f,p])=>{ if(ok){ setData({factures:paiLireFactures(f.result.values||[]), paiements: p ? paiLirePaiements(p.result.values||[]) : [], onglet: !!p}); setErr(''); } })
@@ -3898,7 +3908,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   if(!id) return <div className="card">Configure l'ID du Sheet « La mémoire — Factures » dans Réglages.</div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>{err}</div>;
   if(!data) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des factures et des paiements…</span></div>;
-  const A = paiementsAnalyser(data.factures, data.paiements, nomDe, separes);
+  const A = paiementsAnalyser(data.factures, data.paiements, nomDe, separes, adr);
   const qq = cvNorm(q||'');
   const filtreF = f => !qq || cvNorm([f.num, f.nom, f.client, f.nomAffiche, f.desc, f.po].join(' ')).includes(qq);
   const filtreP = p => !qq || cvNorm([p.de, p.message, p.montant, p.confirmees.join(' ')].join(' ')).includes(qq);
