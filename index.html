@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v207';
+const APP_VERSION = 'v208';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7223,7 +7223,7 @@ function useClientsData(cfg, refreshKey){
         const readSheet = (id, nom, range) => id
           ? delai(Promise.resolve(window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:range||'A1:Z'})).then(r=>r.result.values||[], ()=>[]), nom, [])
           : Promise.resolve([]);
-        const [events, regRows, facRows, apRows, coRows, acRows, liRows, flRows, arRows, doRows, fiRows, soRows, gcRows, paRows] = await Promise.all([
+        const [events, regRows, facRows, apRows, coRows, acRows, liRows, flRows, arRows, doRows, fiRows, soRows, gcRows, paRows, ccRows] = await Promise.all([
           delai(listCalendarEventsRange(calIds, min.toISOString(), max.toISOString()), 'agenda', []),
           readSheet(cfg.memoireJobsSpreadsheetId, 'registre des jobs'),
           readSheet(cfg.memoireFacturesSpreadsheetId, 'registre des factures'),
@@ -7237,8 +7237,10 @@ function useClientsData(cfg, refreshKey){
           readSheet(cfg.memoireJobsSpreadsheetId, 'fiches', 'Fiches!A1:L'),
           readSheet(cfg.memoireJobsSpreadsheetId, 'soumissions envoyées', 'Soumissions!A1:M'),
           readSheet(cfg.memoireJobsSpreadsheetId, 'clients du logiciel comptable', "'Clients GCMEQ'!A1:K"),
-          readSheet(cfg.memoireFacturesSpreadsheetId, 'paiements', 'Paiements!A1:L')
+          readSheet(cfg.memoireFacturesSpreadsheetId, 'paiements', 'Paiements!A1:L'),
+          readSheet(cfg.memoireJobsSpreadsheetId, 'contacts lus dans les courriels', "'Contacts courriels'!A1:J")   // v208 : script contactsCourriels (La mémoire)
         ]);
+        const contactsAuto = (ccRows||[]).slice(1).filter(r=>r[0] && r[1]);
         const gcmeq = gcRows.slice(1).filter(r=>r[0]);   // v170 : liste d'adresses du logiciel comptable (GCMEQ)
         // v151 : fiches clients/jobs (onglet privé « Fiches ») et soumissions/OT envoyés (pour le Répertoire)
         const fiches = lireFiches(fiRows);
@@ -7293,8 +7295,8 @@ function useClientsData(cfg, refreshKey){
         })).filter(r=>!/^fusionn/i.test(cvNorm(r.statut)));
         Object.defineProperty(registry,'__colStatut',{value: ix.st>=0 ? ix.st : Math.max(head.length, 12), enumerable:false});
         Object.defineProperty(registry,'__fiches',{value: fiches, enumerable:false});
-        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent, fiches, soumissions, gcmeq, t:Date.now(), force};
-        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent, fiches, soumissions, gcmeq});
+        CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent, fiches, soumissions, gcmeq, contactsAuto, t:Date.now(), force};
+        if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent, fiches, soumissions, gcmeq, contactsAuto});
       }catch(e){ if(alive) setState({loading:false, err:apiErrMsg(e), events:[], registry:[], factures:{}, appels:{}}); }
     })();
     return ()=>{alive=false};
@@ -8538,7 +8540,7 @@ function repContrDeNom(n, F){
   const f = ((F && F.clients)||[]).find(f=>CLIENT_CODES[f.code] && f.nom && cvNorm(f.nom).length>=5 && x.includes(cvNorm(f.nom)));
   return f ? f.code : '';
 }
-function repConstruire({clients, registry, factures, achats, soumissions, F, contacts, gcmeq}){
+function repConstruire({clients, registry, factures, achats, soumissions, F, contacts, gcmeq, contactsAuto}){
   F = F || {clients:[], jobs:[], fourn:[], masques:[]}; F.retirees = F.retirees || [];
   const today = cvDay(new Date().toISOString());
   const jobFiche = (code, cle, po, id) => F.jobs.find(f=>(f.code||'PART')===code && ((f.po && po && f.po===po) || (id && f.ids.has(id)) || ((!id || !f.ids.size) && f.aliasN.has(ficheNorm(cle)))));
@@ -8768,6 +8770,16 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   (F.contacts||[]).forEach(fc=>{ if(vus.has('c:'+fc.row) || !CLIENT_CODES[fc.code]) return;
     C(fc.code).contacts = C(fc.code).contacts.filter(k=>!(k.compta && cvNorm(k.nom)===cvNorm(fc.nom)));
     C(fc.code).contacts.push({fiche:fc, nom:fc.nom, role:fc.notes||'', courriels:String(fc.courriel||'').toLowerCase().split(/[\s,;]+/).filter(e=>/@/.test(e)), tels:[fc.tel].filter(Boolean), noms:[]}); });
+  // v208 : contacts lus dans les courriels (script contactsCourriels) : titre de la signature, téléphone, projets. Ce qui est écrit à la main dans la fiche passe en premier.
+  (contactsAuto||[]).forEach(r=>{ const courriel = String(r[0]||'').trim().toLowerCase(), code = codeDe(r[1]); if(!/@/.test(courriel) || !code) return;
+    const a = {nom:String(r[2]||'').trim(), titre:String(r[3]||'').trim(), tel:String(r[4]||'').trim(), projets:String(r[5]||'').split(/\s*;\s*/).filter(Boolean), note:String(r[6]||'').trim(), dernier:String(r[7]||'').slice(0,10)};
+    const c = C(code), chiffres = t => String(t||'').replace(/\D/g,'').slice(-10);
+    let k = c.contacts.find(x=>(x.courriels||[]).includes(courriel)) || (a.nom && c.contacts.find(x=>persCle(x.nom) && persCle(x.nom)===persCle(a.nom)));
+    if(!k){ k = {fiche:null, auto:true, nom:a.nom || courriel, role:'', courriels:[courriel], tels:[], noms:[]}; c.contacts.push(k); }
+    if(a.titre && (!k.role || (k.compta && !k.fiche))) k.role = a.titre;
+    if(a.tel && !(k.tels||[]).some(t=>chiffres(t)===chiffres(a.tel))) k.tels = [...(k.tels||[]), a.tel];
+    if(!(k.courriels||[]).includes(courriel)) k.courriels = [...(k.courriels||[]), courriel];
+    k.projets = a.projets; k.note = a.note; k.dernier = a.dernier; });
   const estPresident = k => /^pr[ée]sident/i.test(String(k.role||'').trim());   // v207 : le président s'affiche sous le nom du contracteur
   Object.values(contr).forEach(c=>{ c.listeJobs = c.listeJobs || []; c.cout = c.cout || 0; c.last = c.last || ''; c.contacts.sort((a,b)=>estPresident(b)-estPresident(a) || a.nom.localeCompare(b.nom,'fr'));
     const pr = c.contacts.find(estPresident); if(pr){ c.contact = pr.nom; c.president = pr; }
@@ -8912,7 +8924,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
   const [ignores,setIgnores]=useState(repIgnores);
   const F = d.fiches || {clients:[], jobs:[], fourn:[], masques:[]};
   const clients = useMemo(()=>cvBuildClients(d.events||[], d.registry||[], d.factures||{}),[d.events, d.registry, d.factures]);
-  const R = useMemo(()=>repConstruire({clients, registry:d.registry||[], factures:d.factures||{}, achats:d.achats||[], soumissions:d.soumissions||[], F, contacts, gcmeq:d.gcmeq||[]}),[clients, d.registry, d.factures, d.achats, d.soumissions, d.fiches, contacts, d.gcmeq]);
+  const R = useMemo(()=>repConstruire({clients, registry:d.registry||[], factures:d.factures||{}, achats:d.achats||[], soumissions:d.soumissions||[], F, contacts, gcmeq:d.gcmeq||[], contactsAuto:d.contactsAuto||[]}),[d.contactsAuto, clients, d.registry, d.factures, d.achats, d.soumissions, d.fiches, contacts, d.gcmeq]);
   const doublons = useMemo(()=>repDoublonsPers(R.pers, ignores),[R, ignores]);
   useEffect(()=>{ if(!attendu || d.maj || d.loading) return;
     const ok = R.pers.some(p=>p.nom===attendu.nom) || R.contr.some(c=>(c.contacts||[]).some(k=>k.nom===attendu.nom));
@@ -9259,7 +9271,13 @@ function RepImportCompta({cfg, onFait, toast, nbActuel}){
   </div>;
 }
 const CONTACT_TITRES = ['Président','Présidente','Gestionnaire de projet','Chargé de projet','Designer','Comptable','Agente administrative','Contremaître','Estimateur','Propriétaire'];
-function RepContacts({c, busy, ecrire}){
+function RepContacts({c, busy, ecrire, onAller}){
+  // v208 : un projet lu dans les courriels (« 615 Sanford », « P03590 Lebreux ») → la job du contracteur, pour l'ouvrir dans Projets
+  const jobDe = lib => { const L = c.listeJobs || [], po = (String(lib).match(/^P0?(\d{4,5})/i)||[])[1];
+    if(po){ const j = L.find(j=>String(j.po||'').replace(/\D/g,'').replace(/^0+/,'')===po.replace(/^0+/,'')); if(j) return j; }
+    const m = String(lib).match(/^(\d{1,5}[A-Za-z]?)\s+(.+)$/); if(!m) return null;
+    const no = m[1].toLowerCase(), rue = cvNorm(m[2]).slice(0,5);
+    return L.find(j=>[j.adresse, j.nom, ...(j.cles||[])].some(t=>{ const n = cvNorm(t); return n.includes(no) && n.includes(rue); })) || null; };
   const [ed,setEd]=useState(null);   // {fiche?, nom, role (titre), courriel, tel}
   const sauver = () => ecrire([{...(ed.fiche||{}), type:'Contact', code:c.code, nom:ed.nom.trim(), alias:ed.fiche ? ed.fiche.alias : [], notes:ed.role, courriel:ed.courriel, tel:ed.tel}],
     'Contact '+ed.nom.trim()+' enregistré chez '+c.code+'.').then(ok=>ok&&setEd(null));
@@ -9282,7 +9300,9 @@ function RepContacts({c, busy, ecrire}){
         <div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:12.5}}>
           {k.courriels.map(e=><a key={e} href={repGmail(e)} target="_blank" rel="noopener" title="Nouveau courriel dans Gmail" style={{color:'var(--accent)'}}>✉️ {e}</a>)}
           {k.tels.map(t=><a key={t} href={repTel(t)} style={{color:'var(--accent)'}}>📞 {t}</a>)}
-        </div></div>
+        </div>
+        {(k.projets||[]).length>0 && <div className="muted" style={{fontSize:12,marginTop:2}}>Projets : {k.projets.map((lib,i)=>{ const j = jobDe(lib), ids = j ? [...(j.ids||[])] : [];
+          return <React.Fragment key={lib}>{i ? ' · ' : ''}{ids.length && onAller ? <a href="#" onClick={e=>{ e.preventDefault(); onAller('projets', {jobIds:ids, nom:c.code+' '+lib}); }} style={{color:'var(--accent)'}} title="Ouvrir dans Projets">{lib}</a> : lib}</React.Fragment>; })}</div>}</div>
       <span style={{display:'flex',gap:4}}>
         <button className="btn btn-sm" disabled={busy} onClick={()=>setEd({fiche:k.fiche, nom:k.nom, role:k.role, courriel:k.courriels.join(', '), tel:k.tels[0]||''})}>✏️</button>
         {k.fiche && <button className="btn btn-sm" disabled={busy} title="Retirer de ce contracteur (redevient un particulier s'il a des factures)" onClick={()=>retirer(k)}>✕</button>}
@@ -9451,7 +9471,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
       </div>}
     </div>
 
-    {!pers && <RepContacts c={c} busy={busy} ecrire={ecrire}/>}
+    {!pers && <RepContacts c={c} busy={busy} ecrire={ecrire} onAller={onAller}/>}
     {/* v205 : les projets du client sont dans Projets (bouton plus haut) — plus de liste ici */}
   </div>;
 }
