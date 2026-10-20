@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v229';
+const APP_VERSION = 'v230';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3948,13 +3948,13 @@ function paiMots(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,''
 function paiJours(d){ const t = Date.parse(String(d||'').slice(0,10)); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
 function paiLireFactures(rows){
   const fh=(rows[0]||[]).map(h=>cvNorm(h)), fc=re=>fh.findIndex(h=>re.test(h));
-  const fx={num:fc(/^facture/),date:fc(/^date/),cli:fc(/^client/),po:fc(/^po$/),nom:fc(/^nom/),desc:fc(/^description/),ht:fc(/^montant/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/),st:fc(/^statut/)};
+  const fx={num:fc(/^facture/),date:fc(/^date/),cli:fc(/^client/),po:fc(/^po$/),nom:fc(/^nom/),desc:fc(/^description/),ht:fc(/^montant/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/),st:fc(/^statut/),esc:fc(/^escompte/)};   // v230 : Escompte (lu dans le PDF par le script)
   const g=(r,k)=> fx[k]>=0 ? String(r[fx[k]]||'').trim() : '';
   const out={}, tous=new Set(), vieilles={}; Object.defineProperty(out,'__cols',{value:fx, enumerable:false}); Object.defineProperty(out,'__tous',{value:tous, enumerable:false});
   Object.defineProperty(out,'__vieilles',{value:vieilles, enumerable:false});   // v229 : factures d'avant le 1er juin, gardées à part (payées par un virement d'après le 1er juin qui les nomme)
   rows.slice(1).forEach((r,i)=>{ const n=g(r,'num'); if(!n) return; tous.add(n);
     const d = g(r,'date'), env = g(r,'env'), dest = (d && d.slice(0,10) < PAI_DEBUT && !(env && env.slice(0,10) >= PAI_DEBUT)) ? vieilles : out;   // v190-191 : facture datée ET envoyée avant le 1er juin = pas dans le CRM
-    dest[n]={num:n, row:i+2, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, envoi:g(r,'env'), pdf:g(r,'pdf'), annulee:/^annul/.test(cvNorm(g(r,'st'))), statut:g(r,'st'),
+    dest[n]={num:n, row:i+2, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, escompte:Math.max(0, cvNum(g(r,'esc'))||0), envoi:g(r,'env'), pdf:g(r,'pdf'), annulee:/^annul/.test(cvNorm(g(r,'st'))), statut:g(r,'st'),
       ouverte:/^ouverte/i.test(g(r,'st')), estime:/^montant calcul/i.test(g(r,'st'))}; });   // v187 : importées du logiciel comptable
   Object.defineProperty(out,'__stCol',{value: fx.st>=0 ? fx.st : Math.max(fh.length, 10), enumerable:false});
   Object.defineProperty(out,'__stEntete',{value: fx.st>=0, enumerable:false});
@@ -4005,8 +4005,9 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   const conf = paiements.filter(p=>/^confirm/i.test(p.statut) && p.confirmees.length).sort((a,b)=>a.date.localeCompare(b.date));
   // Ce qu'on a appris : tel « Envoyé par » paie pour tel client.
   const appris = {};
-  conf.forEach(p=>{ let reste = p.montant; const fs = p.confirmees.map(n=>F[n]).filter(Boolean);
-    fs.forEach((f,i)=>{ const du = Math.max(0, f.ttc - f.paye); const part = i===fs.length-1 ? reste : Math.min(reste, du);
+  conf.forEach(p=>{ if(p.source==='Escompte' && p.confirmees.every(n=>F[n] && F[n].escompte>0)) return;   // v230 : escompte déjà lu dans le PDF (pas deux fois)
+    let reste = p.montant; const fs = p.confirmees.map(n=>F[n]).filter(Boolean);
+    fs.forEach((f,i)=>{ const du = Math.max(0, f.ttc - (f.escompte||0) - f.paye); const part = i===fs.length-1 ? reste : Math.min(reste, du);
       f.paye += part; reste -= part; f.paiements.push({date:p.date, de:p.de, montant:part, source:p.source, row:p.row}); });
     const k = cvNorm(p.de); if(k) fs.forEach(f=>{ (appris[k]=appris[k]||new Set()).add(paiClientCle(f)); }); });
   // Nom du client appris des paiements confirmés (factures où il n'y a qu'un courriel).
@@ -4016,7 +4017,7 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   Object.values(F).filter(f=>f.ttc < -0.05 && !f.annulee).sort((a,b)=>+a.num - +b.num).forEach(nc=>{
     const cible = Object.values(F).filter(f=>!f.creditee && !f.annulee && f.ttc>0.05 && f.paye<0.05 && +f.num < +nc.num && paiClientCle(f)===paiClientCle(nc) && Math.abs(f.ttc + nc.ttc)<=0.02).sort((a,b)=>+a.num - +b.num)[0];
     if(cible) cible.creditee = nc.num; });
-  Object.values(F).forEach(f=>{ f.solde = f.creditee ? 0 : Math.round((f.ttc - f.paye)*100)/100;
+  Object.values(F).forEach(f=>{ f.solde = f.creditee ? 0 : Math.round((f.ttc - (f.escompte||0) - f.paye)*100)/100;   // v230 : montant dû = total − escompte
     const nn = f.nomRep || paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
     f.etat = f.annulee || f.creditee ? 'annulee' : f.ouverte ? 'ouverte' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
     f.age = paiJours(f.envoi || f.date); });
@@ -4199,7 +4200,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       .catch(e=>setErr('Confirmation automatique impossible : '+apiErrMsg(e)));
   },[data, nomDe, separes, adr]);
   useEffect(()=>{ if(!id) return; let ok=true;
-    Promise.all([lireCache(id, 'A1:K', refreshKey>0||tick>0), lireCache(id, 'Paiements!A1:L', refreshKey>0||tick>0).catch(()=>null)])
+    Promise.all([lireCache(id, 'A1:M', refreshKey>0||tick>0), lireCache(id, 'Paiements!A1:L', refreshKey>0||tick>0).catch(()=>null)])
       .then(([f,p])=>{ if(ok){ setData({factures:paiLireFactures(f.result.values||[]), paiements: p ? paiLirePaiements(p.result.values||[]) : [], onglet: !!p}); setErr(''); } })
       .catch(e=>{ if(ok) setErr(apiErrMsg(e)); });
     return ()=>{ ok=false; }; },[id, refreshKey, tick]);
@@ -4283,7 +4284,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const groupesV = A.groupes.filter(g=>g.membres.some(filtreP));
   const payees = Object.values(A.F).filter(f=>(f.etat==='payee') && filtreF(f)).sort((a,b)=>String(b.num).localeCompare(String(a.num)));
   const tous = data.paiements.filter(filtreP).filter(p=>voirArch || !p.archive).sort((a,b)=>b.date.localeCompare(a.date));
-  const descF = n => { const f = A.F[n]; return f ? '#'+n+' '+f.nomAffiche+(f.nom && f.nomAffiche!==f.nom ? ' — '+f.nom : '')+' ('+(f.estime?'≈ ':'')+cvMoney(f.etat==='payee'?f.ttc:f.solde)+')' : '#'+n+' (pas dans le registre)'; };
+  const descF = n => { const f = A.F[n]; return f ? '#'+n+' '+f.nomAffiche+(f.nom && f.nomAffiche!==f.nom ? ' — '+f.nom : '')+' ('+(f.estime?'≈ ':'')+cvMoney(f.etat==='payee'?f.ttc:f.solde)+(f.escompte>0 ? ', escompte de '+cvMoney(f.escompte) : '')+')' : '#'+n+' (pas dans le registre)'; };
   const couleur = {sur:'var(--success)', probable:'var(--warning)', verifier:'var(--muted)'};
   const etiquette = {sur:'Sûr', probable:'Probable', verifier:'À vérifier'};
   const Tuile = ({v, l, c, onClick}) => <div className="card" style={{padding:12,cursor:onClick?'pointer':'default'}} onClick={onClick}><div style={{fontSize:20,fontWeight:800,color:c||'inherit',fontVariantNumeric:'tabular-nums'}}>{v}</div><div className="muted" style={{fontSize:12}}>{l}</div></div>;
@@ -7531,12 +7532,12 @@ function useClientsData(cfg, refreshKey){
           a.factures.forEach(f=>{ (appels.parFacture[f]=appels.parFacture[f]||[]).push(a); });
         });
         const fh=(facRows[0]||[]).map(h=>cvNorm(h)), fc=re=>fh.findIndex(h=>re.test(h));
-        const fx={num:fc(/^facture/),date:fc(/^date/),cli:fc(/^client/),po:fc(/^po$/),nom:fc(/^nom/),desc:fc(/^description/),ht:fc(/^montant/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/),st:fc(/^statut/)};
+        const fx={num:fc(/^facture/),date:fc(/^date/),cli:fc(/^client/),po:fc(/^po$/),nom:fc(/^nom/),desc:fc(/^description/),ht:fc(/^montant/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/),st:fc(/^statut/),esc:fc(/^escompte/)};   // v230 : Escompte (lu dans le PDF par le script)
         const fg=(r,k)=> fx[k]>=0 ? (r[fx[k]]||'').trim() : '';
         const factures={};
         facRows.slice(1).forEach((r,i)=>{ const n=fg(r,'num'); if(!n) return; const st=cvNorm(fg(r,'st'));
           if(fg(r,'date') && fg(r,'date').slice(0,10) < PAI_DEBUT && !(fg(r,'env') && fg(r,'env').slice(0,10) >= PAI_DEBUT)) return;   // v190-191 : datée ET envoyée avant le 1er juin = pas dans le CRM
-          factures[n]={num:n, row:i+2, date:fg(r,'date'), client:fg(r,'cli'), po:fg(r,'po'), nom:fg(r,'nom'), desc:fg(r,'desc'), ht:cvNum(fg(r,'ht')), ttc:cvNum(fg(r,'ttc')), envoi:fg(r,'env'), pdf:fg(r,'pdf'),
+          factures[n]={num:n, row:i+2, escompte:Math.max(0, cvNum(fg(r,'esc'))||0), date:fg(r,'date'), client:fg(r,'cli'), po:fg(r,'po'), nom:fg(r,'nom'), desc:fg(r,'desc'), ht:cvNum(fg(r,'ht')), ttc:cvNum(fg(r,'ttc')), envoi:fg(r,'env'), pdf:fg(r,'pdf'),
             statut:fg(r,'st'), annulee:/^annul/.test(st), ok:/^(ok|correct|verifie)/.test(st)}; });
         // Colonne « Statut » du registre (créée par le CRM au premier clic si elle n'existe pas encore).
         // v180 : payée / partielle / à recevoir (onglet « Paiements », confirmés seulement)
