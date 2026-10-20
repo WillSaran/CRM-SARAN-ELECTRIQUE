@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v220';
+const APP_VERSION = 'v221';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8782,6 +8782,10 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     if(a.tel && !(k.tels||[]).some(t=>chiffres(t)===chiffres(a.tel))) k.tels = [...(k.tels||[]), a.tel];
     if(!(k.courriels||[]).includes(courriel)) k.courriels = [...(k.courriels||[]), courriel];
     k.projets = a.projets; k.note = a.note; k.dernier = a.dernier; });
+  // v221 : « Propriétaire » = « Président » (un seul titre)
+  const titreUniforme = r => { if(!r || r==='—') return r; const l = String(r).replace(/propri[ée]taire/ig,'Président').replace(/pr[ée]sidente?\b/ig,'Président').split(/\s*·\s*/).map(x=>x.trim()).filter(Boolean);
+    return [...new Map(l.map(x=>[cvNorm(x), x])).values()].join(' · '); };
+  Object.values(contr).forEach(c=>c.contacts.forEach(k=>{ k.role = titreUniforme(k.role); }));
   const estPresident = k => /(^|[·\/,&]\s*|\s-\s)pr[ée]sident/i.test(String(k.role||'').trim());   // v217 : « Président · Chargé de projet »   // v207 : le président s'affiche sous le nom du contracteur
   // v212 : un contact = une seule ligne (même courriel, même nom, ou « Danny » = « Danny Chalet »), en ordre alphabétique
   const prenomDe = n => persCle(n).split(' ')[0] || '';
@@ -9286,7 +9290,7 @@ function RepImportCompta({cfg, onFait, toast, nbActuel}){
 }
 // v211 : projets montrés seulement pour les gestionnaires / chargés de projet, designers et estimateurs (pas l'adjointe, le service après-vente, le président…)
 const CONTACT_ROLE_PROJETS = /projet|design|cuisiniste|estimat/i;
-const CONTACT_TITRES = ['Président','Présidente','Gestionnaire de projet','Chargé de projet','Designer-Cuisiniste','Comptable','Responsable des comptes','Agente administrative','Contremaître','Estimateur','Propriétaire'];
+const CONTACT_TITRES = ['Président','Présidente','Gestionnaire de projet','Chargé de projet','Designer-Cuisiniste','Comptable','Responsable des comptes','Agente administrative','Contremaître','Estimateur'];
 const contactEstPresident = k => /(^|[·\/,&]\s*|\s-\s)pr[ée]sident/i.test(String(k.role||'').trim());
 // v214 : filtre « pres » = les présidents, en haut de la fiche (modifiables là) ; « autres » = la boîte Contacts, sans les présidents
 function RepContacts({c, busy, ecrire, onAller, filtre}){
