@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v195';
+const APP_VERSION = 'v196';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3782,7 +3782,9 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
     // 1. Numéros de facture écrits dans le message
     const lues = [...new Set([...p.lues, ...paiNums(p.message)])].map(n=>F[n]).filter(f=>f && f.etat!=='annulee');
     if(lues.length){ const tot = lues.reduce((s,f)=>s+(f.etat==='payee'?0:f.solde),0);
-      ajoute(lues, 'Numéro'+(lues.length>1?'s':'')+' écrit'+(lues.length>1?'s':'')+' dans le message'+(Math.abs(tot-p.montant)>0.05 && Math.abs(tot-p.montant)<1 ? ' (montant arrondi)' : ''), Math.abs(tot-p.montant)<1 ? 'sur' : 'verifier');
+      const partiel = p.montant < tot - 1 && lues.some(nomOk);   // v196 : versement d'une facture nommée dans le message, même client
+      ajoute(lues, 'Numéro'+(lues.length>1?'s':'')+' écrit'+(lues.length>1?'s':'')+' dans le message'+(Math.abs(tot-p.montant)>0.05 && Math.abs(tot-p.montant)<1 ? ' (montant arrondi)' : partiel ? ' — versement partiel (reste '+cvMoney(Math.round((tot-p.montant)*100)/100)+')' : ''),
+        Math.abs(tot-p.montant)<1 || partiel ? 'sur' : 'verifier');
       // v189 : montant calculé (≈) d'une facture importée qui ne balance pas avec le paiement qui la nomme : proposer de corriger la facture
       const o = opts[opts.length-1]; if(o && lues.length===1 && lues[0].estime && lues[0].paye<0.05 && Math.abs(o.ecart)>0.05){ o.corriger = p.montant; o.raison += ' · montant de la facture calculé (≈ '+cvMoney(lues[0].ttc)+'), le paiement dit '+cvMoney(p.montant); } }
     // 2. Une facture du même montant exact
@@ -3812,10 +3814,11 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   // v188 : plusieurs virements qui vont ensemble (même payeur dans le mois, ou même message à quelques jours — ex. un couple qui paie chacun la moitié)
   const sur1 = p => (propositions[p.row]||[]).some(o=>o.niveau==='sur');
   const cleNom = p => paiMots(p.de).sort().join(' '), cleMsg = p => { const m = cvNorm(p.message); return m.length>=8 && !/^merci/.test(m) ? m : ''; };
+  const cleFac = p => [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>F[n]).sort().join(',');   // v196 : mêmes factures nommées
   const jours = (a,b) => Math.abs(Date.parse(String(a.date).slice(0,10)) - Date.parse(String(b.date).slice(0,10)))/864e5;
   const libres = attente.filter(p=>!sur1(p)).sort((a,b)=>a.date.localeCompare(b.date));
   const pere = {}, tr = r => pere[r]===undefined || pere[r]===r ? r : (pere[r] = tr(pere[r]));
-  libres.forEach((p,i)=>libres.slice(i+1).forEach(q=>{ const lie = (cleNom(p) && cleNom(p)===cleNom(q) && jours(p,q)<=45) || (cleMsg(p) && cleMsg(p)===cleMsg(q) && jours(p,q)<=10);
+  libres.forEach((p,i)=>libres.slice(i+1).forEach(q=>{ const lie = (cleNom(p) && cleNom(p)===cleNom(q) && jours(p,q)<=120) || (cleMsg(p) && cleMsg(p)===cleMsg(q) && jours(p,q)<=10) || (cleFac(p) && cleFac(p)===cleFac(q));
     if(lie){ const a = tr(p.row), b = tr(q.row); if(a!==b) pere[b] = a; } }));
   const gr = {}; libres.forEach(p=>{ const r = tr(p.row); (gr[r] = gr[r] || []).push(p); });
   const groupesV = [];
