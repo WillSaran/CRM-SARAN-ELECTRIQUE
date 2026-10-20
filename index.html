@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v231';
+const APP_VERSION = 'v232';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4018,14 +4018,24 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   // v200 : note de crédit (facture négative) — annule la facture ouverte du même client au même montant (ex. #2320 annule #2319)
   Object.values(F).filter(f=>f.ttc < -0.05 && !f.annulee).sort((a,b)=>+a.num - +b.num).forEach(nc=>{
     const cible = Object.values(F).filter(f=>!f.creditee && !f.annulee && f.ttc>0.05 && f.paye<0.05 && +f.num < +nc.num && paiClientCle(f)===paiClientCle(nc) && Math.abs(f.ttc + nc.ttc)<=0.02).sort((a,b)=>+a.num - +b.num)[0];
-    if(cible) cible.creditee = nc.num; });
-  // v231 : facture refaite (ex. adresse corrigée, #2652 → #2672) : même client, même montant, même description, à 30 jours près,
-  // et la plus récente est payée → l'ancienne est « remplacée » (plus à recevoir). Rien n'est écrit dans le registre.
-  const descN = f => cvNorm(f.desc||'');
-  Object.values(F).forEach(f=>{ if(f.creditee || f.annulee || f.paye>0.05 || f.ttc<=0.05 || !descN(f)) return;
-    const g = Object.values(F).find(g=>g!==f && +g.num>+f.num && !g.annulee && paiClientCle(g)===paiClientCle(f) && Math.abs(g.ttc-f.ttc)<=0.02 && descN(g)===descN(f)
-      && Math.abs(Date.parse(String(g.date).slice(0,10))-Date.parse(String(f.date).slice(0,10)))<=30*864e5 && g.paye>0.05 && g.ttc-(g.escompte||0)-g.paye<=0.05);
-    if(g) f.remplaceePar = g.num; });
+    // v232 : note de crédit au montant calculé (≈, souvent faux) : on la jumelle par la description détaillée identique (même client, 60 jours)
+    const dn = f => cvNorm(f.desc||''), detail = f => /·/.test(String(f.desc||''));
+    const cible2 = !cible && nc.estime && detail(nc) ? Object.values(F).filter(f=>!f.creditee && !f.annulee && f.ttc>0.05 && f.paye<0.05 && +f.num < +nc.num && paiClientCle(f)===paiClientCle(nc)
+      && dn(f)===dn(nc) && Math.abs(Date.parse(String(nc.date).slice(0,10))-Date.parse(String(f.date).slice(0,10)))<=60*864e5).sort((a,b)=>+b.num - +a.num)[0] : null;
+    if(cible || cible2) (cible || cible2).creditee = nc.num; });
+  // v231-232 : facture refaite (nom, date, adresse ou erreur corrigés) : même client, même montant, même description (sans la date des travaux),
+  // à 14 jours près (30 si l'une des deux est payée). Si une seule est payée, l'autre est le doublon ; sinon, la plus récente remplace l'ancienne.
+  // Rien n'est écrit dans le registre (le ✕ « annuler » reste là pour l'inscrire).
+  const descN = f => cvNorm(String(f.desc||'').replace(/[·\-–]?\s*travaux\s+\d{4}-\d{2}-\d{2}/ig,''));
+  const payee = f => f.paye>0.05 && f.ttc-(f.escompte||0)-f.paye<=0.05;
+  const L = Object.values(F).filter(f=>!f.creditee && !f.annulee && f.ttc>0.05 && descN(f));
+  L.forEach(f=>L.forEach(g=>{ if(+g.num<=+f.num || f.remplaceePar || g.remplaceePar) return;
+    if(paiClientCle(g)!==paiClientCle(f) || Math.abs(g.ttc-f.ttc)>0.02 || descN(g)!==descN(f)) return;
+    const pf = payee(f), pg = payee(g), j = Math.abs(Date.parse(String(g.date).slice(0,10))-Date.parse(String(f.date).slice(0,10)))/864e5;
+    if(pf && pg) return;
+    if(j > ((pf||pg) ? 30 : 14)) return;
+    if(pf && !pg && g.paye<0.05) g.remplaceePar = f.num;            // l'ancienne est payée : la nouvelle est le doublon
+    else if(!pf && f.paye<0.05) f.remplaceePar = g.num; }));        // sinon : la plus récente remplace l'ancienne
   Object.values(F).forEach(f=>{ f.solde = f.creditee || f.remplaceePar ? 0 : Math.round((f.ttc - (f.escompte||0) - f.paye)*100)/100;   // v230 : montant dû = total − escompte
     const nn = f.nomRep || paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
     f.etat = f.annulee || f.creditee ? 'annulee' : f.remplaceePar ? 'remplacee' : f.ouverte ? 'ouverte' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
@@ -9492,7 +9502,7 @@ function RepDoublons({doublons, busy, ecrire, onIgnorer}){
 
 function RepLigneFacture({f}){
   return <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'4px 0',borderBottom:'1px dashed var(--border)',fontSize:12.5,opacity:f.annulee?.5:1}}>
-    <span>🧾 <b>#{f.num}</b> <span className="muted">· {cvFmtDay(f.date)} {String(f.date).slice(0,4)}</span>{f.desc ? ' · '+f.desc : ''}{f.annulee ? <span style={{color:'var(--danger)'}}> · annulée</span> : ''}{f.etatPaie==='payee' ? <span style={{color:'var(--success)'}}> · ✅ payée</span> : f.etatPaie==='remplacee' ? <span className="muted"> · remplacée par #{f.remplaceePar} (payée)</span> : f.etatPaie==='partielle' ? <span style={{color:'var(--warning)'}}> · payée en partie</span> : f.etatPaie==='impayee' && f.envoi ? <span className="muted"> · à recevoir</span> : ''}</span>
+    <span>🧾 <b>#{f.num}</b> <span className="muted">· {cvFmtDay(f.date)} {String(f.date).slice(0,4)}</span>{f.desc ? ' · '+f.desc : ''}{f.annulee ? <span style={{color:'var(--danger)'}}> · annulée</span> : ''}{f.etatPaie==='payee' ? <span style={{color:'var(--success)'}}> · ✅ payée</span> : f.etatPaie==='remplacee' ? <span className="muted"> · doublon de #{f.remplaceePar} (pas à recevoir)</span> : f.etatPaie==='partielle' ? <span style={{color:'var(--warning)'}}> · payée en partie</span> : f.etatPaie==='impayee' && f.envoi ? <span className="muted"> · à recevoir</span> : ''}</span>
     <span style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(f.ht)} <span className="muted">/ {cvMoney(f.ttc)} tx incl.</span>{f.pdf && <> · <a href={repPdf(f.pdf)} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} style={{color:'var(--accent)'}}>PDF</a></>}</span>
   </div>;
 }
