@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v187';
+const APP_VERSION = 'v188';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3733,7 +3733,7 @@ function paiSommes(liste, montant, maxN){
 }
 // Analyse : solde de chaque facture (paiements confirmés) et propositions pour les paiements pas encore confirmés.
 // v186 : nomDe(courriel) = {nom} trouvé dans le Répertoire (fiche du particulier / commerce, contact d'un contracteur)
-function paiementsAnalyser(factures, paiements, nomDe){
+function paiementsAnalyser(factures, paiements, nomDe, separes){
   const F = {}; Object.values(factures).forEach(f=>{ F[f.num] = {...f, paye:0, paiements:[]};
     const c = String(f.client||'').trim().toLowerCase(); if(nomDe && c.includes('@')){ const r = nomDe(c); if(r) F[f.num].nomRep = r.nom; else F[f.num].sansFiche = c; } });
   const conf = paiements.filter(p=>/^confirm/i.test(p.statut) && p.confirmees.length).sort((a,b)=>a.date.localeCompare(b.date));
@@ -3762,21 +3762,19 @@ function paiementsAnalyser(factures, paiements, nomDe){
   const anciens = paiements.filter(p=>p.horsRegistre);
   const archives = paiements.filter(p=>p.archive);
   const propositions = {};
-  attente.forEach(p=>{
-    const opts = [], vu = new Set();
+  // Propositions pour un paiement — ou pour plusieurs virements pris ensemble (p.noms = tous les payeurs du groupe)
+  const proposer = p => {
+    const opts = [], vu = new Set(), noms = p.noms || [p.de];
     const ajoute = (fs, raison, niveau)=>{ const k = fs.map(f=>f.num).sort().join('+'); if(!fs.length || vu.has(k)) return; vu.add(k);
       const total = fs.reduce((s,f)=>s+(f.etat==='payee'?0:f.solde),0); opts.push({factures:fs.map(f=>f.num), raison, niveau, ecart:Math.round((p.montant-total)*100)/100}); };
     const dmax = Date.parse(String(p.date).slice(0,10)) + 10*864e5;
     const cands = ouvertes.filter(f=>isNaN(dmax) || !Date.parse(f.date) || Date.parse(f.date)<=dmax);
-    const appr = appris[cvNorm(p.de)] || new Set();
-    const nomOk = f => paiScoreNom(p.de, f)>=2 || appr.has(paiClientCle(f));
+    const appr = new Set(noms.flatMap(n=>[...(appris[cvNorm(n)] || [])]));
+    const nomOk = f => noms.some(n=>paiScoreNom(n, f)>=2) || appr.has(paiClientCle(f));
     // 1. Numéros de facture écrits dans le message
     const lues = [...new Set([...p.lues, ...paiNums(p.message)])].map(n=>F[n]).filter(f=>f && f.etat!=='annulee');
     if(lues.length){ const tot = lues.reduce((s,f)=>s+(f.etat==='payee'?0:f.solde),0);
-      const cle = lues.map(f=>f.num).sort().join(','), autres = attente.filter(q=>q!==p && [...new Set([...q.lues, ...paiNums(q.message)])].filter(n=>F[n]).sort().join(',')===cle);
-      const ensemble = autres.length && Math.abs(autres.reduce((s,q)=>s+q.montant,0)+p.montant-tot)<=0.05;   // ex. 220,00 $ + 32,95 $ pour la même facture
-      ajoute(lues, 'Numéro'+(lues.length>1?'s':'')+' écrit'+(lues.length>1?'s':'')+' dans le message'+(ensemble ? ' · avec '+(autres.length>1?'les autres paiements':'l\'autre paiement du '+String(autres[0].date).slice(0,10))+', ça fait le total' : ''), Math.abs(tot-p.montant)<=0.05 || ensemble ? 'sur' : 'verifier');
-      if(ensemble && opts.length) opts[opts.length-1].ecart = 0; }
+      ajoute(lues, 'Numéro'+(lues.length>1?'s':'')+' écrit'+(lues.length>1?'s':'')+' dans le message', Math.abs(tot-p.montant)<=0.05 ? 'sur' : 'verifier'); }
     // 2. Une facture du même montant exact
     const exacts = cands.filter(f=>Math.abs(f.solde-p.montant)<=0.02);
     exacts.filter(nomOk).forEach(f=>ajoute([f], 'Même montant et même client', 'sur'));
@@ -3787,15 +3785,35 @@ function paiementsAnalyser(factures, paiements, nomDe){
       paiSommes(l, p.montant, l.length>16 ? 3 : 5).forEach(fs=>ajoute(fs, fs.length+' factures du même client = le montant', ok ? 'sur' : 'probable')); });
     exacts.filter(f=>!nomOk(f)).forEach(f=>ajoute([f], 'Même montant (nom différent)', 'probable'));
     // 4. Le client ressemble mais le montant ne balance pas : paiement partiel ou acompte ?
-    if(!opts.some(o=>o.niveau==='sur')) cands.filter(nomOk).sort((a,b)=>String(a.date).localeCompare(String(b.date))).slice(0,3)
-      .forEach(f=>ajoute([f], f.solde>p.montant ? 'Même client — paiement partiel ?' : 'Même client — montant différent', 'verifier'));
+    if(!opts.some(o=>o.niveau==='sur')){ const memes = cands.filter(nomOk).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+      if(memes.length>1 && memes.length<=6 && paiClientCle(memes[0])===paiClientCle(memes[memes.length-1])) ajoute(memes, 'Toutes les factures ouvertes de ce client', 'verifier');
+      memes.slice(0,3).forEach(f=>ajoute([f], f.solde>p.montant ? 'Même client — paiement partiel ?' : 'Même client — montant différent', 'verifier')); }
     const rang = {sur:0, probable:1, verifier:2};
     opts.sort((a,b)=>rang[a.niveau]-rang[b.niveau] || Math.abs(a.ecart)-Math.abs(b.ecart));
     // Deux propositions « sûres » différentes = pas sûr : on te laisse choisir.
     if(opts.filter(o=>o.niveau==='sur').length>1) opts.forEach(o=>{ if(o.niveau==='sur') o.niveau='probable'; });
-    propositions[p.row] = opts.slice(0,4);
-  });
-  return {F, ouvertes, attente, anciens, archives, minNum, propositions};
+    return opts.slice(0,4);
+  };
+  attente.forEach(p=>{ propositions[p.row] = proposer(p); });
+  // v188 : plusieurs virements qui vont ensemble (même payeur dans le mois, ou même message à quelques jours — ex. un couple qui paie chacun la moitié)
+  const sur1 = p => (propositions[p.row]||[]).some(o=>o.niveau==='sur');
+  const cleNom = p => paiMots(p.de).sort().join(' '), cleMsg = p => { const m = cvNorm(p.message); return m.length>=8 && !/^merci/.test(m) ? m : ''; };
+  const jours = (a,b) => Math.abs(Date.parse(String(a.date).slice(0,10)) - Date.parse(String(b.date).slice(0,10)))/864e5;
+  const libres = attente.filter(p=>!sur1(p)).sort((a,b)=>a.date.localeCompare(b.date));
+  const pere = {}, tr = r => pere[r]===undefined || pere[r]===r ? r : (pere[r] = tr(pere[r]));
+  libres.forEach((p,i)=>libres.slice(i+1).forEach(q=>{ const lie = (cleNom(p) && cleNom(p)===cleNom(q) && jours(p,q)<=45) || (cleMsg(p) && cleMsg(p)===cleMsg(q) && jours(p,q)<=10);
+    if(lie){ const a = tr(p.row), b = tr(q.row); if(a!==b) pere[b] = a; } }));
+  const gr = {}; libres.forEach(p=>{ const r = tr(p.row); (gr[r] = gr[r] || []).push(p); });
+  const groupesV = [];
+  Object.values(gr).filter(m=>m.length>=2 && m.length<=5).forEach(m=>{
+    const id = 'g'+m.map(p=>p.row).join('-'); if(separes && separes.has(id)) return;
+    const pseudo = {row:id, de:[...new Set(m.map(p=>p.de))].join(' + '), noms:[...new Set(m.map(p=>p.de))], montant:Math.round(m.reduce((t,p)=>t+p.montant,0)*100)/100,
+      message:[...new Set(m.map(p=>p.message).filter(Boolean))].join(' · '), lues:[...new Set(m.flatMap(p=>p.lues))], date:m[m.length-1].date};
+    const opts = proposer(pseudo); if(!opts.length) return;
+    groupesV.push({id, membres:m, montant:pseudo.montant, de:pseudo.de, opts}); });
+  const dansGroupe = new Set(groupesV.flatMap(g=>g.membres.map(p=>p.row)));
+  const seuls = attente.filter(p=>!dansGroupe.has(p.row));
+  return {F, ouvertes, attente, seuls, groupes:groupesV, anciens, archives, minNum, propositions};
 }
 async function paiOnglet(id){
   const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:id, fields:'sheets.properties.title'});
@@ -3843,25 +3861,29 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const [autre,setAutre]=useState({});          // row -> numéros tapés à la main
   const [manuel,setManuel]=useState(null);       // {nums, montant, date, mode, note}
   const [voirArch,setVoirArch]=useState(false);
+  const [separes,setSepares]=useState(()=>new Set());   // v188 : groupes de virements que tu as séparés
   const [annule,setAnnule]=useState('');   // numéro de facture à annuler (confirmation)
   const [imp,setImp]=useState(null);   // {source, nouvelles:[], lignes:[], annuler:[], etape}
   // v184 : les paiements « Sûr » (une seule proposition sûre) sont confirmés tout seuls ; ↩ dans « Tous les paiements » pour annuler
   const essayes = useRef(new Set());
   const [autoConf,setAutoConf]=useState([]);   // [{de, montant, factures}]
   useEffect(()=>{ if(!data || !data.onglet || !id) return;
-    const A0 = paiementsAnalyser(data.factures, data.paiements, nomDe), pris = new Set(), lot = [];
+    const A0 = paiementsAnalyser(data.factures, data.paiements, nomDe, separes), pris = new Set(), lot = [];
     A0.attente.forEach(p=>{ if(essayes.current.has(p.row)) return; const o = A0.propositions[p.row]||[]; const surs = o.filter(x=>x.niveau==='sur');
       if(surs.length!==1 || o[0]!==surs[0] || surs[0].factures.some(n=>pris.has(n))) return;
       surs[0].factures.forEach(n=>pris.add(n)); lot.push({p, factures:surs[0].factures}); });
+    A0.groupes.forEach(g=>{ if(g.membres.some(p=>essayes.current.has(p.row))) return; const surs = g.opts.filter(x=>x.niveau==='sur');
+      if(surs.length!==1 || g.opts[0]!==surs[0] || surs[0].factures.some(n=>pris.has(n))) return;
+      surs[0].factures.forEach(n=>pris.add(n)); g.membres.forEach(p=>lot.push({p, factures:surs[0].factures, groupe:g.membres.length})); });
     if(!lot.length) return;
     lot.forEach(x=>essayes.current.add(x.p.row));
     suivreEcritures();
     const note = 'Confirmé automatiquement (sûr) le '+paiAujourdhui();
     window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW',
-      data:lot.map(x=>({range:'Paiements!J'+x.p.row+':L'+x.p.row, values:[[x.factures.join(', '), 'Confirmé', note]]}))}})
+      data:lot.map(x=>({range:'Paiements!J'+x.p.row+':L'+x.p.row, values:[[x.factures.join(', '), 'Confirmé', note+(x.groupe ? ' — '+x.groupe+' virements ensemble' : '')]]}))}})
       .then(()=>{ setAutoConf(a=>[...a, ...lot.map(x=>({de:x.p.de, montant:x.p.montant, factures:x.factures}))]); setTick(t=>t+1); })
       .catch(e=>setErr('Confirmation automatique impossible : '+apiErrMsg(e)));
-  },[data, nomDe]);
+  },[data, nomDe, separes]);
   useEffect(()=>{ if(!id) return; let ok=true;
     Promise.all([lireCache(id, 'A1:K', refreshKey>0||tick>0), lireCache(id, 'Paiements!A1:L', refreshKey>0||tick>0).catch(()=>null)])
       .then(([f,p])=>{ if(ok){ setData({factures:paiLireFactures(f.result.values||[]), paiements: p ? paiLirePaiements(p.result.values||[]) : [], onglet: !!p}); setErr(''); } })
@@ -3870,12 +3892,17 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   if(!id) return <div className="card">Configure l'ID du Sheet « La mémoire — Factures » dans Réglages.</div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>{err}</div>;
   if(!data) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des factures et des paiements…</span></div>;
-  const A = paiementsAnalyser(data.factures, data.paiements, nomDe);
+  const A = paiementsAnalyser(data.factures, data.paiements, nomDe, separes);
   const qq = cvNorm(q||'');
   const filtreF = f => !qq || cvNorm([f.num, f.nom, f.client, f.nomAffiche, f.desc, f.po].join(' ')).includes(qq);
   const filtreP = p => !qq || cvNorm([p.de, p.message, p.montant, p.confirmees.join(' ')].join(' ')).includes(qq);
   const confirmer = async (p, nums, statut)=>{ setBusy('p'+p.row);
     try{ await paiEcrireStatut(id, p.row, nums, statut, (statut==='Ignoré'?'Ignoré':'Confirmé')+' dans le CRM le '+paiAujourdhui()); setTick(t=>t+1); }
+    catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } setBusy(''); };
+  const confirmerGroupe = async (g, nums, statut)=>{ setBusy(g.id);
+    try{ suivreEcritures(); const note = (statut==='Ignoré'?'Ignoré':'Confirmé')+' dans le CRM le '+paiAujourdhui()+' — '+g.membres.length+' virements ensemble';
+      await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:g.membres.map(p=>({range:'Paiements!J'+p.row+':L'+p.row, values:[[nums.join(', '), statut, note]]}))}});
+      setTick(t=>t+1); }
     catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } setBusy(''); };
   const ajouterManuel = async ()=>{ const m = manuel; const nums = paiNums(m.nums); const mt = cvNum(m.montant);
     if(!nums.length || !mt){ alert('Indique le ou les numéros de facture et le montant.'); return; }
@@ -3917,6 +3944,8 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const totalDu = aRecevoir.reduce((s,f)=>s+f.solde,0);
   const tranche = (a,b)=>aRecevoir.filter(f=>f.age!=null && f.age>=a && f.age<=b).reduce((s,f)=>s+f.solde,0);
   const attente = A.attente.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
+  const seuls = A.seuls.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
+  const groupesV = A.groupes.filter(g=>g.membres.some(filtreP));
   const payees = Object.values(A.F).filter(f=>(f.etat==='payee') && filtreF(f)).sort((a,b)=>String(b.num).localeCompare(String(a.num)));
   const tous = data.paiements.filter(filtreP).filter(p=>voirArch || !p.archive).sort((a,b)=>b.date.localeCompare(a.date));
   const descF = n => { const f = A.F[n]; return f ? '#'+n+' '+f.nomAffiche+(f.nom && f.nomAffiche!==f.nom ? ' — '+f.nom : '')+' ('+(f.estime?'≈ ':'')+cvMoney(f.etat==='payee'?f.ttc:f.solde)+')' : '#'+n+' (pas dans le registre)'; };
@@ -3996,7 +4025,28 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
     {sous==='confirmer' && <div className="card">
       <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Virements reçus pas encore associés à une facture. Rien n'est associé tant que tu ne confirmes pas.{A.anciens.length>0 && <> {A.anciens.length} paiement{A.anciens.length>1?'s':''} pour des factures pas dans le registre (n° plus petit que {A.minNum}) {A.anciens.length>1?'sont rangés':'est rangé'} dans « Tous les paiements ».</>}{A.archives.length>0 && <> Les paiements d'avant le 1er juin 2026 sont archivés.</>}</div>
       {!attente.length && <div className="muted" style={{padding:'8px 0'}}>Rien à confirmer.</div>}
-      {attente.map(p=>{ const opts = A.propositions[p.row]||[]; const b = busy==='p'+p.row;
+      {groupesV.map(g=>{ const b = busy===g.id;
+        return <div key={g.id} style={{padding:'10px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+          <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
+            <div style={{minWidth:0}}><b>🔗 {g.membres.length} virements ensemble</b> <span className="muted">· {g.de}</span></div>
+            <b style={{fontSize:15,fontVariantNumeric:'tabular-nums'}}>{cvMoney(g.montant)}</b>
+          </div>
+          {g.membres.map(p=><div key={p.row} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'2px 0 2px 14px'}}>
+            <span><span className="muted">{String(p.date).slice(0,10)}</span> · {p.de}{p.message ? <span className="muted"> · « {p.message} »</span> : ''}</span>
+            <span style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(p.montant)}{p.lien && <> · <a href={p.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>↗</a></>}</span></div>)}
+          {g.opts.map((o,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:6}}>
+            <span style={{fontSize:11,fontWeight:700,color:couleur[o.niveau],border:'1px solid',borderRadius:6,padding:'1px 6px'}}>{etiquette[o.niveau]}</span>
+            <span style={{fontSize:12.5,flex:'1 1 220px'}}>{o.factures.map(descF).join(' + ')}<span className="muted"> — {o.raison}{Math.abs(o.ecart)>0.05 ? ' · écart '+cvMoney(o.ecart) : ''}</span></span>
+            <button className="btn btn-sm btn-p" disabled={b} onClick={()=>confirmerGroupe(g, o.factures, 'Confirmé')}>{b?'…':'✓ Confirmer les '+g.membres.length+' virements'}</button>
+          </div>)}
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6,alignItems:'center'}}>
+            <input value={autre[g.id]||''} onChange={e=>setAutre({...autre, [g.id]:e.target.value})} placeholder="Autre(s) facture(s) : 1234, 1235" style={{flex:'1 1 180px',width:'auto',minWidth:0,padding:'5px 9px',fontSize:12.5}}/>
+            <button className="btn btn-sm" disabled={b || !paiNums(autre[g.id]).length} onClick={()=>confirmerGroupe(g, paiNums(autre[g.id]), 'Confirmé')}>Confirmer ces factures</button>
+            <button className="btn btn-sm" disabled={b} title="Ces virements ne vont pas ensemble : les voir un par un" onClick={()=>setSepares(s=>new Set([...s, g.id]))}>Séparer</button>
+          </div>
+          {paiNums(autre[g.id]).length>0 && <div className="muted" style={{fontSize:12,marginTop:3}}>{paiNums(autre[g.id]).map(descF).join(' + ')}</div>}
+        </div>; })}
+      {seuls.map(p=>{ const opts = A.propositions[p.row]||[]; const b = busy==='p'+p.row;
         return <div key={p.row} style={{padding:'10px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
           <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
             <div style={{minWidth:0}}><b>{p.de||'—'}</b> <span className="muted">· {p.source} · {String(p.date).slice(0,10)}</span>
