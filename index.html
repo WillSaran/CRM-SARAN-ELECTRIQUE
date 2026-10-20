@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v183';
+const APP_VERSION = 'v184';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3809,6 +3809,23 @@ function PaiementsView({cfg, refreshKey, q}){
   const [autre,setAutre]=useState({});          // row -> numéros tapés à la main
   const [manuel,setManuel]=useState(null);       // {nums, montant, date, mode, note}
   const [voirArch,setVoirArch]=useState(false);
+  // v184 : les paiements « Sûr » (une seule proposition sûre) sont confirmés tout seuls ; ↩ dans « Tous les paiements » pour annuler
+  const essayes = useRef(new Set());
+  const [autoConf,setAutoConf]=useState([]);   // [{de, montant, factures}]
+  useEffect(()=>{ if(!data || !data.onglet || !id) return;
+    const A0 = paiementsAnalyser(data.factures, data.paiements), pris = new Set(), lot = [];
+    A0.attente.forEach(p=>{ if(essayes.current.has(p.row)) return; const o = A0.propositions[p.row]||[]; const surs = o.filter(x=>x.niveau==='sur');
+      if(surs.length!==1 || o[0]!==surs[0] || surs[0].factures.some(n=>pris.has(n))) return;
+      surs[0].factures.forEach(n=>pris.add(n)); lot.push({p, factures:surs[0].factures}); });
+    if(!lot.length) return;
+    lot.forEach(x=>essayes.current.add(x.p.row));
+    suivreEcritures();
+    const note = 'Confirmé automatiquement (sûr) le '+paiAujourdhui();
+    window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW',
+      data:lot.map(x=>({range:'Paiements!J'+x.p.row+':L'+x.p.row, values:[[x.factures.join(', '), 'Confirmé', note]]}))}})
+      .then(()=>{ setAutoConf(a=>[...a, ...lot.map(x=>({de:x.p.de, montant:x.p.montant, factures:x.factures}))]); setTick(t=>t+1); })
+      .catch(e=>setErr('Confirmation automatique impossible : '+apiErrMsg(e)));
+  },[data]);
   useEffect(()=>{ if(!id) return; let ok=true;
     Promise.all([lireCache(id, 'A1:K', refreshKey>0||tick>0), lireCache(id, 'Paiements!A1:L', refreshKey>0||tick>0).catch(()=>null)])
       .then(([f,p])=>{ if(ok){ setData({factures:paiLireFactures(f.result.values||[]), paiements: p ? paiLirePaiements(p.result.values||[]) : [], onglet: !!p}); setErr(''); } })
@@ -3853,6 +3870,11 @@ function PaiementsView({cfg, refreshKey, q}){
     {!data.onglet && <div className="card" style={{marginBottom:10,borderColor:'var(--warning)'}}>
       <b>L'onglet « Paiements » n'existe pas encore dans La mémoire — Factures.</b>
       <div className="muted" style={{fontSize:12.5,marginTop:4}}>Colle le script « paiements.gs » dans La mémoire et exécute « paiementsInteracInstaller » : les virements Interac reçus vont s'ajouter tout seuls toutes les heures. En attendant, tu peux déjà marquer une facture payée à la main (chèque, comptant).</div>
+    </div>}
+    {autoConf.length>0 && <div className="card" style={{marginBottom:10,borderColor:'var(--success)',fontSize:12.5}}>
+      <b style={{color:'var(--success)'}}>✓ {autoConf.length} paiement{autoConf.length>1?'s':''} sûr{autoConf.length>1?'s':''} confirmé{autoConf.length>1?'s':''} automatiquement</b>
+      <span className="muted"> — pour annuler : « Tous les paiements » › ↩</span>
+      <div className="muted" style={{marginTop:4}}>{autoConf.slice(0,40).map(x=>x.de+' '+cvMoney(x.montant)+' → #'+x.factures.join(', #')).join(' · ')}{autoConf.length>40?' …':''}</div>
     </div>}
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:10,marginBottom:10}}>
       <Tuile v={attente.length} l="paiements reçus à confirmer" c={attente.length?'var(--warning)':'var(--success)'} onClick={()=>setSous('confirmer')}/>
