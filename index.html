@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v211';
+const APP_VERSION = 'v212';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8778,11 +8778,24 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     let k = c.contacts.find(x=>(x.courriels||[]).includes(courriel)) || (a.nom && c.contacts.find(x=>persCle(x.nom) && persCle(x.nom)===persCle(a.nom)));
     if(!k){ k = {fiche:null, auto:true, nom:a.nom || courriel, role:'', courriels:[courriel], tels:[], noms:[]}; c.contacts.push(k); }
     if(a.titre && (!k.role || (k.compta && !k.fiche))) k.role = a.titre;
+    if(a.nom && a.nom.length>String(k.nom||'').length && cvNorm(a.nom).startsWith(cvNorm(k.nom||'-'))) k.nom = a.nom;   // v212 : « Danny » → « Danny Chalet »
     if(a.tel && !(k.tels||[]).some(t=>chiffres(t)===chiffres(a.tel))) k.tels = [...(k.tels||[]), a.tel];
     if(!(k.courriels||[]).includes(courriel)) k.courriels = [...(k.courriels||[]), courriel];
     k.projets = a.projets; k.note = a.note; k.dernier = a.dernier; });
   const estPresident = k => /^pr[ée]sident/i.test(String(k.role||'').trim());   // v207 : le président s'affiche sous le nom du contracteur
-  Object.values(contr).forEach(c=>{ c.listeJobs = c.listeJobs || []; c.cout = c.cout || 0; c.last = c.last || ''; c.contacts.sort((a,b)=>estPresident(b)-estPresident(a) || a.nom.localeCompare(b.nom,'fr'));
+  // v212 : un contact = une seule ligne (même courriel, même nom, ou « Danny » = « Danny Chalet »), en ordre alphabétique
+  const prenomDe = n => persCle(n).split(' ')[0] || '';
+  Object.values(contr).forEach(c=>{ const out = [];
+    c.contacts.forEach(k=>{ const mk = new Set((k.courriels||[]).map(e=>String(e).toLowerCase())), ck = persCle(k.nom);
+      const d = out.find(x=>(x.courriels||[]).some(e=>mk.has(String(e).toLowerCase())) || (ck && persCle(x.nom)===ck)
+        || (ck && prenomDe(x.nom)===prenomDe(k.nom) && (persCle(x.nom).split(' ').length===1 || ck.split(' ').length===1) && out.filter(y=>prenomDe(y.nom)===prenomDe(k.nom)).length===1));
+      if(!d){ out.push({...k}); return; }
+      const p = d.fiche || !k.fiche ? d : k, a = p===d ? k : d;   // la fiche écrite à la main reste la principale
+      const nom = String(a.nom||'').startsWith(String(p.nom||'').trim()) && a.nom.length>p.nom.length ? a.nom : p.nom;   // « Danny » → « Danny Chalet »
+      Object.assign(d, {...p, nom, role:p.role || a.role, courriels:[...new Set([...(p.courriels||[]), ...(a.courriels||[])])], tels:[...new Set([...(p.tels||[]), ...(a.tels||[])])],
+        projets:(p.projets && p.projets.length ? p.projets : a.projets) || [], fiche:p.fiche || a.fiche || null}); });
+    c.contacts = out; });
+  Object.values(contr).forEach(c=>{ c.listeJobs = c.listeJobs || []; c.cout = c.cout || 0; c.last = c.last || ''; c.contacts.sort((a,b)=>String(a.nom).localeCompare(String(b.nom),'fr',{sensitivity:'base'}));
     const pr = c.contacts.find(estPresident); if(pr){ c.contact = pr.nom; c.president = pr; }
     c.facture = c.listeJobs.reduce((t,j)=>t+j.facture,0) + c.facturesSans.filter(f=>!f.annulee).reduce((t,f)=>t+(f.ht||0),0); });
   // Étiquette d'une job de particulier : ce que tu as écrit (« Cuisine »), sinon le mois (« Août 2026 »)
@@ -9309,8 +9322,10 @@ function RepContacts({c, busy, ecrire, onAller}){
           {k.courriels.map(e=><a key={e} href={repGmail(e)} target="_blank" rel="noopener" title="Nouveau courriel dans Gmail" style={{color:'var(--accent)'}}>✉️ {e}</a>)}
           {k.tels.map(t=><a key={t} href={repTel(t)} style={{color:'var(--accent)'}}>📞 {t}</a>)}
         </div>
-        {(k.projets||[]).length>0 && CONTACT_ROLE_PROJETS.test(k.role||'') && <div className="muted" style={{fontSize:12,marginTop:2}}>Projets : {k.projets.map((lib,i)=>{ const j = jobDe(lib), ids = j ? [...(j.ids||[])] : [];
-          return <React.Fragment key={lib}>{i ? ' · ' : ''}{ids.length && onAller ? <a href="#" onClick={e=>{ e.preventDefault(); onAller('projets', {jobIds:ids, nom:c.code+' '+lib}); }} style={{color:'var(--accent)'}} title="Ouvrir dans Projets">{lib}</a> : lib}</React.Fragment>; })}</div>}</div>
+        {(()=>{ if(!CONTACT_ROLE_PROJETS.test(k.role||'')) return null;   // v212 : seulement les projets qui ont un PO
+          const js = [...new Map((k.projets||[]).map(jobDe).filter(j=>j && j.po).map(j=>[j.key||j.po, j])).values()];
+          return js.length>0 && <div className="muted" style={{fontSize:12,marginTop:2}}>Projets : {js.map((j,i)=>{ const ids = [...(j.ids||[])], lib = j.po+(j.label||j.nom ? ' · '+(j.label||j.nom) : '');
+            return <React.Fragment key={j.key||j.po}>{i ? ', ' : ''}{ids.length && onAller ? <a href="#" onClick={e=>{ e.preventDefault(); onAller('projets', {jobIds:ids, nom:c.code+' '+j.po}); }} style={{color:'var(--accent)'}} title="Ouvrir dans Projets">{lib}</a> : lib}</React.Fragment>; })}</div>; })()}</div>
       <span style={{display:'flex',gap:4}}>
         <button className="btn btn-sm" disabled={busy} onClick={()=>setEd({fiche:k.fiche, nom:k.nom, role:k.role, courriel:k.courriels.join(', '), orig:k.courriels.map(e=>String(e).toLowerCase()), tel:k.tels[0]||''})}>✏️</button>
         {k.fiche && <button className="btn btn-sm" disabled={busy} title="Retirer de ce contracteur (redevient un particulier s'il a des factures)" onClick={()=>retirer(k)}>✕</button>}
