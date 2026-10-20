@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v194';
+const APP_VERSION = 'v195';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3772,7 +3772,7 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
     const dmax = Date.parse(String(p.date).slice(0,10)) + 10*864e5;
     const cands = ouvertes.filter(f=>isNaN(dmax) || !Date.parse(f.date) || Date.parse(f.date)<=dmax);
     const appr = new Set(noms.flatMap(n=>[...(appris[cvNorm(n)] || [])]));
-    const conj = new Set(adr && adr.conjoint ? noms.flatMap(n=>[...(adr.conjoint[persCle(n)] || [])]) : []);
+    const conj = new Set(adr && adr.conjoint ? noms.flatMap(n=>[...(adr.conjoint[persCle(n)] || []), ...(adr.payeur ? [...adr.payeur(n)] : [])]) : []);
     const conjOk = f => conj.size>0 && [persCle(f.nom||''), persCle(f.nomRep||''), String(f.client||'').trim().toLowerCase()].some(k=>k && conj.has(k));
     const nomOk = f => noms.some(n=>paiScoreNom(n, f)>=2) || appr.has(paiClientCle(f)) || conjOk(f);
     // v192 : payeur et client de la facture à la même adresse dans le Répertoire (ex. un conjoint qui paie la facture de l'autre)
@@ -3862,7 +3862,15 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
     const conjoint = {}; R.pers.forEach(p=>{ const cj = (p.fiche && p.fiche.conjoints) || []; if(!cj.length) return;
       const idsP = [...new Set([p.nom, ...(p.noms||[])].map(persCle).filter(Boolean).concat((p.courriels||[]).map(e=>String(e).toLowerCase())))];
       cj.forEach(n=>{ const k = persCle(n); if(!k) return; idsP.forEach(i=>aj(conjoint, k, i)); [p.nom, ...(p.noms||[])].forEach(m=>aj(conjoint, persCle(m), k)); }); });
-    return {parNom, parCourriel, conjoint}; },[R]);
+    // v195 : fiches liées (particulier ↔ son commerce, ex. Marc-André Roy ↔ Garage André Roy) — le payeur peut payer pour l'autre fiche
+    const idsDe = p => [...new Set([p.nom, ...(p.noms||[]), ...((p.fiche && p.fiche.alias)||[])].map(persCle).filter(Boolean).concat((p.courriels||[]).map(e=>String(e).toLowerCase())))];
+    const motsP = R.pers.map(p=>({p, mots:new Set([p.nom, ...(p.noms||[]), ...((p.fiche && p.fiche.alias)||[])].flatMap(paiMots))}));
+    const cache = {};
+    const payeur = de => { const k = cvNorm(de); if(cache[k]) return cache[k]; const m = paiMots(de), out = new Set();
+      if(m.length) motsP.forEach(({p, mots})=>{ const communs = m.filter(w=>mots.has(w)).length;
+        if(communs>=2 || (m.length===1 && communs===1)) [p, ...(p.lies||[])].forEach(q=>idsDe(q).forEach(i=>out.add(i))); });
+      return (cache[k] = out); };
+    return {parNom, parCourriel, conjoint, payeur}; },[R]);
   const nomDe = useCallback(e => parCourriel[e] || (()=>{ const code = repCodeCourriel(e, FR); return code ? {nom:CLIENT_CODES[code]||code} : null; })(),[parCourriel, FR]);
   const [assoc,setAssoc]=useState(null);   // {courriel, q, nom}
   const associer = async (courriel, cible, nomNouveau) => { setBusy('as'+courriel);
@@ -9128,7 +9136,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
           {fiche && fiche.notes && <div style={{fontSize:12.5,marginTop:4,whiteSpace:'pre-wrap'}}>📝 {fiche.notes}</div>}
           {pers && numsEnt.length>0 && <div style={{fontSize:13}}>🏢 N° d'entreprise : {numsEnt.join(' · ')}</div>}
           {pers && autresNoms.length>0 && <div className="muted" style={{fontSize:11.5,marginTop:4}}>Aussi écrit : {autresNoms.slice(0,10).join(' · ')}</div>}
-          {pers && !c.commerce && <div style={{fontSize:12.5,marginTop:6,display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>Conjoint(e) :
+          {pers && <div style={{fontSize:12.5,marginTop:6,display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>{c.commerce ? 'Paie aussi pour ce commerce :' : 'Conjoint(e) :'}
             {conjoints.map(n=><span key={n} style={{display:'inline-flex',alignItems:'center',gap:4,border:'1px solid var(--border)',borderRadius:6,padding:'1px 4px 1px 7px'}}>{n}
               <button className="btn btn-sm" style={{padding:'0 5px',fontSize:10.5}} disabled={busy} title={'Retirer '+n} onClick={()=>retirerConjoint(n)}>✕</button></span>)}
             {conjN===null ? <button className="btn btn-sm" style={{padding:'1px 7px',fontSize:11.5}} disabled={busy} onClick={()=>setConjN('')} title="Ses virements seront associés aux factures de ce client (et l'inverse)">＋ Ajouter</button>
