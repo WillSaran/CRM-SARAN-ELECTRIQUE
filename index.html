@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v204';
+const APP_VERSION = 'v205';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8954,7 +8954,6 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
         <div onClick={()=>ouvrirC(p)} style={{padding:'9px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
           <div style={{minWidth:0}}><span style={{fontSize:12}}>{p.commerce ? '🏪' : '👤'}</span> <b>{p.nom}</b>
             <div className="muted" style={{fontSize:12}}>{[p.adresse, p.tel, p.courriel].filter(Boolean).join(' · ') || '—'}</div></div>
-          <div style={{textAlign:'right',fontSize:12}}>{p.listeJobs.length} job{p.listeJobs.length>1?'s':''}<div className="muted" style={{fontSize:11}}>{p.last ? cvFmtDay(p.last)+' '+p.last.slice(0,4) : ''}</div></div>
         </div>
       </React.Fragment>; })}
     {!l.length && <div className="muted" style={{padding:14}}>Aucun résultat.</div>}
@@ -8964,7 +8963,6 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
     {l.map(c=><div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0}} onClick={()=>ouvrirC(c)}>
       <div><b style={{color:'var(--accent)'}}>{c.code}</b> {c.nom}</div>
       <div className="muted" style={{fontSize:12}}>{c.contact || (c.fiche&&c.fiche.tel) || ' '}</div>
-      <div style={{fontSize:12,marginTop:4}}>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''}</div>
     </div>)}
   </div>;
   const ListeFourn = ({l}) => <div className="card" style={{padding:0}}>
@@ -9374,59 +9372,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
       <b>📒 Dans le logiciel comptable</b>
       {c.compta.map((x,i)=><div key={i} style={{padding:'4px 0',borderTop:i?'1px dashed var(--border)':'none'}}>📍 {x.adresse || '—'}{x.tel && <> · <a href={repTel(x.tel)} style={{color:'var(--accent)'}}>📞 {x.tel}</a></>}{x.courriel && <> · <a href={'mailto:'+x.courriel} style={{color:'var(--accent)'}}>✉️ {x.courriel}</a></>}</div>)}
     </div>}
-    {dupJobs.length>0 && !regroupe && <div className="card" style={{marginBottom:12,borderColor:'var(--warning)',fontSize:13}}>
-      <div style={{display:'flex',justifyContent:'space-between',cursor:'pointer',gap:8}} onClick={()=>setVoirDup(!voirDup)}><b>🔁 Jobs qui semblent être la même ({dupJobs.length} groupe{dupJobs.length>1?'s':''})</b><span className="muted" style={{fontSize:12}}>{voirDup?'▲ cacher':'▼ voir'}</span></div>
-      {voirDup && dupJobs.map((g,i)=>{ const p = g.jobs.find(j=>j.po) || g.jobs[0];
-        return <div key={g.id} style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',padding:'6px 0',borderTop:'1px solid var(--border)'}}>
-          <span style={{flex:'1 1 260px'}}>{g.jobs.map(j=>j.label+(j.po?' ('+j.po+')':'')).join('  ·  ')}</span>
-          <button className="btn btn-sm" disabled={busy} onClick={()=>{ setRegroupe(new Set(g.jobs.map(j=>j.key))); setNomGroupe(p.label); window.scrollTo(0, 0); }}>Regrouper…</button>
-          <button className="btn btn-sm" disabled={busy} onClick={()=>{ repIgnorer(g.id); setIgnJ(repIgnores()); }}>Pas la même</button>
-        </div>; })}
-    </div>}
-
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',margin:'4px 0 6px'}}>
-      <b>Projets</b>
-      {c.listeJobs.length>1 && (regroupe
-        ? <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-            <input value={nomGroupe} onChange={e=>setNomGroupe(e.target.value)} placeholder={pers ? 'Nom de la job (ex. Cuisine, Août 2026)' : 'Nom de la job'} style={{width:200,padding:'5px 8px'}}/>
-            <button className="btn btn-sm btn-p" disabled={busy || regroupe.size<2 || !nomGroupe.trim()} onClick={()=>ecrire(ligneJob(c.listeJobs.filter(j=>regroupe.has(j.key)), nomGroupe.trim()), regroupe.size+' jobs regroupées sous « '+nomGroupe.trim()+' ».').then(ok=>ok&&setRegroupe(null))}>Regrouper ({regroupe.size})</button>
-            <button className="btn btn-sm" onClick={()=>setRegroupe(null)}>Annuler</button></span>
-        : <button className="btn btn-sm" onClick={()=>{ setRegroupe(new Set()); setNomGroupe(''); }}>🔗 Regrouper des jobs</button>)}
-    </div>
-    {c.listeJobs.map(j=>{ const o = ouverte===j.key;
-      return <div key={j.key} className="card" style={{marginBottom:8,padding:'10px 12px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',cursor:'pointer'}} onClick={()=>regroupe ? setRegroupe(s=>{ const n = new Set(s); n.has(j.key) ? n.delete(j.key) : n.add(j.key); return n; }) : setOuverte(o?'':j.key)}>
-          <div style={{minWidth:0}}>
-            {regroupe && <input type="checkbox" readOnly checked={regroupe.has(j.key)} style={{width:15,height:15,marginRight:6,verticalAlign:'middle'}}/>}
-            <b>{j.label}</b>{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}
-            <div className="muted" style={{fontSize:12}}>{[j.adresse, j.derniere ? 'dernière visite '+cvFmtDay(j.derniere)+' '+j.derniere.slice(0,4) : '', j.prochaine ? 'prochaine '+cvFmtDay(j.prochaine) : '', !j.derniere && !j.prochaine && j.first ? cvFmtDay(j.first)+(j.last && j.last!==j.first ? ' → '+cvFmtDay(j.last) : '')+' '+j.last.slice(0,4) : '', j.passages ? j.passages+' passage'+(j.passages>1?'s':'') : '', j.equipe.length ? j.equipe.map(n=>n.split(' ')[0]).join(', ') : ''].filter(Boolean).join(' · ')}</div>
-          </div>
-        </div>
-        {o && !regroupe && <div style={{marginTop:8}}>
-          {renomme && renomme.key===j.key
-            ? <div style={{display:'flex',gap:6,marginBottom:6,flexWrap:'wrap'}}><input value={renomme.nom} onChange={e=>setRenomme({...renomme, nom:e.target.value})} style={{width:220,padding:'5px 8px'}} placeholder={pers ? 'Cuisine, Borne, Août 2026…' : 'Nom de la job'}/>
-                <button className="btn btn-sm btn-p" disabled={busy || !renomme.nom.trim()} onClick={()=>ecrire(ligneJob([j], renomme.nom.trim()), 'Job renommée « '+renomme.nom.trim()+' ».').then(ok=>ok&&setRenomme(null))}>OK</button>
-                <button className="btn btn-sm" onClick={()=>setRenomme(null)}>Annuler</button></div>
-            : <span style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
-                <button className="btn btn-sm" onClick={()=>setRenomme({key:j.key, nom:j.label})}>✏️ Nommer la job</button>
-                {retire===j.key
-                  ? <span style={{display:'inline-flex',gap:4,alignItems:'center',padding:'2px 6px',border:'1px solid var(--danger)',borderRadius:8,fontSize:12}}>
-                      <span style={{color:'var(--danger)'}}>Retirer « {j.label} » de {pers ? c.nom : c.code} ?</span>
-                      <button className="btn btn-sm" style={{background:'var(--danger)',color:'#fff',border:'none'}} disabled={busy} onClick={()=>ecrire([{type:'Job retirée', code, nom:j.label,
-                        alias:[...new Set([...j.cles].filter(Boolean)), ...[...j.ids].map(i=>'id:'+i)], po:j.po||'', client: pers ? c.nom : '', notes:'Retirée dans le Répertoire'}], '« '+j.label+' » est retirée de '+(pers ? c.nom : c.code)+'.').then(ok=>ok&&setRetire(null))}>Oui, retirer</button>
-                      <button className="btn btn-sm" onClick={()=>setRetire(null)}>Non</button></span>
-                  : <button className="btn btn-sm" disabled={busy} title={'Cette job n\'a pas rapport avec '+(pers ? c.nom : c.code)+' (ton agenda n\'est pas modifié)'} onClick={()=>setRetire(j.key)}>🗑 Retirer cette job</button>}
-              </span>}
-          {j.cles.size>1 && <div className="muted" style={{fontSize:11.5,marginBottom:4}}>Écrit dans l'agenda/les achats : {[...j.cles].slice(0,6).join(' · ')}</div>}
-        </div>}
-      </div>; })}
-    {!c.listeJobs.length && <div className="muted" style={{fontSize:13,marginBottom:10}}>Aucune job connue.</div>}
-    {(c.retirees||[]).length>0 && <div style={{fontSize:12.5,margin:'2px 0 10px'}}>
-      <a href="#" className="muted" onClick={e=>{ e.preventDefault(); setVoirRet(!voirRet); }}>🗑 {c.retirees.length} job{c.retirees.length>1?'s':''} retirée{c.retirees.length>1?'s':''} {voirRet?'▲':'▼'}</a>
-      {voirRet && c.retirees.map(r=><div key={r.row} style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'center',padding:'4px 0',borderBottom:'1px dashed var(--border)'}}>
-        <span className="muted">{r.nom}{r.po ? ' · '+r.po : ''}</span>
-        <button className="btn btn-sm" disabled={busy} onClick={()=>ecrire([{...r, alias:[...r.alias, ...[...r.ids].map(i=>'id:'+i)], type:'Retiré'}], '« '+r.nom+' » est remise.')}>↩ Remettre</button></div>)}
-    </div>}
+    {/* v205 : les projets du client sont dans Projets (bouton plus haut) — plus de liste ici */}
   </div>;
 }
 
