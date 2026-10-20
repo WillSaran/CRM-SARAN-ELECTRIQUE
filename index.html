@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v214';
+const APP_VERSION = 'v215';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9300,6 +9300,17 @@ function RepContacts({c, busy, ecrire, onAller, filtre}){
     const no = m[1].toLowerCase(), rue = cvNorm(m[2]).slice(0,5);
     return L.find(j=>[j.adresse, j.nom, ...(j.cles||[])].some(t=>{ const n = cvNorm(t); return n.includes(no) && n.includes(rue); })) || null; };
   const [ed,setEd]=useState(null);   // {fiche?, nom, role (titre), courriel, tel}
+  // v215 : projets ajoutés / retirés à la main (colonne PO de la fiche du contact : « P03590 ; ≠ PAY-893 »)
+  const [ajoutPO,setAjoutPO]=useState(null);   // clé du contact qui choisit un projet
+  const posMain = k => String((k.fiche && k.fiche.po)||'').split(/\s*;\s*/).map(x=>x.trim()).filter(Boolean);
+  const jobsDe = k => { const l = posMain(k), main = l.filter(x=>!/^≠/.test(x)), exclus = l.filter(x=>/^≠/.test(x)).map(x=>x.replace(/^≠\s*/,''));
+    const auto = CONTACT_ROLE_PROJETS.test(k.role||'') ? (k.projets||[]).map(jobDe).filter(j=>j && j.po) : [];
+    const m = main.map(po=>(c.listeJobs||[]).find(j=>j.po===po)).filter(Boolean);
+    return [...new Map([...m, ...auto].filter(j=>!exclus.includes(j.po)).map(j=>[j.po, j])).values()]; };
+  const majPO = (k, l, msg) => ecrire([{...(k.fiche||{}), type:'Contact', code:c.code, nom:k.nom, alias:[...(k.fiche ? k.fiche.alias : []), ...((k.fiche && k.fiche.exclus)||[]).map(e=>'≠ '+e)],
+    notes:k.role||'', courriel:(k.courriels||[]).join(', '), tel:(k.tels||[])[0]||'', po:l.join(' ; ')}], msg).then(ok=>{ if(ok) setAjoutPO(null); });
+  const ajouterPO = (k, po) => { const l = posMain(k).filter(x=>x.replace(/^≠\s*/,'')!==po); l.push(po); return majPO(k, l, po+' ajouté aux projets de '+k.nom+'.'); };
+  const retirerPO = (k, po) => { const l = posMain(k).filter(x=>x.replace(/^≠\s*/,'')!==po); l.push('≠ '+po); return majPO(k, l, po+' retiré des projets de '+k.nom+'.'); };
   // v210 : un courriel enlevé ici reste enlevé (même s'il vient d'une facture, d'une soumission ou des courriels lus) : « ≠ courriel » dans Aussi écrit
   const sauver = () => { const garde = String(ed.courriel||'').toLowerCase().split(/[\s,;]+/).filter(e=>/@/.test(e));
     const exclus = [...new Set([...((ed.fiche && ed.fiche.exclus)||[]), ...(ed.orig||[]).filter(e=>!garde.includes(e))])].filter(e=>!garde.includes(e));
@@ -9337,10 +9348,18 @@ function RepContacts({c, busy, ecrire, onAller, filtre}){
           {k.courriels.map(e=><a key={e} href={repGmail(e)} target="_blank" rel="noopener" title="Nouveau courriel dans Gmail" style={{color:'var(--accent)'}}>✉️ {e}</a>)}
           {k.tels.map(t=><a key={t} href={repTel(t)} style={{color:'var(--accent)'}}>📞 {t}</a>)}
         </div>
-        {(()=>{ if(!CONTACT_ROLE_PROJETS.test(k.role||'')) return null;   // v212 : seulement les projets qui ont un PO
-          const js = [...new Map((k.projets||[]).map(jobDe).filter(j=>j && j.po).map(j=>[j.key||j.po, j])).values()];
-          return js.length>0 && <div className="muted" style={{fontSize:12,marginTop:2}}>Projets : {js.map((j,i)=>{ const ids = [...(j.ids||[])], lib = j.po+(j.label||j.nom ? ' · '+(j.label||j.nom) : '');
-            return <React.Fragment key={j.key||j.po}>{i ? ', ' : ''}{ids.length && onAller ? <a href="#" onClick={e=>{ e.preventDefault(); onAller('projets', {jobIds:ids, nom:c.code+' '+j.po}); }} style={{color:'var(--accent)'}} title="Ouvrir dans Projets">{lib}</a> : lib}</React.Fragment>; })}</div>; })()}</div>
+        {(()=>{ const js = jobsDe(k), cle = k.nom+'|'+i;   // v212 : projets avec PO ; v215 : ＋ / ✕ à la main
+          const dispo = (c.listeJobs||[]).filter(j=>j.po && !js.some(x=>x.po===j.po)).sort((a,b)=>String(b.last||'').localeCompare(String(a.last||'')));
+          return <div className="muted" style={{fontSize:12,marginTop:2,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+            {js.length>0 && <span>Projets :</span>}
+            {js.map(j=>{ const ids = [...(j.ids||[])], lib = j.po+(j.label||j.nom ? ' · '+(j.label||j.nom) : '');
+              return <span key={j.po} style={{display:'inline-flex',alignItems:'center',gap:3}}>{ids.length && onAller ? <a href="#" onClick={e=>{ e.preventDefault(); onAller('projets', {jobIds:ids, nom:c.code+' '+j.po}); }} style={{color:'var(--accent)'}} title="Ouvrir dans Projets">{lib}</a> : lib}
+                <button className="btn btn-sm" style={{padding:'0 4px',fontSize:10}} disabled={busy} title={'Retirer '+j.po+' des projets de '+k.nom} onClick={()=>retirerPO(k, j.po)}>✕</button></span>; })}
+            {ajoutPO===cle
+              ? <select autoFocus defaultValue="" disabled={busy} onChange={e=>e.target.value && ajouterPO(k, e.target.value)} onBlur={()=>setAjoutPO(null)} style={{padding:'2px 6px',fontSize:12,width:'auto',maxWidth:280}}>
+                  <option value="">Choisir un projet…</option>{dispo.map(j=><option key={j.po} value={j.po}>{j.po}{j.label||j.nom ? ' · '+(j.label||j.nom) : ''}</option>)}</select>
+              : dispo.length>0 && <button className="btn btn-sm" style={{padding:'0 6px',fontSize:11}} disabled={busy} onClick={()=>setAjoutPO(cle)}>＋ Projet</button>}
+          </div>; })()}</div>
       <span style={{display:'flex',gap:4}}>
         <button className="btn btn-sm" disabled={busy} onClick={()=>ouvrirEd(k)}>✏️</button>
         {k.fiche && <button className="btn btn-sm" disabled={busy} title="Retirer de ce contracteur (redevient un particulier s'il a des factures)" onClick={()=>retirer(k)}>✕</button>}
