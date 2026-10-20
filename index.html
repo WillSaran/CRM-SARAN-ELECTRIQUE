@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v203';
+const APP_VERSION = 'v204';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8843,7 +8843,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
   const K = useContactsFournisseurs(cfg);
   // v177 : une seule vue choisie dans un menu déroulant ; la recherche reste en haut
   // v202 : « À vérifier » est maintenant dans Comptabilité (mode « verif ») ; le Répertoire = les fiches de contact
-  const [vue,setVueS]=useState(()=>{ if(mode==='verif') return 'verif'; try{ const v = localStorage.getItem('crm_rep_vue')||'accueil'; return ['verif','soum'].includes(v) ? 'accueil' : v; }catch(e){ return 'accueil'; } });
+  const [vue,setVueS]=useState(()=>{ if(mode==='verif') return 'verif'; try{ const v = localStorage.getItem('crm_rep_vue')||'contr'; return ['part','com','contr','fourn'].includes(v) ? v : 'contr'; }catch(e){ return 'contr'; } });   // v204 : plus de vue d'ensemble
   const setVue = v => { setVueS(v); setSel(null); if(mode!=='verif') try{ localStorage.setItem('crm_rep_vue', v); }catch(e){} };
   const [q,setQ]=useState('');
   const [sel,setSelId]=useState(null);       // id d'un client ou 'F:<fournisseur>'
@@ -8916,16 +8916,13 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
   const nbPart = actifs.filter(p=>!p.commerce).length, nbCom = actifs.filter(p=>p.commerce).length;
   const nbSoumSeul = R.pers.filter(p=>p.soumSeul).length;
   const totalAV = Object.entries(aVerif).filter(([k])=>k!=='PART').reduce((t,[,n])=>t+n,0);
-  const VUES = [['accueil','🏠 Vue d\'ensemble'],['part','👤 Particuliers ('+nbPart+')'],['com','🏪 Commerces ('+nbCom+')'],['contr','🏗 Contracteurs ('+R.contr.length+')'],
-    ['fourn','🏭 Fournisseurs ('+fourn.length+')']];
+  const VUES = [['contr','Contracteurs ('+R.contr.length+')'],['part','Particuliers ('+nbPart+')'],['com','Commerces ('+nbCom+')'],['fourn','Fournisseurs ('+fourn.length+')']];   // v204 : onglets
 
   const entete = <div style={{marginBottom:12}}>
     <input value={q} onChange={e=>{ setQ(e.target.value); if(sel) setSel(null); }} placeholder="🔎 Chercher un client, commerce, contracteur, fournisseur — nom, courriel, téléphone, adresse, PO, no de facture…"
       style={{width:'100%',padding:'9px 12px',fontSize:14,marginBottom:8}}/>
     {mode!=='verif' && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-      <select value={vue} onChange={e=>setVue(e.target.value)} style={{padding:'6px 10px',fontWeight:700,width:'auto'}}>
-        {VUES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
-      </select>
+      {VUES.map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k && !sel ? ' btn-p' : '')} onClick={()=>setVue(k)}>{l}</button>)}
       {d.maj && <span className="muted" style={{fontSize:11.5}}>mise à jour…</span>}
       <span style={{marginLeft:'auto',display:'flex',gap:6}}>
         <button className="btn btn-sm" onClick={()=>{ setSel(null); setNouveau(nouveau ? null : {commerce:vue==='com', nom:'', adresse:'', ville:'', tel:'', courriel:'', notes:''}); }}>＋ Ajouter un client</button>
@@ -9036,7 +9033,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
       <CvAnomalies cfg={cfg} factures={d.factures} clients={clients} appels={d.appels || {parNumero:{}, parFacture:{}, liste:[]}} onOpen={code=>setSuivi(code)} onChanged={()=>setTick(t=>t+1)}/></>;
   } else {   // vue d'ensemble : contracteurs en cubes (v202 : « À vérifier » est dans Comptabilité)
     corps = <>{titre('Contracteurs', contrTri.length)}<Cubes l={contrTri}/>
-      <div className="muted" style={{fontSize:12.5,marginTop:12}}>Choisis « 👤 Particuliers », « 🏪 Commerces » ou « 🏭 Fournisseurs » dans le menu pour voir les fiches.</div></>;
+      <div className="muted" style={{fontSize:12.5,marginTop:12}}>Choisis un onglet pour voir les fiches.</div></>;
   }
   if(mode==='verif') return <div>{entete}{corps}</div>;
   return <div>{entete}{formNouveau}{corps}</div>;
@@ -9229,7 +9226,8 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
   const ligneLiens = (f, liens, pas, conj) => ({...f, type:'Client', client:[...new Set(liens)].concat([...new Set(pas)].map(n=>'≠ '+n), [...new Set(conj || f.conjoints || [])].map(n=>'Conjoint: '+n)).join(' ; ')});
   const [conjN,setConjN]=useState(null);   // v193 : nom du conjoint en train d'être ajouté
   const conjoints = (c.fiche && c.fiche.conjoints) || [];
-  const ajouterConjoint = () => { const n = (conjN||'').trim(); if(!n) return; const f = baseFiche();
+  const ficheDe = n => { const k = persCle(n); return k ? R.pers.find(p=>p.id!==c.id && [p.nom, ...(p.noms||[])].some(x=>persCle(x)===k)) : null; };   // v204 : conjoint = une fiche du Répertoire
+  const ajouterConjoint = nom => { const n = String(typeof nom==='string' ? nom : (conjN||'')).trim(); if(!n) return; const f = baseFiche();
     return ecrire([ligneLiens(f, f.liens||[], f.pasLies||[], [...conjoints, n])], n+' est maintenant le conjoint / la conjointe de '+c.nom+'. Ses paiements iront à ses factures.').then(ok=>{ if(ok) setConjN(null); }); };
   const retirerConjoint = n => { const f = baseFiche(); return ecrire([ligneLiens(f, f.liens||[], f.pasLies||[], conjoints.filter(x=>x!==n))], n+' retiré(e) comme conjoint(e).'); };
   const lierA = q => { const f = baseFiche(), kq = clesDe(q);
@@ -9296,11 +9294,20 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
           {pers && numsEnt.length>0 && <div style={{fontSize:13}}>🏢 N° d'entreprise : {numsEnt.join(' · ')}</div>}
           {pers && autresNoms.length>0 && <div className="muted" style={{fontSize:11.5,marginTop:4}}>Aussi écrit : {autresNoms.slice(0,10).join(' · ')}</div>}
           {pers && <div style={{fontSize:12.5,marginTop:6,display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>{c.commerce ? 'Paie aussi pour ce commerce :' : 'Conjoint(e) :'}
-            {conjoints.map(n=><span key={n} style={{display:'inline-flex',alignItems:'center',gap:4,border:'1px solid var(--border)',borderRadius:6,padding:'1px 4px 1px 7px'}}>{n}
-              <button className="btn btn-sm" style={{padding:'0 5px',fontSize:10.5}} disabled={busy} title={'Retirer '+n} onClick={()=>retirerConjoint(n)}>✕</button></span>)}
+            {conjoints.map(n=>{ const q = ficheDe(n); return <span key={n} style={{display:'inline-flex',alignItems:'center',gap:4,border:'1px solid var(--border)',borderRadius:6,padding:'1px 4px 1px 7px'}}>
+              {q && onOuvrir ? <a href="#" onClick={e=>{ e.preventDefault(); onOuvrir(q.id, q.nom); }} style={{color:'var(--accent)'}} title="Ouvrir sa fiche">{n}</a> : n}
+              <button className="btn btn-sm" style={{padding:'0 5px',fontSize:10.5}} disabled={busy} title={'Retirer '+n} onClick={()=>retirerConjoint(n)}>✕</button></span>; })}
             {conjN===null ? <button className="btn btn-sm" style={{padding:'1px 7px',fontSize:11.5}} disabled={busy} onClick={()=>setConjN('')} title="Ses virements seront associés aux factures de ce client (et l'inverse)">＋ Ajouter</button>
-              : <span style={{display:'inline-flex',gap:4}}><input autoFocus value={conjN} onChange={e=>setConjN(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouterConjoint(); }} placeholder="Prénom et nom" style={{padding:'3px 7px',width:170}}/>
-                  <button className="btn btn-sm btn-p" disabled={busy || !conjN.trim()} onClick={ajouterConjoint}>OK</button><button className="btn btn-sm" onClick={()=>setConjN(null)}>Annuler</button></span>}
+              : <span style={{display:'inline-flex',flexDirection:'column',gap:4}}>
+                  <span style={{display:'inline-flex',gap:4}}><input autoFocus value={conjN} onChange={e=>setConjN(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouterConjoint(); }} placeholder="Chercher une fiche ou écrire un nom" style={{padding:'3px 7px',width:230}}/>
+                    <button className="btn btn-sm btn-p" disabled={busy || !conjN.trim()} onClick={()=>ajouterConjoint()}>OK</button><button className="btn btn-sm" onClick={()=>setConjN(null)}>Annuler</button></span>
+                  {(()=>{ const nq = cvNorm(conjN); if(nq.length<2) return null;
+                    const l = R.pers.filter(p=>p.id!==c.id && !p.sansNom && (c.commerce || !p.commerce) && !conjoints.some(n=>persCle(n)===persCle(p.nom)) && cvNorm([p.nom, ...(p.noms||[]), ...(p.courriels||[])].join(' ')).includes(nq))
+                      .sort((a,b)=>(!!a.commerce)-(!!b.commerce) || a.nom.localeCompare(b.nom,'fr')).slice(0,8);
+                    return l.length>0 && <span style={{display:'flex',flexDirection:'column',border:'1px solid var(--border)',borderRadius:6,maxWidth:360}}>
+                      {l.map(p=><span key={p.id} onMouseDown={e=>e.preventDefault()} onClick={()=>!busy && ajouterConjoint(p.nom)} style={{padding:'5px 8px',cursor:'pointer',borderBottom:'1px solid var(--border)'}}>
+                        {p.commerce ? '🏪' : '👤'} <b>{p.nom}</b> <span className="muted">{[p.adresse, p.courriel].filter(Boolean).join(' · ')}</span></span>)}</span>; })()}
+                </span>}
           </div>}
           {pers && (c.lies||[]).length>0 && <div style={{fontSize:12.5,marginTop:6,display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>🔗 Lié à :
             {c.lies.map(q=><span key={q.id} style={{display:'inline-flex',alignItems:'center',gap:4,border:'1px solid var(--border)',borderRadius:6,padding:'1px 4px 1px 7px'}}>
