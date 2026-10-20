@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v184';
+const APP_VERSION = 'v185';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3690,9 +3690,18 @@ function paiLireFactures(rows){
   const fh=(rows[0]||[]).map(h=>cvNorm(h)), fc=re=>fh.findIndex(h=>re.test(h));
   const fx={num:fc(/^facture/),date:fc(/^date/),cli:fc(/^client/),po:fc(/^po$/),nom:fc(/^nom/),desc:fc(/^description/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/),st:fc(/^statut/)};
   const g=(r,k)=> fx[k]>=0 ? String(r[fx[k]]||'').trim() : '';
-  const out={}; rows.slice(1).forEach(r=>{ const n=g(r,'num'); if(!n) return;
-    out[n]={num:n, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, envoi:g(r,'env'), pdf:g(r,'pdf'), annulee:/^annul/.test(cvNorm(g(r,'st')))}; });
+  const out={}; rows.slice(1).forEach((r,i)=>{ const n=g(r,'num'); if(!n) return;
+    out[n]={num:n, row:i+2, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, envoi:g(r,'env'), pdf:g(r,'pdf'), annulee:/^annul/.test(cvNorm(g(r,'st')))}; });
+  Object.defineProperty(out,'__stCol',{value: fx.st>=0 ? fx.st : Math.max(fh.length, 10), enumerable:false});
+  Object.defineProperty(out,'__stEntete',{value: fx.st>=0, enumerable:false});
   return out;
+}
+// v185 : annuler une facture dans le registre (colonne Statut = « Annulée (date) »), comme dans « À vérifier »
+async function paiAnnulerFacture(id, factures, f){
+  const lettre = String.fromCharCode(65+factures.__stCol);
+  suivreEcritures();
+  if(!factures.__stEntete) await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:lettre+'1', valueInputOption:'RAW', resource:{values:[['Statut']]}});
+  return window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:lettre+f.row, valueInputOption:'RAW', resource:{values:[['Annulée ('+paiAujourdhui()+')']]}});
 }
 function paiLirePaiements(rows){
   return rows.slice(1).map((r,i)=>({row:i+2, id:String(r[0]||''), date:String(r[1]||''), de:String(r[2]||''), montant:cvNum(r[3])||0, message:String(r[4]||''), ref:String(r[5]||''),
@@ -3853,6 +3862,13 @@ function PaiementsView({cfg, refreshKey, q}){
   const annuler = async p => { if(!confirm('Remettre ce paiement « à confirmer » ?')) return; setBusy('p'+p.row);
     try{ if(/^manuel-/.test(p.id)) await paiEcrireStatut(id, p.row, p.confirmees, 'Annulé', 'Annulé dans le CRM le '+paiAujourdhui()); else await paiEcrireStatut(id, p.row, [], '', ''); setTick(t=>t+1); }
     catch(e){ alert('Impossible : '+apiErrMsg(e)); } setBusy(''); };
+  const [annule,setAnnule]=useState('');   // numéro de facture à annuler (confirmation)
+  const annulerFacture = async f => { setBusy('a'+f.num);
+    try{ await paiAnnulerFacture(id, data.factures, f); setAnnule(''); setTick(t=>t+1); }
+    catch(e){ alert('Impossible d\'annuler : '+apiErrMsg(e)); } setBusy(''); };
+  // Deux factures ouvertes du même client, même montant = probablement la même facture faite deux fois
+  const doublonsDe = p => { const o = (A.propositions[p.row]||[]).filter(x=>x.factures.length===1).map(x=>A.F[x.factures[0]]).filter(Boolean);
+    const out = []; o.forEach((a,i)=>o.slice(i+1).forEach(b=>{ if(paiClientCle(a)===paiClientCle(b) && Math.abs(a.ttc-b.ttc)<=0.02) out.push([a,b]); })); return out; };
   const ouvrirManuel = fs => setManuel({nums:fs.map(f=>f.num).join(', '), montant:fs.reduce((s,f)=>s+f.solde,0).toFixed(2), date:paiAujourdhui(), mode:'Chèque', note:''});
 
   const aRecevoir = A.ouvertes.filter(filtreF);
@@ -3919,6 +3935,14 @@ function PaiementsView({cfg, refreshKey, q}){
             <button className="btn btn-sm btn-p" disabled={b} onClick={()=>confirmer(p, o.factures, 'Confirmé')}>{b?'…':'✓ Confirmer'}</button>
           </div>)}
           {(()=>{ const inc = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>!A.F[n]); return inc.length>0 && <div style={{fontSize:12.5,marginTop:6,color:'var(--warning)'}}>Le message parle de la facture {inc.join(', ')}, qui n'est pas (encore) dans le registre des factures.</div>; })()}
+          {doublonsDe(p).map(([a,b])=><div key={a.num+b.num} style={{marginTop:6,padding:8,border:'1px solid var(--warning)',borderRadius:8,fontSize:12.5}}>
+            <div><b>Facture en double ?</b> #{a.num} ({a.date}) et #{b.num} ({b.date}) : même client, même montant ({cvMoney(a.ttc)}). Garde celle qui est bonne, l'autre sera marquée « Annulée » dans le registre.</div>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:5}}>
+              {[[a,b],[b,a]].map(([garde,autre])=>annule===autre.num
+                ? <button key={autre.num} className="btn btn-sm btn-danger" disabled={busy==='a'+autre.num} onClick={()=>annulerFacture(autre)}>{busy==='a'+autre.num?'…':'Confirmer : annuler #'+autre.num}</button>
+                : <button key={autre.num} className="btn btn-sm" disabled={!!busy} onClick={()=>setAnnule(autre.num)}>Garder #{garde.num} (annuler #{autre.num})</button>)}
+              {[a,b].filter(f=>f.pdf).map(f=><a key={'pdf'+f.num} className="btn btn-sm" href={repPdf(f.pdf)} target="_blank" rel="noopener" style={{textDecoration:'none'}}>PDF #{f.num} ↗</a>)}
+            </div></div>)}
           {!opts.length && <div className="muted" style={{fontSize:12.5,marginTop:6}}>Aucune facture ne correspond. Indique le numéro ci-dessous, ou « Ignorer ».</div>}
           <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6,alignItems:'center'}}>
             <input value={autre[p.row]||''} onChange={e=>setAutre({...autre, [p.row]:e.target.value})} placeholder="Autre(s) facture(s) : 1234, 1235" style={{flex:'1 1 180px',width:'auto',minWidth:0,padding:'5px 9px',fontSize:12.5}}/>
@@ -3944,6 +3968,9 @@ function PaiementsView({cfg, refreshKey, q}){
                 {f.age!=null && <span style={{fontWeight:700,color:f.age>60?'var(--danger)':f.age>30?'var(--warning)':'var(--muted)'}}>{f.age} j</span>}
                 {f.pdf && <a href={repPdf(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>PDF</a>}
                 <button className="btn btn-sm" onClick={()=>ouvrirManuel([f])}>💵 Payée</button>
+                {annule===f.num
+                  ? <button className="btn btn-sm btn-danger" disabled={busy==='a'+f.num} onClick={()=>annulerFacture(f)}>{busy==='a'+f.num?'…':'Confirmer : annuler'}</button>
+                  : <button className="btn btn-sm" disabled={!!busy} title="Facture faite en double ou annulée : elle ne sera plus comptée à recevoir" onClick={()=>setAnnule(f.num)}>✕</button>}
               </span>
             </div>)}
           </div>); })()}
