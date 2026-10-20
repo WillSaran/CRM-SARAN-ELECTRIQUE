@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v206';
+const APP_VERSION = 'v207';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8768,7 +8768,9 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   (F.contacts||[]).forEach(fc=>{ if(vus.has('c:'+fc.row) || !CLIENT_CODES[fc.code]) return;
     C(fc.code).contacts = C(fc.code).contacts.filter(k=>!(k.compta && cvNorm(k.nom)===cvNorm(fc.nom)));
     C(fc.code).contacts.push({fiche:fc, nom:fc.nom, role:fc.notes||'', courriels:String(fc.courriel||'').toLowerCase().split(/[\s,;]+/).filter(e=>/@/.test(e)), tels:[fc.tel].filter(Boolean), noms:[]}); });
-  Object.values(contr).forEach(c=>{ c.listeJobs = c.listeJobs || []; c.cout = c.cout || 0; c.last = c.last || ''; c.contacts.sort((a,b)=>a.nom.localeCompare(b.nom,'fr'));
+  const estPresident = k => /^pr[ée]sident/i.test(String(k.role||'').trim());   // v207 : le président s'affiche sous le nom du contracteur
+  Object.values(contr).forEach(c=>{ c.listeJobs = c.listeJobs || []; c.cout = c.cout || 0; c.last = c.last || ''; c.contacts.sort((a,b)=>estPresident(b)-estPresident(a) || a.nom.localeCompare(b.nom,'fr'));
+    const pr = c.contacts.find(estPresident); if(pr){ c.contact = pr.nom; c.president = pr; }
     c.facture = c.listeJobs.reduce((t,j)=>t+j.facture,0) + c.facturesSans.filter(f=>!f.annulee).reduce((t,f)=>t+(f.ht||0),0); });
   // Étiquette d'une job de particulier : ce que tu as écrit (« Cuisine »), sinon le mois (« Août 2026 »)
   const MOIS = ['','Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
@@ -8861,6 +8863,7 @@ async function ficheEcrire(cfg, f){
 }
 const repPdf = id => id ? 'https://drive.google.com/file/d/'+id+'/view' : '';
 const repTel = t => 'tel:'+String(t||'').replace(/[^\d+]/g,'');
+const repGmail = e => 'https://mail.google.com/mail/?authuser=info@saranelectrique.com&view=cm&fs=1&to='+encodeURIComponent(String(e||'').trim());   // v207 : nouveau courriel dans Gmail
 // v197 : téléphone écrit (450) 542-9898, et adresse coupée en lignes (rue / ville / province + code postal)
 const repTelFmt = t => { const d = String(t||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); return d.length===10 ? '('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6) : String(t||'').trim(); };
 const repAdrLignes = a => String(a||'').split(/\s*,\s*/).map(x=>x.trim()).filter(x=>x && !/^canada$/i.test(x));
@@ -9255,8 +9258,9 @@ function RepImportCompta({cfg, onFait, toast, nbActuel}){
     <button className="btn btn-sm" style={{marginTop:8}} onClick={()=>{ setOuvert(false); setLu(null); }}>Fermer</button>
   </div>;
 }
+const CONTACT_TITRES = ['Président','Présidente','Gestionnaire de projet','Chargé de projet','Designer','Comptable','Agente administrative','Contremaître','Estimateur','Propriétaire'];
 function RepContacts({c, busy, ecrire}){
-  const [ed,setEd]=useState(null);   // {fiche?, nom, role, courriel, tel}
+  const [ed,setEd]=useState(null);   // {fiche?, nom, role (titre), courriel, tel}
   const sauver = () => ecrire([{...(ed.fiche||{}), type:'Contact', code:c.code, nom:ed.nom.trim(), alias:ed.fiche ? ed.fiche.alias : [], notes:ed.role, courriel:ed.courriel, tel:ed.tel}],
     'Contact '+ed.nom.trim()+' enregistré chez '+c.code+'.').then(ok=>ok&&setEd(null));
   const retirer = k => ecrire([{...k.fiche, type:'Retiré'}], k.nom+' retiré des contacts de '+c.code+'.');
@@ -9267,13 +9271,16 @@ function RepContacts({c, busy, ecrire}){
       {!ed && <button className="btn btn-sm" disabled={busy} onClick={()=>setEd({nom:'', role:'', courriel:'', tel:''})}>+ Ajouter un contact</button>}
     </div>
     {ed && <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:6,margin:'8px 0'}}>
-      {champ('nom','Nom')}{champ('role','Rôle (ex. chargé de projet)')}{champ('courriel','Courriel')}{champ('tel','Téléphone')}
+      {champ('nom','Nom')}
+      <input value={ed.role} list="contact-titres" placeholder="Titre (ex. Président, Gestionnaire de projet)" onChange={e=>setEd({...ed,role:e.target.value})} style={{padding:'5px 8px'}}/>
+      <datalist id="contact-titres">{CONTACT_TITRES.map(t=><option key={t} value={t}/>)}</datalist>
+      {champ('courriel','Courriel')}{champ('tel','Téléphone')}
       <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={busy || !ed.nom.trim()} onClick={sauver}>Enregistrer</button><button className="btn btn-sm" onClick={()=>setEd(null)}>Annuler</button></div>
     </div>}
     {c.contacts.map((k,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'6px 0',borderTop:'1px solid var(--border)',fontSize:13}}>
-      <div style={{minWidth:0}}><b>{k.nom}</b>{k.compta && <span title="Du logiciel comptable" style={{fontSize:11}}> 📒</span>}{k.role && <span className="muted"> · {k.role}</span>}
+      <div style={{minWidth:0}}><b>{k.nom}</b>{k.role && <span style={{fontSize:11.5,marginLeft:6,padding:'1px 7px',borderRadius:10,border:'1px solid var(--border)',color:/^pr[ée]sident/i.test(k.role) ? 'var(--accent)' : 'var(--muted)',fontWeight:/^pr[ée]sident/i.test(k.role) ? 700 : 400}}>{k.role}</span>}
         <div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:12.5}}>
-          {k.courriels.map(e=><a key={e} href={'mailto:'+e} style={{color:'var(--accent)'}}>✉️ {e}</a>)}
+          {k.courriels.map(e=><a key={e} href={repGmail(e)} target="_blank" rel="noopener" title="Nouveau courriel dans Gmail" style={{color:'var(--accent)'}}>✉️ {e}</a>)}
           {k.tels.map(t=><a key={t} href={repTel(t)} style={{color:'var(--accent)'}}>📞 {t}</a>)}
         </div></div>
       <span style={{display:'flex',gap:4}}>
@@ -9358,11 +9365,11 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
         <div style={{minWidth:0,flex:'1 1 280px'}}>
           {pers && <div className="muted" style={{fontSize:11,textTransform:'uppercase',letterSpacing:.5}}>{c.commerce ? '🏪 Commerce' : '👤 Particulier'}{c.compta ? ' · 📒 logiciel comptable' : ''}</div>}
           <h3 className="fh" style={{margin:'0 0 4px',fontSize:20}}>{pers ? c.nom : <><span style={{color:'var(--accent)'}}>{c.code}</span> {c.nom}</>}</h3>
-          {!pers && c.contact && <div style={{fontSize:13}}>👤 {c.contact}</div>}
+          {!pers && c.contact && <div style={{fontSize:13}}>👤 {c.contact}{c.president ? <span className="muted"> · {c.president.role}</span> : ''}</div>}
           {(()=>{ const l = repAdrLignes(adrToutes[0]);
             return l.length>0 && <div style={{fontSize:13,display:'flex',gap:6,margin:'2px 0 4px',lineHeight:1.35}}><span>📍</span><div>{l.map((x,i)=><div key={i}>{x}</div>)}</div></div>; })()}
           {telsTous.map(t=><div key={t} style={{fontSize:13}}>📞 <a href={repTel(t)} style={{color:'var(--accent)'}}>{t}</a></div>)}
-          {courrielsTous.map(e=><div key={e} style={{fontSize:13}}>✉️ <a href={'mailto:'+e} style={{color:'var(--accent)'}}>{e}</a></div>)}
+          {courrielsTous.map(e=><div key={e} style={{fontSize:13}}><a href={repGmail(e)} target="_blank" rel="noopener" title="Nouveau courriel dans Gmail" style={{color:'var(--accent)'}}>✉️ {e}</a></div>)}
           {pers && c.entreprise && c.entreprise!==c.nom && <div style={{fontSize:13}}>🏢 {c.entreprise}</div>}
           {pers && c.contacts.filter(k=>k.notes).map((k,i)=><div key={i} style={{fontSize:12.5,marginTop:2,whiteSpace:'pre-wrap'}}>🗒 {k.notes}</div>)}
           {fiche && fiche.notes && <div style={{fontSize:12.5,marginTop:4,whiteSpace:'pre-wrap'}}>📝 {fiche.notes}</div>}
