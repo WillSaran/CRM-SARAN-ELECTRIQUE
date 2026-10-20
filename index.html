@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v188';
+const APP_VERSION = 'v189';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3688,9 +3688,9 @@ function paiMots(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,''
 function paiJours(d){ const t = Date.parse(String(d||'').slice(0,10)); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
 function paiLireFactures(rows){
   const fh=(rows[0]||[]).map(h=>cvNorm(h)), fc=re=>fh.findIndex(h=>re.test(h));
-  const fx={num:fc(/^facture/),date:fc(/^date/),cli:fc(/^client/),po:fc(/^po$/),nom:fc(/^nom/),desc:fc(/^description/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/),st:fc(/^statut/)};
+  const fx={num:fc(/^facture/),date:fc(/^date/),cli:fc(/^client/),po:fc(/^po$/),nom:fc(/^nom/),desc:fc(/^description/),ht:fc(/^montant/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/),st:fc(/^statut/)};
   const g=(r,k)=> fx[k]>=0 ? String(r[fx[k]]||'').trim() : '';
-  const out={}; rows.slice(1).forEach((r,i)=>{ const n=g(r,'num'); if(!n) return;
+  const out={}; Object.defineProperty(out,'__cols',{value:fx, enumerable:false}); rows.slice(1).forEach((r,i)=>{ const n=g(r,'num'); if(!n) return;
     out[n]={num:n, row:i+2, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, envoi:g(r,'env'), pdf:g(r,'pdf'), annulee:/^annul/.test(cvNorm(g(r,'st'))), statut:g(r,'st'),
       ouverte:/^ouverte/i.test(g(r,'st')), estime:/^montant calcul/i.test(g(r,'st'))}; });   // v187 : importées du logiciel comptable
   Object.defineProperty(out,'__stCol',{value: fx.st>=0 ? fx.st : Math.max(fh.length, 10), enumerable:false});
@@ -3774,7 +3774,9 @@ function paiementsAnalyser(factures, paiements, nomDe, separes){
     // 1. Numéros de facture écrits dans le message
     const lues = [...new Set([...p.lues, ...paiNums(p.message)])].map(n=>F[n]).filter(f=>f && f.etat!=='annulee');
     if(lues.length){ const tot = lues.reduce((s,f)=>s+(f.etat==='payee'?0:f.solde),0);
-      ajoute(lues, 'Numéro'+(lues.length>1?'s':'')+' écrit'+(lues.length>1?'s':'')+' dans le message', Math.abs(tot-p.montant)<=0.05 ? 'sur' : 'verifier'); }
+      ajoute(lues, 'Numéro'+(lues.length>1?'s':'')+' écrit'+(lues.length>1?'s':'')+' dans le message', Math.abs(tot-p.montant)<=0.05 ? 'sur' : 'verifier');
+      // v189 : montant calculé (≈) d'une facture importée qui ne balance pas avec le paiement qui la nomme : proposer de corriger la facture
+      const o = opts[opts.length-1]; if(o && lues.length===1 && lues[0].estime && lues[0].paye<0.05 && Math.abs(o.ecart)>0.05){ o.corriger = p.montant; o.raison += ' · montant de la facture calculé (≈ '+cvMoney(lues[0].ttc)+'), le paiement dit '+cvMoney(p.montant); } }
     // 2. Une facture du même montant exact
     const exacts = cands.filter(f=>Math.abs(f.solde-p.montant)<=0.02);
     exacts.filter(nomOk).forEach(f=>ajoute([f], 'Même montant et même client', 'sur'));
@@ -3899,6 +3901,17 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const confirmer = async (p, nums, statut)=>{ setBusy('p'+p.row);
     try{ await paiEcrireStatut(id, p.row, nums, statut, (statut==='Ignoré'?'Ignoré':'Confirmé')+' dans le CRM le '+paiAujourdhui()); setTick(t=>t+1); }
     catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } setBusy(''); };
+  // v189 : corriger le montant d'une facture importée (≈) avec le montant du paiement, puis confirmer
+  const corrigerEtConfirmer = async (cible, num, montant) => { const f = data.factures[num], c = data.factures.__cols; if(!f || c.ttc<0) return;
+    if(!confirm('Mettre le total de la facture #'+num+' à '+cvMoney(montant)+' (au lieu de ≈ '+cvMoney(f.ttc)+') et confirmer le paiement ?')) return;
+    setBusy(cible.id || 'p'+cible.row);
+    try{ suivreEcritures(); const L = i => String.fromCharCode(65+i), ht = Math.round(montant/1.14975*100)/100;
+      const data2 = [{range:L(c.ttc)+f.row, values:[[montant.toFixed(2)]]}];
+      if(c.ht>=0) data2.push({range:L(c.ht)+f.row, values:[[ht.toFixed(2)]]});
+      data2.push({range:L(data.factures.__stCol)+f.row, values:[['Montant corrigé par le paiement du '+String(cible.date || (cible.membres||[{}]).slice(-1)[0].date || '').slice(0,10)]]});
+      await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:data2}});
+      if(cible.membres) await confirmerGroupe(cible, [num], 'Confirmé'); else await confirmer(cible, [num], 'Confirmé'); }
+    catch(e){ alert('Impossible : '+apiErrMsg(e)); setBusy(''); } };
   const confirmerGroupe = async (g, nums, statut)=>{ setBusy(g.id);
     try{ suivreEcritures(); const note = (statut==='Ignoré'?'Ignoré':'Confirmé')+' dans le CRM le '+paiAujourdhui()+' — '+g.membres.length+' virements ensemble';
       await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:g.membres.map(p=>({range:'Paiements!J'+p.row+':L'+p.row, values:[[nums.join(', '), statut, note]]}))}});
@@ -4038,6 +4051,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
             <span style={{fontSize:11,fontWeight:700,color:couleur[o.niveau],border:'1px solid',borderRadius:6,padding:'1px 6px'}}>{etiquette[o.niveau]}</span>
             <span style={{fontSize:12.5,flex:'1 1 220px'}}>{o.factures.map(descF).join(' + ')}<span className="muted"> — {o.raison}{Math.abs(o.ecart)>0.05 ? ' · écart '+cvMoney(o.ecart) : ''}</span></span>
             <button className="btn btn-sm btn-p" disabled={b} onClick={()=>confirmerGroupe(g, o.factures, 'Confirmé')}>{b?'…':'✓ Confirmer les '+g.membres.length+' virements'}</button>
+            {o.corriger && <button className="btn btn-sm" disabled={b} title="La facture importée avait un montant calculé ; on le remplace par le montant payé" onClick={()=>corrigerEtConfirmer(g, o.factures[0], o.corriger)}>✓ Confirmer et corriger la facture à {cvMoney(o.corriger)}</button>}
           </div>)}
           <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6,alignItems:'center'}}>
             <input value={autre[g.id]||''} onChange={e=>setAutre({...autre, [g.id]:e.target.value})} placeholder="Autre(s) facture(s) : 1234, 1235" style={{flex:'1 1 180px',width:'auto',minWidth:0,padding:'5px 9px',fontSize:12.5}}/>
@@ -4058,6 +4072,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
             <span style={{fontSize:11,fontWeight:700,color:couleur[o.niveau],border:'1px solid',borderRadius:6,padding:'1px 6px'}}>{etiquette[o.niveau]}</span>
             <span style={{fontSize:12.5,flex:'1 1 220px'}}>{o.factures.map(descF).join(' + ')}<span className="muted"> — {o.raison}{Math.abs(o.ecart)>0.05 ? ' · écart '+cvMoney(o.ecart) : ''}</span></span>
             <button className="btn btn-sm btn-p" disabled={b} onClick={()=>confirmer(p, o.factures, 'Confirmé')}>{b?'…':'✓ Confirmer'}</button>
+            {o.corriger && <button className="btn btn-sm" disabled={b} title="La facture importée avait un montant calculé ; on le remplace par le montant payé" onClick={()=>corrigerEtConfirmer(p, o.factures[0], o.corriger)}>✓ Confirmer et corriger la facture à {cvMoney(o.corriger)}</button>}
           </div>)}
           {(()=>{ const inc = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>!A.F[n]); return inc.length>0 && <div style={{fontSize:12.5,marginTop:6,color:'var(--warning)'}}>Le message parle de la facture {inc.join(', ')}, qui n'est pas (encore) dans le registre des factures.</div>; })()}
           {doublonsDe(p).map(([a,b])=><div key={a.num+b.num} style={{marginTop:6,padding:8,border:'1px solid var(--warning)',borderRadius:8,fontSize:12.5}}>
