@@ -142,11 +142,14 @@ function loadCfg(){
 }
 function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
-const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.send';
+// v202 : ouvrir une section déjà filtrée sur un client (boutons de la fiche du Répertoire) — {cible, nom, q, code, vue, jobIds, suivi}
+let NAV_FOCUS = null;
+const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NAV_FOCUS.t||0) < 5000 ? NAV_FOCUS : null;
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v201';
+const APP_VERSION = 'v202';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -820,6 +823,7 @@ async function initGoogle(cfg){
 let tokenExpire = 0;
 let tokenScopes = '';   // permissions accordées (pour savoir si on peut déposer des photos dans Drive)
 function peutDeposer(){ return /drive\.file|auth\/drive(\s|$)/.test(tokenScopes); }
+function peutEnvoyerCourriel(){ return /gmail\.send/.test(tokenScopes); }
 function requestToken(prompt){
   return new Promise((resolve,reject)=>{
     tokenClient.callback = (resp)=>{
@@ -2087,7 +2091,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
         : <CvChoixJob clients={clients} R={R} propose={proposeAchat(a, clients)} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients)} date={date(a)} refAchat={a.ref} onChoix={job=>enregistrer(a, job)}/>)}
     </div>; };
   return <div>
-    <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Fournisseurs</h2>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Comptes fournisseurs</h2>
     <div className="muted" style={{fontSize:13,marginBottom:12}}>Tes factures d'achat lues dans tes courriels. Clique une facture pour voir ses articles ; associe-la à une job, à l'entrepôt, à un camion, à Éclairage Saran ou à un employé.</div>
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher une facture (fournisseur, #, référence, job, employé, article…)" style={{width:'100%',boxSizing:'border-box',marginBottom:12}}/>
     {q.trim().length>=2 && <div className="card" style={{marginBottom:16,borderColor:'var(--accent)'}}>
@@ -2184,7 +2188,8 @@ function ProjetsSuivi({cfg, refreshKey}){
   const [commandes, enregistrerCommande] = useCommandes(cfg);
   const [manuels, basculerEtape] = useEtapesManuelles(cfg);
   const [propAdresses] = useAdresses(cfg);
-  const [filtre,setFiltre]=useState('');
+  const [focus,setFocus]=useState(()=>navFocus('projets'));   // v202 : projets d'un client (bouton de sa fiche)
+  const [filtre,setFiltre]=useState(()=>(navFocus('projets')||{}).code || '');
   const [seulManque,setSeulManque]=useState(false);
   const [ouvert,setOuvert]=useState(null);
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
@@ -2193,14 +2198,15 @@ function ProjetsSuivi({cfg, refreshKey}){
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les jobs : {err}</div>;
   const today = cvDay(new Date().toISOString()), recent = cvDay(new Date(Date.now()-30*864e5).toISOString());
   let jobs = Object.values(clients).flatMap(c=>c.jobs.map(j=>({c, j, s:pjEtapes(j, ap, commandes, courriels, manuels)})))
-    .filter(x=>x.j.status!=='done' || x.j.last>=recent || x.s.etape==='À facturer');
+    .filter(x=>focus || x.j.status!=='done' || x.j.last>=recent || x.s.etape==='À facturer');
+  if(focus && focus.jobIds) jobs = jobs.filter(x=>focus.jobIds.includes(x.j.id));
   const nbArch = jobs.filter(x=>(archives||{})[x.j.id]).length;
   jobs = jobs.filter(x=>voirArch ? (archives||{})[x.j.id] : !(archives||{})[x.j.id]);
   if(filtre) jobs = jobs.filter(x=>x.c.code===filtre);
   if(seulManque) jobs = jobs.filter(x=>x.s.manquants.length);
   // Terminées cachées, sauf celles qui restent à facturer.
   const nbTerm = jobs.filter(x=>x.j.status==='done' && x.s.etape!=='À facturer').length;
-  if(!voirTerm) jobs = jobs.filter(x=>x.j.status!=='done' || x.s.etape==='À facturer');
+  if(!voirTerm && !focus) jobs = jobs.filter(x=>x.j.status!=='done' || x.s.etape==='À facturer');
   // Contracteurs en ordre alphabétique, particuliers à la fin.
   const codes = [...new Set(Object.values(clients).map(c=>c.code))].sort((a,b)=>(a==='PART')-(b==='PART') || a.localeCompare(b,'fr'));
   const groupes = [['cours','En cours'],['avenir','À venir'],['done','Terminées (30 derniers jours)']];
@@ -2273,8 +2279,10 @@ function ProjetsSuivi({cfg, refreshKey}){
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Projets</h2>
     <div className="muted" style={{fontSize:13,marginBottom:10}}>Chaque job, ses étapes et ce qui manque — et où le compléter. {totalManque ? <b style={{color:'var(--warning)'}}>{totalManque} choses à compléter.</b> : 'Tout est complet.'}</div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>
-      <button className="btn btn-sm" style={!filtre?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>setFiltre('')}>Tous</button>
-      {codes.map(cd=><button key={cd} className="btn btn-sm" style={filtre===cd?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>setFiltre(cd)}>{cd==='PART'?'Particuliers':cd}</button>)}
+      {focus && <span style={{display:'inline-flex',gap:6,alignItems:'center',padding:'2px 4px 2px 10px',border:'1px solid var(--accent)',borderRadius:8,fontSize:13}}>Projets de <b>{focus.nom}</b>
+        <button className="btn btn-sm" style={{padding:'1px 7px'}} onClick={()=>{ setFocus(null); setFiltre(''); }}>✕</button></span>}
+      <button className="btn btn-sm" style={!filtre && !focus?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>{ setFiltre(''); setFocus(null); }}>Tous</button>
+      {codes.map(cd=><button key={cd} className="btn btn-sm" style={filtre===cd?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>{ setFiltre(cd); setFocus(null); }}>{cd==='PART'?'Particuliers':cd}</button>)}
       <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,marginLeft:'auto'}}><input type="checkbox" checked={seulManque} onChange={e=>setSeulManque(e.target.checked)}/> Seulement ce qui manque</label>
       <CaseTerminees v={voirTerm} set={setVoirTerm} n={nbTerm}/>
       <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13}}><input type="checkbox" checked={voirArch} onChange={e=>setVoirArch(e.target.checked)}/> Archivées{nbArch?' ('+nbArch+')':''}</label>
@@ -2856,7 +2864,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:16}}>
       <Tuile n={enCours.length} l="Jobs en cours" sub={aCompleter ? aCompleter+' étapes à compléter' : 'tout est complet'} go="projets"/>
       <Tuile n={suivi ? aFacturer.length : '…'} l="À facturer" sub={suivi ? (sansFac ? sansFac+" sans rien d'inscrit, "+(aFacturer.length-sansFac)+' facture à faire' : (aFacturer.length ? 'appels faits, factures à faire' : 'tout est facturé')) : 'Suivi Travaux'} alerte={aFacturer.length>0} go="factures"/>
-      <Tuile n={anomalies.length} l="À vérifier" sub="factures, PO, appels" alerte={anomalies.length>0} go="clients"/>
+      <Tuile n={anomalies.length} l="À vérifier" sub="factures, PO, appels" alerte={anomalies.length>0} go="verif"/>
       <Tuile n={aCommander.length} l="Commandes à placer" sub={'cette semaine et la prochaine (jusqu\'au '+cvFmtDay(dans14)+')'} alerte={aCommander.some(x=>x.e.day<=jour(3))} go="commandes"/>
       {(()=>{ const af = soum.liste.filter(x=>x.type==='À faire' && !SOUM_FINI.includes(x.statut));
         const att = soum.liste.filter(x=>x.type==='Envoyée' && !['Acceptée','Refusée'].includes(x.statut)).length;
@@ -4200,9 +4208,9 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts}){
   const [loading,setLoading]=useState(true);
   const [rows,setRows]=useState([]);
   const [err,setErr]=useState('');
-  const [vue,setVue]=useState('afacturer');
-  const [filterC,setFilterC]=useState(null);
-  const [q,setQ]=useState('');
+  const [vue,setVue]=useState(()=>(navFocus('factures')||{}).vue || 'afacturer');   // v202 : ouverte depuis la fiche d'un client
+  const [filterC,setFilterC]=useState(()=>(navFocus('factures')||{}).code || null);
+  const [q,setQ]=useState(()=>(navFocus('factures')||{}).q || '');
   const [busy,setBusy]=useState('');
   const [tick,setTick]=useState(0);
   const id = cfg.suiviTravauxSpreadsheetId;
@@ -4323,7 +4331,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts}){
     : r.statutFacture==='annule' ? <span className="muted" style={{fontWeight:700}}>{r.appelService==='-'||r.facture==='-' ? '- ' : '** '}Pas à facturer</span>
     : r.estPasseOuAujourdhui ? <span style={{color:'var(--danger)',fontWeight:700}}>Rien d'inscrit</span> : <span className="muted">À venir</span>;
   return <div>
-    <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Factures</h2>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Factures clients</h2>
     <div className="muted" style={{fontSize:13,marginBottom:12}}>Tiré du Sheet « SUIVI TRAVAUX SARAN ÉLECTRIQUE ». Tout passage fait qui n'a pas encore de facture est ici, le plus vieux en premier. Un passage qui ne se facture pas (annulé, garantie, visite) : « Pas à facturer » met « ** » dans le Sheet.</div>
     {!id && <div className="card">Configure l'ID du Sheet "SUIVI TRAVAUX" dans Réglages.</div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
@@ -4580,10 +4588,10 @@ function SoumNote({txt}){
 
 function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const S = useSoumissions(cfg, refreshKey);
-  const [onglet,setOnglet]=useState('afaire');
+  const [onglet,setOnglet]=useState(()=>navFocus('soumissions') ? 'envoyees' : 'afaire');   // v202 : soumissions d'un client (bouton de sa fiche)
   const [voirFinies,setVoirFinies]=useState(false);
-  const [filtre,setFiltre]=useState('');
-  const [q,setQ]=useState('');
+  const [filtre,setFiltre]=useState(()=>navFocus('soumissions') ? 'tout' : '');
+  const [q,setQ]=useState(()=>(navFocus('soumissions')||{}).q || '');
   const [nouveau,setNouveau]=useState(null);
   const [details,setDetails]=useState('');
   const [fichiers,setFichiers]=useState([]);
@@ -6012,6 +6020,54 @@ function docHtml(d, calc, plan, imprimer){
   return html;
 }
 // Ouvre la version imprimable (« Enregistrer en PDF »). w0 : fenêtre déjà ouverte (évite le blocage des pop-ups).
+// v202 : le document en PDF (pour le joindre à un courriel) — html2canvas + jsPDF, chargés seulement au besoin
+async function docPdfBase64(html){
+  if(!window.html2canvas) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+  if(!(window.jspdf && window.jspdf.jsPDF)) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+  const ifr = document.createElement('iframe'); ifr.style.cssText = 'position:fixed;left:0;top:0;width:816px;height:1056px;border:0;z-index:-9999;pointer-events:none;';
+  document.body.appendChild(ifr);
+  try{ const dd = ifr.contentDocument; dd.open(); dd.write(html); dd.close();
+    await new Promise(r=>setTimeout(r, 300));
+    await Promise.all([...dd.images].map(im=>im.complete ? 0 : new Promise(r=>{ im.onload = im.onerror = r; })));
+    // html2canvas sur la page de l'iframe (garde ses styles), puis une image par page lettre dans jsPDF
+    const canvas = await window.html2canvas(dd.body, {scale:2, useCORS:true, logging:false, backgroundColor:'#ffffff', windowWidth:816, width:816});
+    const J = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
+    const pdf = new J({unit:'pt', format:'letter', orientation:'portrait'}), W = pdf.internal.pageSize.getWidth(), Hp = pdf.internal.pageSize.getHeight();
+    const hPx = Math.floor(canvas.width * Hp / W);
+    for(let y=0, i=0; y<canvas.height; y+=hPx, i++){
+      const c = document.createElement('canvas'); c.width = canvas.width; c.height = Math.min(hPx, canvas.height-y);
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0,0,c.width,c.height); g.drawImage(canvas, 0, -y);
+      if(i) pdf.addPage(); pdf.addImage(c.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, W, c.height * W / c.width); }
+    return pdf.output('datauristring').split(',')[1];
+  } finally { ifr.remove(); } }
+// v202 : envoyer un courriel avec Gmail (de toi à toi) — texte + pièce jointe facultative {nom, type, base64}
+async function gmailEnvoyer({to, sujet, texte, pj}){
+  const b = 'saran'+Date.now(), u8 = x => btoa(unescape(encodeURIComponent(x))), lignes = x => x.replace(/.{76}/g, '$&\r\n');
+  let mime = 'To: '+to+'\r\nSubject: =?UTF-8?B?'+u8(sujet)+'?=\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="'+b+'"\r\n\r\n'+
+    '--'+b+'\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n'+lignes(u8(texte))+'\r\n';
+  if(pj) mime += '--'+b+'\r\nContent-Type: '+pj.type+'; name="'+pj.nom+'"\r\nContent-Disposition: attachment; filename="'+pj.nom+'"\r\nContent-Transfer-Encoding: base64\r\n\r\n'+lignes(pj.base64)+'\r\n';
+  mime += '--'+b+'--';
+  suivreEcritures();
+  return window.gapi.client.request({path:'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', method:'POST', body:{raw:btoa(mime).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}});
+}
+// Texte de la « facture à faire » : tout ce qu'il faut pour la refaire dans le logiciel comptable
+function docTexteAFaire(d, calc){
+  const m = n => cvMoney(Math.round((Number(n)||0)*100)/100);
+  const L = ['Facture à faire — brouillon '+d.numero+' préparé dans le CRM', '',
+    'Client : '+(d.nom||'—'), 'Adresse : '+(d.adresse||'—'), 'Téléphone : '+(d.tel||'—'), 'Courriel : '+(d.courriel||'—'), '',
+    'Projet : '+(d.titre||'—')];
+  if(d.travaux) L.push('Travaux : '+d.travaux);
+  L.push('', 'Visites :'); d.jours.filter(j=>j.date || cvNum(j.sa01) || cvNum(j.sa02)).forEach(j=>L.push('  '+(j.date||'')+(cvNum(j.sa01) ? ' · SA01 '+j.sa01+' h' : '')+(cvNum(j.sa02) ? ' · SA02 '+j.sa02+' h' : '')));
+  const forfait = cvNum(d.forfait)!=null && d.forfait!=='';
+  if(forfait) L.push('', 'Prix forfaitaire (avant taxes) : '+m(d.forfait));
+  else { L.push('', 'Main-d\'œuvre : '+m(calc.mo)+(calc.h1 ? ' (SA01 '+calc.h1+' h × '+m(calc.r1)+')' : '')+(calc.h2 ? ' (SA02 '+calc.h2+' h × '+m(calc.r2)+')' : ''));
+    if(calc.depl) L.push('Déplacement : '+m(calc.depl)); if(calc.quin) L.push('Quincaillerie : '+m(calc.quin)); }
+  const lg = d.lignes.filter(l=>cvNum(l.qte));
+  if(lg.length){ L.push('', 'Matériel :'); lg.forEach(l=>L.push('  '+(l.code||'')+' — '+(l.desc||'')+' · '+l.qte+' '+(l.unite||'')+(forfait ? '' : ' × '+m(calc.px(l.code, l))))); }
+  if(d.remarques) L.push('', 'Remarques : '+d.remarques);
+  L.push('', 'Sous-total : '+m(calc.st), 'TPS : '+m(calc.tps), 'TVQ : '+m(calc.tvq), 'Total : '+m(calc.total), '', 'Le brouillon PDF est en pièce jointe.');
+  return L.join('\n');
+}
 function docImprimer(d, calc, plan, w0){
   const w = w0 || window.open('', '_blank');
   if(!w) return false;
@@ -6501,6 +6557,20 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
     }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); return null; }
     finally{ setOccupe(''); }
   };
+  // v202 : « Facture à faire » — courriel de info@ à info@ avec le brouillon en PDF ; la comptable la fait dans le logiciel comptable
+  const envoyerAFaire = async ()=>{
+    const doc = await enregistrer(); if(!doc) return;
+    setOccupe('envoi');
+    try{
+      if(!peutEnvoyerCourriel()){ await requestToken('consent'); if(!peutEnvoyerCourriel()){ toast && toast('Permission Gmail refusée : le courriel n\'est pas parti.'); return; } }
+      const c2 = docCalcul(doc, C.prixDe);
+      let pj = null; try{ pj = {nom:'Facture-a-faire-'+doc.numero+'.pdf', type:'application/pdf', base64: await docPdfBase64(docHtml(doc, c2, await planPourImpression(doc), false))}; }catch(e){}
+      const sujet = 'Facture à faire — '+[doc.nom, doc.titre].filter(Boolean).join(' — ')+' (brouillon '+doc.numero+')';
+      await gmailEnvoyer({to:'info@saranelectrique.com', sujet, texte:docTexteAFaire(doc, c2)+(pj ? '' : '\n\n(Le PDF n\'a pas pu être joint : imprime-le depuis le CRM.)'), pj});
+      toast && toast('Facture à faire envoyée à info@saranelectrique.com'+(pj ? ' (PDF joint)' : ''));
+    }catch(e){ toast && toast('Courriel pas envoyé : '+apiErrMsg(e)); }
+    finally{ setOccupe(''); }
+  };
   const courriel = async ()=>{
     const doc = d.numero ? d : await enregistrer(); if(!doc) return;
     const sujet = doc.type+' '+doc.numero+(doc.titre?' — '+doc.titre:'')+' : Saran Électrique Inc.';
@@ -6644,7 +6714,9 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
         <button className="btn btn-sm" disabled={!!occupe} onClick={imprimer}>🖨️ PDF / Imprimer</button>
         <button className="btn btn-sm" disabled={!!occupe} onClick={courriel}>📧 Courriel (Gmail)</button>
       </div>
-      {d.type==='Facture' && <div className="muted" style={{fontSize:11.5,marginTop:6,textAlign:'right'}}>Facture = brouillon : rentre-la dans ton logiciel de facturation (numéro officiel).</div>}
+      {d.type==='Facture' && !soumMode && <div style={{display:'flex',justifyContent:'flex-end',marginTop:8}}>
+        <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={envoyerAFaire} title="Courriel de info@ à info@ : « Facture à faire », avec le brouillon en PDF">{occupe==='envoi' ? 'Envoi…' : '📧 Envoyer la facture à faire'}</button></div>}
+      {d.type==='Facture' && <div className="muted" style={{fontSize:11.5,marginTop:6,textAlign:'right'}}>Facture = brouillon : « Envoyer la facture à faire » l'envoie à info@ avec le PDF, pour la faire dans le logiciel comptable (numéro officiel).</div>}
     </div>
 
     {apercu && <ApercuPdf d={d} prixDe={C.prixDe} onImprimer={imprimer} onFermer={()=>setApercu(false)}/>}
@@ -8742,15 +8814,37 @@ const repAdrLignes = a => String(a||'').split(/\s*,\s*/).map(x=>x.trim()).filter
 function repIgnores(){ try{ return new Set(JSON.parse(localStorage.getItem('crm_rep_ignores')||'[]')); }catch(e){ return new Set(); } }
 function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.setItem('crm_rep_ignores', JSON.stringify([...s])); }catch(e){} }
 
-function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
+// v202 : Comptabilité — comptes fournisseurs, factures clients (et paiements reçus), appels de service, à vérifier. Les pages gardent toutes leurs fonctions.
+const CPT_NAV = {factures:'factures', fournisseurs:'fourn', appel:'appel', verif:'verif'};   // anciens menus → onglet de Comptabilité
+const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['factures','Factures clients'],['appel','Appels de service'],['verif','À vérifier']];
+function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, onglet0}){
+  const [onglet,setOnglet]=useState(onglet0 || 'factures');
+  const [cles,setCles]=useState({});
+  const choisir = k => { if(k===onglet) setCles(c=>({...c, [k]:(c[k]||0)+1})); setOnglet(k); NAV_FOCUS = null; window.scrollTo(0,0); };
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 8px',fontSize:22}}>Comptabilité</h2>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,borderBottom:'1px solid var(--border)',paddingBottom:10}}>
+      {CPT_ONGLETS.map(([k,l])=><button key={k} className={'btn btn-sm'+(onglet===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
+    </div>
+    {onglet==='fourn' && <FournisseursView key={'f'+(cles.fourn||0)} cfg={cfgRep} refreshKey={refreshKey} isDesktop={isDesktop}/>}
+    {onglet==='factures' && <FacturesView key={'x'+(cles.factures||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
+    {onglet==='appel' && <AppelServiceView key={'a'+(cles.appel||0)} cfg={cfgRep} toast={toast}/>}
+    {onglet==='verif' && <>
+      <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>À vérifier</h2>
+      <div className="muted" style={{fontSize:13,marginBottom:10}}>Passages pas facturés, factures en double, PO et appels à vérifier — par client. Clique un client pour voir le suivi de ses jobs.</div>
+      <RepertoireView key={'v'+(cles.verif||0)} mode="verif" cfg={cfgRep} refreshKey={refreshKey} toast={toast} isDesktop={isDesktop} contacts={contacts}/></>}
+  </div>;
+}
+function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAller}){
   const [tick,setTick]=useState(0);
   const d = useClientsData(cfg, refreshKey+'|r'+tick);
   const [reglees] = useVerifsReglees(cfg);
-  const [suivi,setSuivi]=useState(null);       // v156 : suivi et vérifications (ancien onglet Clients) : code contracteur, 'PART' ou id d'un particulier
+  const [suivi,setSuivi]=useState(()=>mode==='verif' ? (navFocus('verif')||{}).suivi || null : null);       // v156 : suivi et vérifications (ancien onglet Clients) : code contracteur, 'PART' ou id d'un particulier
   const K = useContactsFournisseurs(cfg);
   // v177 : une seule vue choisie dans un menu déroulant ; la recherche reste en haut
-  const [vue,setVueS]=useState(()=>{ try{ return localStorage.getItem('crm_rep_vue')||'accueil'; }catch(e){ return 'accueil'; } });
-  const setVue = v => { setVueS(v); setSel(null); try{ localStorage.setItem('crm_rep_vue', v); }catch(e){} };
+  // v202 : « À vérifier » est maintenant dans Comptabilité (mode « verif ») ; le Répertoire = les fiches de contact
+  const [vue,setVueS]=useState(()=>{ if(mode==='verif') return 'verif'; try{ const v = localStorage.getItem('crm_rep_vue')||'accueil'; return ['verif','soum'].includes(v) ? 'accueil' : v; }catch(e){ return 'accueil'; } });
+  const setVue = v => { setVueS(v); setSel(null); if(mode!=='verif') try{ localStorage.setItem('crm_rep_vue', v); }catch(e){} };
   const [q,setQ]=useState('');
   const [sel,setSelId]=useState(null);       // id d'un client ou 'F:<fournisseur>'
   const [selNom,setSelNom]=useState('');      // pour retrouver le client après une fusion (son id change)
@@ -8823,12 +8917,12 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   const nbSoumSeul = R.pers.filter(p=>p.soumSeul).length;
   const totalAV = Object.entries(aVerif).filter(([k])=>k!=='PART').reduce((t,[,n])=>t+n,0);
   const VUES = [['accueil','🏠 Vue d\'ensemble'],['part','👤 Particuliers ('+nbPart+')'],['com','🏪 Commerces ('+nbCom+')'],['contr','🏗 Contracteurs ('+R.contr.length+')'],
-    ['fourn','🏭 Fournisseurs ('+fourn.length+')'],['verif','⚠️ À vérifier ('+totalAV+')'],['soum','⏳ En attente / soumissions ('+nbSoumSeul+')']];
+    ['fourn','🏭 Fournisseurs ('+fourn.length+')']];
 
   const entete = <div style={{marginBottom:12}}>
     <input value={q} onChange={e=>{ setQ(e.target.value); if(sel) setSel(null); }} placeholder="🔎 Chercher un client, commerce, contracteur, fournisseur — nom, courriel, téléphone, adresse, PO, no de facture…"
       style={{width:'100%',padding:'9px 12px',fontSize:14,marginBottom:8}}/>
-    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+    {mode!=='verif' && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
       <select value={vue} onChange={e=>setVue(e.target.value)} style={{padding:'6px 10px',fontWeight:700,width:'auto'}}>
         {VUES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
       </select>
@@ -8837,7 +8931,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
         <button className="btn btn-sm" onClick={()=>{ setSel(null); setNouveau(nouveau ? null : {commerce:vue==='com', nom:'', adresse:'', ville:'', tel:'', courriel:'', notes:''}); }}>＋ Ajouter un client</button>
         <button className="btn btn-sm" onClick={()=>setOutils(!outils)} title="Importer / mettre à jour">⋯</button>
       </span>
-    </div>
+    </div>}
     {outils && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8}}>
       <RepImportCompta cfg={cfg} toast={toast} nbActuel={(d.gcmeq||[]).length} onFait={()=>setTick(t=>t+1)}/>
       {cfg.memoireMajUrl && <button className="btn btn-sm" title="Va chercher les nouveaux PO et factures, met le registre à jour et range tout (prêt dans environ 15 min)" onClick={()=>window.open(cfg.memoireMajUrl,'_blank')}>⟳ Mettre à jour La mémoire</button>}
@@ -8848,7 +8942,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
   if(choisi) return <div>{entete}
     <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>setSel(null)}>← Retour</button>
     {sel && sel.startsWith('F:') ? <RepFicheFournisseur f={choisi} K={K} toast={toast}/>
-      : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onLie={nom=>setSel('', nom)} onContr={code=>setSel('C:'+code)} onOuvrir={(id, nom)=>setSel(id, nom)}
+      : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onAller={onAller} onLie={nom=>setSel('', nom)} onContr={code=>setSel('C:'+code)} onOuvrir={(id, nom)=>setSel(id, nom)}
           nbAV={aVerif[choisi.type==='contr' ? 'C:'+choisi.code : choisi.id]||0} onSuivi={(choisi.type==='contr' ? clients[choisi.code] : choisi.srcJobs.length) ? ()=>setSuivi(choisi.type==='contr' ? choisi.code : choisi.id) : null}/>}
   </div>;
 
@@ -8860,7 +8954,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
     {l.map((p,i)=>{ const L = lettre(p.nom), nouv = !i || lettre(l[i-1].nom)!==L;
       return <React.Fragment key={p.id}>
         {lettres && nouv && l.length>15 && <div style={{padding:'3px 14px',fontSize:11.5,fontWeight:800,color:'var(--accent)',background:'var(--bg3)',borderBottom:'1px solid var(--border)'}}>{L}</div>}
-        <div onClick={()=>setSel(p.id)} style={{padding:'9px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
+        <div onClick={()=>ouvrirC(p)} style={{padding:'9px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
           <div style={{minWidth:0}}><span style={{fontSize:12}}>{p.commerce ? '🏪' : '👤'}</span> <b>{p.nom}</b>{badge(aVerif[p.id])}
             <div className="muted" style={{fontSize:12}}>{[p.adresse, p.tel, p.courriel].filter(Boolean).join(' · ') || '—'}</div></div>
           <div style={{textAlign:'right',fontSize:12}}>{p.listeJobs.length} job{p.listeJobs.length>1?'s':''}{p.facture ? <> · <b>{cvMoney(p.facture)}</b></> : ''}<div className="muted" style={{fontSize:11}}>{p.last ? cvFmtDay(p.last)+' '+p.last.slice(0,4) : ''}</div></div>
@@ -8868,8 +8962,9 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
       </React.Fragment>; })}
     {!l.length && <div className="muted" style={{padding:14}}>Aucun résultat.</div>}
   </div>;
+  const ouvrirC = c => { if(mode==='verif'){ if(c.type==='contr' && clients[c.code]){ setSuivi(c.code); return; } if(c.type!=='contr' && c.srcJobs && c.srcJobs.length){ setSuivi(c.id); return; } } setSel(c.id); };
   const Cubes = ({l}) => <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:8}}>
-    {l.map(c=><div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0,borderColor:aVerif['C:'+c.code] ? 'rgba(248,81,73,0.45)' : undefined}} onClick={()=>setSel(c.id)}>
+    {l.map(c=><div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0,borderColor:aVerif['C:'+c.code] ? 'rgba(248,81,73,0.45)' : undefined}} onClick={()=>ouvrirC(c)}>
       <div><b style={{color:'var(--accent)'}}>{c.code}</b> {c.nom}</div>
       <div className="muted" style={{fontSize:12}}>{c.contact || (c.fiche&&c.fiche.tel) || ' '}</div>
       <div style={{fontSize:12,marginTop:4}}>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''} · facturé <b>{cvMoney(c.facture)}</b></div>
@@ -8941,11 +9036,11 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
       {clients.PART && <div style={{marginTop:10}}><button className="btn btn-sm" onClick={()=>setSuivi('PART')}>🔎 Suivi de toutes les jobs de particuliers{aVerif.PART ? ' · '+aVerif.PART+' à vérifier' : ''}</button></div>}
       <div style={{height:16}}/>
       <CvAnomalies cfg={cfg} factures={d.factures} clients={clients} appels={d.appels || {parNumero:{}, parFacture:{}, liste:[]}} onOpen={code=>setSuivi(code)} onChanged={()=>setTick(t=>t+1)}/></>;
-  } else {   // vue d'ensemble : contracteurs en cubes + seulement les particuliers/commerces à vérifier
+  } else {   // vue d'ensemble : contracteurs en cubes (v202 : « À vérifier » est dans Comptabilité)
     corps = <>{titre('Contracteurs', contrTri.length)}<Cubes l={contrTri}/>
-      {titre('Particuliers et commerces à vérifier', persVerif.length)}
-      {persVerif.length ? <Liste l={persVerif}/> : <div className="card muted" style={{fontSize:13}}>Rien à vérifier chez les particuliers et commerces 👍 — choisis « 👤 Particuliers » ou « 🏪 Commerces » dans le menu pour voir la liste complète.</div>}</>;
+      <div className="muted" style={{fontSize:12.5,marginTop:12}}>Choisis « 👤 Particuliers » ou « 🏪 Commerces » dans le menu pour voir les fiches. Ce qui est à vérifier est dans Comptabilité › À vérifier.</div></>;
   }
+  if(mode==='verif') return <div>{entete}{corps}</div>;
   return <div>{entete}{formNouveau}{corps}</div>;
 }
 
@@ -9126,7 +9221,7 @@ function RepContacts({c, busy, ecrire}){
   </div>;
 }
 const REP_NUM_ENT = /^\s*\d{4}[\s-]?\d{4}\s+qu[ée]?u?[ée]bec/i;   // « 9272-0473 Québec inc. »
-function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOuvrir}){
+function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOuvrir, onAller}){
   const numsEnt = c.type==='pers' ? [...new Set([...(c.noms||[]), ...((c.fiche&&c.fiche.alias)||[])].filter(n=>REP_NUM_ENT.test(n)).map(n=>n.trim()))] : [];
   const autresNoms = c.type==='pers' ? [...new Set((c.noms||[]).filter(n=>persNomPropre(n)!==c.nom && n!==c.nom && !REP_NUM_ENT.test(n) && !/@/.test(n)))] : [];
   // v181 : liens entre fiches (particulier ↔ commerce), choisis à la main — colonne Client de la fiche (privée)
@@ -9216,7 +9311,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
           {pers && c.adresses.length>1 && <div className="muted" style={{fontSize:11.5,marginTop:6}}>Autres adresses :{c.adresses.slice(1,4).map((a,i)=><div key={i} style={{paddingLeft:10}}>{repAdrLignes(a).join(', ')}</div>)}</div>}
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'stretch',flex:'0 0 auto',minWidth:200}}>
-          {onSuivi && <button className="btn btn-sm" onClick={onSuivi} style={nbAV ? {borderColor:'var(--danger)',color:'var(--danger)',fontWeight:700} : null}>🔎 Suivi des jobs{nbAV ? ' · '+nbAV+' à vérifier' : ''}</button>}
+          {onSuivi && !onAller && <button className="btn btn-sm" onClick={onSuivi} style={nbAV ? {borderColor:'var(--danger)',color:'var(--danger)',fontWeight:700} : null}>🔎 Suivi des jobs{nbAV ? ' · '+nbAV+' à vérifier' : ''}</button>}
           <button className="btn btn-sm" onClick={ouvrirEdit} disabled={busy}>✏️ Modifier la fiche</button>
           {pers && <button className="btn btn-sm" onClick={()=>{ setLien(lien===null ? '' : null); setLier(null); }} disabled={busy}>{c.commerce ? '🔗 Lier à un particulier' : '🔗 Lier à un commerce'}</button>}
           {pers && (!confSup ? <button className="btn btn-sm" style={{color:'var(--muted)'}} onClick={()=>setConfSup(true)} disabled={busy} title="Ce n'est pas un client (ex. Lettrage du camion 14)">🗑 Supprimer</button>
@@ -9226,6 +9321,14 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
               </span>)}
         </div>
       </div>
+      {onAller && (()=>{ const aller = (cible, f) => onAller(cible, {...f, nom:c.nom}), q = pers ? c.nom : c.code;   // v202 : sections de ce client, déjà filtrées
+        return <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
+          <button className="btn btn-sm" onClick={()=>aller('factures', pers ? {vue:'toutes', q:c.nom} : {vue:'toutes', code:c.code})}>Factures</button>
+          <button className="btn btn-sm" onClick={()=>aller('factures', {vue:'paiements', q})}>Paiements</button>
+          <button className="btn btn-sm" onClick={()=>aller('projets', pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code})}>Projets</button>
+          <button className="btn btn-sm" onClick={()=>aller('soumissions', {q:c.nom})}>Soumissions</button>
+          {nbAV>0 && onSuivi && <button className="btn btn-sm" style={{borderColor:'var(--danger)',color:'var(--danger)',fontWeight:700}} onClick={()=>aller('verif', {suivi: pers ? c.id : c.code})}>À vérifier ({nbAV})</button>}
+        </div>; })()}
       <div style={{display:'flex',gap:16,flexWrap:'wrap',marginTop:10,fontSize:13,fontVariantNumeric:'tabular-nums'}}>
         <span>Facturé : <b>{cvMoney(c.facture)}</b> <span className="muted" style={{fontSize:11}}>avant taxes</span></span>
         <span>Achats : <b>{cvMoney(c.cout)}</b> <span className="muted" style={{fontSize:11}}>avant taxes</span></span>
@@ -9463,18 +9566,18 @@ function App(){
     {!cfg.crmSpreadsheetId && <div className="muted" style={{fontSize:12,maxWidth:320,textAlign:'center'}}>Astuce: connecte-toi puis va dans Réglages pour indiquer l'ID du Google Sheet du CRM et l'initialiser.</div>}
   </div>;
 
+  // v202 : ouvrir une section filtrée sur un client (boutons de la fiche du Répertoire)
+  const allerFiltre = (cible, f) => { NAV_FOCUS = {...f, cible, t:Date.now()}; setNavKey(k=>k+1); setNav(cible); setMenuMobile(false); window.scrollTo(0,0); };
   const navItems = [
     {id:'dashboard',label:'Tableau de bord'},
     {id:'repertoire',label:'Répertoire'},
     {id:'projets',label:'Projets'},
     {id:'agenda',label:'Agenda'},
-    {id:'fournisseurs',label:'Fournisseurs'},
     {id:'courriels',label:'Courriels'},
     {id:'heures',label:'Employés'},
-    {id:'factures',label:'Factures'},
+    {id:'factures',label:'Comptabilité'},
     {id:'rappels',label:'Rappels & Suivi'},
     {id:'soumissions',label:'Soumissions'},
-    {id:'appel',label:'Appel de service'},
     {id:'commandes',label:'Commandes'},
     {id:'produits',label:'Produits'},
     {id:'stock',label:'Stock'},
@@ -9508,23 +9611,21 @@ function App(){
       {!isDesktop && menuMobile && <div className="nav-fond" onClick={()=>setMenuMobile(false)}/>}
       <div className={'nav'+(!isDesktop && menuMobile ? ' ouvert' : '')} style={(isDesktop && navCollapsed) ? {width:0,minWidth:0,padding:0,overflow:'hidden',border:'none'} : null}>
         {!isDesktop && <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'2px 4px 10px'}}><b className="fh" style={{fontSize:15}}>Menu</b><button className="btn btn-sm" onClick={()=>setMenuMobile(false)} aria-label="Fermer">✕</button></div>}
-        {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id?' active':'')} onClick={()=>{ if(nav===n.id) setNavKey(k=>k+1); setNav(n.id); setMenuMobile(false); window.scrollTo(0,0); }}>{n.label}</div>)}
+        {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id || (n.id==='factures' && CPT_NAV[nav])?' active':'')} onClick={()=>{ NAV_FOCUS = null; if(nav===n.id) setNavKey(k=>k+1); setNav(n.id); setMenuMobile(false); window.scrollTo(0,0); }}>{n.label}</div>)}
       </div>
       <div className="main" style={(nav==='agenda' && isDesktop) ? {maxWidth:'none',width:'100%'} : null}>
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
-        {(nav==='repertoire' || nav==='clients') && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts}/>}
+        {(nav==='repertoire' || nav==='clients') && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts} onAller={allerFiltre}/>}
         {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey}/>}
-        {nav==='fournisseurs' && <FournisseursView key={'f'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} isDesktop={isDesktop}/>}
         {nav==='contacts' && <RepertoireView key={'rc'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts}/>}
         {nav==='projets' && <ProjetsView key={'p'+navKey} data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='agenda' && <AgendaView cfg={effectiveCfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
         {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
-        {nav==='factures' && <FacturesView key={'x'+navKey} cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/>}
+        {CPT_NAV[nav] && <ComptabiliteView key={'cpt'+navKey} onglet0={CPT_NAV[nav]} cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} toast={show} isDesktop={isDesktop}/>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='soumissions' && <SoumissionsView key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
-        {nav==='appel' && <AppelServiceView key={'a'+navKey} cfg={effectiveCfg} toast={show}/>}
         {nav==='commandes' && <CommandesView key={'bc'+navKey} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='produits' && <ProduitsView key={'pr'+navKey} cfg={effectiveCfg} toast={show}/>}
         {nav==='stock' && <StockView data={data}/>}
