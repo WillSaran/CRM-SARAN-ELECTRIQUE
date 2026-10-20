@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v209';
+const APP_VERSION = 'v210';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8453,7 +8453,7 @@ function lireFiches(rows){
       f.conjoints = l.filter(x=>cj.test(x)).map(x=>x.replace(cj,'').trim()).filter(Boolean);
       f.liens = l.filter(x=>!/^≠/.test(x) && !cj.test(x)); f.pasLies = l.filter(x=>/^≠/.test(x)).map(x=>x.replace(/^≠\s*/,'')); F.clients.push(f); }
     else if(t==='masque' || t==='supprime') F.masques.push(f);   // v173 : « Supprimé » (ancien « Masqué ») = n'apparaît plus nulle part
-    else if(t==='contact') F.contacts.push(f);   // v161 : employé d'un contracteur (Code = ASC, CRS…) ; Notes = rôle
+    else if(t==='contact'){ f.exclus = f.alias.filter(a=>/^≠/.test(a)).map(a=>a.replace(/^≠\s*/,'').toLowerCase()); f.alias = f.alias.filter(a=>!/^≠/.test(a)); F.contacts.push(f); }   // v210 : « ≠ courriel » = retiré de ce contact ; v161 : employé d'un contracteur (Code = ASC, CRS…) ; Notes = rôle
   });
   return F;
 }
@@ -8750,7 +8750,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     // v161 : contact d'un contracteur → va sous le contracteur (ses factures, soumissions et jobs aussi)
     const fc = (F.contacts||[]).find(f=>trouve('c:'+f.row)===g);
     if(fc && CLIENT_CODES[fc.code]){ const c = C(fc.code); vus.add('c:'+fc.row); c.contacts = c.contacts.filter(k=>!(k.compta && cvNorm(k.nom)===cvNorm(fc.nom||p.nom)));
-      c.contacts.push({fiche:fc, nom:fc.nom || p.nom, role:fc.notes||'', courriels:[...new Set([...String(fc.courriel||'').toLowerCase().split(/[\s,;]+/), ...p.courriels].filter(e=>/@/.test(e)))],
+      c.contacts.push({fiche:fc, nom:fc.nom || p.nom, role:fc.notes||'', courriels:[...new Set([...String(fc.courriel||'').toLowerCase().split(/[\s,;]+/), ...p.courriels].filter(e=>/@/.test(e) && !(fc.exclus||[]).includes(String(e).toLowerCase())))],
         tels:[...new Set([fc.tel, ...p.tels].filter(Boolean))], noms:p.noms});
       c.facturesSans.push(...p.facturesSans, ...p.listeJobs.flatMap(j=>j.factures)); c.soum.push(...p.soum);
       p.listeJobs.forEach(j=>{ j.factures = []; if(j.events.length || j.achats.length) c.listeJobs.push(j); });
@@ -8769,11 +8769,12 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   // contacts ajoutés à la main (sans facture ni job)
   (F.contacts||[]).forEach(fc=>{ if(vus.has('c:'+fc.row) || !CLIENT_CODES[fc.code]) return;
     C(fc.code).contacts = C(fc.code).contacts.filter(k=>!(k.compta && cvNorm(k.nom)===cvNorm(fc.nom)));
-    C(fc.code).contacts.push({fiche:fc, nom:fc.nom, role:fc.notes||'', courriels:String(fc.courriel||'').toLowerCase().split(/[\s,;]+/).filter(e=>/@/.test(e)), tels:[fc.tel].filter(Boolean), noms:[]}); });
+    C(fc.code).contacts.push({fiche:fc, nom:fc.nom, role:fc.notes||'', courriels:String(fc.courriel||'').toLowerCase().split(/[\s,;]+/).filter(e=>/@/.test(e) && !(fc.exclus||[]).includes(e)), tels:[fc.tel].filter(Boolean), noms:[]}); });
   // v208 : contacts lus dans les courriels (script contactsCourriels) : titre de la signature, téléphone, projets. Ce qui est écrit à la main dans la fiche passe en premier.
   (contactsAuto||[]).forEach(r=>{ const courriel = String(r[0]||'').trim().toLowerCase(), code = codeDe(r[1]); if(!/@/.test(courriel) || !code) return;
     const a = {nom:String(r[2]||'').trim(), titre:String(r[3]||'').trim(), tel:String(r[4]||'').trim(), projets:String(r[5]||'').split(/\s*;\s*/).filter(Boolean), note:String(r[6]||'').trim(), dernier:String(r[7]||'').slice(0,10)};
     const c = C(code), chiffres = t => String(t||'').replace(/\D/g,'').slice(-10);
+    if((F.contacts||[]).some(f=>f.code===code && (f.exclus||[]).includes(courriel))) return;   // v210 : courriel retiré à la main
     let k = c.contacts.find(x=>(x.courriels||[]).includes(courriel)) || (a.nom && c.contacts.find(x=>persCle(x.nom) && persCle(x.nom)===persCle(a.nom)));
     if(!k){ k = {fiche:null, auto:true, nom:a.nom || courriel, role:'', courriels:[courriel], tels:[], noms:[]}; c.contacts.push(k); }
     if(a.titre && (!k.role || (k.compta && !k.fiche))) k.role = a.titre;
@@ -9281,8 +9282,11 @@ function RepContacts({c, busy, ecrire, onAller}){
     const no = m[1].toLowerCase(), rue = cvNorm(m[2]).slice(0,5);
     return L.find(j=>[j.adresse, j.nom, ...(j.cles||[])].some(t=>{ const n = cvNorm(t); return n.includes(no) && n.includes(rue); })) || null; };
   const [ed,setEd]=useState(null);   // {fiche?, nom, role (titre), courriel, tel}
-  const sauver = () => ecrire([{...(ed.fiche||{}), type:'Contact', code:c.code, nom:ed.nom.trim(), alias:ed.fiche ? ed.fiche.alias : [], notes:ed.role, courriel:ed.courriel, tel:ed.tel}],
-    'Contact '+ed.nom.trim()+' enregistré chez '+c.code+'.').then(ok=>ok&&setEd(null));
+  // v210 : un courriel enlevé ici reste enlevé (même s'il vient d'une facture, d'une soumission ou des courriels lus) : « ≠ courriel » dans Aussi écrit
+  const sauver = () => { const garde = String(ed.courriel||'').toLowerCase().split(/[\s,;]+/).filter(e=>/@/.test(e));
+    const exclus = [...new Set([...((ed.fiche && ed.fiche.exclus)||[]), ...(ed.orig||[]).filter(e=>!garde.includes(e))])].filter(e=>!garde.includes(e));
+    return ecrire([{...(ed.fiche||{}), type:'Contact', code:c.code, nom:ed.nom.trim(), alias:[...(ed.fiche ? ed.fiche.alias : []), ...exclus.map(e=>'≠ '+e)], notes:ed.role, courriel:garde.join(', '), tel:ed.tel}],
+    'Contact '+ed.nom.trim()+' enregistré chez '+c.code+'.').then(ok=>ok&&setEd(null)); };
   const retirer = k => ecrire([{...k.fiche, type:'Retiré'}], k.nom+' retiré des contacts de '+c.code+'.');
   const champ = (k, l) => <input value={ed[k]} placeholder={l} onChange={e=>setEd({...ed,[k]:e.target.value})} style={{padding:'5px 8px'}}/>;
   return <div className="card" style={{marginBottom:12}}>
@@ -9306,7 +9310,7 @@ function RepContacts({c, busy, ecrire, onAller}){
         {(k.projets||[]).length>0 && <div className="muted" style={{fontSize:12,marginTop:2}}>Projets : {k.projets.map((lib,i)=>{ const j = jobDe(lib), ids = j ? [...(j.ids||[])] : [];
           return <React.Fragment key={lib}>{i ? ' · ' : ''}{ids.length && onAller ? <a href="#" onClick={e=>{ e.preventDefault(); onAller('projets', {jobIds:ids, nom:c.code+' '+lib}); }} style={{color:'var(--accent)'}} title="Ouvrir dans Projets">{lib}</a> : lib}</React.Fragment>; })}</div>}</div>
       <span style={{display:'flex',gap:4}}>
-        <button className="btn btn-sm" disabled={busy} onClick={()=>setEd({fiche:k.fiche, nom:k.nom, role:k.role, courriel:k.courriels.join(', '), tel:k.tels[0]||''})}>✏️</button>
+        <button className="btn btn-sm" disabled={busy} onClick={()=>setEd({fiche:k.fiche, nom:k.nom, role:k.role, courriel:k.courriels.join(', '), orig:k.courriels.map(e=>String(e).toLowerCase()), tel:k.tels[0]||''})}>✏️</button>
         {k.fiche && <button className="btn btn-sm" disabled={busy} title="Retirer de ce contracteur (redevient un particulier s'il a des factures)" onClick={()=>retirer(k)}>✕</button>}
       </span>
     </div>)}
