@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v223';
+const APP_VERSION = 'v224';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2176,6 +2176,212 @@ function CvPhasesJob({job, onDone}){
   </div>;
 }
 
+// ══ v224 : Projets — phases (Entrée, Rough, Finition, Wrap-up), barre d'état et blocages ══
+const PJ_PHASES = ['Entrée','Rough','Finition','Wrap-up'];
+const PJ_TYPES_PART = ['Piscine','Spa','Éclairage','Prise','Pièce','Mise à niveau'];
+const PJ_TYPES_BLOCAGE = ['SERV supplémentaire demandée','Matériel manquant','Retour au chantier','Problème d\'accès','Problème découvert pendant les travaux'];
+const PJ_BLOC_ENTETE = ['Id','Job','Étape','Type','Description','Date','Statut','Réglé le','Pièces jointes','Créé le'];
+// Les étapes d'une job, rangées par phase. État : ok / manuel (coché à la main) / manque (devrait être fait) / futur (pas encore rendu là) / na (ne s'applique pas)
+function pjPhases(job, s, ctx){
+  const today = cvDay(new Date().toISOString()), pro = job.client!=='PART';
+  const ev = job.events.filter(e=>!e.attente), att = job.events.filter(e=>e.attente);
+  const passe = e => e.day < today, avenir = ev.filter(e=>!passe(e));
+  const plans = ev.some(e=>e.attachments.some(a=>/plan|tout le dossier/i.test(a.title||'')));
+  const E = n => (s.E||[]).find(x=>x.titre===n);
+  const visites = cvVisites(job), ots = pro ? cvJobOTs(job, ctx.appels||{parNumero:{}, parFacture:{}, liste:[]}) : [];
+  const fin7 = cvFinSemaineProchaine();
+  const out = [];
+  const add = (phase, titre, o) => out.push({id:phase+' — '+titre, phase, titre, ...o});
+  // Entrée
+  const coordOk = pro ? true : !!(E('Coordonnées complètes') ? E('Coordonnées complètes').ok : true);
+  add('Entrée', pro ? 'PO reçu' : 'Soumission acceptée et coordonnées complètes', {ok: pro ? !!job.po : coordOk, du: ev.length>0,
+    info: pro ? 'Aucun PO trouvé pour cette job (P0xxxx dans le titre de l\'événement)' : (E('Coordonnées complètes')||{}).manque || 'À confirmer'});
+  add('Entrée', 'Adresse du chantier', {ok: !!job.address, du: true, info:'Pas d\'adresse dans l\'événement'});
+  add('Entrée', 'Plans reçus', {na: !pro && !plans, ok: plans, du: pro && ev.some(e=>e.phase==='ROUGH'), info:'Aucun plan attaché aux passages'});
+  add('Entrée', 'Job cédulée dans l\'agenda', {ok: ev.length>0, du: att.length>0, info: att.length ? 'Encore dans l\'agenda En Attente' : 'Pas encore à l\'agenda'});
+  // Rough et Finition
+  const phase = (P, nom) => {
+    const L = ev.filter(e=>e.phase===P), faits = L.filter(passe), futurs = L.filter(e=>!passe(e));
+    const autreVisitesFaites = visites.some(v=>v.faite);
+    const na = !L.length && autreVisitesFaites && !avenir.length;   // job de service : pas de rough / finition
+    const vs = visites.filter(v=>v.phase===P && v.faite);
+    const nonCmd = futurs.filter(e=>!(ctx.commandes && cvCmd(ctx.commandes, job, e).fait));   // un passage déjà fait = la commande a été faite
+    add(nom, 'Commande '+(P==='ROUGH'?'du rough':'de la finition')+' placée', {na, ok: L.length>0 && !nonCmd.length, du: nonCmd.some(e=>e.day<=fin7),
+      info: nonCmd.map(e=>cvFmtDay(e.day)).join(', ')+' : commande à placer'});
+    add(nom, (P==='ROUGH'?'Rough fait':'Finition faite'), {na, ok: faits.length>0 && !futurs.length, du: false,
+      info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
+    const sansAp = faits.filter(e=>!(e.as || e.fac));
+    add(nom, 'Appel de service inscrit', {na, ok: faits.length>0 && !sansAp.length, du: sansAp.length>0, info: sansAp.map(e=>cvFmtDay(e.day)).join(', ')+' sans appel de service'});
+    if(P==='ROUGH') add(nom, 'OT du rough reçu (liste de stock pour la finition)', {na: na || !pro, ok: ots.length>0 || faits.some(e=>e.ot), du: faits.length>0,
+      info:'Le rough est fait mais aucun OT n\'est classé (« B- REF OT » / « 1-PAD »)'});
+    const nonFac = vs.filter(v=>!v.facturee);
+    add(nom, 'Facture '+(P==='ROUGH'?'du rough':'de la finition'), {na, ok: vs.length>0 && !nonFac.length, du: nonFac.length>0, info: nonFac.map(v=>v.label).join(', ')+' : visite faite, pas de facture'});
+  };
+  phase('ROUGH','Rough'); phase('FINITION','Finition');
+  // Wrap-up
+  const ouverts = (ctx.blocages||[]).filter(b=>b.statut!=='Réglé');
+  const travauxFaits = visites.some(v=>v.faite) && !avenir.length;
+  add('Wrap-up', 'Services et corrections terminés', {ok: travauxFaits && !ouverts.length, du: travauxFaits && ouverts.length>0,
+    info: ouverts.length ? ouverts.length+' blocage'+(ouverts.length>1?'s':'')+' pas réglé'+(ouverts.length>1?'s':'') : avenir.length ? 'Encore des passages à venir' : 'Aucun passage fait'});
+  const nonFac = visites.filter(v=>v.faite && !v.facturee);
+  add('Wrap-up', 'Toutes les factures envoyées', {ok: travauxFaits && !nonFac.length, du: travauxFaits && nonFac.length>0, info: nonFac.map(v=>v.label).join(', ')+' sans facture'});
+  const nums = [...new Set(ev.flatMap(e=>e.fac && e.fac!=='**' ? paiNums(e.fac) : []))];
+  const F = ctx.factures || {}, nonPayees = nums.filter(n=>!(F[n] && F[n].etatPaie==='payee'));
+  add('Wrap-up', 'Paiement reçu', {ok: nums.length>0 && !nonPayees.length && !nonFac.length && travauxFaits, du: nums.length>0,
+    info: nonPayees.length ? 'En attente : facture'+(nonPayees.length>1?'s':'')+' #'+nonPayees.join(', #') : 'Pas encore de facture'});
+  add('Wrap-up', 'Job fermée', {ok: !!(ctx.archives||{})[job.id], du: false, info:'« Fermer la job » quand tout est réglé'});
+  // Coché à la main (onglet Etapes)
+  const M = ctx.manuels || {};
+  out.forEach(x=>{ x.manuel = !x.ok && !!M[job.id+'|'+x.id]; x.etat = x.na ? 'na' : x.ok ? 'ok' : x.manuel ? 'manuel' : x.du ? 'manque' : 'futur'; });
+  const actifs = out.filter(x=>x.etat!=='na'), faits = actifs.filter(x=>x.etat==='ok'||x.etat==='manuel');
+  return {steps:out, pct: actifs.length ? Math.round(faits.length*100/actifs.length) : 0, prochaine: actifs.find(x=>x.etat==='manque') || actifs.find(x=>x.etat==='futur'), ouverts};
+}
+
+// Blocages (onglet privé « Blocages » de La mémoire — Jobs) ; pièces jointes dans Drive › « Saran CRM — Blocages »
+function useBlocages(cfg){
+  const id = cfg.memoireJobsSpreadsheetId;
+  const [etat,setEtat]=useState({liste:[], lu:false});
+  const lire = useCallback(async(force)=>{ if(!id) return;
+    try{ const r = await lireCache(id, 'Blocages!A1:J', force);
+      setEtat({lu:true, liste:(r.result.values||[]).slice(1).map((x,i)=>({row:i+2, id:x[0]||'', job:x[1]||'', etape:x[2]||'', type:x[3]||'', description:x[4]||'', date:x[5]||'', statut:x[6]||'Ouvert', regle:x[7]||'',
+        pj:(()=>{ try{ return JSON.parse(x[8]||'[]'); }catch(e){ return []; } })(), cree:x[9]||''})).filter(b=>b.id && b.job)}); }
+    catch(e){ setEtat({liste:[], lu:true}); } },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const ligne = b => [b.id, b.job, b.etape, b.type, b.description, b.date, b.statut||'Ouvert', b.regle||'', JSON.stringify(b.pj||[]), b.cree||new Date().toLocaleString('fr-CA')];
+  const deposer = async (fichiers, job) => { if(!fichiers.length) return [];
+    if(!peutDeposer()){ await requestToken('consent'); if(!peutDeposer()) throw new Error('Permission Drive refusée'); }
+    const d = await driveDossier('Saran CRM — Blocages'), out = [];
+    for(const f of fichiers){ const nom = (job||'job').replace(/[\\/|]/g,'-')+' — '+(f.name||'fichier');
+      const r = await driveDeposer(new File([f], nom, {type:f.type||'application/octet-stream'}), d); out.push({k:'fichier', nom:f.name||nom, id:r.id, mime:f.type||''}); }
+    return out; };
+  const ajouter = async (b, fichiers) => { const pj = [...(b.pj||[]), ...await deposer(fichiers||[], b.job)];
+    if(!etat.liste.length) await ensureSheetsExist(id, [{name:'Blocages', headers:PJ_BLOC_ENTETE}]);
+    await sheetsAppendRow(id, 'Blocages', ligne({...b, pj, id:'B'+Date.now()})); await lire(true); };
+  const maj = async (b, champs, fichiers) => { const pj = [...(champs.pj || b.pj || []), ...await deposer(fichiers||[], b.job)];
+    await sheetsUpdateRow(id, 'Blocages', b.row, ligne({...b, ...champs, pj})); await lire(true); };
+  const parJob = useMemo(()=>{ const m = {}; etat.liste.forEach(b=>{ (m[b.job] = m[b.job] || []).push(b); }); return m; },[etat.liste]);
+  return {...etat, parJob, ajouter, maj, relire:()=>lire(true)};
+}
+// Type de job d'un particulier (Piscine, Spa…) — onglet « Types de job »
+function useTypesJob(cfg){
+  const id = cfg.memoireJobsSpreadsheetId;
+  const [etat,setEtat]=useState({map:{}, rows:{}, lu:false});
+  const lire = useCallback(async(force)=>{ if(!id) return;
+    try{ const r = await lireCache(id, "'Types de job'!A1:C", force); const map = {}, rows = {};
+      (r.result.values||[]).slice(1).forEach((x,i)=>{ if(x[0]){ map[x[0]] = x[1]||''; rows[x[0]] = i+2; } }); setEtat({map, rows, lu:true, existe:true}); }
+    catch(e){ setEtat({map:{}, rows:{}, lu:true, existe:false}); } },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const changer = async (jobId, type) => { setEtat(s=>({...s, map:{...s.map, [jobId]:type}}));
+    const l = [jobId, type, new Date().toLocaleString('fr-CA')];
+    if(!etat.existe) await ensureSheetsExist(id, [{name:'Types de job', headers:['Job','Type','Le']}]);
+    if(etat.rows[jobId]) await sheetsUpdateRow(id, qSheet('Types de job'), etat.rows[jobId], l); else await sheetsAppendRow(id, qSheet('Types de job'), l);
+    await lire(true); };
+  return {...etat, changer};
+}
+
+const PJ_COULEUR = {ok:'var(--success)', manuel:'var(--success)', manque:'var(--warning)', futur:'rgba(139,148,158,.3)', na:'transparent'};
+// La barre : une section par phase, un segment par étape (nom dessous), ✕ rouge = blocage ouvert, ✓ = blocage réglé
+function PjBarre({p, blocages, sel, onEtape}){
+  const parEtape = id => (blocages||[]).filter(b=>b.etape===id);
+  return <div style={{overflowX:'auto',margin:'8px 0 2px'}} onClick={e=>e.stopPropagation()}>
+    <div style={{display:'flex',gap:6,minWidth:760}}>
+      {PJ_PHASES.map(ph=>{ const L = p.steps.filter(x=>x.phase===ph); const fait = L.filter(x=>x.etat!=='na').every(x=>x.etat==='ok'||x.etat==='manuel') && L.some(x=>x.etat!=='na');
+        return <div key={ph} style={{flex:L.length,minWidth:0}}>
+          <div style={{fontSize:10.5,fontWeight:800,letterSpacing:'.05em',textTransform:'uppercase',color:fait?'var(--success)':'var(--muted)',marginBottom:3}}>{fait?'✓ ':''}{ph}</div>
+          <div style={{display:'flex',gap:2}}>
+            {L.map(x=>{ const bs = parEtape(x.id), ouvert = bs.some(b=>b.statut!=='Réglé'), choisi = sel===x.id;
+              return <div key={x.id} style={{flex:1,minWidth:0,cursor:'pointer',position:'relative'}} title={x.titre+' — '+({ok:'fait',manuel:'coché à la main',manque:'à faire',futur:'pas encore rendu là',na:'ne s\'applique pas'})[x.etat]} onClick={()=>onEtape(choisi ? null : x.id)}>
+                {bs.length>0 && <span style={{position:'absolute',top:-9,left:'50%',transform:'translateX(-50%)',zIndex:1,width:16,height:16,borderRadius:8,fontSize:10.5,fontWeight:900,lineHeight:'16px',textAlign:'center',
+                  background:ouvert?'var(--danger)':'var(--success)',color:'#fff',boxShadow:'0 0 0 2px var(--bg2, #161b22)'}}>{ouvert?'✕':'✓'}</span>}
+                <div style={{height:12,borderRadius:3,background:PJ_COULEUR[x.etat],border:x.etat==='na'?'1px dashed var(--border)':choisi?'2px solid var(--accent)':'none',
+                  backgroundImage:x.etat==='manuel'?'repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,.25) 4px 7px)':undefined}}/>
+                <div style={{fontSize:9.5,lineHeight:1.15,marginTop:3,textAlign:'center',color:x.etat==='manque'?'var(--warning)':x.etat==='na'?'var(--muted)':'var(--text)',opacity:x.etat==='na'?.5:1,fontWeight:choisi?800:400,wordBreak:'break-word'}}>{x.titre.replace(/ \(liste de stock pour la finition\)/,'')}</div>
+              </div>; })}
+          </div></div>; })}
+    </div>
+  </div>;
+}
+
+// Détail d'une étape choisie : état, ce qui manque, cocher à la main, blocages (ajouter, voir, régler)
+function PjEtapeDetail({job, x, blocages, B, basculerEtape, toast}){
+  const [form,setForm]=useState(null);   // {type, autre, date, description, lien, note, fichiers:[]}
+  const [voir,setVoir]=useState(null);   // id du blocage ouvert
+  const [occupe,setOccupe]=useState('');
+  const [enreg,setEnreg]=useState(null); // MediaRecorder en cours
+  const bs = (blocages||[]).filter(b=>b.etape===x.id).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const nomJob = (job.client!=='PART' ? job.client+' ' : '')+job.name;
+  const vocal = async () => { if(enreg){ enreg.stop(); return; }
+    try{ const flux = await navigator.mediaDevices.getUserMedia({audio:true}); const rec = new MediaRecorder(flux), morceaux = [];
+      rec.ondataavailable = e=>morceaux.push(e.data);
+      rec.onstop = ()=>{ flux.getTracks().forEach(t=>t.stop()); const blob = new Blob(morceaux, {type:rec.mimeType||'audio/webm'});
+        setForm(f=>({...f, fichiers:[...(f.fichiers||[]), new File([blob], 'Mémo vocal '+new Date().toLocaleString('fr-CA').replace(/[/:]/g,'-')+'.webm', {type:blob.type})]})); setEnreg(null); };
+      rec.start(); setEnreg(rec); }
+    catch(e){ toast && toast('Micro non disponible : '+(e.message||e)); } };
+  const piecesTexte = f => [...(f.lien ? [{k:'lien', url:f.lien.trim(), nom:/mail\.google/.test(f.lien) ? 'Courriel Gmail' : 'Lien'}] : []), ...(f.note ? [{k:'note', texte:f.note.trim()}] : [])];
+  const sauver = async () => { const type = form.type==='Autre' ? (form.autre||'').trim() || 'Autre' : form.type;
+    setOccupe('Enregistrement du blocage…');
+    try{ await B.ajouter({job:job.id, etape:x.id, type, description:form.description.trim(), date:form.date, statut:'Ouvert', pj:piecesTexte(form)}, form.fichiers||[]);
+      setForm(null); toast && toast('Blocage ajouté : '+type); }
+    catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOccupe(''); };
+  const ajouterPJ = async (b, f) => { setOccupe('Ajout…'); try{ await B.maj(b, {pj:[...(b.pj||[]), ...piecesTexte(f)]}, f.fichiers||[]); setForm(null); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOccupe(''); };
+  const regler = async (b, regle) => { setOccupe('…'); try{ await B.maj(b, {statut: regle ? 'Réglé' : 'Ouvert', regle: regle ? cvDay(new Date().toISOString()) : ''}); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOccupe(''); };
+  const lienPJ = p => p.k==='fichier' ? 'https://drive.google.com/file/d/'+p.id+'/view' : p.url;
+  const iconePJ = p => p.k==='note' ? '🗒' : p.k==='lien' ? (/mail\.google/.test(p.url||'') ? '✉️' : '🔗') : /^audio\//.test(p.mime||'') ? '🎤' : /^image\//.test(p.mime||'') ? '📷' : /pdf/.test(p.mime||'') ? '📄' : '📎';
+  const champsPJ = (f, set) => <div style={{display:'grid',gap:6}}>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+      <label className="btn btn-sm" style={{cursor:'pointer'}}>📎 Photos / PDF / fichiers<input type="file" multiple style={{display:'none'}} onChange={e=>{ const l = [...e.target.files]; e.target.value=''; set({...f, fichiers:[...(f.fichiers||[]), ...l]}); }}/></label>
+      <button type="button" className="btn btn-sm" onClick={vocal} style={enreg?{color:'var(--danger)',borderColor:'var(--danger)',fontWeight:700}:null}>{enreg ? '⏹ Arrêter le mémo vocal' : '🎤 Mémo vocal'}</button>
+      {(f.fichiers||[]).map((x,i)=><span key={i} className="muted" style={{fontSize:12}}>{x.name} <a href="#" onClick={e=>{ e.preventDefault(); set({...f, fichiers:f.fichiers.filter((y,j)=>j!==i)}); }}>✕</a></span>)}
+    </div>
+    <input value={f.lien||''} onChange={e=>set({...f, lien:e.target.value})} placeholder="Lien d'un courriel Gmail ou autre lien (facultatif)" style={{padding:'5px 8px'}}/>
+    <textarea value={f.note||''} onChange={e=>set({...f, note:e.target.value})} rows={2} placeholder="Message ou note à garder (texto, conversation…) — facultatif" style={{padding:'5px 8px'}}/>
+  </div>;
+  return <div className="card" style={{margin:'6px 0 2px',padding:10,fontSize:13}} onClick={e=>e.stopPropagation()}>
+    <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+      <div><span className="muted" style={{fontSize:11,textTransform:'uppercase',fontWeight:700}}>{x.phase}</span> <b>{x.titre}</b>{' '}
+        <span style={{color:x.etat==='manque'?'var(--warning)':x.etat==='ok'||x.etat==='manuel'?'var(--success)':'var(--muted)',fontWeight:700}}>
+          {({ok:'✓ fait', manuel:'✓ coché à la main', manque:'à faire', futur:'pas encore rendu là', na:'ne s\'applique pas'})[x.etat]}</span>
+        {(x.etat==='manque'||x.etat==='futur') && x.info && <div className="muted" style={{fontSize:12.5}}>{x.info}</div>}</div>
+      <span style={{display:'flex',gap:6}}>
+        {x.etat!=='ok' && x.etat!=='na' && (x.etat==='manuel'
+          ? <button className="btn btn-sm" onClick={()=>basculerEtape(job.id, x.id, false)}>Décocher</button>
+          : <button className="btn btn-sm" title="Marquer cette étape comme faite" onClick={()=>basculerEtape(job.id, x.id, true)}>{x.titre==='Job fermée' ? 'Fermer la job' : '✓ Fait'}</button>)}
+        {!form && <button className="btn btn-sm" style={{color:'var(--danger)',borderColor:'var(--danger)'}} onClick={()=>setForm({type:PJ_TYPES_BLOCAGE[0], autre:'', date:cvDay(new Date().toISOString()), description:'', fichiers:[]})}>+ Blocage</button>}
+      </span>
+    </div>
+    {form && !form.pour && <div style={{marginTop:8,paddingTop:8,borderTop:'1px solid var(--border)',display:'grid',gap:6}}>
+      <b>Nouveau blocage — {x.titre}</b>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        <select value={form.type} onChange={e=>setForm({...form, type:e.target.value})} style={{width:'auto',padding:'5px 8px'}}>{[...PJ_TYPES_BLOCAGE,'Autre'].map(t=><option key={t}>{t}</option>)}</select>
+        {form.type==='Autre' && <input value={form.autre} onChange={e=>setForm({...form, autre:e.target.value})} placeholder="Quel contretemps ?" style={{flex:'1 1 180px',padding:'5px 8px'}}/>}
+        <input type="date" value={form.date} onChange={e=>setForm({...form, date:e.target.value})} style={{width:'auto',padding:'5px 8px'}}/>
+      </div>
+      <textarea value={form.description} onChange={e=>setForm({...form, description:e.target.value})} rows={3} placeholder="Description complète : ce qui s'est passé, ce qu'il faut faire…" style={{padding:'6px 8px'}}/>
+      {champsPJ(form, setForm)}
+      <div style={{display:'flex',gap:6,alignItems:'center'}}><button className="btn btn-sm btn-p" disabled={!!occupe || !form.description.trim() || (form.type==='Autre' && !form.autre.trim())} onClick={sauver}>{occupe || 'Enregistrer le blocage'}</button>
+        <button className="btn btn-sm" onClick={()=>setForm(null)}>Annuler</button></div>
+    </div>}
+    {bs.map(b=><div key={b.id} style={{marginTop:8,paddingTop:8,borderTop:'1px solid var(--border)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setVoir(voir===b.id?null:b.id)}>
+        <span><span style={{display:'inline-block',width:16,height:16,borderRadius:8,textAlign:'center',lineHeight:'16px',fontSize:10.5,fontWeight:900,color:'#fff',background:b.statut==='Réglé'?'var(--success)':'var(--danger)'}}>{b.statut==='Réglé'?'✓':'✕'}</span>
+          {' '}<b>{b.type}</b> <span className="muted">· {b.date}{b.statut==='Réglé' ? ' · réglé le '+b.regle : ' · ouvert'}{(b.pj||[]).length ? ' · '+b.pj.length+' pièce'+(b.pj.length>1?'s':'')+' jointe'+(b.pj.length>1?'s':'') : ''}</span></span>
+        <span className="muted">{voir===b.id?'▲':'▼'}</span></div>
+      {voir===b.id && <div style={{marginTop:6,display:'grid',gap:6}}>
+        <div style={{whiteSpace:'pre-wrap'}}>{b.description}</div>
+        {(b.pj||[]).map((p,i)=>p.k==='note' ? <div key={i} className="card" style={{padding:6,fontSize:12.5,whiteSpace:'pre-wrap',margin:0}}>🗒 {p.texte}</div>
+          : <a key={i} href={lienPJ(p)} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5}}>{iconePJ(p)} {p.nom || p.url}</a>)}
+        {form && form.pour===b.id ? <div style={{display:'grid',gap:6}}>{champsPJ(form, setForm)}
+            <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={!!occupe} onClick={()=>ajouterPJ(b, form)}>{occupe || 'Ajouter'}</button><button className="btn btn-sm" onClick={()=>setForm(null)}>Annuler</button></div></div>
+          : <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+              <button className="btn btn-sm" onClick={()=>setForm({pour:b.id, fichiers:[]})}>📎 Ajouter une pièce jointe</button>
+              {b.statut==='Réglé' ? <button className="btn btn-sm" disabled={!!occupe} onClick={()=>regler(b, false)}>Rouvrir</button>
+                : <button className="btn btn-sm" style={{color:'var(--success)',borderColor:'var(--success)'}} disabled={!!occupe} onClick={()=>regler(b, true)}>✓ Réglé</button>}
+            </div>}
+      </div>}
+    </div>)}
+  </div>;
+}
+
 function ProjetsView(props){
   return <ProjetsSuivi cfg={props.cfg} refreshKey={props.refreshKey}/>;
 }
@@ -2192,6 +2398,9 @@ function ProjetsSuivi({cfg, refreshKey}){
   const [filtre,setFiltre]=useState(()=>(navFocus('projets')||{}).code || '');
   const [seulManque,setSeulManque]=useState(false);
   const [ouvert,setOuvert]=useState(null);
+  const B = useBlocages(cfg), TJ = useTypesJob(cfg);   // v224 : blocages et type de job
+  const [selEt,setSelEt]=useState(null);              // {k, id} : étape choisie sur la barre d'une job
+  const [typeAutre,setTypeAutre]=useState(null);      // {k, v} : type « Autre » en train d'être écrit
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des jobs…</span></div>;
@@ -2211,13 +2420,23 @@ function ProjetsSuivi({cfg, refreshKey}){
   const codes = [...new Set(Object.values(clients).map(c=>c.code))].sort((a,b)=>(a==='PART')-(b==='PART') || a.localeCompare(b,'fr'));
   const groupes = [['cours','En cours'],['avenir','À venir'],['done','Terminées (30 derniers jours)']];
   const Ligne = ({x})=>{ const {c,j,s}=x, k=c.code+j.id, o=ouvert===k;
+    const p = pjPhases(j, s, {appels:ap, commandes, factures, manuels, archives, blocages:B.parJob[j.id]||[]});   // v224
     return <div className="opp-card" style={{padding:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:10,cursor:'pointer'}} onClick={()=>setOuvert(o?null:k)}>
         <div>
-          <div className="t" style={{fontSize:14.5}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{j.name}{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}</div>
+          <div className="t" style={{fontSize:14.5}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{j.name}{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}
+            {c.code==='PART' && <span onClick={e=>e.stopPropagation()} style={{marginLeft:8,fontSize:12}}>
+              {typeAutre && typeAutre.k===k
+                ? <span style={{display:'inline-flex',gap:4}}><input autoFocus value={typeAutre.v} onChange={e=>setTypeAutre({k, v:e.target.value})} placeholder="Type de job" style={{padding:'1px 6px',width:130,fontSize:12}}/>
+                    <button className="btn btn-sm" style={{padding:'0 6px',fontSize:11}} disabled={!typeAutre.v.trim()} onClick={()=>{ TJ.changer(j.id, typeAutre.v.trim()); setTypeAutre(null); }}>OK</button></span>
+                : <select value={TJ.map[j.id]||''} onChange={e=>{ if(e.target.value==='__autre') setTypeAutre({k, v:''}); else TJ.changer(j.id, e.target.value); }}
+                    style={{width:'auto',padding:'1px 6px',fontSize:12,fontWeight:600,color:TJ.map[j.id]?'var(--accent)':'var(--muted)'}}>
+                    <option value="">Type de job…</option>{[...new Set([...PJ_TYPES_PART, ...(TJ.map[j.id] ? [TJ.map[j.id]] : [])])].map(t=><option key={t} value={t}>{t}</option>)}<option value="__autre">Autre…</option></select>}</span>}</div>
           <CvPhasesJob job={j} onDone={()=>setTick(t=>t+1)}/>
-          <div className="a">Prochaine étape : <b>{s.etape}</b></div>
-          <div style={{display:'flex',gap:4,marginTop:6}}>{s.G.map(g=><span key={g.k} title={g.label+' — '+(g.segments && g.segments.length ? g.segments.map(x=>(x.etat==='na'?'⏳ ':x.etat==='manque'?'✗ ':'✓ ')+x.label).join(' · ') : g.L.length ? g.L.map(x=>(x.ok?'✓ ':'✗ ')+x.titre).join(' · ') : 'pas encore rendu là')} style={{display:'inline-flex',flexDirection:'column',alignItems:'center',gap:2}}>
+          <div className="a">Prochaine étape : <b>{s.etape}</b>{p.prochaine ? <span className="muted"> · à faire : {p.prochaine.phase} › {p.prochaine.titre}</span> : ''} <span style={{fontWeight:800,color:p.pct===100?'var(--success)':'var(--text)'}}>· {p.pct} %</span></div>
+          <PjBarre p={p} blocages={B.parJob[j.id]||[]} sel={selEt && selEt.k===k ? selEt.id : null} onEtape={id=>setSelEt(id ? {k, id} : null)}/>
+          {selEt && selEt.k===k && (()=>{ const x = p.steps.find(y=>y.id===selEt.id); return x ? <PjEtapeDetail job={j} x={x} blocages={B.parJob[j.id]||[]} B={B} basculerEtape={basculerEtape} toast={m=>{ if(/^Erreur|^Micro/.test(m)) alert(m); }}/> : null; })()}
+          <div style={{display:'none'}}>{s.G.map(g=><span key={g.k} title={g.label+' — '+(g.segments && g.segments.length ? g.segments.map(x=>(x.etat==='na'?'⏳ ':x.etat==='manque'?'✗ ':'✓ ')+x.label).join(' · ') : g.L.length ? g.L.map(x=>(x.ok?'✓ ':'✗ ')+x.titre).join(' · ') : 'pas encore rendu là')} style={{display:'inline-flex',flexDirection:'column',alignItems:'center',gap:2}}>
             {(g.segments && g.segments.length>1)
               ? <span style={{width:38,height:8,display:'flex',gap:1}}>{g.segments.map((x,i)=><span key={i} title={x.label} style={{flex:1,borderRadius:2,background: x.etat==='ok'||x.etat==='manuel' ? 'var(--success)' : x.etat==='manque' ? 'var(--warning)' : 'var(--bg4)'}}/>)}</span>
               : <span style={{width:38,height:8,borderRadius:3,background: g.etat==='manuel'
@@ -2232,6 +2451,7 @@ function ProjetsSuivi({cfg, refreshKey}){
             {s.otFait && <span title="OT fait" style={{marginLeft:4}}>📝</span>}
             {s.apFait && <span title="Appel de service fait" style={{marginLeft:4,fontSize:11,fontWeight:800,padding:'1px 4px',borderRadius:4,background:'rgba(88,166,255,0.15)',color:'var(--accent)'}}>AP</span>}
           </span>
+          {p.ouverts.length>0 && <span className="badge" style={{background:'rgba(248,81,73,0.15)',color:'var(--danger)',marginRight:6}}>✕ {p.ouverts.length} blocage{p.ouverts.length>1?'s':''}</span>}
           {s.manquants.length ? <span className="badge" style={{background:'rgba(210,153,34,0.15)',color:'var(--warning)'}}>{s.manquants.length} à compléter</span>
             : <span className="badge" style={{background:'rgba(63,185,80,0.15)',color:'var(--success)'}}>✓ tout est là</span>}
           <div className="muted" style={{fontSize:12,marginTop:4}}>{o?'▲':'▼'}</div>
