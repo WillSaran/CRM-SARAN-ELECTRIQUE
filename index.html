@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v202';
+const APP_VERSION = 'v203';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2034,7 +2034,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
   const auto = useAutoAssociation(cfg, achats, clients);
   const R = useMemo(()=>{ try{ return repConstruire({clients, registry:registry||[], factures:factures||{}, achats:achats||[], soumissions:soumissions||[], F:fiches, gcmeq:gcmeq||[]}); }catch(e){ return null; } },[clients, registry, factures, achats, soumissions, fiches, gcmeq]);
   const [busy,setBusy]=useState('');
-  const [ouvert,setOuvert]=useState(null);
+  const [ouvert,setOuvert]=useState(()=>(navFocus('fournisseurs')||{}).fournisseur || null);   // v203 : ouvert depuis la fiche du fournisseur
   const [detail,setDetail]=useState(null);
   const [changer,setChanger]=useState(null);
   const [fait,setFait]=useState({});   // v136 : destination choisie, affichée tout de suite (pas de rechargement de toute la page)
@@ -8941,7 +8941,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
 
   if(choisi) return <div>{entete}
     <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>setSel(null)}>← Retour</button>
-    {sel && sel.startsWith('F:') ? <RepFicheFournisseur f={choisi} K={K} toast={toast}/>
+    {sel && sel.startsWith('F:') ? <RepFicheFournisseur f={choisi} K={K} toast={toast} onAller={onAller}/>
       : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onAller={onAller} onLie={nom=>setSel('', nom)} onContr={code=>setSel('C:'+code)} onOuvrir={(id, nom)=>setSel(id, nom)}
           nbAV={aVerif[choisi.type==='contr' ? 'C:'+choisi.code : choisi.id]||0} onSuivi={(choisi.type==='contr' ? clients[choisi.code] : choisi.srcJobs.length) ? ()=>setSuivi(choisi.type==='contr' ? choisi.code : choisi.id) : null}/>}
   </div>;
@@ -8955,28 +8955,26 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
       return <React.Fragment key={p.id}>
         {lettres && nouv && l.length>15 && <div style={{padding:'3px 14px',fontSize:11.5,fontWeight:800,color:'var(--accent)',background:'var(--bg3)',borderBottom:'1px solid var(--border)'}}>{L}</div>}
         <div onClick={()=>ouvrirC(p)} style={{padding:'9px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
-          <div style={{minWidth:0}}><span style={{fontSize:12}}>{p.commerce ? '🏪' : '👤'}</span> <b>{p.nom}</b>{badge(aVerif[p.id])}
+          <div style={{minWidth:0}}><span style={{fontSize:12}}>{p.commerce ? '🏪' : '👤'}</span> <b>{p.nom}</b>
             <div className="muted" style={{fontSize:12}}>{[p.adresse, p.tel, p.courriel].filter(Boolean).join(' · ') || '—'}</div></div>
-          <div style={{textAlign:'right',fontSize:12}}>{p.listeJobs.length} job{p.listeJobs.length>1?'s':''}{p.facture ? <> · <b>{cvMoney(p.facture)}</b></> : ''}<div className="muted" style={{fontSize:11}}>{p.last ? cvFmtDay(p.last)+' '+p.last.slice(0,4) : ''}</div></div>
+          <div style={{textAlign:'right',fontSize:12}}>{p.listeJobs.length} job{p.listeJobs.length>1?'s':''}<div className="muted" style={{fontSize:11}}>{p.last ? cvFmtDay(p.last)+' '+p.last.slice(0,4) : ''}</div></div>
         </div>
       </React.Fragment>; })}
     {!l.length && <div className="muted" style={{padding:14}}>Aucun résultat.</div>}
   </div>;
   const ouvrirC = c => { if(mode==='verif'){ if(c.type==='contr' && clients[c.code]){ setSuivi(c.code); return; } if(c.type!=='contr' && c.srcJobs && c.srcJobs.length){ setSuivi(c.id); return; } } setSel(c.id); };
   const Cubes = ({l}) => <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:8}}>
-    {l.map(c=><div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0,borderColor:aVerif['C:'+c.code] ? 'rgba(248,81,73,0.45)' : undefined}} onClick={()=>ouvrirC(c)}>
+    {l.map(c=><div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0}} onClick={()=>ouvrirC(c)}>
       <div><b style={{color:'var(--accent)'}}>{c.code}</b> {c.nom}</div>
       <div className="muted" style={{fontSize:12}}>{c.contact || (c.fiche&&c.fiche.tel) || ' '}</div>
-      <div style={{fontSize:12,marginTop:4}}>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''} · facturé <b>{cvMoney(c.facture)}</b></div>
-      {aVerif['C:'+c.code] ? <div style={{marginTop:4}}><span className="badge" style={{background:'rgba(248,81,73,0.12)',color:'var(--danger)'}}>{aVerif['C:'+c.code]} à vérifier</span></div> : null}
+      <div style={{fontSize:12,marginTop:4}}>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''}</div>
     </div>)}
   </div>;
   const ListeFourn = ({l}) => <div className="card" style={{padding:0}}>
     {l.map(f=>{ const k = K.map[f.nom];
       return <div key={f.nom} onClick={()=>setSel('F:'+f.nom)} style={{padding:'10px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
         <div><span style={{fontSize:12}}>🏭</span> <b>{f.nom}</b>{k && k.nom && <span className="muted" style={{fontSize:12}}> · {k.nom}{k.role?' ('+k.role+')':''}</span>}
-          <div className="muted" style={{fontSize:12}}>{f.achats.length} facture{f.achats.length>1?'s':''}{f.docs.length ? ' · '+f.docs.length+' document'+(f.docs.length>1?'s':'') : ''}{f.last ? ' · dernier achat '+cvFmtDay(f.last) : ''}</div></div>
-        <div style={{textAlign:'right',fontSize:12.5}}><b>{cvMoney(f.annee)}</b><div className="muted" style={{fontSize:11}}>cette année (avant taxes)</div></div>
+          <div className="muted" style={{fontSize:12}}>{k ? [k.courriel, k.cell, k.succ].filter(Boolean).join(' · ') || '—' : '—'}</div></div>
       </div>; })}
     {!l.length && <div className="muted" style={{padding:14}}>Aucun fournisseur trouvé.</div>}
   </div>;
@@ -9038,7 +9036,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
       <CvAnomalies cfg={cfg} factures={d.factures} clients={clients} appels={d.appels || {parNumero:{}, parFacture:{}, liste:[]}} onOpen={code=>setSuivi(code)} onChanged={()=>setTick(t=>t+1)}/></>;
   } else {   // vue d'ensemble : contracteurs en cubes (v202 : « À vérifier » est dans Comptabilité)
     corps = <>{titre('Contracteurs', contrTri.length)}<Cubes l={contrTri}/>
-      <div className="muted" style={{fontSize:12.5,marginTop:12}}>Choisis « 👤 Particuliers » ou « 🏪 Commerces » dans le menu pour voir les fiches. Ce qui est à vérifier est dans Comptabilité › À vérifier.</div></>;
+      <div className="muted" style={{fontSize:12.5,marginTop:12}}>Choisis « 👤 Particuliers », « 🏪 Commerces » ou « 🏭 Fournisseurs » dans le menu pour voir les fiches.</div></>;
   }
   if(mode==='verif') return <div>{entete}{corps}</div>;
   return <div>{entete}{formNouveau}{corps}</div>;
@@ -9327,13 +9325,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
           <button className="btn btn-sm" onClick={()=>aller('factures', {vue:'paiements', q})}>Paiements</button>
           <button className="btn btn-sm" onClick={()=>aller('projets', pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code})}>Projets</button>
           <button className="btn btn-sm" onClick={()=>aller('soumissions', {q:c.nom})}>Soumissions</button>
-          {nbAV>0 && onSuivi && <button className="btn btn-sm" style={{borderColor:'var(--danger)',color:'var(--danger)',fontWeight:700}} onClick={()=>aller('verif', {suivi: pers ? c.id : c.code})}>À vérifier ({nbAV})</button>}
         </div>; })()}
-      <div style={{display:'flex',gap:16,flexWrap:'wrap',marginTop:10,fontSize:13,fontVariantNumeric:'tabular-nums'}}>
-        <span>Facturé : <b>{cvMoney(c.facture)}</b> <span className="muted" style={{fontSize:11}}>avant taxes</span></span>
-        <span>Achats : <b>{cvMoney(c.cout)}</b> <span className="muted" style={{fontSize:11}}>avant taxes</span></span>
-        <span>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''}</span>
-      </div>
       {lien!==null && pers && (()=>{ const nq = cvNorm(lien);
         const cands = nq.length<2 ? [] : R.pers.filter(p=>p.id!==c.id && !(c.lies||[]).includes(p) && cvNorm([p.nom, ...p.noms, ...p.courriels].join(' ')).includes(nq))
           .sort((a,b)=>(a.commerce===c.commerce)-(b.commerce===c.commerce) || a.nom.localeCompare(b.nom,'fr')).slice(0,12);
@@ -9386,7 +9378,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
     </div>}
 
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',margin:'4px 0 6px'}}>
-      <b>Jobs</b>
+      <b>Projets</b>
       {c.listeJobs.length>1 && (regroupe
         ? <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
             <input value={nomGroupe} onChange={e=>setNomGroupe(e.target.value)} placeholder={pers ? 'Nom de la job (ex. Cuisine, Août 2026)' : 'Nom de la job'} style={{width:200,padding:'5px 8px'}}/>
@@ -9402,7 +9394,6 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
             <b>{j.label}</b>{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}
             <div className="muted" style={{fontSize:12}}>{[j.adresse, j.derniere ? 'dernière visite '+cvFmtDay(j.derniere)+' '+j.derniere.slice(0,4) : '', j.prochaine ? 'prochaine '+cvFmtDay(j.prochaine) : '', !j.derniere && !j.prochaine && j.first ? cvFmtDay(j.first)+(j.last && j.last!==j.first ? ' → '+cvFmtDay(j.last) : '')+' '+j.last.slice(0,4) : '', j.passages ? j.passages+' passage'+(j.passages>1?'s':'') : '', j.equipe.length ? j.equipe.map(n=>n.split(' ')[0]).join(', ') : ''].filter(Boolean).join(' · ')}</div>
           </div>
-          <div style={{textAlign:'right',fontSize:12.5,fontVariantNumeric:'tabular-nums'}}>Facturé <b>{cvMoney(j.facture)}</b><div className="muted" style={{fontSize:11.5}}>Achats {cvMoney(j.cout)}{j.reg && j.reg.ht ? ' · PO '+cvMoney(j.reg.ht) : ''}</div></div>
         </div>
         {o && !regroupe && <div style={{marginTop:8}}>
           {renomme && renomme.key===j.key
@@ -9420,9 +9411,6 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
                   : <button className="btn btn-sm" disabled={busy} title={'Cette job n\'a pas rapport avec '+(pers ? c.nom : c.code)+' (ton agenda n\'est pas modifié)'} onClick={()=>setRetire(j.key)}>🗑 Retirer cette job</button>}
               </span>}
           {j.cles.size>1 && <div className="muted" style={{fontSize:11.5,marginBottom:4}}>Écrit dans l'agenda/les achats : {[...j.cles].slice(0,6).join(' · ')}</div>}
-          {j.factures.sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(f=><RepLigneFacture key={'f'+f.num} f={f}/>)}
-          {j.achats.sort((a,b)=>String(b.date||b.recue).localeCompare(String(a.date||a.recue))).map(a=><RepLigneAchat key={'a'+a.row} a={a}/>)}
-          {!j.factures.length && !j.achats.length && <div className="muted" style={{fontSize:12}}>Aucune facture ni achat rattaché à cette job.</div>}
         </div>}
       </div>; })}
     {!c.listeJobs.length && <div className="muted" style={{fontSize:13,marginBottom:10}}>Aucune job connue.</div>}
@@ -9432,25 +9420,10 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
         <span className="muted">{r.nom}{r.po ? ' · '+r.po : ''}</span>
         <button className="btn btn-sm" disabled={busy} onClick={()=>ecrire([{...r, alias:[...r.alias, ...[...r.ids].map(i=>'id:'+i)], type:'Retiré'}], '« '+r.nom+' » est remise.')}>↩ Remettre</button></div>)}
     </div>}
-    {(c.achatsSans||[]).length>0 && <div className="card" style={{marginTop:10}}>
-      <b>Achats associés à {c.code} (sans job précise)</b>
-      {c.achatsSans.slice().sort((a,b)=>String(b.date||b.recue).localeCompare(String(a.date||a.recue))).map(a=><RepLigneAchat key={'s'+a.row} a={a}/>)}
-    </div>}
-    {c.facturesSans.length>0 && <div className="card" style={{marginTop:10}}>
-      <b>Factures envoyées {pers ? 'sans job précise' : 'à la compagnie'}</b>
-      {c.facturesSans.sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(f=><RepLigneFacture key={f.num} f={f}/>)}
-    </div>}
-    {c.soum.length>0 && <div className="card" style={{marginTop:10}}>
-      <b>Soumissions et ordres de travail</b>
-      {c.soum.sort((a,b)=>String(b.date).localeCompare(String(a.date))).map((s,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'4px 0',borderBottom:'1px dashed var(--border)',fontSize:12.5}}>
-        <span>📄 <b>#{s.no}</b> <span className="muted">· {cvFmtDay(s.date)} {String(s.date).slice(0,4)}{s.statut ? ' · '+s.statut : ''}</span>{s.extrait ? ' · '+s.extrait : ''}</span>
-        <span>{s.montant ? cvMoney(s.montant) : ''}{s.pdf && <> · <a href={repPdf(s.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>PDF</a></>}</span>
-      </div>)}
-    </div>}
   </div>;
 }
 
-function RepFicheFournisseur({f, K, toast}){
+function RepFicheFournisseur({f, K, toast, onAller}){
   const [q,setQ]=useState('');
   const [n,setN]=useState(40);
   const parAn = {}; f.achats.forEach(a=>{ const y = String(a.date||a.recue||'').slice(0,4)||'?'; parAn[y] = (parAn[y]||0) + (a.st||0); });
@@ -9458,29 +9431,11 @@ function RepFicheFournisseur({f, K, toast}){
   return <div>
     <div className="card" style={{marginBottom:12}}>
       <h3 className="fh" style={{margin:'0 0 6px',fontSize:20}}>{f.nom}</h3>
-      <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:13,marginBottom:8,fontVariantNumeric:'tabular-nums'}}>
-        {Object.entries(parAn).sort((a,b)=>b[0].localeCompare(a[0])).map(([y,t])=><span key={y}>{y} : <b>{cvMoney(t)}</b></span>)}
-        <span className="muted">{f.achats.length} facture{f.achats.length>1?'s':''} · avant taxes</span>
-      </div>
       {K.map[f.nom] && K.map[f.nom].courriel && <div style={{fontSize:13}}>✉️ <a href={'mailto:'+K.map[f.nom].courriel} style={{color:'var(--accent)'}}>{K.map[f.nom].courriel}</a></div>}
       <ContactFournisseur f={f.nom} K={K} toast={toast} onCourriel={()=>{}}/>
+      {onAller && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
+        <button className="btn btn-sm" onClick={()=>onAller('fournisseurs', {fournisseur:f.nom, nom:f.nom})}>Factures d'achat</button></div>}
     </div>
-    <div className="card" style={{marginBottom:12}}>
-      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:6}}>
-        <b>Factures d'achat</b>
-        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="No, référence, job, produit…" style={{flex:'1 1 180px',width:'auto',minWidth:0,padding:'5px 9px',maxWidth:320}}/>
-      </div>
-      {l.slice(0,n).map(a=><RepLigneAchat key={a.row} a={a} montrerJob/>)}
-      {l.length>n && <div style={{textAlign:'center',padding:8}}><button className="btn btn-sm" onClick={()=>setN(n+60)}>Voir plus ({l.length-n})</button></div>}
-      {!l.length && <div className="muted" style={{fontSize:12.5}}>Aucune facture.</div>}
-    </div>
-    {f.docs.length>0 && <div className="card">
-      <b>Soumissions, relevés et confirmations</b>
-      {f.docs.sort((a,b)=>String(b.date).localeCompare(String(a.date))).map((x,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'4px 0',borderBottom:'1px dashed var(--border)',fontSize:12.5}}>
-        <span>{x.type} <b>{x.num}</b> <span className="muted">· {cvFmtDay(x.date)} {String(x.date).slice(0,4)}{x.ref ? ' · « '+x.ref+' »' : ''}</span></span>
-        <span>{x.total ? cvMoney(x.total) : ''}{x.pdf && <> · <a href={repPdf(x.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>PDF</a></>}</span>
-      </div>)}
-    </div>}
   </div>;
 }
 
