@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v216';
+const APP_VERSION = 'v217';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8782,7 +8782,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     if(a.tel && !(k.tels||[]).some(t=>chiffres(t)===chiffres(a.tel))) k.tels = [...(k.tels||[]), a.tel];
     if(!(k.courriels||[]).includes(courriel)) k.courriels = [...(k.courriels||[]), courriel];
     k.projets = a.projets; k.note = a.note; k.dernier = a.dernier; });
-  const estPresident = k => /^pr[ée]sident/i.test(String(k.role||'').trim());   // v207 : le président s'affiche sous le nom du contracteur
+  const estPresident = k => /(^|[·\/,&]\s*|\s-\s)pr[ée]sident/i.test(String(k.role||'').trim());   // v217 : « Président · Chargé de projet »   // v207 : le président s'affiche sous le nom du contracteur
   // v212 : un contact = une seule ligne (même courriel, même nom, ou « Danny » = « Danny Chalet »), en ordre alphabétique
   const prenomDe = n => persCle(n).split(' ')[0] || '';
   Object.values(contr).forEach(c=>{ const out = [];
@@ -9287,7 +9287,7 @@ function RepImportCompta({cfg, onFait, toast, nbActuel}){
 // v211 : projets montrés seulement pour les gestionnaires / chargés de projet, designers et estimateurs (pas l'adjointe, le service après-vente, le président…)
 const CONTACT_ROLE_PROJETS = /projet|design|cuisiniste|estimat/i;
 const CONTACT_TITRES = ['Président','Présidente','Gestionnaire de projet','Chargé de projet','Designer-Cuisiniste','Comptable','Agente administrative','Contremaître','Estimateur','Propriétaire'];
-const contactEstPresident = k => /^pr[ée]sident/i.test(String(k.role||'').trim());
+const contactEstPresident = k => /(^|[·\/,&]\s*|\s-\s)pr[ée]sident/i.test(String(k.role||'').trim());
 // v214 : filtre « pres » = les présidents, en haut de la fiche (modifiables là) ; « autres » = la boîte Contacts, sans les présidents
 function RepContacts({c, busy, ecrire, onAller, filtre}){
   const liste = c.contacts.filter(k=>filtre==='pres' ? contactEstPresident(k) : filtre==='autres' ? !contactEstPresident(k) : true);
@@ -9319,11 +9319,27 @@ function RepContacts({c, busy, ecrire, onAller, filtre}){
     'Contact '+ed.nom.trim()+' enregistré chez '+c.code+'.').then(ok=>ok&&setEd(null)); };
   const retirer = k => ecrire([{...k.fiche, type:'Retiré'}], k.nom+' retiré des contacts de '+c.code+'.');
   const champ = (k, l) => <input value={ed[k]} placeholder={l} onChange={e=>setEd({...ed,[k]:e.target.value})} style={{padding:'5px 8px'}}/>;
+  const projetsBloc = (k, i) => { const js = jobsDe(k), cle = k.nom+'|'+i;   // v212 : projets avec PO ; v215 : ＋ / ✕ à la main ; v217 : aussi pour un président chargé de projet
+          const dispo = (c.listeJobs||[]).filter(j=>j.po && !js.some(x=>x.po===j.po)).sort((a,b)=>String(b.last||'').localeCompare(String(a.last||'')));
+          return <div className="muted" style={{fontSize:12,marginTop:2,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+            {js.length>0 && <span>Projets :</span>}
+            {js.map(j=>{ const ids = [...(j.ids||[])], lib = j.po+(j.label||j.nom ? ' · '+(j.label||j.nom) : '');
+              return <span key={j.po} style={{display:'inline-flex',alignItems:'center',gap:3}}>{ids.length && onAller ? <a href="#" onClick={e=>{ e.preventDefault(); onAller('projets', {jobIds:ids, nom:c.code+' '+j.po}); }} style={{color:'var(--accent)'}} title="Ouvrir dans Projets">{lib}</a> : lib}
+                <button className="btn btn-sm" style={{padding:'0 4px',fontSize:10}} disabled={busy} title={'Retirer '+j.po+' des projets de '+k.nom} onClick={()=>retirerPO(k, j.po)}>✕</button></span>; })}
+            {ajoutPO===cle
+              ? <select autoFocus defaultValue="" disabled={busy} onChange={e=>e.target.value && ajouterPO(k, e.target.value)} onBlur={()=>setAjoutPO(null)} style={{padding:'2px 6px',fontSize:12,width:'auto',maxWidth:280}}>
+                  <option value="">Choisir un projet…</option>{dispo.map(j=><option key={j.po} value={j.po}>{j.po}{j.label||j.nom ? ' · '+(j.label||j.nom) : ''}</option>)}</select>
+              : dispo.length>0 && <button className="btn btn-sm" style={{padding:'0 6px',fontSize:11}} disabled={busy} onClick={()=>setAjoutPO(cle)}>＋ Projet</button>}
+          </div>; };
   const ouvrirEd = k => setEd({fiche:k.fiche, nom:k.nom, role:k.role==='—' ? '' : (k.role||''), roleOrig:k.role||'', courriel:k.courriels.join(', '), orig:k.courriels.map(e=>String(e).toLowerCase()), tel:k.tels[0]||''});
   const formulaire = ed && <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:6,margin:'8px 0'}}>
       {champ('nom','Nom')}
-      <input value={ed.role} list="contact-titres" placeholder="Titre (ex. Président, Gestionnaire de projet)" onChange={e=>setEd({...ed,role:e.target.value})} style={{padding:'5px 8px'}}/>
+      <input value={ed.role} list="contact-titres" placeholder="Titre(s) — ex. Président · Chargé de projet" onChange={e=>setEd({...ed,role:e.target.value})} style={{padding:'5px 8px'}}/>
       <datalist id="contact-titres">{CONTACT_TITRES.map(t=><option key={t} value={t}/>)}</datalist>
+      {(()=>{ const l = String(ed.role||'').split(/\s*·\s*/).map(x=>x.trim()).filter(Boolean);   // v217 : plusieurs titres (cliquer pour ajouter / enlever)
+        const bascule = t => { const n = l.some(x=>cvNorm(x)===cvNorm(t)) ? l.filter(x=>cvNorm(x)!==cvNorm(t)) : [...l, t]; setEd({...ed, role:n.join(' · ')}); };
+        return <div style={{gridColumn:'1 / -1',display:'flex',gap:4,flexWrap:'wrap'}}>{CONTACT_TITRES.filter(t=>t!=='Présidente').map(t=>{ const on = l.some(x=>cvNorm(x)===cvNorm(t));
+          return <button key={t} type="button" className={'btn btn-sm'+(on ? ' btn-p' : '')} style={{padding:'1px 8px',fontSize:11.5}} onClick={()=>bascule(t)}>{t}</button>; })}</div>; })()}
       {champ('courriel','Courriel')}{champ('tel','Téléphone')}
       <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={busy || !ed.nom.trim()} onClick={sauver}>Enregistrer</button><button className="btn btn-sm" onClick={()=>setEd(null)}>Annuler</button></div>
     </div>;
@@ -9333,6 +9349,7 @@ function RepContacts({c, busy, ecrire, onAller, filtre}){
       {k.courriels.map(e=><a key={e} href={repGmail(e)} target="_blank" rel="noopener" title="Nouveau courriel dans Gmail" style={{color:'var(--accent)',fontSize:12.5}}>✉️ {e}</a>)}
       {k.tels.map(t=><a key={t} href={repTel(t)} style={{color:'var(--accent)',fontSize:12.5}}>📞 {t}</a>)}
       <button className="btn btn-sm" style={{padding:'0 6px',fontSize:11}} disabled={busy} title="Modifier ce contact" onClick={()=>ouvrirEd(k)}>✏️</button>
+      {CONTACT_ROLE_PROJETS.test(k.role||'') && <div style={{flexBasis:'100%',paddingLeft:20}}>{projetsBloc(k, 'p'+i)}</div>}
     </div>)}
     {formulaire}
   </div>;
@@ -9348,18 +9365,7 @@ function RepContacts({c, busy, ecrire, onAller, filtre}){
           {k.courriels.map(e=><a key={e} href={repGmail(e)} target="_blank" rel="noopener" title="Nouveau courriel dans Gmail" style={{color:'var(--accent)'}}>✉️ {e}</a>)}
           {k.tels.map(t=><a key={t} href={repTel(t)} style={{color:'var(--accent)'}}>📞 {t}</a>)}
         </div>
-        {(()=>{ const js = jobsDe(k), cle = k.nom+'|'+i;   // v212 : projets avec PO ; v215 : ＋ / ✕ à la main
-          const dispo = (c.listeJobs||[]).filter(j=>j.po && !js.some(x=>x.po===j.po)).sort((a,b)=>String(b.last||'').localeCompare(String(a.last||'')));
-          return <div className="muted" style={{fontSize:12,marginTop:2,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-            {js.length>0 && <span>Projets :</span>}
-            {js.map(j=>{ const ids = [...(j.ids||[])], lib = j.po+(j.label||j.nom ? ' · '+(j.label||j.nom) : '');
-              return <span key={j.po} style={{display:'inline-flex',alignItems:'center',gap:3}}>{ids.length && onAller ? <a href="#" onClick={e=>{ e.preventDefault(); onAller('projets', {jobIds:ids, nom:c.code+' '+j.po}); }} style={{color:'var(--accent)'}} title="Ouvrir dans Projets">{lib}</a> : lib}
-                <button className="btn btn-sm" style={{padding:'0 4px',fontSize:10}} disabled={busy} title={'Retirer '+j.po+' des projets de '+k.nom} onClick={()=>retirerPO(k, j.po)}>✕</button></span>; })}
-            {ajoutPO===cle
-              ? <select autoFocus defaultValue="" disabled={busy} onChange={e=>e.target.value && ajouterPO(k, e.target.value)} onBlur={()=>setAjoutPO(null)} style={{padding:'2px 6px',fontSize:12,width:'auto',maxWidth:280}}>
-                  <option value="">Choisir un projet…</option>{dispo.map(j=><option key={j.po} value={j.po}>{j.po}{j.label||j.nom ? ' · '+(j.label||j.nom) : ''}</option>)}</select>
-              : dispo.length>0 && <button className="btn btn-sm" style={{padding:'0 6px',fontSize:11}} disabled={busy} onClick={()=>setAjoutPO(cle)}>＋ Projet</button>}
-          </div>; })()}</div>
+        {projetsBloc(k, i)}</div>
       <span style={{display:'flex',gap:4}}>
         <button className="btn btn-sm" disabled={busy} onClick={()=>ouvrirEd(k)}>✏️</button>
         {k.fiche && <button className="btn btn-sm" disabled={busy} title="Retirer de ce contracteur (redevient un particulier s'il a des factures)" onClick={()=>retirer(k)}>✕</button>}
