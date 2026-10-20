@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v189';
+const APP_VERSION = 'v190';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3681,7 +3681,7 @@ function SuiviTableur({rows, id, onChanged}){
 //   | G Factures lues | H Lien Gmail | I Source | J Factures confirmées | K Statut | L Note.  Le CRM écrit seulement J à L
 //   (ou une nouvelle ligne pour un paiement entré à la main). Rien n'est associé sans que tu confirmes (mode essai).
 const PAI_ENTETE = ['Id courriel','Date','Envoyé par','Montant','Message','Référence','Factures lues dans le message','Lien Gmail','Source','Factures confirmées','Statut','Note'];
-const PAI_DEBUT = '2026-06-01';   // v183 : début de l'année financière — avant = archivé
+const PAI_DEBUT = '2026-06-01';   // v190 : début de l'année financière — tout ce qui est avant n'apparaît plus dans le CRM (factures et paiements)
 const PAI_MOTS_VIDES = new Set(['inc','ltee','ltd','limited','quebec','qc','canada','et','and','de','du','la','le','les','des','property','properties','gestion','construction','constructions','compagnie','cie','enr','senc','corp','corporation']);
 function paiNums(s){ return [...new Set(String(s||'').replace(/\b(19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.](19|20)\d{2}\b/g,' ').match(/\b\d{4}\b/g)||[])]; }
 function paiMots(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3 && !PAI_MOTS_VIDES.has(w) && !/^\d+$/.test(w)); }
@@ -3690,7 +3690,9 @@ function paiLireFactures(rows){
   const fh=(rows[0]||[]).map(h=>cvNorm(h)), fc=re=>fh.findIndex(h=>re.test(h));
   const fx={num:fc(/^facture/),date:fc(/^date/),cli:fc(/^client/),po:fc(/^po$/),nom:fc(/^nom/),desc:fc(/^description/),ht:fc(/^montant/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/),st:fc(/^statut/)};
   const g=(r,k)=> fx[k]>=0 ? String(r[fx[k]]||'').trim() : '';
-  const out={}; Object.defineProperty(out,'__cols',{value:fx, enumerable:false}); rows.slice(1).forEach((r,i)=>{ const n=g(r,'num'); if(!n) return;
+  const out={}, tous=new Set(); Object.defineProperty(out,'__cols',{value:fx, enumerable:false}); Object.defineProperty(out,'__tous',{value:tous, enumerable:false});
+  rows.slice(1).forEach((r,i)=>{ const n=g(r,'num'); if(!n) return; tous.add(n);
+    const d = g(r,'date'); if(d && d.slice(0,10) < PAI_DEBUT) return;   // v190 : avant l'année financière = pas dans le CRM
     out[n]={num:n, row:i+2, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, envoi:g(r,'env'), pdf:g(r,'pdf'), annulee:/^annul/.test(cvNorm(g(r,'st'))), statut:g(r,'st'),
       ouverte:/^ouverte/i.test(g(r,'st')), estime:/^montant calcul/i.test(g(r,'st'))}; });   // v187 : importées du logiciel comptable
   Object.defineProperty(out,'__stCol',{value: fx.st>=0 ? fx.st : Math.max(fh.length, 10), enumerable:false});
@@ -3707,7 +3709,7 @@ async function paiAnnulerFacture(id, factures, f){
 function paiLirePaiements(rows){
   return rows.slice(1).map((r,i)=>({row:i+2, id:String(r[0]||''), date:String(r[1]||''), de:String(r[2]||''), montant:cvNum(r[3])||0, message:String(r[4]||''), ref:String(r[5]||''),
     lues:paiNums(r[6]).filter(n=>!new RegExp('\\b'+n+'[-/.]\\d{1,2}[-/.]\\d{1,2}\\b').test(String(r[4]||''))), lien:String(r[7]||''), source:String(r[8]||'Interac'), confirmees:paiNums(r[9]), statut:String(r[10]||'').trim(), note:String(r[11]||'')}))
-    .filter(p=>p.id || p.montant);
+    .filter(p=>(p.id || p.montant) && !(String(p.date).slice(0,10) < PAI_DEBUT));   // v190 : paiements d'avant le 1er juin = pas dans le CRM
 }
 // Nom affiché du client d'une facture : contracteur (code) ou nom écrit sur la facture, sinon le courriel.
 function paiClientNom(f){ const c = String(f.client||'').trim(); const code = c.toUpperCase();
@@ -3757,7 +3759,7 @@ function paiementsAnalyser(factures, paiements, nomDe, separes){
   paiements.forEach(p=>{ const ns = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>!F[n]);
     const connus = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>F[n]);
     p.archive = !p.statut && String(p.date).slice(0,10) < PAI_DEBUT;   // avant l'année financière
-    p.horsRegistre = !p.statut && !p.archive && !connus.length && ns.length>0 && ns.every(n=>+n<minNum) ? ns : null; });   // n° de facture plus petits que la 1re du registre
+    p.horsRegistre = !p.statut && !p.archive && !connus.length && ns.length>0 && ns.every(n=>+n<minNum || (factures.__tous && factures.__tous.has(n))) ? ns : null; });   // factures d'avant le 1er juin (ou plus vieilles que le registre)
   const attente = paiements.filter(p=>!p.statut && !p.archive && !p.horsRegistre);
   const anciens = paiements.filter(p=>p.horsRegistre);
   const archives = paiements.filter(p=>p.archive);
@@ -3937,7 +3939,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
     const out = []; o.forEach((a,i)=>o.slice(i+1).forEach(b=>{ if(paiClientCle(a)===paiClientCle(b) && Math.abs(a.ttc-b.ttc)<=0.02) out.push([a,b]); })); return out; };
   // v187 : importer des factures préparées par Claude (fichier .json tiré du logiciel comptable). Ajoute seulement ; n'écrase rien.
   const lireImport = async file => { try{ const j = JSON.parse(await file.text()); const ex = data.factures;
-      const nouvelles = (j.factures||[]).filter(x=>x && x.num && !ex[x.num] && Array.isArray(x.row));
+      const nouvelles = (j.factures||[]).filter(x=>x && x.num && !ex[x.num] && !(ex.__tous && ex.__tous.has(String(x.num))) && Array.isArray(x.row));
       const nums = new Set(nouvelles.map(x=>x.num));
       const annuler = (j.annulees||[]).filter(n=>ex[n] && !ex[n].annulee && !String(ex[n].statut||'').trim());
       setImp({source:j.source||file.name, nouvelles, lignes:(j.lignes||[]).filter(l=>nums.has(String(l[0]))), annuler, etape:'apercu'}); }
@@ -4036,7 +4038,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
     </div>}
 
     {sous==='confirmer' && <div className="card">
-      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Virements reçus pas encore associés à une facture. Rien n'est associé tant que tu ne confirmes pas.{A.anciens.length>0 && <> {A.anciens.length} paiement{A.anciens.length>1?'s':''} pour des factures pas dans le registre (n° plus petit que {A.minNum}) {A.anciens.length>1?'sont rangés':'est rangé'} dans « Tous les paiements ».</>}{A.archives.length>0 && <> Les paiements d'avant le 1er juin 2026 sont archivés.</>}</div>
+      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Virements reçus pas encore associés à une facture. Rien n'est associé tant que tu ne confirmes pas.{A.anciens.length>0 && <> {A.anciens.length} paiement{A.anciens.length>1?'s':''} pour des factures d'avant le 1er juin {A.anciens.length>1?'sont rangés':'est rangé'} dans « Tous les paiements ».</>}{A.archives.length>0 && <> Les paiements d'avant le 1er juin 2026 sont archivés.</>}</div>
       {!attente.length && <div className="muted" style={{padding:'8px 0'}}>Rien à confirmer.</div>}
       {groupesV.map(g=>{ const b = busy===g.id;
         return <div key={g.id} style={{padding:'10px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
@@ -4133,7 +4135,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       {tous.map(p=><div key={p.row} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'5px 0',borderBottom:'1px dashed var(--border)',opacity:/^(ignor|annul)/i.test(p.statut)?.55:1}}>
         <span><b>{String(p.date).slice(0,10)}</b> · {p.de||'—'} · <b>{cvMoney(p.montant)}</b> <span className="muted">· {p.source}</span>{p.message ? <span className="muted"> · « {p.message} »</span> : ''}</span>
         <span style={{display:'flex',gap:8,alignItems:'center'}}>
-          {/^confirm/i.test(p.statut) ? <span style={{color:'var(--success)'}}>→ {p.confirmees.map(n=>'#'+n).join(', ')}</span> : p.statut ? <span className="muted">{p.statut}</span> : p.archive ? <span className="muted">archivé (avant le 1er juin)</span> : p.horsRegistre ? <span className="muted">facture{p.horsRegistre.length>1?'s':''} {p.horsRegistre.join(', ')} pas dans le registre</span> : <span style={{color:'var(--warning)'}}>à confirmer</span>}
+          {/^confirm/i.test(p.statut) ? <span style={{color:'var(--success)'}}>→ {p.confirmees.map(n=>'#'+n).join(', ')}</span> : p.statut ? <span className="muted">{p.statut}</span> : p.archive ? <span className="muted">archivé (avant le 1er juin)</span> : p.horsRegistre ? <span className="muted">facture{p.horsRegistre.length>1?'s':''} {p.horsRegistre.join(', ')} d'avant le 1er juin</span> : <span style={{color:'var(--warning)'}}>à confirmer</span>}
           {p.statut && !/^annul/i.test(p.statut) && <button className="btn btn-sm" disabled={busy==='p'+p.row} onClick={()=>annuler(p)}>↩</button>}
           {p.lien && <a href={p.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>↗</a>}
         </span>
@@ -7080,6 +7082,7 @@ function useClientsData(cfg, refreshKey){
         const fg=(r,k)=> fx[k]>=0 ? (r[fx[k]]||'').trim() : '';
         const factures={};
         facRows.slice(1).forEach((r,i)=>{ const n=fg(r,'num'); if(!n) return; const st=cvNorm(fg(r,'st'));
+          if(fg(r,'date') && fg(r,'date').slice(0,10) < PAI_DEBUT) return;   // v190 : avant l'année financière (1er juin) = pas dans le CRM
           factures[n]={num:n, row:i+2, date:fg(r,'date'), client:fg(r,'cli'), po:fg(r,'po'), nom:fg(r,'nom'), desc:fg(r,'desc'), ht:cvNum(fg(r,'ht')), ttc:cvNum(fg(r,'ttc')), envoi:fg(r,'env'), pdf:fg(r,'pdf'),
             statut:fg(r,'st'), annulee:/^annul/.test(st), ok:/^(ok|correct|verifie)/.test(st)}; });
         // Colonne « Statut » du registre (créée par le CRM au premier clic si elle n'existe pas encore).
