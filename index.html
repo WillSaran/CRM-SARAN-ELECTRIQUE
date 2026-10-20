@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v210';
+const APP_VERSION = 'v211';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9271,6 +9271,8 @@ function RepImportCompta({cfg, onFait, toast, nbActuel}){
     <button className="btn btn-sm" style={{marginTop:8}} onClick={()=>{ setOuvert(false); setLu(null); }}>Fermer</button>
   </div>;
 }
+// v211 : projets montrés seulement pour les gestionnaires / chargés de projet, designers et estimateurs (pas l'adjointe, le service après-vente, le président…)
+const CONTACT_ROLE_PROJETS = /projet|design|cuisiniste|estimat/i;
 const CONTACT_TITRES = ['Président','Présidente','Gestionnaire de projet','Chargé de projet','Designer','Comptable','Agente administrative','Contremaître','Estimateur','Propriétaire'];
 function RepContacts({c, busy, ecrire, onAller}){
   // v208 : un projet lu dans les courriels (« 615 Sanford », « P03590 Lebreux ») → la job du contracteur, pour l'ouvrir dans Projets
@@ -9307,7 +9309,7 @@ function RepContacts({c, busy, ecrire, onAller}){
           {k.courriels.map(e=><a key={e} href={repGmail(e)} target="_blank" rel="noopener" title="Nouveau courriel dans Gmail" style={{color:'var(--accent)'}}>✉️ {e}</a>)}
           {k.tels.map(t=><a key={t} href={repTel(t)} style={{color:'var(--accent)'}}>📞 {t}</a>)}
         </div>
-        {(k.projets||[]).length>0 && <div className="muted" style={{fontSize:12,marginTop:2}}>Projets : {k.projets.map((lib,i)=>{ const j = jobDe(lib), ids = j ? [...(j.ids||[])] : [];
+        {(k.projets||[]).length>0 && CONTACT_ROLE_PROJETS.test(k.role||'') && <div className="muted" style={{fontSize:12,marginTop:2}}>Projets : {k.projets.map((lib,i)=>{ const j = jobDe(lib), ids = j ? [...(j.ids||[])] : [];
           return <React.Fragment key={lib}>{i ? ' · ' : ''}{ids.length && onAller ? <a href="#" onClick={e=>{ e.preventDefault(); onAller('projets', {jobIds:ids, nom:c.code+' '+lib}); }} style={{color:'var(--accent)'}} title="Ouvrir dans Projets">{lib}</a> : lib}</React.Fragment>; })}</div>}</div>
       <span style={{display:'flex',gap:4}}>
         <button className="btn btn-sm" disabled={busy} onClick={()=>setEd({fiche:k.fiche, nom:k.nom, role:k.role, courriel:k.courriels.join(', '), orig:k.courriels.map(e=>String(e).toLowerCase()), tel:k.tels[0]||''})}>✏️</button>
