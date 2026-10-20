@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v196';
+const APP_VERSION = 'v197';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8684,6 +8684,9 @@ async function ficheEcrire(cfg, f){
 }
 const repPdf = id => id ? 'https://drive.google.com/file/d/'+id+'/view' : '';
 const repTel = t => 'tel:'+String(t||'').replace(/[^\d+]/g,'');
+// v197 : téléphone écrit (450) 542-9898, et adresse coupée en lignes (rue / ville / province + code postal)
+const repTelFmt = t => { const d = String(t||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); return d.length===10 ? '('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6) : String(t||'').trim(); };
+const repAdrLignes = a => String(a||'').split(/\s*,\s*/).map(x=>x.trim()).filter(x=>x && !/^canada$/i.test(x));
 function repIgnores(){ try{ return new Set(JSON.parse(localStorage.getItem('crm_rep_ignores')||'[]')); }catch(e){ return new Set(); } }
 function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.setItem('crm_rep_ignores', JSON.stringify([...s])); }catch(e){} }
 
@@ -8869,7 +8872,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts}){
     const com = vue==='com', l = actifs.filter(p=>!!p.commerce===com).sort(alpha);
     const sansNom = R.pers.filter(p=>p.sansNom && !p.soumSeul);
     corps = <>{blocDoublons}{titre(com ? 'Commerces' : 'Particuliers', l.length)}<Liste l={l} lettres/>
-      {com && <div className="muted" style={{fontSize:11,margin:'4px 2px 0'}}>Mal classé ? Ouvre la fiche et clique « C'est un particulier ».</div>}
+      {com && <div className="muted" style={{fontSize:11,margin:'4px 2px 0'}}>Mal classé ? Ouvre la fiche › Modifier la fiche › Type de fiche.</div>}
       {!com && sansNom.length>0 && <RepSansNom l={sansNom} R={R} busy={busy} ecrire={ecrire} onOuvrir={x=>setSel(x.id)}/>}</>;
   } else if(vue==='contr'){
     corps = <>{titre('Contracteurs', contrTri.length)}<Cubes l={contrTri}/></>;
@@ -9067,7 +9070,7 @@ function RepContacts({c, busy, ecrire}){
         {k.fiche && <button className="btn btn-sm" disabled={busy} title="Retirer de ce contracteur (redevient un particulier s'il a des factures)" onClick={()=>retirer(k)}>✕</button>}
       </span>
     </div>)}
-    {!c.contacts.length && !ed && <div className="muted" style={{fontSize:12.5,marginTop:4}}>Aucun contact. Ajoute-en un, ou ouvre un particulier et clique « 🏗 Lier à un contracteur ».</div>}
+    {!c.contacts.length && !ed && <div className="muted" style={{fontSize:12.5,marginTop:4}}>Aucun contact. Ajoute-en un, ou ouvre un particulier › Modifier la fiche › Contact d'un contracteur.</div>}
   </div>;
 }
 const REP_NUM_ENT = /^\s*\d{4}[\s-]?\d{4}\s+qu[ée]?u?[ée]bec/i;   // « 9272-0473 Québec inc. »
@@ -9101,14 +9104,21 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
   const [voirRet,setVoirRet]=useState(false);
   const pers = c.type==='pers', code = pers ? 'PART' : c.code, ficheCode = pers ? (c.commerce ? 'COMMERCE' : 'PART') : c.code;
   const fiche = c.fiche;
-  const ouvrirEdit = () => setEdit({nom:c.nom, alias:fiche ? fiche.alias.join(' ; ') : (pers ? c.noms.filter(n=>n!==c.nom).join(' ; ') : ''),
+  const ouvrirEdit = () => setEdit({genre:ficheCode, nom:c.nom, alias:fiche ? fiche.alias.join(' ; ') : (pers ? c.noms.filter(n=>n!==c.nom).join(' ; ') : ''),
     adresse:fiche ? fiche.adresse : (pers ? (c.adresses[0]||'') : ''), ville:fiche ? fiche.ville : '', tel:fiche ? fiche.tel : (pers ? c.tel : ''),
     courriel:fiche ? fiche.courriel : (pers ? c.courriel : ''), notes:fiche ? fiche.notes : ''});
   // v160 : l'ancien nom reste dans « Aussi écrit », sinon la fiche ne retrouve plus les jobs et factures écrites sous l'ancien nom
   const sauver = () => { const nouveau = edit.nom.trim()||c.nom;
     const alias = [...new Set([...edit.alias.split(/\s*;\s*/).map(x=>x.trim()), ...(pers ? [c.nom, ...c.noms] : [])].filter(x=>x && !/@/.test(x) && x!==nouveau))];
-    return ecrire([{...(fiche||{}), type:'Client', code:ficheCode, nom:nouveau, alias,
-    adresse:edit.adresse, ville:edit.ville, tel:edit.tel, courriel:edit.courriel, notes:edit.notes}], 'Fiche de '+nouveau+' enregistrée.').then(ok=>ok&&setEdit(null)); };
+    const genre = pers && (edit.genre==='PART' || edit.genre==='COMMERCE') ? edit.genre : ficheCode;
+    return ecrire([{...(fiche||{}), type:'Client', code:genre, nom:nouveau, alias,
+    adresse:edit.adresse, ville:edit.ville, tel:edit.tel, courriel:edit.courriel, notes:edit.notes}],
+      'Fiche de '+nouveau+' enregistrée'+(genre!==ficheCode ? (genre==='COMMERCE' ? ' — maintenant dans les commerces.' : ' — maintenant dans les particuliers.') : '.')).then(ok=>ok&&setEdit(null)); };
+  // v197 : « Contact d'un contracteur » (dans Modifier la fiche) — la fiche devient un contact du contracteur choisi
+  const versContracteur = k => { const lignes = [{type:'Contact', code:k.code, nom:(edit && edit.nom.trim())||c.nom, alias:c.noms.filter(n=>n!==c.nom && !/@/.test(n)),
+      courriel:(edit && edit.courriel) || c.courriels.join(', '), tel:(edit && edit.tel) || c.tels[0] || '', notes:(edit && edit.notes) || ''}];
+    if(fiche) lignes.push({...fiche, type:'Retiré'});
+    return ecrire(lignes, c.nom+' est maintenant un contact de '+k.code+'.').then(ok=>{ if(ok){ setEdit(null); onContr && onContr(k.code); } }); };
   const [confSup,setConfSup]=useState(false);
   const masquer = () => ecrire([{type:'Supprimé', code:'PART', nom:c.nom, alias:c.noms.filter(n=>!/@/.test(n))}, ...(fiche ? [{...fiche, type:'Retiré'}] : [])], c.nom+' est supprimé du répertoire.').then(ok=>{ if(ok && onLie) onLie(''); });
   const basculer = () => ecrire([{...(fiche || {alias:c.noms.filter(n=>n!==c.nom), tel:c.tel, courriel:c.courriel}), type:'Client', code:c.commerce ? 'PART' : 'COMMERCE', nom:c.nom}],
@@ -9127,12 +9137,13 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
   return <div>
     <div className="card" style={{marginBottom:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',alignItems:'flex-start'}}>
-        <div style={{minWidth:0}}>
+        <div style={{minWidth:0,flex:'1 1 280px'}}>
           {pers && <div className="muted" style={{fontSize:11,textTransform:'uppercase',letterSpacing:.5}}>{c.commerce ? '🏪 Commerce' : '👤 Particulier'}{c.compta ? ' · 📒 logiciel comptable' : ''}</div>}
           <h3 className="fh" style={{margin:'0 0 4px',fontSize:20}}>{pers ? c.nom : <><span style={{color:'var(--accent)'}}>{c.code}</span> {c.nom}</>}</h3>
           {!pers && c.contact && <div style={{fontSize:13}}>👤 {c.contact}</div>}
-          {(fiche ? [fiche.adresse, fiche.ville].filter(Boolean).join(', ') : c.adresse) && <div style={{fontSize:13}}>📍 {fiche ? [fiche.adresse, fiche.ville].filter(Boolean).join(', ') : c.adresse}</div>}
-          {(pers ? [...new Set([fiche && fiche.tel, ...c.tels].filter(Boolean))] : [fiche && fiche.tel].filter(Boolean)).map(t=><div key={t} style={{fontSize:13}}>📞 <a href={repTel(t)} style={{color:'var(--accent)'}}>{t}</a></div>)}
+          {(()=>{ const l = repAdrLignes(fiche ? [fiche.adresse, fiche.ville].filter(Boolean).join(', ') : c.adresse);
+            return l.length>0 && <div style={{fontSize:13,display:'flex',gap:6,margin:'2px 0 4px',lineHeight:1.35}}><span>📍</span><div>{l.map((x,i)=><div key={i}>{x}</div>)}</div></div>; })()}
+          {[...new Set((pers ? [fiche && fiche.tel, ...c.tels] : [fiche && fiche.tel]).filter(Boolean).map(repTelFmt))].map(t=><div key={t} style={{fontSize:13}}>📞 <a href={repTel(t)} style={{color:'var(--accent)'}}>{t}</a></div>)}
           {(pers ? c.courriels : String((fiche && fiche.courriel)||'').split(/[\s,;]+/).filter(Boolean)).map(e=><div key={e} style={{fontSize:13}}>✉️ <a href={'mailto:'+e} style={{color:'var(--accent)'}}>{e}</a></div>)}
           {pers && c.entreprise && c.entreprise!==c.nom && <div style={{fontSize:13}}>🏢 {c.entreprise}</div>}
           {pers && c.contacts.filter(k=>k.notes).map((k,i)=><div key={i} style={{fontSize:12.5,marginTop:2,whiteSpace:'pre-wrap'}}>🗒 {k.notes}</div>)}
@@ -9150,16 +9161,13 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
             {c.lies.map(q=><span key={q.id} style={{display:'inline-flex',alignItems:'center',gap:4,border:'1px solid var(--border)',borderRadius:6,padding:'1px 4px 1px 7px'}}>
               <a href="#" onClick={e=>{ e.preventDefault(); onOuvrir && onOuvrir(q.id, q.nom); }} style={{color:'var(--accent)'}}>{q.commerce ? '🏪' : '👤'} {q.nom}</a>
               <button className="btn btn-sm" style={{padding:'0 5px',fontSize:10.5}} disabled={busy} title={'Ne plus lier '+c.nom+' et '+q.nom} onClick={()=>delier(q)}>✕</button></span>)}</div>}
-          {pers && c.adresses.length>1 && <div className="muted" style={{fontSize:11.5}}>Autres adresses : {c.adresses.slice(1,4).join(' · ')}</div>}
+          {pers && c.adresses.length>1 && <div className="muted" style={{fontSize:11.5,marginTop:6}}>Autres adresses :{c.adresses.slice(1,4).map((a,i)=><div key={i} style={{paddingLeft:10}}>{repAdrLignes(a).join(', ')}</div>)}</div>}
         </div>
-        <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end'}}>
+        <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'stretch',flex:'0 0 auto',minWidth:200}}>
           {onSuivi && <button className="btn btn-sm" onClick={onSuivi} style={nbAV ? {borderColor:'var(--danger)',color:'var(--danger)',fontWeight:700} : null}>🔎 Suivi des jobs{nbAV ? ' · '+nbAV+' à vérifier' : ''}</button>}
           <button className="btn btn-sm" onClick={ouvrirEdit} disabled={busy}>✏️ Modifier la fiche</button>
           {pers && <button className="btn btn-sm" onClick={()=>{ setLien(lien===null ? '' : null); setLier(null); }} disabled={busy}>{c.commerce ? '🔗 Lier à un particulier' : '🔗 Lier à un commerce'}</button>}
-          {pers && <button className="btn btn-sm" onClick={()=>{ setLier(lier===null ? '' : null); setLien(null); }} disabled={busy} title="Même client écrit de deux façons : une seule fiche">🔀 Fusionner avec…</button>}
-          {pers && <button className="btn btn-sm" onClick={()=>setVersContr(!versContr)} disabled={busy}>🏗 Lier à un contracteur</button>}
-          {pers && <button className="btn btn-sm" onClick={basculer} disabled={busy}>{c.commerce ? '👤 C\'est un particulier' : '🏪 C\'est un commerce'}</button>}
-          {pers && (!confSup ? <button className="btn btn-sm" onClick={()=>setConfSup(true)} disabled={busy} title="Ce n'est pas un client (ex. Lettrage du camion 14)">🗑 Supprimer</button>
+          {pers && (!confSup ? <button className="btn btn-sm" style={{color:'var(--muted)'}} onClick={()=>setConfSup(true)} disabled={busy} title="Ce n'est pas un client (ex. Lettrage du camion 14)">🗑 Supprimer</button>
             : <span style={{display:'flex',flexDirection:'column',gap:4,alignItems:'flex-end',padding:6,border:'1px solid var(--danger)',borderRadius:8}}>
                 <span style={{color:'var(--danger)',fontSize:12}}>Supprimer {c.nom} du répertoire ?</span>
                 <span style={{display:'flex',gap:4}}><button className="btn btn-sm" style={{background:'var(--danger)',color:'#fff',border:'none'}} disabled={busy} onClick={masquer}>Oui, supprimer</button><button className="btn btn-sm" onClick={()=>setConfSup(false)}>Non</button></span>
@@ -9171,16 +9179,6 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
         <span>Achats : <b>{cvMoney(c.cout)}</b> <span className="muted" style={{fontSize:11}}>avant taxes</span></span>
         <span>{c.listeJobs.length} job{c.listeJobs.length>1?'s':''}</span>
       </div>
-      {versContr && pers && <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border)',fontSize:13}}>
-        <div style={{marginBottom:6}}><b>{c.nom}</b> travaille pour quel contracteur ? Il deviendra un contact de ce contracteur (ses factures et soumissions suivent).</div>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-          {R.contr.map(k=><button key={k.code} className="btn btn-sm" disabled={busy} onClick={()=>{
-            const lignes = [{type:'Contact', code:k.code, nom:c.nom, alias:c.noms.filter(n=>n!==c.nom && !/@/.test(n)), courriel:c.courriels.join(', '), tel:c.tels[0]||'', notes:''}];
-            if(fiche) lignes.push({...fiche, type:'Retiré'});
-            ecrire(lignes, c.nom+' est maintenant un contact de '+k.code+'.').then(ok=>{ if(ok){ setVersContr(false); onContr && onContr(k.code); } }); }}><b>{k.code}</b> {k.nom}</button>)}
-          <button className="btn btn-sm" onClick={()=>setVersContr(false)}>Annuler</button>
-        </div>
-      </div>}
       {lien!==null && pers && (()=>{ const nq = cvNorm(lien);
         const cands = nq.length<2 ? [] : R.pers.filter(p=>p.id!==c.id && !(c.lies||[]).includes(p) && cvNorm([p.nom, ...p.noms, ...p.courriels].join(' ')).includes(nq))
           .sort((a,b)=>(a.commerce===c.commerce)-(b.commerce===c.commerce) || a.nom.localeCompare(b.nom,'fr')).slice(0,12);
@@ -9193,30 +9191,19 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
           {nq.length>=2 && !cands.length && <div className="muted" style={{fontSize:12.5}}>Aucune fiche trouvée. Ajoute-la d'abord avec ＋ Ajouter.</div>}
           <button className="btn btn-sm" style={{marginTop:6}} onClick={()=>setLien(null)}>Annuler</button>
         </div>; })()}
-      {lier!==null && pers && (()=>{
-        if(typeof lier==='object'){ const a = lier.autre;
-          const lierEt = (garde, autre) => ecrire(repLignesFusion(garde, autre), autre.nom+' fusionné avec '+garde.nom+'.').then(ok=>{ if(ok){ setLier(null); onLie && onLie(garde.nom); } });
-          return <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border)',fontSize:13}}>
-            <div style={{marginBottom:6}}>Fusionner <b>{c.nom}</b> et <b>{a.nom}</b> ({a.listeJobs.length} job{a.listeJobs.length>1?'s':''}) en une seule fiche : leurs jobs, factures et achats seront ensemble. Quel nom garder ?</div>
-            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-              <button className="btn btn-sm btn-p" disabled={busy} onClick={()=>lierEt(c, a)}>Garder « {c.nom} »</button>
-              <button className="btn btn-sm btn-p" disabled={busy} onClick={()=>lierEt(a, c)}>Garder « {a.nom} »</button>
-              <button className="btn btn-sm" onClick={()=>setLier('')}>← Choisir un autre</button>
-            </div>
-          </div>; }
-        const nq = cvNorm(lier);
-        const cands = R.pers.filter(p=>p.id!==c.id && (nq.length<2 ? p.cle.split(' ').some(w=>w.length>=4 && c.cle.split(' ').includes(w)) : cvNorm([p.nom, ...p.noms, ...p.courriels].join(' ')).includes(nq))).slice(0,12);
-        return <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border)'}}>
-          <input autoFocus value={lier} onChange={e=>setLier(e.target.value)}  placeholder="Chercher le client ou commerce à fusionner (même client écrit autrement)…" style={{width:'100%',padding:'6px 10px',marginBottom:6}}/>
-          {nq.length<2 && cands.length>0 && <div className="muted" style={{fontSize:11.5,marginBottom:4}}>Noms qui se ressemblent :</div>}
-          {cands.map(p=><div key={p.id} onMouseDown={e=>e.preventDefault()} onClick={()=>setLier({autre:p})} style={{padding:'6px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13,display:'flex',justifyContent:'space-between',gap:8}}>
-            <span><b>{p.nom}</b> <span className="muted">{p.commerce ? '🏪' : '👤'} {[p.adresse, p.courriel].filter(Boolean).join(' · ')}</span></span>
-            <span className="muted" style={{fontSize:12}}>{p.listeJobs.length} job{p.listeJobs.length>1?'s':''}</span></div>)}
-          {nq.length>=2 && !cands.length && <div className="muted" style={{fontSize:12.5}}>Aucun client trouvé.</div>}
-          <button className="btn btn-sm" style={{marginTop:6}} onClick={()=>setLier(null)}>Annuler</button>
-        </div>; })()}
       {edit && <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border)'}}>
-        {champ('nom', pers ? 'Nom du client' : 'Nom de la compagnie')}
+        {pers && <div className="field" style={{marginBottom:10}}><label>Type de fiche</label>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {[['PART','👤 Particulier'],['COMMERCE','🏪 Commerce'],['CONTR','🏗 Contact d\'un contracteur']].map(([g,l])=>
+              <button key={g} className={'btn btn-sm'+(edit.genre===g ? ' btn-p' : '')} disabled={busy} onClick={()=>setEdit({...edit, genre:g})}>{l}</button>)}
+          </div></div>}
+        {pers && edit.genre==='CONTR' ? <div style={{fontSize:13,marginBottom:8}}>
+          <div style={{marginBottom:6}}>Pour quel contracteur <b>{edit.nom||c.nom}</b> travaille-t-il ? La fiche sera déplacée dans ses contacts (ses factures et soumissions suivent).</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {R.contr.map(k=><button key={k.code} className="btn btn-sm" disabled={busy} onClick={()=>versContracteur(k)}><b>{k.code}</b> {k.nom}</button>)}
+            <button className="btn btn-sm" onClick={()=>setEdit(null)}>Annuler</button>
+          </div></div> : <>
+        {champ('nom', pers ? (edit.genre==='COMMERCE' ? 'Nom du commerce' : 'Nom du client') : 'Nom de la compagnie')}
         {champ('alias', 'Aussi écrit (séparé par ;) — ces noms seront reconnus comme ce client', 'Alain Cuisine Robichaud ; A Robichaud')}
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:8}}>
           {champ('adresse','Adresse')}{champ('ville','Ville')}{champ('tel','Téléphone')}{champ('courriel','Courriel')}
@@ -9224,6 +9211,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
         <div className="field" style={{marginBottom:8}}><label>Notes</label><textarea value={edit.notes} rows={2} onChange={e=>setEdit({...edit,notes:e.target.value})}/></div>
         <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={busy} onClick={sauver}>{busy ? 'Enregistrement…' : 'Enregistrer'}</button><button className="btn btn-sm" onClick={()=>setEdit(null)}>Annuler</button></div>
         <div className="muted" style={{fontSize:11,marginTop:6}}>Enregistré dans La mémoire — Jobs › Fiches (privé). Ton agenda n'est pas modifié.</div>
+        </>}
       </div>}
     </div>
 
