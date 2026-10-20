@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v185';
+const APP_VERSION = 'v186';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3714,7 +3714,7 @@ function paiClientNom(f){ const c = String(f.client||'').trim(); const code = c.
 function paiClientCle(f){ return cvNorm(f.client) || cvNorm(f.nom) || 'f'+f.num; }
 // Mots qui représentent le client d'une facture (nom, courriel, nom du contracteur).
 function paiMotsFacture(f){ const c = String(f.client||''), code = c.toUpperCase();
-  return {mots:new Set([...paiMots(f.nom), ...paiMots(CLIENT_CODES[code]||''), ...paiMots(c.split('@')[0])]), courriel: c.includes('@') ? cvNorm(c.split('@')[0]) : ''}; }
+  return {mots:new Set([...paiMots(f.nom), ...paiMots(f.nomRep||''), ...paiMots(CLIENT_CODES[code]||''), ...paiMots(c.split('@')[0])]), courriel: c.includes('@') ? cvNorm(c.split('@')[0]) : ''}; }
 // Ressemblance entre « Envoyé par » d'un virement et le client d'une facture (0 = rien).
 function paiScoreNom(de, f){
   const m = paiMots(de); if(!m.length) return 0; const {mots, courriel} = paiMotsFacture(f);
@@ -3731,8 +3731,10 @@ function paiSommes(liste, montant, maxN){
   rec(0, [], 0); return out;
 }
 // Analyse : solde de chaque facture (paiements confirmés) et propositions pour les paiements pas encore confirmés.
-function paiementsAnalyser(factures, paiements){
-  const F = {}; Object.values(factures).forEach(f=>{ F[f.num] = {...f, paye:0, paiements:[]}; });
+// v186 : nomDe(courriel) = {nom} trouvé dans le Répertoire (fiche du particulier / commerce, contact d'un contracteur)
+function paiementsAnalyser(factures, paiements, nomDe){
+  const F = {}; Object.values(factures).forEach(f=>{ F[f.num] = {...f, paye:0, paiements:[]};
+    const c = String(f.client||'').trim().toLowerCase(); if(nomDe && c.includes('@')){ const r = nomDe(c); if(r) F[f.num].nomRep = r.nom; else F[f.num].sansFiche = c; } });
   const conf = paiements.filter(p=>/^confirm/i.test(p.statut) && p.confirmees.length).sort((a,b)=>a.date.localeCompare(b.date));
   // Ce qu'on a appris : tel « Envoyé par » paie pour tel client.
   const appris = {};
@@ -3744,7 +3746,7 @@ function paiementsAnalyser(factures, paiements){
   const nomsAppris = {}, titre = t => String(t||'').toLowerCase().replace(/(^|[\s'’-])\p{L}/gu, m=>m.toUpperCase());
   conf.forEach(p=>{ if(!p.de || /^manuel-/.test(p.id)) return; p.confirmees.forEach(n=>{ if(F[n]) nomsAppris[paiClientCle(F[n])] = titre(p.de); }); });
   Object.values(F).forEach(f=>{ f.solde = Math.round((f.ttc - f.paye)*100)/100;
-    const nn = paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
+    const nn = f.nomRep || paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
     f.etat = f.annulee ? 'annulee' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
     f.age = paiJours(f.envoi || f.date); });
   const ouvertes = Object.values(F).filter(f=>(f.etat==='impayee' || f.etat==='partielle') && String(f.date).slice(0,10) >= PAI_DEBUT);
@@ -3808,8 +3810,30 @@ async function paiEcrireStatut(id, row, nums, statut, note){
 }
 const paiAujourdhui = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
 
-function PaiementsView({cfg, refreshKey, q}){
+function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const id = cfg.memoireFacturesSpreadsheetId;
+  // v186 : Répertoire (même lecture que l'onglet Répertoire) pour mettre un nom sur les courriels des factures
+  const [repTick,setRepTick]=useState(0);
+  const dR = useClientsData(cfgRep || cfg, refreshKey+'|r'+repTick);
+  const FR = dR.fiches || {clients:[], jobs:[], fourn:[], masques:[], contacts:[]};
+  const clientsR = useMemo(()=>cvBuildClients(dR.events||[], dR.registry||[], dR.factures||{}),[dR.events, dR.registry, dR.factures]);
+  const R = useMemo(()=>repConstruire({clients:clientsR, registry:dR.registry||[], factures:dR.factures||{}, achats:dR.achats||[], soumissions:dR.soumissions||[], F:FR, contacts, gcmeq:dR.gcmeq||[]}),[clientsR, dR.registry, dR.factures, dR.achats, dR.soumissions, dR.fiches, contacts, dR.gcmeq]);
+  const parCourriel = useMemo(()=>{ const m = {};
+    R.pers.forEach(p=>p.courriels.forEach(e=>{ e = String(e).toLowerCase(); if(!m[e]) m[e] = {nom:p.nom, p}; }));
+    R.contr.forEach(c=>(c.contacts||[]).forEach(k=>[...(k.courriels||[]), ...String(k.courriel||'').split(/[\s,;]+/)].filter(e=>/@/.test(e)).forEach(e=>{ e = e.toLowerCase(); if(!m[e]) m[e] = {nom:(CLIENT_CODES[c.code]||c.nom||c.code)+' ('+k.nom+')', contr:c}; })));
+    return m; },[R]);
+  const nomDe = useCallback(e => parCourriel[e] || (()=>{ const code = repCodeCourriel(e, FR); return code ? {nom:CLIENT_CODES[code]||code} : null; })(),[parCourriel, FR]);
+  const [assoc,setAssoc]=useState(null);   // {courriel, q, nom}
+  const associer = async (courriel, cible, nomNouveau) => { setBusy('as'+courriel);
+    try{
+      if(cible && cible.type==='pers'){ const p = cible;
+        const f = p.fiche || {type:'Client', code:p.commerce ? 'COMMERCE' : 'PART', nom:p.nom, alias:(p.noms||[]).filter(n=>n!==p.nom && !/@/.test(n)), tel:p.tel||'', adresse:p.adresses[0]||'', courriel:(p.courriels||[]).join(', ')};
+        await ficheEcrire(cfgRep || cfg, {...f, type:'Client', courriel:[...new Set([...String(f.courriel||'').split(/[\s,;]+/), courriel].filter(Boolean))].join(', ')}); }
+      else if(cible && cible.code) await ficheEcrire(cfgRep || cfg, {type:'Contact', code:cible.code, nom:(nomNouveau||'').trim() || courriel.split('@')[0], alias:[], courriel, tel:'', notes:''});
+      else await ficheEcrire(cfgRep || cfg, {type:'Client', code:'PART', nom:nomNouveau.trim(), alias:[], courriel});
+      setAssoc(null); setRepTick(t=>t+1); }
+    catch(e){ alert('Impossible d\'associer : '+apiErrMsg(e)); }
+    setBusy(''); };
   const [tick,setTick]=useState(0);
   const [data,setData]=useState(null);
   const [err,setErr]=useState('');
@@ -3822,7 +3846,7 @@ function PaiementsView({cfg, refreshKey, q}){
   const essayes = useRef(new Set());
   const [autoConf,setAutoConf]=useState([]);   // [{de, montant, factures}]
   useEffect(()=>{ if(!data || !data.onglet || !id) return;
-    const A0 = paiementsAnalyser(data.factures, data.paiements), pris = new Set(), lot = [];
+    const A0 = paiementsAnalyser(data.factures, data.paiements, nomDe), pris = new Set(), lot = [];
     A0.attente.forEach(p=>{ if(essayes.current.has(p.row)) return; const o = A0.propositions[p.row]||[]; const surs = o.filter(x=>x.niveau==='sur');
       if(surs.length!==1 || o[0]!==surs[0] || surs[0].factures.some(n=>pris.has(n))) return;
       surs[0].factures.forEach(n=>pris.add(n)); lot.push({p, factures:surs[0].factures}); });
@@ -3834,7 +3858,7 @@ function PaiementsView({cfg, refreshKey, q}){
       data:lot.map(x=>({range:'Paiements!J'+x.p.row+':L'+x.p.row, values:[[x.factures.join(', '), 'Confirmé', note]]}))}})
       .then(()=>{ setAutoConf(a=>[...a, ...lot.map(x=>({de:x.p.de, montant:x.p.montant, factures:x.factures}))]); setTick(t=>t+1); })
       .catch(e=>setErr('Confirmation automatique impossible : '+apiErrMsg(e)));
-  },[data]);
+  },[data, nomDe]);
   useEffect(()=>{ if(!id) return; let ok=true;
     Promise.all([lireCache(id, 'A1:K', refreshKey>0||tick>0), lireCache(id, 'Paiements!A1:L', refreshKey>0||tick>0).catch(()=>null)])
       .then(([f,p])=>{ if(ok){ setData({factures:paiLireFactures(f.result.values||[]), paiements: p ? paiLirePaiements(p.result.values||[]) : [], onglet: !!p}); setErr(''); } })
@@ -3843,7 +3867,7 @@ function PaiementsView({cfg, refreshKey, q}){
   if(!id) return <div className="card">Configure l'ID du Sheet « La mémoire — Factures » dans Réglages.</div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>{err}</div>;
   if(!data) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des factures et des paiements…</span></div>;
-  const A = paiementsAnalyser(data.factures, data.paiements);
+  const A = paiementsAnalyser(data.factures, data.paiements, nomDe);
   const qq = cvNorm(q||'');
   const filtreF = f => !qq || cvNorm([f.num, f.nom, f.client, f.nomAffiche, f.desc, f.po].join(' ')).includes(qq);
   const filtreP = p => !qq || cvNorm([p.de, p.message, p.montant, p.confirmees.join(' ')].join(' ')).includes(qq);
@@ -3905,6 +3929,23 @@ function PaiementsView({cfg, refreshKey, q}){
       <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>ouvrirManuel([])}>💵 Paiement chèque / comptant</button>
     </div>
 
+    {assoc && (()=>{ const nq = cvNorm(assoc.q);
+      const cands = nq.length<2 ? [] : [...R.pers.filter(p=>cvNorm([p.nom, ...p.noms].join(' ')).includes(nq)).map(p=>({type:'pers', p, nom:p.nom, icone:p.commerce?'🏪':'👤', info:[p.adresse, p.courriels[0]].filter(Boolean).join(' · ')})),
+        ...R.contr.filter(c=>cvNorm([c.code, c.nom].join(' ')).includes(nq)).map(c=>({type:'contr', code:c.code, nom:c.code+' '+(c.nom||''), icone:'🏗', info:'contact de ce contracteur'}))].slice(0,12);
+      return <div className="card" style={{marginBottom:10,borderColor:'var(--accent)',fontSize:13}}>
+        <b>👤 À qui appartient {assoc.courriel} ?</b>
+        <div className="muted" style={{fontSize:12,margin:'2px 0 6px'}}>Le courriel sera ajouté à la fiche choisie dans le Répertoire (onglet privé Fiches). Les factures envoyées à ce courriel porteront ce nom.</div>
+        <input autoFocus value={assoc.q} onChange={e=>setAssoc({...assoc, q:e.target.value})} placeholder="Chercher un particulier, un commerce ou un contracteur…" style={{width:'100%',padding:'6px 10px',marginBottom:6}}/>
+        {cands.map((x,i)=><div key={i} onMouseDown={e=>e.preventDefault()} onClick={()=>{ if(busy) return; if(x.type==='pers') associer(assoc.courriel, x.p); else { const n = prompt('Nom de la personne chez '+x.code+' (facultatif) :', assoc.nom||''); if(n!==null) associer(assoc.courriel, {code:x.code}, n); } }}
+          style={{padding:'6px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:8}}>
+          <span>{x.icone} <b>{x.nom}</b> <span className="muted">{x.info}</span></span></div>)}
+        {nq.length>=2 && !cands.length && <div className="muted" style={{fontSize:12.5}}>Aucune fiche trouvée.</div>}
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8,alignItems:'center'}}>
+          <input value={assoc.nom} onChange={e=>setAssoc({...assoc, nom:e.target.value})} placeholder="… ou nom d'un nouveau particulier" style={{flex:'1 1 200px',width:'auto',minWidth:0,padding:'5px 9px'}}/>
+          <button className="btn btn-sm btn-p" disabled={!!busy || !assoc.nom.trim()} onClick={()=>associer(assoc.courriel, null, assoc.nom)}>{busy==='as'+assoc.courriel?'…':'＋ Créer la fiche'}</button>
+          <button className="btn btn-sm" onClick={()=>setAssoc(null)}>Annuler</button>
+        </div>
+      </div>; })()}
     {manuel && <div className="card" style={{marginBottom:10,borderColor:'var(--accent)'}}>
       <b>💵 Inscrire un paiement reçu</b>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:8,marginTop:8}}>
@@ -3959,7 +4000,10 @@ function PaiementsView({cfg, refreshKey, q}){
       {(()=>{ const g = {}; aRecevoir.forEach(f=>{ const k = f.nomAffiche; (g[k]=g[k]||[]).push(f); });
         return Object.entries(g).map(([k,fs])=>[k, fs.sort((a,b)=>(b.age||0)-(a.age||0))]).sort((a,b)=>(b[1][0].age||0)-(a[1][0].age||0)).map(([k,fs])=>
           <div key={k} style={{padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
-            <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}><b style={{color:'var(--accent)'}}>{k}</b><b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(fs.reduce((s,f)=>s+f.solde,0))}</b></div>
+            <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+              <span><b style={{color:'var(--accent)'}}>{k}</b>{fs[0].nomRep && fs[0].client.includes('@') && <span className="muted" style={{fontSize:11.5}}> · {fs[0].client}</span>}
+                {fs[0].sansFiche && <> <span className="muted" style={{fontSize:11.5}}>{k!==fs[0].sansFiche ? '· '+fs[0].sansFiche+' ' : ''}pas dans le Répertoire</span> <button className="btn btn-sm" style={{fontSize:11.5,padding:'1px 7px'}} disabled={!!busy} onClick={()=>setAssoc({courriel:fs[0].sansFiche, q:k.includes('@')?'':k, nom:k.includes('@')?'':k})}>👤 Associer</button></>}</span>
+              <b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(fs.reduce((s,f)=>s+f.solde,0))}</b></div>
             {fs.map(f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'3px 0'}}>
               <span>🧾 <b>#{f.num}</b> <span className="muted">· {f.date}</span>{f.nom && f.nom!==k ? ' · '+f.nom : ''}{f.desc ? <span className="muted"> · {f.desc}</span> : ''}
                 {f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}</span>
@@ -3999,7 +4043,7 @@ function PaiementsView({cfg, refreshKey, q}){
   </div>;
 }
 
-function FacturesView({cfg, refreshKey}){
+function FacturesView({cfg, cfgRep, refreshKey, contacts}){
   const [loading,setLoading]=useState(true);
   const [rows,setRows]=useState([]);
   const [err,setErr]=useState('');
@@ -4145,7 +4189,7 @@ function FacturesView({cfg, refreshKey}){
         <button className="btn btn-sm" style={!filterC?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(null)}>Tous</button>
         {contracteurs.map(c=><button key={c} className="btn btn-sm" style={filterC===c?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(filterC===c?null:c)}>{nom(c)}</button>)}
       </div>}
-      {vue==='paiements' ? <PaiementsView cfg={cfg} refreshKey={refreshKey} q={q}/> :
+      {vue==='paiements' ? <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={q} contacts={contacts}/> :
       vue==='tableur' ? <SuiviTableur rows={rows} id={id} onChanged={()=>setTick(t=>t+1)}/> :
       vue==='papiers' ? <div className="card">
         <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Ce qui est dans le dossier partagé <a href={'https://drive.google.com/drive/folders/'+PAD_DOSSIER} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>1-PAD SERVICE À TRAITER ↗</a> : papiers déposés par les gars, pas encore traités. Ce n'est pas une erreur. Pour chacun : où il en est dans le Suivi Travaux.</div>
@@ -9292,7 +9336,7 @@ function App(){
         {nav==='projets' && <ProjetsView key={'p'+navKey} data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='agenda' && <AgendaView cfg={effectiveCfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
         {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
-        {nav==='factures' && <FacturesView key={'x'+navKey} cfg={cfg} refreshKey={refreshKey}/>}
+        {nav==='factures' && <FacturesView key={'x'+navKey} cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='soumissions' && <SoumissionsView key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {nav==='appel' && <AppelServiceView key={'a'+navKey} cfg={effectiveCfg} toast={show}/>}
