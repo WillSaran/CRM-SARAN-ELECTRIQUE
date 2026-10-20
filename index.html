@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v221';
+const APP_VERSION = 'v222';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8778,7 +8778,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     let k = c.contacts.find(x=>(x.courriels||[]).includes(courriel)) || (a.nom && c.contacts.find(x=>persCle(x.nom) && persCle(x.nom)===persCle(a.nom)));
     if(!k){ k = {fiche:null, auto:true, nom:a.nom || courriel, role:'', courriels:[courriel], tels:[], noms:[]}; c.contacts.push(k); }
     if(a.titre && (!k.role || (k.compta && !k.fiche))) k.role = a.titre;
-    if(a.nom && a.nom.length>String(k.nom||'').length && cvNorm(a.nom).startsWith(cvNorm(k.nom||'-'))) k.nom = a.nom;   // v212 : « Danny » → « Danny Chalet »
+    if(a.nom && ((a.nom.length>String(k.nom||'').length && cvNorm(a.nom).startsWith(cvNorm(k.nom||'-'))) || (/@/.test(k.nom||'') && !k.fiche))) k.nom = a.nom;   // v212 : « Danny » → « Danny Chalet » ; v222 : nom = courriel
     if(a.tel && !(k.tels||[]).some(t=>chiffres(t)===chiffres(a.tel))) k.tels = [...(k.tels||[]), a.tel];
     if(!(k.courriels||[]).includes(courriel)) k.courriels = [...(k.courriels||[]), courriel];
     k.projets = a.projets; k.note = a.note; k.dernier = a.dernier; });
@@ -8795,7 +8795,8 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
         || (ck && prenomDe(x.nom)===prenomDe(k.nom) && (persCle(x.nom).split(' ').length===1 || ck.split(' ').length===1) && out.filter(y=>prenomDe(y.nom)===prenomDe(k.nom)).length===1));
       if(!d){ out.push({...k}); return; }
       const p = d.fiche || !k.fiche ? d : k, a = p===d ? k : d;   // la fiche écrite à la main reste la principale
-      const nom = String(a.nom||'').startsWith(String(p.nom||'').trim()) && a.nom.length>p.nom.length ? a.nom : p.nom;   // « Danny » → « Danny Chalet »
+      const vraiNom = n => n && !/@/.test(n);   // v222 : un nom qui est un courriel cède la place au vrai nom
+      const nom = !vraiNom(p.nom) && vraiNom(a.nom) ? a.nom : String(a.nom||'').startsWith(String(p.nom||'').trim()) && a.nom.length>p.nom.length ? a.nom : p.nom;   // « Danny » → « Danny Chalet »
       Object.assign(d, {...p, nom, role:p.role || a.role, courriels:[...new Set([...(p.courriels||[]), ...(a.courriels||[])])], tels:[...new Set([...(p.tels||[]), ...(a.tels||[])])],
         projets:(p.projets && p.projets.length ? p.projets : a.projets) || [], fiche:p.fiche || a.fiche || null}); });
     c.contacts = out; });
