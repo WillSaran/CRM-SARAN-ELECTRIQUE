@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v197';
+const APP_VERSION = 'v198';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3986,7 +3986,6 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
 
   const aRecevoir = A.ouvertes.filter(filtreF);
   const totalDu = aRecevoir.reduce((s,f)=>s+f.solde,0);
-  const tranche = (a,b)=>aRecevoir.filter(f=>f.age!=null && f.age>=a && f.age<=b).reduce((s,f)=>s+f.solde,0);
   const attente = A.attente.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
   const seuls = A.seuls.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
   const groupesV = A.groupes.filter(g=>g.membres.some(filtreP));
@@ -4009,13 +4008,10 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
     </div>}
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:10,marginBottom:10}}>
       <Tuile v={attente.length} l="paiements reçus à confirmer" c={attente.length?'var(--warning)':'var(--success)'} onClick={()=>setSous('confirmer')}/>
-      <Tuile v={cvMoney(totalDu)} l={aRecevoir.length+' facture'+(aRecevoir.length>1?'s':'')+' à recevoir'} c="var(--accent)" onClick={()=>setSous('recevoir')}/>
-      <Tuile v={cvMoney(tranche(0,30))} l="envoyées il y a 0 à 30 jours"/>
-      <Tuile v={cvMoney(tranche(31,60))} l="31 à 60 jours" c={tranche(31,60)>0?'var(--warning)':null}/>
-      <Tuile v={cvMoney(tranche(61,99999))} l="plus de 60 jours" c={tranche(61,99999)>0?'var(--danger)':null}/>
+      <Tuile v={cvMoney(totalDu)} l={'En attente de paiement / en souffrance · '+aRecevoir.length+' facture'+(aRecevoir.length>1?'s':'')} c="var(--accent)" onClick={()=>setSous('recevoir')}/>
     </div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
-      {[['confirmer','À confirmer ('+attente.length+')'],['recevoir','À recevoir ('+aRecevoir.length+')'],['payees','Payées ('+payees.length+')'],['tous','Tous les paiements']].map(([k,l])=>
+      {[['confirmer','À confirmer ('+attente.length+')'],['recevoir','En attente de paiement ('+aRecevoir.length+')'],['payees','Payées ('+payees.length+')'],['tous','Tous les paiements']].map(([k,l])=>
         <button key={k} className={'btn btn-sm'+(sous===k?' btn-p':'')} onClick={()=>setSous(k)}>{l}</button>)}
       <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>ouvrirManuel([])}>💵 Paiement chèque / comptant</button>
       <label className="btn btn-sm" style={{cursor:'pointer'}} title="Fichier .json de factures préparé par Claude à partir du logiciel comptable">📥 Importer des factures<input type="file" accept=".json,application/json" style={{display:'none'}} onChange={e=>{ const f = e.target.files[0]; e.target.value=''; if(f) lireImport(f); }}/></label>
@@ -4125,7 +4121,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
     </div>}
 
     {sous==='recevoir' && <div className="card">
-      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Factures envoyées pas encore payées (ou payées en partie), la plus vieille en premier. Les factures annulées et à 0 $ ne sont pas comptées.</div>
+      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Factures en attente de paiement (ou payées en partie), par client, la plus vieille en premier.</div>
       {!aRecevoir.length && <div className="muted" style={{padding:'8px 0'}}>Tout est payé.</div>}
       {(()=>{ const g = {}; aRecevoir.forEach(f=>{ const k = f.nomAffiche; (g[k]=g[k]||[]).push(f); });
         return Object.entries(g).map(([k,fs])=>[k, fs.sort((a,b)=>(b.age||0)-(a.age||0))]).sort((a,b)=>(b[1][0].age||0)-(a[1][0].age||0)).map(([k,fs])=>
@@ -4139,7 +4135,6 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
                 {f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}</span>
               <span style={{display:'flex',gap:8,alignItems:'center'}}>
                 <span style={{fontVariantNumeric:'tabular-nums'}} title={f.estime ? 'Montant calculé à partir des lignes du logiciel comptable (un prix forfait peut être différent)' : ''}>{f.estime ? '≈ ' : ''}{cvMoney(f.solde)}</span>
-                {f.age!=null && <span style={{fontWeight:700,color:f.age>60?'var(--danger)':f.age>30?'var(--warning)':'var(--muted)'}}>{f.age} j</span>}
                 {f.pdf && <a href={repPdf(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>PDF</a>}
                 <button className="btn btn-sm" onClick={()=>ouvrirManuel([f])}>💵 Payée</button>
                 {annule===f.num
