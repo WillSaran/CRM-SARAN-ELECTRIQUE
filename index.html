@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v230';
+const APP_VERSION = 'v231';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3943,7 +3943,9 @@ function SuiviTableur({rows, id, onChanged}){
 const PAI_ENTETE = ['Id courriel','Date','Envoyé par','Montant','Message','Référence','Factures lues dans le message','Lien Gmail','Source','Factures confirmées','Statut','Note'];
 const PAI_DEBUT = '2026-06-01';   // v190 : début de l'année financière — tout ce qui est avant n'apparaît plus dans le CRM (factures et paiements)
 const PAI_MOTS_VIDES = new Set(['inc','ltee','ltd','limited','quebec','qc','canada','et','and','de','du','la','le','les','des','property','properties','gestion','construction','constructions','compagnie','cie','enr','senc','corp','corporation']);
-function paiNums(s){ return [...new Set(String(s||'').replace(/\b(19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.](19|20)\d{2}\b/g,' ').match(/\b\d{4}\b/g)||[])]; }
+// v231 : un numéro civique (« 2311 rue du docteur Primeau ») n'est pas un numéro de facture
+const PAI_RUE = '\\s*,?\\s*(rue|av\\.?|avenue|boul\\.?|boulevard|ch\\.?|chemin|rang|mont[ée]e|place|croissant|terrasse|route|rte)\\b';
+function paiNums(s){ return [...new Set(String(s||'').replace(new RegExp('\\b\\d{3,5}'+PAI_RUE,'gi'),' ').replace(/\b(19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.](19|20)\d{2}\b/g,' ').match(/\b\d{4}\b/g)||[])]; }
 function paiMots(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3 && !PAI_MOTS_VIDES.has(w) && !/^\d+$/.test(w)); }
 function paiJours(d){ const t = Date.parse(String(d||'').slice(0,10)); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
 function paiLireFactures(rows){
@@ -3969,7 +3971,7 @@ async function paiAnnulerFacture(id, factures, f){
 }
 function paiLirePaiements(rows){
   return rows.slice(1).map((r,i)=>({row:i+2, id:String(r[0]||''), date:String(r[1]||''), de:String(r[2]||''), montant:cvNum(r[3])||0, message:String(r[4]||''), ref:String(r[5]||''),
-    lues:paiNums(r[6]).filter(n=>!new RegExp('\\b'+n+'[-/.]\\d{1,2}[-/.]\\d{1,2}\\b').test(String(r[4]||''))), lien:String(r[7]||''), source:String(r[8]||'Interac'), confirmees:paiNums(r[9]), statut:String(r[10]||'').trim(), note:String(r[11]||'')}))
+    lues:paiNums(r[6]).filter(n=>!new RegExp('\\b'+n+'[-/.]\\d{1,2}[-/.]\\d{1,2}\\b').test(String(r[4]||'')) && !new RegExp('\\b'+n+PAI_RUE,'i').test(String(r[4]||''))), lien:String(r[7]||''), source:String(r[8]||'Interac'), confirmees:paiNums(r[9]), statut:String(r[10]||'').trim(), note:String(r[11]||'')}))
     .filter(p=>(p.id || p.montant) && !(String(p.date).slice(0,10) < PAI_DEBUT));   // v190 : paiements d'avant le 1er juin = pas dans le CRM
 }
 // Nom affiché du client d'une facture : contracteur (code) ou nom écrit sur la facture, sinon le courriel.
@@ -4017,9 +4019,16 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   Object.values(F).filter(f=>f.ttc < -0.05 && !f.annulee).sort((a,b)=>+a.num - +b.num).forEach(nc=>{
     const cible = Object.values(F).filter(f=>!f.creditee && !f.annulee && f.ttc>0.05 && f.paye<0.05 && +f.num < +nc.num && paiClientCle(f)===paiClientCle(nc) && Math.abs(f.ttc + nc.ttc)<=0.02).sort((a,b)=>+a.num - +b.num)[0];
     if(cible) cible.creditee = nc.num; });
-  Object.values(F).forEach(f=>{ f.solde = f.creditee ? 0 : Math.round((f.ttc - (f.escompte||0) - f.paye)*100)/100;   // v230 : montant dû = total − escompte
+  // v231 : facture refaite (ex. adresse corrigée, #2652 → #2672) : même client, même montant, même description, à 30 jours près,
+  // et la plus récente est payée → l'ancienne est « remplacée » (plus à recevoir). Rien n'est écrit dans le registre.
+  const descN = f => cvNorm(f.desc||'');
+  Object.values(F).forEach(f=>{ if(f.creditee || f.annulee || f.paye>0.05 || f.ttc<=0.05 || !descN(f)) return;
+    const g = Object.values(F).find(g=>g!==f && +g.num>+f.num && !g.annulee && paiClientCle(g)===paiClientCle(f) && Math.abs(g.ttc-f.ttc)<=0.02 && descN(g)===descN(f)
+      && Math.abs(Date.parse(String(g.date).slice(0,10))-Date.parse(String(f.date).slice(0,10)))<=30*864e5 && g.paye>0.05 && g.ttc-(g.escompte||0)-g.paye<=0.05);
+    if(g) f.remplaceePar = g.num; });
+  Object.values(F).forEach(f=>{ f.solde = f.creditee || f.remplaceePar ? 0 : Math.round((f.ttc - (f.escompte||0) - f.paye)*100)/100;   // v230 : montant dû = total − escompte
     const nn = f.nomRep || paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
-    f.etat = f.annulee || f.creditee ? 'annulee' : f.ouverte ? 'ouverte' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
+    f.etat = f.annulee || f.creditee ? 'annulee' : f.remplaceePar ? 'remplacee' : f.ouverte ? 'ouverte' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
     f.age = paiJours(f.envoi || f.date); });
   const ouvertes = Object.values(F).filter(f=>(f.etat==='impayee' || f.etat==='partielle') && (String(f.date).slice(0,10) >= PAI_DEBUT || String(f.envoi||'').slice(0,10) >= PAI_DEBUT));
   // v182 : paiement pour des factures plus vieilles que le registre (avant qu'il existe) : rangé à part, pas à confirmer
@@ -7541,7 +7550,7 @@ function useClientsData(cfg, refreshKey){
             statut:fg(r,'st'), annulee:/^annul/.test(st), ok:/^(ok|correct|verifie)/.test(st)}; });
         // Colonne « Statut » du registre (créée par le CRM au premier clic si elle n'existe pas encore).
         // v180 : payée / partielle / à recevoir (onglet « Paiements », confirmés seulement)
-        try{ Object.values(paiementsAnalyser(factures, paiLirePaiements(paRows||[])).F).forEach(x=>{ if(factures[x.num]){ factures[x.num].etatPaie = x.etat; factures[x.num].paye = x.paye; } }); }catch(e){}
+        try{ Object.values(paiementsAnalyser(factures, paiLirePaiements(paRows||[])).F).forEach(x=>{ if(factures[x.num]){ factures[x.num].etatPaie = x.etat; factures[x.num].paye = x.paye; factures[x.num].remplaceePar = x.remplaceePar; } }); }catch(e){}
         Object.defineProperty(factures,'__statutCol',{value: fx.st>=0 ? fx.st : Math.max(fh.length, 10), enumerable:false});
         Object.defineProperty(factures,'__statutHeader',{value: fx.st>=0, enumerable:false});
         const head=(regRows[0]||[]).map(h=>cvNorm(h));
@@ -9483,7 +9492,7 @@ function RepDoublons({doublons, busy, ecrire, onIgnorer}){
 
 function RepLigneFacture({f}){
   return <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'4px 0',borderBottom:'1px dashed var(--border)',fontSize:12.5,opacity:f.annulee?.5:1}}>
-    <span>🧾 <b>#{f.num}</b> <span className="muted">· {cvFmtDay(f.date)} {String(f.date).slice(0,4)}</span>{f.desc ? ' · '+f.desc : ''}{f.annulee ? <span style={{color:'var(--danger)'}}> · annulée</span> : ''}{f.etatPaie==='payee' ? <span style={{color:'var(--success)'}}> · ✅ payée</span> : f.etatPaie==='partielle' ? <span style={{color:'var(--warning)'}}> · payée en partie</span> : f.etatPaie==='impayee' && f.envoi ? <span className="muted"> · à recevoir</span> : ''}</span>
+    <span>🧾 <b>#{f.num}</b> <span className="muted">· {cvFmtDay(f.date)} {String(f.date).slice(0,4)}</span>{f.desc ? ' · '+f.desc : ''}{f.annulee ? <span style={{color:'var(--danger)'}}> · annulée</span> : ''}{f.etatPaie==='payee' ? <span style={{color:'var(--success)'}}> · ✅ payée</span> : f.etatPaie==='remplacee' ? <span className="muted"> · remplacée par #{f.remplaceePar} (payée)</span> : f.etatPaie==='partielle' ? <span style={{color:'var(--warning)'}}> · payée en partie</span> : f.etatPaie==='impayee' && f.envoi ? <span className="muted"> · à recevoir</span> : ''}</span>
     <span style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(f.ht)} <span className="muted">/ {cvMoney(f.ttc)} tx incl.</span>{f.pdf && <> · <a href={repPdf(f.pdf)} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} style={{color:'var(--accent)'}}>PDF</a></>}</span>
   </div>;
 }
