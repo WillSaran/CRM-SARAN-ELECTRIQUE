@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v205';
+const APP_VERSION = 'v206';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7131,6 +7131,44 @@ function cvPO(text){
   return m ? 'P0'+m[1] : '';
 }
 // Décortique le titre d'un événement : code client, phase, PO, initiales, nom.
+// v206 : client écrit dans la description d'un événement de job (The Crew) : nom complet, téléphone, courriel (+ conjoint « X et Y »)
+function cvClientDescription(desc){
+  let t = String(desc||'');
+  if(!t.trim()) return null;
+  t = t.replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|li|tr|h\d)>/gi,'\n').replace(/<[^>]+>/g,'')
+    .replace(/&nbsp;/g,' ').replace(/&#39;|&apos;/g,"'").replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
+  t = t.replace(/──\s*Suivi\s*──[\s\S]*?──\s*↑\s*──/g,'\n');
+  const L = t.split(/\n/).map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean);
+  const reTel = /(?:\+?1[\s.-]?)?\(?(\d{3})\)?[\s.-]?(\d{3})[\s.-]?(\d{4})(?!\d)/, reMail = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+  const MOT = "[A-ZÀ-ÝÉÈ][A-Za-zÀ-ÿ'’.-]*";
+  const reNom = new RegExp('^'+MOT+"(?:\\s+(?:de|du|des|la|le|van|von|d'|"+MOT+')){1,4}$');
+  const interdits = /^(contact|client|cliente|clients|bonjour|salut|allo|merci|note|travaux|commande|adresse|projet|stock|crs|pay|asc|sar|ggp|rroy)$/i;
+  const okNom = n => reNom.test(n) && !/\d/.test(n) && !n.split(/\s+/).some(w=>interdits.test(w) || (typeof CLIENT_CODES!=='undefined' && CLIENT_CODES[w.toUpperCase()] && w===w.toUpperCase()));
+  const telDe = s => { const m = String(s||'').match(reTel); return m ? m[1]+'-'+m[2]+'-'+m[3] : ''; };
+  const mailDe = s => { const m = String(s||'').match(reMail); return m && !/@saranelectrique\.com$/i.test(m[0]) ? m[0].toLowerCase() : ''; };
+  // « Ryan & Sondos Young » → Ryan Young + Sondos Young ; « Louise Thériault et Sylvain Boisvert » → les deux
+  const nomsDe = s => { let n = String(s||'').replace(/\([^)]*\)/g,' ').replace(reMail,' ').replace(reTel,' ')
+      .split(/\s+[–—-]\s+|[,;|:]|\s+(?:t[ée]l|cell|courriel)\b/i)[0].replace(/^(m\.|mme|monsieur|madame)\s+/i,'').replace(/[.\s]+$/,'').replace(/\s+/g,' ').trim();
+    const p = n.split(/\s*&\s*|\s+et\s+/).map(x=>x.trim()).filter(Boolean);
+    if(p.length===2 && !p[0].includes(' ') && p[1].includes(' ')) p[0] = p[0]+' '+p[1].split(' ').slice(1).join(' ');
+    return p.length && p.length<=2 && p.every(okNom) ? p : null; };
+  let noms = null, i0 = -1;
+  const essai = (re, sur) => L.some((l,i)=>{ const m = l.match(re); if(!m) return false; if(sur && !sur(l,i)) return false; const n = nomsDe(m[1]); if(n){ noms = n; i0 = i; return true; } return false; });
+  // 1. « Client : … » / « Clients : … » / « Contact : … » (n'importe où dans la ligne)
+  essai(/(?:^|[\s.;•-])(?:clients?|cliente|contact|nom du client)\s*:\s*(.+)$/i);
+  // 2. « Mme Andrée Benn » / « M. Jean Tremblay » (avec téléphone ou courriel tout près)
+  if(!noms) essai(/(?:^|\s)((?:Mme|M\.|Madame|Monsieur)\s+.+)$/, (l,i)=>L.slice(i, i+3).some(x=>reTel.test(x) || reMail.test(x)));
+  // 3. « Prénom Nom — 438-… » ou « Prénom Nom, courriel » au début d'une ligne
+  if(!noms) essai(/^(.+)$/, l=>reTel.test(l) || reMail.test(l));
+  if(!noms) return null;
+  // Téléphone / courriel : sur la ligne du client et les 3 suivantes (lignes « Tél : », « Courriel : » ou qui commencent par le numéro / courriel)
+  let tel = '', courriel = '';
+  L.slice(i0, i0+4).forEach((l,k)=>{ if(!tel && (k===0 || /^(t[ée]l|cell|t[ée]l[ée]phone)\b|^\(?\d{3}/i.test(l))) tel = telDe(l);
+    if(!courriel && (k===0 || /^(courriel|e-?mail|adresse courriel)\b|^[A-Za-z0-9._%+-]+@/i.test(l))) courriel = mailDe(l); });
+  if(!tel){ const l = L.find(x=>/^(t[ée]l|cell|t[ée]l[ée]phone)\b/i.test(x)); if(l) tel = telDe(l); }
+  if(!courriel){ const l = L.find(x=>/^(courriel|e-?mail)\b/i.test(x)); if(l) courriel = mailDe(l); }
+  return {nom:noms[0], conjoint:noms[1]||'', tel, courriel};
+}
 function cvParseEvent(e){
   const title = String(e.title||'').trim();
   const toks = title.replace(new RegExp(CV_NOJOB_RE.source,'ig'),' ').replace(/[()]/g,' ').split(/[\s\-–\/,+&]+/).filter(Boolean);
@@ -7155,6 +7193,7 @@ function cvParseEvent(e){
   return {
     code, phase: phase || (code?'SERV':''), servType, po, name, key: cvNorm(name), crew:[...crew],
     as: cvSuivi(e.description,'Appel de service'), ot: cvSuivi(e.description,'Ordre de travail'), fac: cvSuivi(e.description,'Facture'),
+    client: e.calendarId===CREW_CAL ? cvClientDescription(e.description) : null,   // v206
     attente: e.calendarId===EN_ATTENTE_CAL, id: e.id||'', calId: e.calendarId||'', day: cvDay(e.start), start: e.start||'', end: e.end||'', allDay: !!e.allDay, location: e.location||'', title, attachments: e.attachments||[], lien: e.htmlLink||'', colorId: e.colorId||'', calColor: e.calColor||'', couleurId: couleurIdEvenement(e)
   };
 }
@@ -8467,7 +8506,9 @@ const CLIENT_COURRIELS = {'infopayneconstruction@gmail.com':'PAY'};
 function repCodeCourriel(e, F){
   const d = String(e||'').toLowerCase().split('@')[1] || ''; if(!d) return '';
   if(CLIENT_COURRIELS[String(e).trim().toLowerCase()]) return CLIENT_COURRIELS[String(e).trim().toLowerCase()];
-  const f = ((F && F.clients)||[]).find(x=>x.code && CLIENT_CODES[x.code] && String(x.courriel).toLowerCase().split(/[\s,;]+/).some(c=>c.split('@')[1]===d));
+  // v206 : même domaine seulement pour un domaine de compagnie (@saranconstruction.ca) ; @gmail, @hotmail… = le courriel exact seulement
+  const perso = REP_COURRIEL_PERSO.test('@'+d+'.') || REP_COURRIEL_PERSO.test(String(e));
+  const f = ((F && F.clients)||[]).find(x=>x.code && CLIENT_CODES[x.code] && String(x.courriel).toLowerCase().split(/[\s,;]+/).some(c=>perso ? c.trim()===String(e).trim().toLowerCase() : c.split('@')[1]===d));
   return f ? f.code : (CLIENT_DOMAINES[d] || '');
 }
 // v154 : commerce (Éclairage Saran, St-Jean Pizzeria, dentiste, Actiforme…) ou particulier — deviné par des mots, corrigeable dans la fiche
@@ -8600,10 +8641,21 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   const jobContrDe = nom => { const k = contrCle(nom); const l = k && jobsContr[k] ? [...jobsContr[k]] : [];
     const codes = new Set(l.map(j=>j.code)); if(codes.size!==1) return null;
     return l.sort((a,b)=>(!!b.po)-(!!a.po) || String(b.last||'').localeCompare(String(a.last||'')))[0]; };
+  const conjFiche = {}; F.clients.forEach(f=>(f.conjoints||[]).forEach(n=>{ const k = nNom(n); if(k) conjFiche[k] = noeud('f:'+f.row); }));   // v206 : « Conjoint: X » d'une fiche
   if(part) part.jobs.forEach(j=>{
     const jc = jobContrDe(j.name);
     if(jc){ jc.events.push(...j.events.filter(e=>!e.attente)); jc.cles.add(j.name); if(j.id) jc.ids.add(j.id); if(!jc.adresse && j.address) jc.adresse = jc.adresse || j.address; jc.sansCode = (jc.sansCode||[]).concat(j); return; }
-    rec({nNom:nNom(j.name), nAdr:nAdresse(j.address), nom:String(j.name||'').split(/\s+—\s+/)[0], adresse:j.address, kind:'job', obj:j, tel:(j.reg&&j.reg.tel)||'', courriel:(j.reg&&j.reg.courriel)||''});
+    // v206 : le client vient de la DESCRIPTION de l'événement (The Crew seulement, pas En Attente) : nom complet, téléphone, courriel.
+    // Sans client dans la description : le titre sert seulement à relier la job à une fiche qui existe déjà (pas de nouvelle fiche).
+    const cli = j.events.filter(e=>e.calId===CREW_CAL && !e.attente && e.client).sort((a,b)=>String(a.day).localeCompare(String(b.day))).map(e=>e.client).pop();
+    const kT = nNom(j.name);
+    if(cli){
+      const r = rec({nNom:nNom(cli.nom), nMail:nMail(cli.courriel), nAdr:nAdresse(j.address), nom:cli.nom, adresse:j.address, kind:'job', agenda:true, cli:{...cli, adresse:j.address||''}, obj:j,
+        tel:cli.tel || (j.reg&&j.reg.tel) || '', courriel:cli.courriel || (j.reg&&j.reg.courriel) || ''});
+      // Déjà connu ailleurs : conjoint d'une fiche, son conjoint a une fiche, ou le titre nomme une fiche (son commerce) → même fiche, pas de doublon
+      const fNode = k => k && parent[k] && ficheR[trouve(k)] ? trouve(k) : null;
+      if(r.noeud && !ficheR[trouve(r.noeud)]){ const cible = conjFiche[nNom(cli.nom)] || fNode(nNom(cli.conjoint)) || fNode(kT); if(cible) unir(cible, r.noeud); }
+    } else rec({nNom:kT, nAdr:nAdresse(j.address), nom:String(j.name||'').split(/\s+—\s+/)[0], adresse:j.address, kind:'job', titre:true, obj:j, tel:(j.reg&&j.reg.tel)||'', courriel:(j.reg&&j.reg.courriel)||''});
   });
   (soumissions||[]).forEach(s=>{
     const cc = repCodeCourriel(s.courriel, F) || repCodeCourriel(s.client, F); if(cc){ C(cc).soum.push(s); return; }
@@ -8648,7 +8700,8 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   let pers = []; const vus = new Set();
   Object.entries(groupes).forEach(([g, rs])=>{
     const fiche = ficheDe(g);
-    const variantes = {}; rs.forEach(r=>{ if(r.nom && !/@/.test(r.nom)){ const p = r.kind==='compta' ? r.nom.replace(/\s+/g,' ').trim() : persNomPropre(r.nom); if(p) variantes[p] = (variantes[p]||0) + (r.kind==='compta' ? 3 : r.kind==='reg'||r.kind==='fac'||r.kind==='soum' ? 2 : 1); } });
+    if(!fiche && rs.every(r=>r.titre)) return;   // v206 : seulement un titre d'événement, sans client dans la description = pas de fiche
+    const variantes = {}; rs.forEach(r=>{ if(r.nom && !/@/.test(r.nom) && !r.titre){ const p = r.kind==='compta' ? r.nom.replace(/\s+/g,' ').trim() : persNomPropre(r.nom); if(p) variantes[p] = (variantes[p]||0) + (r.kind==='compta' || r.agenda ? 3 : r.kind==='reg'||r.kind==='fac'||r.kind==='soum' ? 2 : 1); } });
     const meilleur = Object.entries(variantes).sort((a,b)=>b[1]-a[1] || (/\d/.test(a[0]))-(/\d/.test(b[0])) || b[0].split(' ').length-a[0].split(' ').length || b[0].length-a[0].length)[0];   // un nom à numéro (9272-0473 Québec inc) passe après un vrai nom
     const courriels = [...new Set([...rs.map(r=>String(r.courriel||'').toLowerCase()), ...String((fiche&&fiche.courriel)||'').toLowerCase().split(/[\s,;]+/)].filter(e=>/@/.test(e)))];
     const nom = (fiche && fiche.nom) || (meilleur && meilleur[0]) || courriels[0] || '';
@@ -8656,7 +8709,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     const p = {type:'pers', id:'P:'+g, nom, fiche, srcJobs:rs.filter(r=>r.kind==='job').map(r=>r.obj), noms:[...new Set(rs.map(r=>r.nom).filter(Boolean))], courriels,
       tels:[...new Set(rs.map(r=>r.tel).filter(Boolean))], adresses:[...new Set(rs.map(r=>r.adresse).filter(Boolean))], sansNom:!fiche && !meilleur, compta:rs.some(r=>r.kind==='compta'),
       contacts:rs.filter(r=>r.kind==='contact').map(r=>r.obj), entreprise:(rs.find(r=>r.kind==='contact' && r.obj.entreprise)||{obj:{}}).obj.entreprise||'',
-      jobs:{}, facturesSans:[], soum:[], masque:false};
+      jobs:{}, facturesSans:[], soum:[], masque:false, agenda:(rs.find(r=>r.agenda)||{}).cli || null};
     p.masque = !fiche && [...new Set(rs.map(r=>persCle(r.nom)).filter(Boolean))].some(k=>masques.has(k));
     // Jobs du particulier
     rs.forEach(r=>{
@@ -8864,6 +8917,24 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
     if(Date.now()-attendu.t > 4000){ const nf = (F.clients||[]).filter(f=>cvNorm(f.nom)===cvNorm(attendu.nom)).length;
       toast && toast(nf ? attendu.nom+' est bien enregistré, mais il est caché par une autre fiche (contact de contracteur ou supprimé). Cherche-le dans la recherche ou dis-le à Claude.' : attendu.nom+' n\'a pas été relu dans l\'onglet Fiches. Clique ⟳ Refresh.','err');
       setAttendu(null); } },[R, d.maj, d.loading, attendu]);
+  // v206 : nouveau client écrit dans la description d'une job de The Crew → sa fiche est créée toute seule, une seule fois (jamais par-dessus une fiche)
+  const autoFait = useRef(new Set());
+  useEffect(()=>{ if(mode==='verif' || d.loading || d.maj || !d.fiches || !cfg.memoireJobsSpreadsheetId) return;
+    let deja; try{ deja = new Set(JSON.parse(localStorage.getItem('crm_fiches_agenda')||'[]')); }catch(e){ deja = new Set(); }
+    const existants = new Set((F.clients||[]).flatMap(f=>[f.nom, ...(f.alias||[]), ...(f.conjoints||[])]).map(persCle).filter(Boolean));
+    const vus = new Set();
+    const nouveaux = R.pers.filter(p=>!p.fiche && !p.masque && p.agenda && p.agenda.nom).filter(p=>{ const k = persCle(p.agenda.nom);
+      if(!k || existants.has(k) || deja.has(k) || autoFait.current.has(k) || vus.has(k)) return false; vus.add(k); return true; });
+    if(!nouveaux.length) return;
+    nouveaux.forEach(p=>autoFait.current.add(persCle(p.agenda.nom)));
+    const le = new Date().toLocaleString('fr-CA');
+    const lignes = nouveaux.map(p=>{ const a = p.agenda; return ['Client', a.nom, 'PART', '', a.adresse||p.adresses[0]||'', '', a.tel ? repTelFmt(a.tel) : '', a.courriel||'', 'Créée depuis l\'agenda The Crew', '', a.conjoint ? 'Conjoint: '+a.conjoint : '', le]; });
+    suivreEcritures();
+    window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:cfg.memoireJobsSpreadsheetId, range:'Fiches!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:lignes}})
+      .then(()=>{ try{ localStorage.setItem('crm_fiches_agenda', JSON.stringify([...deja, ...nouveaux.map(p=>persCle(p.agenda.nom))].slice(-2000))); }catch(e){}
+        toast && toast(nouveaux.length===1 ? 'Fiche créée depuis l\'agenda : '+nouveaux[0].agenda.nom : nouveaux.length+' fiches créées depuis l\'agenda', 'ok'); setTick(t=>t+1); })
+      .catch(()=>{ nouveaux.forEach(p=>autoFait.current.delete(persCle(p.agenda.nom))); });
+  },[R, d.loading, d.maj]);
   // À vérifier (passages pas facturés, factures en double…) — même calcul que l'ancien onglet Clients
   const aVerif = useMemo(()=>{ const m = {};
     Object.values(clients).forEach(c=>{ if(c.code!=='PART') m['C:'+c.code] = cvAVerifierClient(c, reglees, d.archives).n; });
@@ -9274,6 +9345,12 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
   const [ignJ,setIgnJ]=useState(repIgnores);
   const dupJobs = useMemo(()=>repDoublonsJobs(c, ignJ),[c, ignJ]);
   const [voirDup,setVoirDup]=useState(false);
+  // v206 : coordonnées réunies (fiche + logiciel comptable), sans doublon
+  const adrFiche = fiche ? [fiche.adresse, fiche.ville && !cvNorm(fiche.adresse).includes(cvNorm(fiche.ville)) ? fiche.ville : ''].filter(Boolean).join(', ') : '';
+  const adrToutes = (()=>{ const vu = new Set(); return [adrFiche, ...(pers ? c.adresses : [c.adresse, ...(c.compta||[]).map(x=>x.adresse)])].map(a=>String(a||'').trim()).filter(Boolean)
+    .filter(a=>{ const k = repCleAdresse(a) || cvNorm(a); if(vu.has(k)) return false; vu.add(k); return true; }); })();
+  const telsTous = [...new Set([fiche && fiche.tel, ...(pers ? c.tels : (c.compta||[]).map(x=>x.tel))].filter(Boolean).map(repTelFmt))];
+  const courrielsTous = [...new Set([...String((fiche && fiche.courriel)||'').split(/[\s,;]+/), ...(pers ? c.courriels : (c.compta||[]).map(x=>x.courriel))].map(x=>String(x||'').trim().toLowerCase()).filter(x=>/@/.test(x)))];
   const champ = (k, l, ph) => <div className="field" style={{marginBottom:8}}><label>{l}</label><input value={edit[k]} placeholder={ph||''} onChange={e=>setEdit({...edit,[k]:e.target.value})}/></div>;
   return <div>
     <div className="card" style={{marginBottom:12}}>
@@ -9282,10 +9359,10 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
           {pers && <div className="muted" style={{fontSize:11,textTransform:'uppercase',letterSpacing:.5}}>{c.commerce ? '🏪 Commerce' : '👤 Particulier'}{c.compta ? ' · 📒 logiciel comptable' : ''}</div>}
           <h3 className="fh" style={{margin:'0 0 4px',fontSize:20}}>{pers ? c.nom : <><span style={{color:'var(--accent)'}}>{c.code}</span> {c.nom}</>}</h3>
           {!pers && c.contact && <div style={{fontSize:13}}>👤 {c.contact}</div>}
-          {(()=>{ const l = repAdrLignes(fiche ? [fiche.adresse, fiche.ville].filter(Boolean).join(', ') : c.adresse);
+          {(()=>{ const l = repAdrLignes(adrToutes[0]);
             return l.length>0 && <div style={{fontSize:13,display:'flex',gap:6,margin:'2px 0 4px',lineHeight:1.35}}><span>📍</span><div>{l.map((x,i)=><div key={i}>{x}</div>)}</div></div>; })()}
-          {[...new Set((pers ? [fiche && fiche.tel, ...c.tels] : [fiche && fiche.tel]).filter(Boolean).map(repTelFmt))].map(t=><div key={t} style={{fontSize:13}}>📞 <a href={repTel(t)} style={{color:'var(--accent)'}}>{t}</a></div>)}
-          {(pers ? c.courriels : String((fiche && fiche.courriel)||'').split(/[\s,;]+/).filter(Boolean)).map(e=><div key={e} style={{fontSize:13}}>✉️ <a href={'mailto:'+e} style={{color:'var(--accent)'}}>{e}</a></div>)}
+          {telsTous.map(t=><div key={t} style={{fontSize:13}}>📞 <a href={repTel(t)} style={{color:'var(--accent)'}}>{t}</a></div>)}
+          {courrielsTous.map(e=><div key={e} style={{fontSize:13}}>✉️ <a href={'mailto:'+e} style={{color:'var(--accent)'}}>{e}</a></div>)}
           {pers && c.entreprise && c.entreprise!==c.nom && <div style={{fontSize:13}}>🏢 {c.entreprise}</div>}
           {pers && c.contacts.filter(k=>k.notes).map((k,i)=><div key={i} style={{fontSize:12.5,marginTop:2,whiteSpace:'pre-wrap'}}>🗒 {k.notes}</div>)}
           {fiche && fiche.notes && <div style={{fontSize:12.5,marginTop:4,whiteSpace:'pre-wrap'}}>📝 {fiche.notes}</div>}
@@ -9311,7 +9388,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
             {c.lies.map(q=><span key={q.id} style={{display:'inline-flex',alignItems:'center',gap:4,border:'1px solid var(--border)',borderRadius:6,padding:'1px 4px 1px 7px'}}>
               <a href="#" onClick={e=>{ e.preventDefault(); onOuvrir && onOuvrir(q.id, q.nom); }} style={{color:'var(--accent)'}}>{q.commerce ? '🏪' : '👤'} {q.nom}</a>
               <button className="btn btn-sm" style={{padding:'0 5px',fontSize:10.5}} disabled={busy} title={'Ne plus lier '+c.nom+' et '+q.nom} onClick={()=>delier(q)}>✕</button></span>)}</div>}
-          {pers && c.adresses.length>1 && <div className="muted" style={{fontSize:11.5,marginTop:6}}>Autres adresses :{c.adresses.slice(1,4).map((a,i)=><div key={i} style={{paddingLeft:10}}>{repAdrLignes(a).join(', ')}</div>)}</div>}
+          {adrToutes.length>1 && <div className="muted" style={{fontSize:11.5,marginTop:6}}>Autres adresses :{adrToutes.slice(1,4).map((a,i)=><div key={i} style={{paddingLeft:10}}>{repAdrLignes(a).join(', ')}</div>)}</div>}
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'stretch',flex:'0 0 auto',minWidth:200}}>
           {onSuivi && !onAller && <button className="btn btn-sm" onClick={onSuivi} style={nbAV ? {borderColor:'var(--danger)',color:'var(--danger)',fontWeight:700} : null}>🔎 Suivi des jobs{nbAV ? ' · '+nbAV+' à vérifier' : ''}</button>}
@@ -9368,10 +9445,6 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
     </div>
 
     {!pers && <RepContacts c={c} busy={busy} ecrire={ecrire}/>}
-    {!pers && (c.compta||[]).length>0 && <div className="card" style={{marginBottom:12,fontSize:13}}>
-      <b>📒 Dans le logiciel comptable</b>
-      {c.compta.map((x,i)=><div key={i} style={{padding:'4px 0',borderTop:i?'1px dashed var(--border)':'none'}}>📍 {x.adresse || '—'}{x.tel && <> · <a href={repTel(x.tel)} style={{color:'var(--accent)'}}>📞 {x.tel}</a></>}{x.courriel && <> · <a href={'mailto:'+x.courriel} style={{color:'var(--accent)'}}>✉️ {x.courriel}</a></>}</div>)}
-    </div>}
     {/* v205 : les projets du client sont dans Projets (bouton plus haut) — plus de liste ici */}
   </div>;
 }
