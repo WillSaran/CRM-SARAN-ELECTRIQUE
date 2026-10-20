@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v182';
+const APP_VERSION = 'v183';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3681,6 +3681,7 @@ function SuiviTableur({rows, id, onChanged}){
 //   | G Factures lues | H Lien Gmail | I Source | J Factures confirmées | K Statut | L Note.  Le CRM écrit seulement J à L
 //   (ou une nouvelle ligne pour un paiement entré à la main). Rien n'est associé sans que tu confirmes (mode essai).
 const PAI_ENTETE = ['Id courriel','Date','Envoyé par','Montant','Message','Référence','Factures lues dans le message','Lien Gmail','Source','Factures confirmées','Statut','Note'];
+const PAI_DEBUT = '2026-06-01';   // v183 : début de l'année financière — avant = archivé
 const PAI_MOTS_VIDES = new Set(['inc','ltee','ltd','limited','quebec','qc','canada','et','and','de','du','la','le','les','des','property','properties','gestion','construction','constructions','compagnie','cie','enr','senc','corp','corporation']);
 function paiNums(s){ return [...new Set(String(s||'').replace(/\b(19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.](19|20)\d{2}\b/g,' ').match(/\b\d{4}\b/g)||[])]; }
 function paiMots(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3 && !PAI_MOTS_VIDES.has(w) && !/^\d+$/.test(w)); }
@@ -3737,15 +3738,17 @@ function paiementsAnalyser(factures, paiements){
     const nn = paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
     f.etat = f.annulee ? 'annulee' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
     f.age = paiJours(f.envoi || f.date); });
-  const ouvertes = Object.values(F).filter(f=>f.etat==='impayee' || f.etat==='partielle');
+  const ouvertes = Object.values(F).filter(f=>(f.etat==='impayee' || f.etat==='partielle') && String(f.date).slice(0,10) >= PAI_DEBUT);
   // v182 : paiement pour des factures plus vieilles que le registre (avant qu'il existe) : rangé à part, pas à confirmer
   const nums = Object.keys(F).map(Number).filter(n=>n>0), minNum = nums.length ? Math.min(...nums) : 0;
   const minDate = Object.values(F).map(f=>String(f.date).slice(0,10)).filter(Boolean).sort()[0] || '';
   paiements.forEach(p=>{ const ns = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>!F[n]);
     const connus = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>F[n]);
-    p.ancien = !p.statut && !connus.length && ((ns.length>0 && ns.every(n=>+n<minNum)) || (!ns.length && minDate && String(p.date).slice(0,10) < minDate)); });
-  const attente = paiements.filter(p=>!p.statut && !p.ancien);
-  const anciens = paiements.filter(p=>p.ancien);
+    p.archive = !p.statut && String(p.date).slice(0,10) < PAI_DEBUT;   // avant l'année financière
+    p.horsRegistre = !p.statut && !p.archive && !connus.length && ns.length>0 && ns.every(n=>+n<minNum) ? ns : null; });   // n° de facture plus petits que la 1re du registre
+  const attente = paiements.filter(p=>!p.statut && !p.archive && !p.horsRegistre);
+  const anciens = paiements.filter(p=>p.horsRegistre);
+  const archives = paiements.filter(p=>p.archive);
   const propositions = {};
   attente.forEach(p=>{
     const opts = [], vu = new Set();
@@ -3780,7 +3783,7 @@ function paiementsAnalyser(factures, paiements){
     if(opts.filter(o=>o.niveau==='sur').length>1) opts.forEach(o=>{ if(o.niveau==='sur') o.niveau='probable'; });
     propositions[p.row] = opts.slice(0,4);
   });
-  return {F, ouvertes, attente, anciens, propositions};
+  return {F, ouvertes, attente, anciens, archives, minNum, propositions};
 }
 async function paiOnglet(id){
   const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:id, fields:'sheets.properties.title'});
@@ -3805,6 +3808,7 @@ function PaiementsView({cfg, refreshKey, q}){
   const [busy,setBusy]=useState('');
   const [autre,setAutre]=useState({});          // row -> numéros tapés à la main
   const [manuel,setManuel]=useState(null);       // {nums, montant, date, mode, note}
+  const [voirArch,setVoirArch]=useState(false);
   useEffect(()=>{ if(!id) return; let ok=true;
     Promise.all([lireCache(id, 'A1:K', refreshKey>0||tick>0), lireCache(id, 'Paiements!A1:L', refreshKey>0||tick>0).catch(()=>null)])
       .then(([f,p])=>{ if(ok){ setData({factures:paiLireFactures(f.result.values||[]), paiements: p ? paiLirePaiements(p.result.values||[]) : [], onglet: !!p}); setErr(''); } })
@@ -3839,7 +3843,7 @@ function PaiementsView({cfg, refreshKey, q}){
   const tranche = (a,b)=>aRecevoir.filter(f=>f.age!=null && f.age>=a && f.age<=b).reduce((s,f)=>s+f.solde,0);
   const attente = A.attente.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
   const payees = Object.values(A.F).filter(f=>(f.etat==='payee') && filtreF(f)).sort((a,b)=>String(b.num).localeCompare(String(a.num)));
-  const tous = data.paiements.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
+  const tous = data.paiements.filter(filtreP).filter(p=>voirArch || !p.archive).sort((a,b)=>b.date.localeCompare(a.date));
   const descF = n => { const f = A.F[n]; return f ? '#'+n+' '+f.nomAffiche+(f.nom && f.nomAffiche!==f.nom ? ' — '+f.nom : '')+' ('+cvMoney(f.etat==='payee'?f.ttc:f.solde)+')' : '#'+n+' (pas dans le registre)'; };
   const couleur = {sur:'var(--success)', probable:'var(--warning)', verifier:'var(--muted)'};
   const etiquette = {sur:'Sûr', probable:'Probable', verifier:'À vérifier'};
@@ -3877,7 +3881,7 @@ function PaiementsView({cfg, refreshKey, q}){
     </div>}
 
     {sous==='confirmer' && <div className="card">
-      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Virements reçus pas encore associés à une facture. Rien n'est associé tant que tu ne confirmes pas.{A.anciens.length>0 && <> {A.anciens.length} paiement{A.anciens.length>1?'s':''} pour des factures d'avant le registre (avant le {(Object.values(A.F).map(f=>String(f.date).slice(0,10)).filter(Boolean).sort()[0])}) {A.anciens.length>1?'sont rangés':'est rangé'} dans « Tous les paiements ».</>}</div>
+      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Virements reçus pas encore associés à une facture. Rien n'est associé tant que tu ne confirmes pas.{A.anciens.length>0 && <> {A.anciens.length} paiement{A.anciens.length>1?'s':''} pour des factures pas dans le registre (n° plus petit que {A.minNum}) {A.anciens.length>1?'sont rangés':'est rangé'} dans « Tous les paiements ».</>}{A.archives.length>0 && <> Les paiements d'avant le 1er juin 2026 sont archivés.</>}</div>
       {!attente.length && <div className="muted" style={{padding:'8px 0'}}>Rien à confirmer.</div>}
       {attente.map(p=>{ const opts = A.propositions[p.row]||[]; const b = busy==='p'+p.row;
         return <div key={p.row} style={{padding:'10px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
@@ -3932,11 +3936,12 @@ function PaiementsView({cfg, refreshKey, q}){
     </div>}
 
     {sous==='tous' && <div className="card">
+      {A.archives.length>0 && <div style={{marginBottom:6}}><button className="btn btn-sm" onClick={()=>setVoirArch(!voirArch)}>{voirArch ? 'Cacher' : 'Voir'} les archives d'avant le 1er juin 2026 ({A.archives.length})</button></div>}
       {!tous.length && <div className="muted" style={{padding:'8px 0'}}>Aucun paiement inscrit.</div>}
       {tous.map(p=><div key={p.row} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'5px 0',borderBottom:'1px dashed var(--border)',opacity:/^(ignor|annul)/i.test(p.statut)?.55:1}}>
         <span><b>{String(p.date).slice(0,10)}</b> · {p.de||'—'} · <b>{cvMoney(p.montant)}</b> <span className="muted">· {p.source}</span>{p.message ? <span className="muted"> · « {p.message} »</span> : ''}</span>
         <span style={{display:'flex',gap:8,alignItems:'center'}}>
-          {/^confirm/i.test(p.statut) ? <span style={{color:'var(--success)'}}>→ {p.confirmees.map(n=>'#'+n).join(', ')}</span> : p.statut ? <span className="muted">{p.statut}</span> : p.ancien ? <span className="muted">avant le registre</span> : <span style={{color:'var(--warning)'}}>à confirmer</span>}
+          {/^confirm/i.test(p.statut) ? <span style={{color:'var(--success)'}}>→ {p.confirmees.map(n=>'#'+n).join(', ')}</span> : p.statut ? <span className="muted">{p.statut}</span> : p.archive ? <span className="muted">archivé (avant le 1er juin)</span> : p.horsRegistre ? <span className="muted">facture{p.horsRegistre.length>1?'s':''} {p.horsRegistre.join(', ')} pas dans le registre</span> : <span style={{color:'var(--warning)'}}>à confirmer</span>}
           {p.statut && !/^annul/i.test(p.statut) && <button className="btn btn-sm" disabled={busy==='p'+p.row} onClick={()=>annuler(p)}>↩</button>}
           {p.lien && <a href={p.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>↗</a>}
         </span>
