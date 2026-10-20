@@ -146,7 +146,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googlea
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v190';
+const APP_VERSION = 'v191';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3692,7 +3692,7 @@ function paiLireFactures(rows){
   const g=(r,k)=> fx[k]>=0 ? String(r[fx[k]]||'').trim() : '';
   const out={}, tous=new Set(); Object.defineProperty(out,'__cols',{value:fx, enumerable:false}); Object.defineProperty(out,'__tous',{value:tous, enumerable:false});
   rows.slice(1).forEach((r,i)=>{ const n=g(r,'num'); if(!n) return; tous.add(n);
-    const d = g(r,'date'); if(d && d.slice(0,10) < PAI_DEBUT) return;   // v190 : avant l'année financière = pas dans le CRM
+    const d = g(r,'date'), env = g(r,'env'); if(d && d.slice(0,10) < PAI_DEBUT && !(env && env.slice(0,10) >= PAI_DEBUT)) return;   // v190-191 : facture datée ET envoyée avant le 1er juin = pas dans le CRM
     out[n]={num:n, row:i+2, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, envoi:g(r,'env'), pdf:g(r,'pdf'), annulee:/^annul/.test(cvNorm(g(r,'st'))), statut:g(r,'st'),
       ouverte:/^ouverte/i.test(g(r,'st')), estime:/^montant calcul/i.test(g(r,'st'))}; });   // v187 : importées du logiciel comptable
   Object.defineProperty(out,'__stCol',{value: fx.st>=0 ? fx.st : Math.max(fh.length, 10), enumerable:false});
@@ -3752,7 +3752,7 @@ function paiementsAnalyser(factures, paiements, nomDe, separes){
     const nn = f.nomRep || paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
     f.etat = f.annulee ? 'annulee' : f.ouverte ? 'ouverte' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
     f.age = paiJours(f.envoi || f.date); });
-  const ouvertes = Object.values(F).filter(f=>(f.etat==='impayee' || f.etat==='partielle') && String(f.date).slice(0,10) >= PAI_DEBUT);
+  const ouvertes = Object.values(F).filter(f=>(f.etat==='impayee' || f.etat==='partielle') && (String(f.date).slice(0,10) >= PAI_DEBUT || String(f.envoi||'').slice(0,10) >= PAI_DEBUT));
   // v182 : paiement pour des factures plus vieilles que le registre (avant qu'il existe) : rangé à part, pas à confirmer
   const nums = Object.keys(F).map(Number).filter(n=>n>0), minNum = nums.length ? Math.min(...nums) : 0;
   const minDate = Object.values(F).map(f=>String(f.date).slice(0,10)).filter(Boolean).sort()[0] || '';
@@ -3776,12 +3776,14 @@ function paiementsAnalyser(factures, paiements, nomDe, separes){
     // 1. Numéros de facture écrits dans le message
     const lues = [...new Set([...p.lues, ...paiNums(p.message)])].map(n=>F[n]).filter(f=>f && f.etat!=='annulee');
     if(lues.length){ const tot = lues.reduce((s,f)=>s+(f.etat==='payee'?0:f.solde),0);
-      ajoute(lues, 'Numéro'+(lues.length>1?'s':'')+' écrit'+(lues.length>1?'s':'')+' dans le message', Math.abs(tot-p.montant)<=0.05 ? 'sur' : 'verifier');
+      ajoute(lues, 'Numéro'+(lues.length>1?'s':'')+' écrit'+(lues.length>1?'s':'')+' dans le message'+(Math.abs(tot-p.montant)>0.05 && Math.abs(tot-p.montant)<1 ? ' (montant arrondi)' : ''), Math.abs(tot-p.montant)<1 ? 'sur' : 'verifier');
       // v189 : montant calculé (≈) d'une facture importée qui ne balance pas avec le paiement qui la nomme : proposer de corriger la facture
       const o = opts[opts.length-1]; if(o && lues.length===1 && lues[0].estime && lues[0].paye<0.05 && Math.abs(o.ecart)>0.05){ o.corriger = p.montant; o.raison += ' · montant de la facture calculé (≈ '+cvMoney(lues[0].ttc)+'), le paiement dit '+cvMoney(p.montant); } }
     // 2. Une facture du même montant exact
     const exacts = cands.filter(f=>Math.abs(f.solde-p.montant)<=0.02);
     exacts.filter(nomOk).forEach(f=>ajoute([f], 'Même montant et même client', 'sur'));
+    // v191 : le client a arrondi (ex. 1 034,00 $ pour 1 033,63 $) — même client, moins de 1 $ d'écart
+    cands.filter(f=>nomOk(f) && Math.abs(f.solde-p.montant)>0.02 && Math.abs(f.solde-p.montant)<1).forEach(f=>ajoute([f], 'Même client, montant arrondi', 'sur'));
     // 3. Plusieurs factures du même client qui donnent le montant
     const groupes = {}; cands.forEach(f=>{ (groupes[paiClientCle(f)]=groupes[paiClientCle(f)]||[]).push(f); });
     Object.values(groupes).forEach(g=>{ const ok = g.some(nomOk); if(!ok && g.length>6) return;
@@ -7082,7 +7084,7 @@ function useClientsData(cfg, refreshKey){
         const fg=(r,k)=> fx[k]>=0 ? (r[fx[k]]||'').trim() : '';
         const factures={};
         facRows.slice(1).forEach((r,i)=>{ const n=fg(r,'num'); if(!n) return; const st=cvNorm(fg(r,'st'));
-          if(fg(r,'date') && fg(r,'date').slice(0,10) < PAI_DEBUT) return;   // v190 : avant l'année financière (1er juin) = pas dans le CRM
+          if(fg(r,'date') && fg(r,'date').slice(0,10) < PAI_DEBUT && !(fg(r,'env') && fg(r,'env').slice(0,10) >= PAI_DEBUT)) return;   // v190-191 : datée ET envoyée avant le 1er juin = pas dans le CRM
           factures[n]={num:n, row:i+2, date:fg(r,'date'), client:fg(r,'cli'), po:fg(r,'po'), nom:fg(r,'nom'), desc:fg(r,'desc'), ht:cvNum(fg(r,'ht')), ttc:cvNum(fg(r,'ttc')), envoi:fg(r,'env'), pdf:fg(r,'pdf'),
             statut:fg(r,'st'), annulee:/^annul/.test(st), ok:/^(ok|correct|verifie)/.test(st)}; });
         // Colonne « Statut » du registre (créée par le CRM au premier clic si elle n'existe pas encore).
