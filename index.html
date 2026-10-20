@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v217';
+const APP_VERSION = 'v218';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9331,6 +9331,18 @@ function RepContacts({c, busy, ecrire, onAller, filtre}){
                   <option value="">Choisir un projet…</option>{dispo.map(j=><option key={j.po} value={j.po}>{j.po}{j.label||j.nom ? ' · '+(j.label||j.nom) : ''}</option>)}</select>
               : dispo.length>0 && <button className="btn btn-sm" style={{padding:'0 6px',fontSize:11}} disabled={busy} onClick={()=>setAjoutPO(cle)}>＋ Projet</button>}
           </div>; };
+  const ligneContact = (k, i) => <div key={k.nom+'|'+i} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'6px 0',borderTop:'1px solid var(--border)',fontSize:13}}>
+      <div style={{minWidth:0}}><b>{k.nom}</b>{k.role && k.role!=='—' && <span style={{fontSize:11.5,marginLeft:6,padding:'1px 7px',borderRadius:10,border:'1px solid var(--border)',color:/^pr[ée]sident/i.test(k.role) ? 'var(--accent)' : 'var(--muted)',fontWeight:/^pr[ée]sident/i.test(k.role) ? 700 : 400}}>{k.role}</span>}
+        <div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:12.5}}>
+          {k.courriels.map(e=><a key={e} href={repGmail(e)} target="_blank" rel="noopener" title="Nouveau courriel dans Gmail" style={{color:'var(--accent)'}}>✉️ {e}</a>)}
+          {k.tels.map(t=><a key={t} href={repTel(t)} style={{color:'var(--accent)'}}>📞 {t}</a>)}
+        </div>
+        {projetsBloc(k, i)}</div>
+      <span style={{display:'flex',gap:4}}>
+        <button className="btn btn-sm" disabled={busy} onClick={()=>ouvrirEd(k)}>✏️</button>
+        {k.fiche && <button className="btn btn-sm" disabled={busy} title="Retirer de ce contracteur (redevient un particulier s'il a des factures)" onClick={()=>retirer(k)}>✕</button>}
+      </span>
+    </div>;
   const ouvrirEd = k => setEd({fiche:k.fiche, nom:k.nom, role:k.role==='—' ? '' : (k.role||''), roleOrig:k.role||'', courriel:k.courriels.join(', '), orig:k.courriels.map(e=>String(e).toLowerCase()), tel:k.tels[0]||''});
   const formulaire = ed && <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:6,margin:'8px 0'}}>
       {champ('nom','Nom')}
@@ -9359,18 +9371,12 @@ function RepContacts({c, busy, ecrire, onAller, filtre}){
       {!ed && <button className="btn btn-sm" disabled={busy} onClick={()=>setEd({nom:'', role:'', courriel:'', tel:''})}>+ Ajouter un contact</button>}
     </div>
     {formulaire}
-    {liste.map((k,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',padding:'6px 0',borderTop:'1px solid var(--border)',fontSize:13}}>
-      <div style={{minWidth:0}}><b>{k.nom}</b>{k.role && k.role!=='—' && <span style={{fontSize:11.5,marginLeft:6,padding:'1px 7px',borderRadius:10,border:'1px solid var(--border)',color:/^pr[ée]sident/i.test(k.role) ? 'var(--accent)' : 'var(--muted)',fontWeight:/^pr[ée]sident/i.test(k.role) ? 700 : 400}}>{k.role}</span>}
-        <div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:12.5}}>
-          {k.courriels.map(e=><a key={e} href={repGmail(e)} target="_blank" rel="noopener" title="Nouveau courriel dans Gmail" style={{color:'var(--accent)'}}>✉️ {e}</a>)}
-          {k.tels.map(t=><a key={t} href={repTel(t)} style={{color:'var(--accent)'}}>📞 {t}</a>)}
-        </div>
-        {projetsBloc(k, i)}</div>
-      <span style={{display:'flex',gap:4}}>
-        <button className="btn btn-sm" disabled={busy} onClick={()=>ouvrirEd(k)}>✏️</button>
-        {k.fiche && <button className="btn btn-sm" disabled={busy} title="Retirer de ce contracteur (redevient un particulier s'il a des factures)" onClick={()=>retirer(k)}>✕</button>}
-      </span>
-    </div>)}
+    {filtre==='autres' ? (()=>{   // v218 : chargés de projet d'abord, puis designers, puis les autres — chaque groupe en ordre alphabétique
+        const groupe = k => /charg[ée]+e? de projet|gestion(naire)? de projet/i.test(k.role||'') ? 0 : /designer|cuisiniste/i.test(k.role||'') ? 1 : 2;
+        const NOMS = ['Chargés de projet','Designers','Autres'];
+        return [0,1,2].map(g=>{ const l = liste.map((k,i)=>({k,i})).filter(x=>groupe(x.k)===g).sort((a,b)=>String(a.k.nom).localeCompare(String(b.k.nom),'fr',{sensitivity:'base'}));
+          return l.length>0 && <React.Fragment key={g}><div className="muted" style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:.5,margin:'10px 0 2px'}}>{NOMS[g]} ({l.length})</div>
+            {l.map(({k,i})=>ligneContact(k,i))}</React.Fragment>; }); })() : liste.map((k,i)=>ligneContact(k,i))}
     {!liste.length && !ed && <div className="muted" style={{fontSize:12.5,marginTop:4}}>Aucun {filtre==='autres' && c.contacts.length ? 'autre ' : ''}contact. Ajoute-en un, ou ouvre un particulier › Modifier la fiche › Contact d'un contracteur.</div>}
   </div>;
 }
