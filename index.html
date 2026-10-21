@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v240';
+const APP_VERSION = 'v241';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9674,17 +9674,20 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
   } else if(vue==='factures'){   // v240 : Factures clients — contracteurs en cubes + un cube Particuliers
     const stats = cl => { const L = (cl && cl.jobs) || []; const n = L.filter(j=>!(d.archives||{})[j.id]);
       return n.length ? n.length+' job'+(n.length>1?'s':'')+' · '+n.filter(j=>j.status!=='done').length+' en cours ou à venir' : 'Aucune job récente'; };
-    corps = <>{titre('Contracteurs', contrTri.length)}
+    const totF = contrTri.reduce((t,c)=>t+(aVerif['C:'+c.code]||0),0) + (aVerif.PART||0);
+    corps = <>{totF>0 && <div className="muted" style={{fontSize:12.5,marginTop:4}}>En rouge : <b style={{color:'var(--danger)'}}>{totF} à vérifier</b> — ouvre le client, la liste « À vérifier » est en haut de ses jobs.</div>}
+      {titre('Contracteurs', contrTri.length)}
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:8}}>
-        {contrTri.map(c=><div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0}} onClick={()=>ouvrirC(c)}>
-          <div><b style={{color:'var(--accent)'}}>{c.code}</b> {c.nom}</div>
-          <div className="muted" style={{fontSize:12}}>{stats(clients[c.code])}</div>
-        </div>)}
+        {contrTri.map(c=>{ const n = aVerif['C:'+c.code]||0;   // v241 : en rouge = il y a quelque chose à vérifier chez ce client
+          return <div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0,borderColor:n?'var(--danger)':undefined}} onClick={()=>ouvrirC(c)}>
+            <div><b style={{color:n?'var(--danger)':'var(--accent)'}}>{c.code}</b> {c.nom}{badge(n)}</div>
+            <div className="muted" style={{fontSize:12}}>{stats(clients[c.code])}</div>
+          </div>; })}
       </div>
       {titre('Particuliers', null)}
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:8}}>
-        <div className="card" style={{padding:'10px 12px',cursor:clients.PART?'pointer':'default',margin:0}} onClick={()=>clients.PART && setSuivi('PART')}>
-          <div><b style={{color:'var(--accent)'}}>PART</b> Particuliers</div>
+        <div className="card" style={{padding:'10px 12px',cursor:clients.PART?'pointer':'default',margin:0,borderColor:aVerif.PART?'var(--danger)':undefined}} onClick={()=>clients.PART && setSuivi('PART')}>
+          <div><b style={{color:aVerif.PART?'var(--danger)':'var(--accent)'}}>PART</b> Particuliers{badge(aVerif.PART||0)}</div>
           <div className="muted" style={{fontSize:12}}>{stats(clients.PART)}</div>
         </div>
       </div></>;
