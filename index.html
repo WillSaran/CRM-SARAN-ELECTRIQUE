@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v249';
+const APP_VERSION = 'v250';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4075,7 +4075,9 @@ function paiLireFactures(rows){
   rows.slice(1).forEach((r,i)=>{ const n=g(r,'num'); if(!n) return; tous.add(n);
     const d = g(r,'date'), env = g(r,'env'), dest = (d && d.slice(0,10) < PAI_DEBUT && !(env && env.slice(0,10) >= PAI_DEBUT)) ? vieilles : out;   // v190-191 : facture datée ET envoyée avant le 1er juin = pas dans le CRM
     dest[n]={num:n, row:i+2, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, escompte:Math.max(0, cvNum(g(r,'esc'))||0), payeLog:Math.max(0, cvNum(g(r,'plog'))||0), envoi:g(r,'env'), pdf:g(r,'pdf'), annulee:/^annul/.test(cvNorm(g(r,'st'))), statut:g(r,'st'),
-      ouverte:/^ouverte/i.test(g(r,'st')), estime:/^montant calcul/i.test(g(r,'st'))}; });   // v187 : importées du logiciel comptable
+      ouverte:/^ouverte/i.test(g(r,'st')) && !g(r,'pdf') && !g(r,'env'), estime:/^montant calcul/i.test(g(r,'st')) && !g(r,'pdf'),
+      // v250 : importée du logiciel (export 2000-2673) sans preuve = pas encore une vraie facture pour le CRM (ni à recevoir, ni dans les totaux)
+      aDeposer:/^(montant calcul|ouverte)/i.test(g(r,'st')) && !g(r,'pdf') && !g(r,'env')}; });   // v187 : importées du logiciel comptable
   Object.defineProperty(out,'__stCol',{value: fx.st>=0 ? fx.st : Math.max(fh.length, 10), enumerable:false});
   Object.defineProperty(out,'__stEntete',{value: fx.st>=0, enumerable:false});
   return out;
@@ -4182,7 +4184,7 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   Object.values(F).forEach(f=>{ f.solde = f.creditee || f.remplaceePar ? 0 : Math.round((f.ttc - (f.escompte||0) - f.paye)*100)/100;   // v230 : montant dû = total − escompte
     const nn = f.nomRep || paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
     f.payeLogiciel = !f.creditee && !f.remplaceePar && f.solde>0.05 && (f.payeLog||0) >= f.solde - 0.05;   // v233 : « Payé » inscrit sur le PDF (logiciel comptable)
-    f.etat = f.annulee || f.creditee ? 'annulee' : f.remplaceePar ? 'remplacee' : f.ouverte ? 'ouverte' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 || f.payeLogiciel ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
+    f.etat = f.annulee || f.creditee ? 'annulee' : f.remplaceePar ? 'remplacee' : (f.aDeposer && f.paye<0.05 && !f.payeLogiciel) ? 'adeposer' : f.ouverte ? 'ouverte' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 || f.payeLogiciel ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
     f.age = paiJours(f.envoi || f.date); });
   const ouvertes = Object.values(F).filter(f=>(f.etat==='impayee' || f.etat==='partielle') && (String(f.date).slice(0,10) >= PAI_DEBUT || String(f.envoi||'').slice(0,10) >= PAI_DEBUT));
   // v182 : paiement pour des factures plus vieilles que le registre (avant qu'il existe) : rangé à part, pas à confirmer
@@ -4442,6 +4444,8 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const ouvrirManuel = fs => setManuel({nums:fs.map(f=>f.num).join(', '), montant:fs.reduce((s,f)=>s+f.solde,0).toFixed(2), date:paiAujourdhui(), mode:'Chèque', note:''});
 
   const aRecevoir = A.ouvertes.filter(filtreF);
+  // v250 : factures de l'import du logiciel sans PDF ni courriel (ni paiement) — à déposer dans « Factures PDF »
+  const aDeposer = Object.values(A.F).filter(f=>f.etat==='adeposer' && filtreF(f)).sort((a,b)=>(+b.num)-(+a.num));
   const totalDu = aRecevoir.reduce((s,f)=>s+f.solde,0);
   // v199 : argent reçu depuis le 1er juin (virements, dépôts, chèques, comptant) — sauf les paiements marqués « Ignoré » (argent personnel, remboursement…)
   // v235 : un paiement confirmé seulement pour des factures d'avant le 1er juin (année fiscale précédente) n'est pas compté dans le total
@@ -4477,7 +4481,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       <Tuile v={cvMoney(totalDu)} l={'En attente de paiement / en souffrance · '+aRecevoir.length+' facture'+(aRecevoir.length>1?'s':'')} c="var(--accent)" onClick={()=>setSous('recevoir')}/>
     </div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
-      {[['confirmer','À confirmer ('+attente.length+')'],['recevoir','En attente de paiement ('+aRecevoir.length+')'],['payees','Payées ('+payees.length+')'],['tous','Tous les paiements']].map(([k,l])=>
+      {[['confirmer','À confirmer ('+attente.length+')'],['recevoir','En attente de paiement ('+aRecevoir.length+')'],['payees','Payées ('+payees.length+')'],['tous','Tous les paiements'],...(aDeposer.length ? [['deposer','Factures à déposer ('+aDeposer.length+')']] : [])].map(([k,l])=>
         <button key={k} className={'btn btn-sm'+(sous===k?' btn-p':'')} onClick={()=>setSous(k)}>{l}</button>)}
       <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>ouvrirManuel([])}>💵 Paiement chèque / comptant</button>
       <label className="btn btn-sm" style={{cursor:'pointer'}} title="Fichier .json de factures préparé par Claude à partir du logiciel comptable">📥 Importer des factures<input type="file" accept=".json,application/json" style={{display:'none'}} onChange={e=>{ const f = e.target.files[0]; e.target.value=''; if(f) lireImport(f); }}/></label>
@@ -4598,7 +4602,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
               <span><b style={{color:'var(--accent)'}}>{k}</b>{fs[0].nomRep && fs[0].client.includes('@') && <span className="muted" style={{fontSize:11.5}}> · {fs[0].client}</span>}
                 {fs[0].sansFiche && <> <span className="muted" style={{fontSize:11.5}}>{k!==fs[0].sansFiche ? '· '+fs[0].sansFiche+' ' : ''}pas dans le Répertoire</span> <button className="btn btn-sm" style={{fontSize:11.5,padding:'1px 7px'}} disabled={!!busy} onClick={()=>setAssoc({courriel:fs[0].sansFiche, q:k.includes('@')?'':k, nom:k.includes('@')?'':k})}>👤 Associer</button></>}</span>
               <b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(fs.reduce((s,f)=>s+f.solde,0))}<span className="muted" style={{fontWeight:400,fontSize:12}}> · {fs.length} facture{fs.length>1?'s':''}</span></b></div>
-            {fs.map(f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'3px 0'}}>
+            {(()=>{ const ligneF = f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'3px 0'}}>
               <span>🧾 <b>#{f.num}</b> <span className="muted">· {f.date}</span>{f.nom && f.nom!==k ? ' · '+f.nom : ''}{f.nomAffiche && f.nomAffiche!==k && f.nomAffiche!==f.nom ? <span className="muted"> · {f.nomAffiche}</span> : ''}{f.desc ? <span className="muted"> · {f.desc}</span> : ''}
                 {f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}</span>
               <span style={{display:'flex',gap:8,alignItems:'center'}}>
@@ -4609,8 +4613,23 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
                   ? <button className="btn btn-sm btn-danger" disabled={busy==='a'+f.num} onClick={()=>annulerFacture(f)}>{busy==='a'+f.num?'…':'Confirmer : annuler'}</button>
                   : <button className="btn btn-sm" disabled={!!busy} title="Facture faite en double ou annulée : elle ne sera plus comptée à recevoir" onClick={()=>setAnnule(f.num)}>✕</button>}
               </span>
-            </div>)}
+            </div>;
+              // v250 : contracteur → ses factures regroupées par projet (PO, sinon nom de la job)
+              if(!String(cleG).startsWith('C:')) return fs.map(ligneF);
+              const P = {}; fs.forEach(f=>{ const pk = f.po || cvNorm(f.nom) || 'sans'; (P[pk] = P[pk] || {nom:'', po:'', fs:[]}).fs.push(f); if(!P[pk].nom && f.nom) P[pk].nom = f.nom; if(!P[pk].po && f.po) P[pk].po = f.po; });
+              return Object.values(P).map((pr,i)=><div key={i} style={{margin:'4px 0 2px 10px',paddingLeft:8,borderLeft:'2px solid var(--border2)'}}>
+                <div style={{display:'flex',justifyContent:'space-between',gap:8,fontSize:12.5}}><b>{pr.nom ? cvTitleCase(pr.nom) : 'Sans projet'}{pr.po && <span className="muted" style={{fontWeight:400}}> · {pr.po}</span>}</b>
+                  <span className="muted" style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(pr.fs.reduce((t,f)=>t+f.solde,0))} · {pr.fs.length} facture{pr.fs.length>1?'s':''}</span></div>
+                {pr.fs.map(ligneF)}</div>); })()}
           </div>); })()}
+    </div>}
+
+    {sous==='deposer' && <div className="card">
+      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Factures venues de l'import du logiciel comptable, sans PDF ni courriel d'envoi : elles ne comptent pas (ni à recevoir, ni dans les totaux) tant qu'on n'a pas la preuve. Dépose leur PDF dans La mémoire › « Factures PDF » ; une facture envoyée par courriel ou nommée dans un paiement confirmé compte aussi.</div>
+      {aDeposer.map(f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'4px 0',borderBottom:'1px dashed var(--border)'}}>
+        <span>📄 <b>#{f.num}</b> <span className="muted">· {f.date}</span> · {f.nomAffiche}{f.nom && f.nom!==f.nomAffiche ? ' — '+f.nom : ''}{/^ouverte/i.test(f.statut||'') && <span style={{color:'var(--warning)'}}> · ouverte dans le logiciel (pas encore envoyée ?)</span>}</span>
+        <span className="muted" style={{fontVariantNumeric:'tabular-nums'}}>≈ {cvMoney(f.ttc)}</span>
+      </div>)}
     </div>}
 
     {sous==='payees' && <div className="card">
