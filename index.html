@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v246';
+const APP_VERSION = 'v247';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2372,15 +2372,28 @@ function useBlocages(cfg){
   return {...etat, parJob, ajouter, maj, relire:()=>lire(true)};
 }
 // Type de job d'un particulier (Piscine, Spa…) — onglet « Types de job »
+// v247 : particulier — la job porte le nom complet du client (bloc « Client : … » de la description de l'événement) ;
+// le projet = type de job · date du premier passage (ex. « Éclairage · 26 oct. 2026 »). Les titres de l'agenda ne changent pas.
+let PJ_TYPES_CACHE = {};   // types choisis à la main (onglet « Types de job »), gardés dès qu'une vue les a lus
+function cvNomClientJob(j){ const e = ((j && j.events)||[]).find(x=>x.client && x.client.nom); return e ? e.client.nom : ((j && j.nomClient) || ''); }
+// Sans nom complet dans la description : le titre sans les mots de type de job (« Alain Boucher Lumiere » → « Alain Boucher »)
+function cvNomSansType(nom){ const g = repMots(nom).garde.filter(w=>{ const u = pjMaj(w); return !PJ_TYPE_CODES[u] && !PJ_TYPE_MOTS.some(([, re])=>re.test(u)); }); return g.length ? cvTitleCase(g.join(' ')) : nom; }
+function cvTypeJob(j){ if(!j) return ''; const ids = [j.id, ...(j.ids ? [...j.ids] : [])].filter(Boolean);
+  for(const i of ids) if(PJ_TYPES_CACHE[i]) return PJ_TYPES_CACHE[i];
+  return pjTypeAuto({name:j.name||j.nom||'', events:j.events||[]}); }
+function cvDateLongue(d){ return d ? cvFmtDay(d)+' '+String(d).slice(0,4) : ''; }
+function cvProjetJob(j){ const d = (j && (j.first || ((j.events||[]).filter(e=>!e.attente)[0]||{}).day)) || ''; return [cvTypeJob(j) || 'Service', cvDateLongue(d)].filter(Boolean).join(' · '); }
+function cvTitreJob(j){ return j && j.client==='PART' ? (cvNomClientJob(j) || cvNomSansType(j.name)) : (j ? j.name : ''); }
+function cvTitreJobComplet(j){ return j && j.client==='PART' ? cvTitreJob(j)+' — '+cvProjetJob(j) : cvTitreJob(j); }
 function useTypesJob(cfg){
   const id = cfg.memoireJobsSpreadsheetId;
   const [etat,setEtat]=useState({map:{}, rows:{}, lu:false});
   const lire = useCallback(async(force)=>{ if(!id) return;
     try{ const r = await lireCache(id, "'Types de job'!A1:C", force); const map = {}, rows = {};
-      (r.result.values||[]).slice(1).forEach((x,i)=>{ if(x[0]){ map[x[0]] = x[1]||''; rows[x[0]] = i+2; } }); setEtat({map, rows, lu:true, existe:true}); }
+      (r.result.values||[]).slice(1).forEach((x,i)=>{ if(x[0]){ map[x[0]] = x[1]||''; rows[x[0]] = i+2; } }); PJ_TYPES_CACHE = {...map}; setEtat({map, rows, lu:true, existe:true}); }
     catch(e){ setEtat({map:{}, rows:{}, lu:true, existe:false}); } },[id]);
   useEffect(()=>{ lire(); },[lire]);
-  const changer = async (jobId, type) => { setEtat(s=>({...s, map:{...s.map, [jobId]:type}}));
+  const changer = async (jobId, type) => { setEtat(s=>({...s, map:{...s.map, [jobId]:type}})); PJ_TYPES_CACHE[jobId] = type;
     const l = [jobId, type, new Date().toLocaleString('fr-CA')];
     if(!etat.existe) await ensureSheetsExist(id, [{name:'Types de job', headers:['Job','Type','Le']}]);
     if(etat.rows[jobId]) await sheetsUpdateRow(id, qSheet('Types de job'), etat.rows[jobId], l); else await sheetsAppendRow(id, qSheet('Types de job'), l);
@@ -2555,7 +2568,7 @@ function ProjetsSuivi({cfg, refreshKey}){
     return <div className="opp-card" style={{padding:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:10,cursor:'pointer'}} onClick={()=>setOuvert(o?null:k)}>
         <div>
-          <div className="t" style={{fontSize:14.5}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{j.name}{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}
+          <div className="t" style={{fontSize:14.5}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{cvTitreJob(j)}{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}
             {c.code==='PART' && <span onClick={e=>e.stopPropagation()} style={{marginLeft:8,fontSize:12}}>
               {typeAutre && typeAutre.k===k
                 ? <span style={{display:'inline-flex',gap:4}}><input autoFocus value={typeAutre.v} onChange={e=>setTypeAutre({k, v:e.target.value})} placeholder="Type de job" style={{padding:'1px 6px',width:130,fontSize:12}}/>
@@ -7838,7 +7851,8 @@ function cvBuildClients(events, registry, factures){
       groupes[groupes.length-1].push(e); dernier = e.day; if(facturee(e)) fac = true; });
     if(groupes.length<2) return;
     groupes[groupes.length-1].push(...att);   // En Attente = encore à faire : avec le projet le plus récent
-    j.events = groupes[0];
+    const nomC = (j.events.find(e=>e.client && e.client.nom)||{}).client;   // v247 : le nom complet (description) sert aux deux projets
+    j.events = groupes[0]; if(nomC) j.nomClient = nomC.nom;
     groupes.slice(1).forEach(g=>{ const id = j.id+'#'+g[0].day; jobs[id] = {...j, id, events:g}; });
   });
   // Facture inscrite sur plus d'une job = à vérifier.
@@ -8192,7 +8206,8 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
   const Row = ({k,children}) => children ? <><div className="muted" style={{fontSize:12.5}}>{k}</div><div style={{fontSize:13.5}}>{children}</div></> : null;
   return <div className="card" style={{position:'sticky',top:'calc(var(--topbar-h) + 12px)',maxHeight:'calc(100vh - var(--topbar-h) - 24px)',overflowY:'auto'}}>
     <CvPill status={job.etatClient||job.status}/>
-    <h2 className="fh" style={{margin:'8px 0 2px',fontSize:20}}>{job.name}</h2>
+    <h2 className="fh" style={{margin:'8px 0 2px',fontSize:20}}>{cvTitreJob(job)}</h2>
+    {job.client==='PART' && <div style={{fontSize:13,color:'var(--accent)',fontWeight:600}}>{cvProjetJob(job)}</div>}
     {r.projet && <div className="muted" style={{fontSize:13}}>{r.projet}</div>}
     <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'5px 14px',margin:'12px 0'}}>
       <Row k={job.client==='CRS'?'PO':'No de job'}>{job.po || (job.client==='CRS'?'Pas de PO':'Pas encore de numéro')}{(job.posLies||[]).length>0 && <span className="muted"> + {job.posLies.join(', ')} (même projet)</span>}</Row>
@@ -8332,7 +8347,7 @@ function CvAVerifierClient({av, cfg, factures, marquerRegle, onPick, onChanged, 
       {e.lien && <> · <a href={e.lien} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12}}>événement ↗</a></>}</div>
     <CvInscrirePassage cfg={cfg} e={e} onDone={onChanged}/>
   </div>);
-  const NomJob = ({job}) => <span onClick={()=>onPick(job.id)} title="Ouvrir la fiche de la job" style={{cursor:'pointer',fontWeight:700,textDecoration:'underline dotted'}}>{job.name}</span>;
+  const NomJob = ({job}) => <span onClick={()=>onPick(job.id)} title="Ouvrir la fiche de la job" style={{cursor:'pointer',fontWeight:700,textDecoration:'underline dotted'}}>{cvTitreJobComplet(job)}</span>;
   if(!av.n) return <div className="card" style={{marginBottom:14,padding:'10px 14px',fontSize:13.5,borderColor:'var(--success)'}}>
     <div onClick={()=>enTrait.length && setOuvert(!ouvert)} style={{display:'flex',justifyContent:'space-between',gap:10,cursor:enTrait.length?'pointer':'default'}}>
       <span>✅ Rien à vérifier pour ce client.</span>
@@ -8432,7 +8447,7 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
             <tbody>
               {list.map(j=><tr key={j.id} onClick={()=>pick(j.id)} style={{cursor:'pointer',background:sel===j.id?'rgba(var(--accent-rgb),0.10)':undefined}}>
                 <td style={{whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>{j.po||'—'}{(j.posLies||[]).length>0 && <div className="muted" style={{fontSize:11}}>+ {j.posLies.join(', ')}</div>}</td>
-                <td><b>{j.name}</b>{av.ids.has(j.id) && <span style={{color:'var(--danger)',fontWeight:800}}> !</span>}{q.trim() && arch(j) && <span className="badge" style={{marginLeft:6,fontSize:10.5}}>archivée</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></td>
+                <td><b>{cvTitreJob(j)}</b>{j.client==='PART' && <div style={{fontSize:12,color:'var(--accent)'}}>{cvProjetJob(j)}</div>}{av.ids.has(j.id) && <span style={{color:'var(--danger)',fontWeight:800}}> !</span>}{q.trim() && arch(j) && <span className="badge" style={{marginLeft:6,fontSize:10.5}}>archivée</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></td>
                 <td><CvPhaseCell job={j} phase="ROUGH"/></td>
                 <td><CvPhaseCell job={j} phase="FINITION"/></td>
                 <td style={{fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>
@@ -8546,7 +8561,7 @@ function CvDupJob({job, n, facture, cfg, clients, onRegle, onChanged}){
       : <div className="muted" style={{fontSize:12.5,marginTop:2}}>Facture pas encore dans le registre (pas de PDF).</div>}
     <div style={{display:'grid',gap:8,margin:'8px 0'}}>
       {jobs.map(j=><div key={j.id} style={{border:'1px solid var(--border2)',borderRadius:8,padding:'6px 8px'}}>
-        <div style={{fontWeight:700}}>{j.client!=='PART' ? j.client+' ' : ''}{j.name}{j.po ? <span className="muted" style={{fontWeight:400}}> · {j.po}</span> : ''}{j.address ? <span className="muted" style={{fontWeight:400}}> · {j.address}</span> : ''}
+        <div style={{fontWeight:700}}>{j.client!=='PART' ? j.client+' ' : ''}{cvTitreJobComplet(j)}{j.po ? <span className="muted" style={{fontWeight:400}}> · {j.po}</span> : ''}{j.address ? <span className="muted" style={{fontWeight:400}}> · {j.address}</span> : ''}
           {j.id===job.id && <span className="badge" style={{marginLeft:6,fontSize:10.5}}>cette job</span>}</div>
         {j.events.filter(aLeNo).map((e,i)=><div key={i} style={{paddingLeft:8,marginTop:3,fontSize:12.5}}>
           <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b> <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span> « {e.title} »{e.as ? ' · appel '+e.as : ''} · facture {e.fac}
@@ -8852,7 +8867,7 @@ function CvSemaine({clients, appels, onOpen, ancre, commandes, onCommande, manue
     return <div style={{border:'1px solid var(--border2)',borderLeft:'3px solid '+(fait?'var(--success)':(e.day>=today?'var(--warning)':'var(--border2)')),borderRadius:8,padding:'6px 7px',marginBottom:6,fontSize:12}}>
       <div style={{cursor:'pointer'}} onClick={()=>onOpen && onOpen(c.code)}>
         <div style={{fontWeight:700,fontVariantNumeric:'tabular-nums'}}>{e.allDay ? 'Journée' : cvHeure(e.start)+(e.end?'–'+cvHeure(e.end):'')} <span style={{fontSize:10.5,fontWeight:800,color:'var(--accent)'}}>{e.phase}</span></div>
-        <div style={{fontWeight:700,lineHeight:1.25}}>{c.code!=='PART'?c.code+' ':''}{j.name}</div>
+        <div style={{fontWeight:700,lineHeight:1.25}}>{c.code!=='PART'?c.code+' ':''}{cvTitreJobComplet(j)}</div>
         {e.crew.length>0 && <div className="muted" style={{fontSize:11}}>{e.crew.join(', ')}</div>}
       </div>
       {ots.length>0 && <div style={{marginTop:3}}>{e.phase==='FINITION' && !fait && <div style={{fontSize:11,fontWeight:700,color:'var(--success)'}}>📋 Commander avec l'OT :</div>}<CvOTLinks ots={ots}/></div>}
@@ -8936,7 +8951,7 @@ function ClientsView({cfg, refreshKey, isDesktop}){
       {ouvert && <div style={{marginTop:8,borderTop:'1px solid var(--border)'}}>
         {!voirTerm && !c.jobs.some(j=>j.status!=='done') && <div className="muted" style={{fontSize:12.5,padding:'8px 0'}}>Toutes terminées — coche « Terminées » pour les voir.</div>}
         {c.jobs.filter(j=>voirTerm || j.status!=='done').map(j=><div key={j.id} className="remind-item" style={{cursor:'pointer'}} onClick={()=>setOpen(c.code)}>
-          <div><b style={{fontSize:13.5}}>{j.name}</b>{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></div>
+          <div><b style={{fontSize:13.5}}>{cvTitreJobComplet(j)}</b>{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></div>
           <div className="muted" style={{fontSize:12,whiteSpace:'nowrap'}}>{cvFmtDay(j.last)}</div>
         </div>)}
       </div>}
@@ -9393,7 +9408,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   // Étiquette d'une job de particulier : ce que tu as écrit (« Cuisine »), sinon le mois (« Août 2026 »)
   const MOIS = ['','Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
   pers.forEach(p=>p.listeJobs.forEach(j=>{
-    j.label = (j.ficheJob && j.ficheJob.nom) || [...j.cles].map(persLabelJob).find(Boolean) || (j.first ? MOIS[+j.first.slice(5,7)]+' '+j.first.slice(0,4) : 'Job');
+    j.label = (j.ficheJob && j.ficheJob.nom) || cvProjetJob({name:j.nom, ids:j.ids, events:j.events||[], first:j.first}) || [...j.cles].map(persLabelJob).find(Boolean) || (j.first ? MOIS[+j.first.slice(5,7)]+' '+j.first.slice(0,4) : 'Job');   // v247 : type · date
   }));
   Object.values(contr).forEach(c=>c.listeJobs.forEach(j=>{ j.label = cvSansInit(j.nom) || j.po || 'Job'; }));
   // v169 : jobs en ordre de visite — à venir d'abord (la plus proche en premier), puis de la visite la plus récente à la plus ancienne ; sans visite à la fin
