@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v247';
+const APP_VERSION = 'v248';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2382,7 +2382,9 @@ function cvTypeJob(j){ if(!j) return ''; const ids = [j.id, ...(j.ids ? [...j.id
   for(const i of ids) if(PJ_TYPES_CACHE[i]) return PJ_TYPES_CACHE[i];
   return pjTypeAuto({name:j.name||j.nom||'', events:j.events||[]}); }
 function cvDateLongue(d){ return d ? cvFmtDay(d)+' '+String(d).slice(0,4) : ''; }
-function cvProjetJob(j){ const d = (j && (j.first || ((j.events||[]).filter(e=>!e.attente)[0]||{}).day)) || ''; return [cvTypeJob(j) || 'Service', cvDateLongue(d)].filter(Boolean).join(' · '); }
+function cvProjetJob(j){ const ev = (j && j.events) || [], reels = ev.filter(e=>!e.attente);
+  const d = reels.length ? (reels.map(e=>e.day).sort()[0] || '') : (ev.length ? '' : (j && j.first) || '');
+  return [cvTypeJob(j) || 'Service', d ? cvDateLongue(d) : (ev.length ? 'en attente' : '')].filter(Boolean).join(' · '); }
 function cvTitreJob(j){ return j && j.client==='PART' ? (cvNomClientJob(j) || cvNomSansType(j.name)) : (j ? j.name : ''); }
 function cvTitreJobComplet(j){ return j && j.client==='PART' ? cvTitreJob(j)+' — '+cvProjetJob(j) : cvTitreJob(j); }
 function useTypesJob(cfg){
@@ -7622,7 +7624,7 @@ function cvPO(text){
 }
 // Décortique le titre d'un événement : code client, phase, PO, initiales, nom.
 // v206 : client écrit dans la description d'un événement de job (The Crew) : nom complet, téléphone, courriel (+ conjoint « X et Y »)
-function cvClientDescription(desc){
+function cvClientDescription(desc, titre){
   let t = String(desc||'');
   if(!t.trim()) return null;
   t = t.replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|li|tr|h\d)>/gi,'\n').replace(/<[^>]+>/g,'')
@@ -7650,6 +7652,9 @@ function cvClientDescription(desc){
   if(!noms) essai(/(?:^|\s)((?:Mme|M\.|Madame|Monsieur)\s+.+)$/, (l,i)=>L.slice(i, i+3).some(x=>reTel.test(x) || reMail.test(x)));
   // 3. « Prénom Nom — 438-… » ou « Prénom Nom, courriel » au début d'une ligne
   if(!noms) essai(/^(.+)$/, l=>reTel.test(l) || reMail.test(l));
+  // 4. v248 : la description commence par le nom complet (« Louise Hoelscher ») et le titre de l'événement contient ce prénom ou ce nom
+  if(!noms && titre && L.length){ const n = nomsDe(L[0]); const T = cvNorm(titre);
+    if(n && n[0].split(/\s+/).length>=2 && n[0].split(/\s+/).some(w=>cvNorm(w).length>=3 && T.includes(cvNorm(w)))){ noms = n; i0 = 0; } }
   if(!noms) return null;
   // Téléphone / courriel : sur la ligne du client et les 3 suivantes (lignes « Tél : », « Courriel : » ou qui commencent par le numéro / courriel)
   let tel = '', courriel = '';
@@ -7683,7 +7688,7 @@ function cvParseEvent(e){
   return {
     code, phase: phase || (code?'SERV':''), servType, po, name, key: cvNorm(name), crew:[...crew],
     as: cvSuivi(e.description,'Appel de service'), ot: cvSuivi(e.description,'Ordre de travail'), fac: cvSuivi(e.description,'Facture'),
-    client: e.calendarId===CREW_CAL ? cvClientDescription(e.description) : null,   // v206
+    client: (e.calendarId===CREW_CAL || e.calendarId===EN_ATTENTE_CAL) ? cvClientDescription(e.description, title) : null,   // v206 ; v248 : En Attente aussi
     attente: e.calendarId===EN_ATTENTE_CAL, id: e.id||'', calId: e.calendarId||'', day: cvDay(e.start), start: e.start||'', end: e.end||'', allDay: !!e.allDay, location: e.location||'', title, attachments: e.attachments||[], desc: e.description||'', lien: e.htmlLink||'', colorId: e.colorId||'', calColor: e.calColor||'', couleurId: couleurIdEvenement(e)
   };
 }
