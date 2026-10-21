@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v250';
+const APP_VERSION = 'v251';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4794,7 +4794,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts}){
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('annulees')}><div style={{fontSize:24,fontWeight:800}}>{annulees.length}</div><div className="muted" style={{fontSize:12}}>pas à facturer (**)</div></div>
       </div>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
-        {[['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['tableur','📊 Mode tableur'],['papiers','Papiers à traiter ('+papiers.length+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes'],['paiements','💵 Paiements reçus']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
+        {[['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['tableur','📊 Mode tableur'],['papiers','Papiers à traiter ('+papiers.length+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (projet, adresse, no)…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
       </div>
       {vue!=='paiements' && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:10}}>
@@ -9551,8 +9551,20 @@ function repIgnores(){ try{ return new Set(JSON.parse(localStorage.getItem('crm_
 function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.setItem('crm_rep_ignores', JSON.stringify([...s])); }catch(e){} }
 
 // v202 : Comptabilité — comptes fournisseurs, factures clients (et paiements reçus), appels de service, à vérifier. Les pages gardent toutes leurs fonctions.
-const CPT_NAV = {factures:'factures', fournisseurs:'fourn', appel:'appel', verif:'verif'};   // anciens menus → onglet de Comptabilité
-const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Factures clients'],['factures','Facture appel de service'],['appel','Appels de service'],['verif','À vérifier']];   // v240
+const CPT_NAV = {factures:'factures', fournisseurs:'fourn', appel:'appel', verif:'verif', paiements:'paiements'};   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
+const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Factures clients'],['paiements','Paiements'],['factures','Facture appel de service'],['appel','Appels de service'],['verif','À vérifier']];   // v240
+// v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
+function PaiementsOnglet({cfg, cfgRep, refreshKey, contacts}){
+  const [q,setQ]=useState(()=>(navFocus('paiements')||{}).q || '');
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 8px',fontSize:20}}>Paiements</h2>
+    <div style={{display:'flex',gap:6,marginBottom:10}}>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (client, montant, no de facture)…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
+      {q && <button className="btn btn-sm" onClick={()=>setQ('')}>✕</button>}
+    </div>
+    <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={q} contacts={contacts}/>
+  </div>;
+}
 function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, onglet0}){
   const [onglet,setOnglet]=useState(onglet0 || 'clients');
   const [cles,setCles]=useState({});
@@ -9567,6 +9579,7 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
       <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Factures clients</h2>
       <div className="muted" style={{fontSize:13,marginBottom:10}}>Tous tes clients : contracteurs et particuliers. Clique un client pour voir ses jobs (en cours, terminées), puis une job pour ses factures, achats, PO et dossier.</div>
       <RepertoireView key={'c'+(cles.clients||0)} mode="factures" cfg={cfgRep} refreshKey={refreshKey} toast={toast} isDesktop={isDesktop} contacts={contacts}/></>}
+    {onglet==='paiements' && <PaiementsOnglet key={'p'+(cles.paiements||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='factures' && <FacturesView key={'x'+(cles.factures||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='appel' && <AppelServiceView key={'a'+(cles.appel||0)} cfg={cfgRep} toast={toast}/>}
     {onglet==='verif' && <>
@@ -10186,7 +10199,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
       {onAller && (()=>{ const aller = (cible, f) => onAller(cible, {...f, nom:c.nom}), q = pers ? c.nom : c.code;   // v202 : sections de ce client, déjà filtrées
         return <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
           <button className="btn btn-sm" onClick={()=>aller('factures', pers ? {vue:'toutes', q:c.nom} : {vue:'toutes', code:c.code})}>Factures</button>
-          <button className="btn btn-sm" onClick={()=>aller('factures', {vue:'paiements', q})}>Paiements</button>
+          <button className="btn btn-sm" onClick={()=>aller('paiements', {q})}>Paiements</button>
           <button className="btn btn-sm" onClick={()=>aller('projets', pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code})}>Projets</button>
           <button className="btn btn-sm" onClick={()=>aller('soumissions', {q:c.nom})}>Soumissions</button>
         </div>; })()}
