@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v251';
+const APP_VERSION = 'v252';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4297,6 +4297,10 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const dR = useClientsData(cfgRep || cfg, refreshKey+'|r'+repTick);
   const FR = dR.fiches || {clients:[], jobs:[], fourn:[], masques:[], contacts:[]};
   const clientsR = useMemo(()=>cvBuildClients(dR.events||[], dR.registry||[], dR.factures||{}),[dR.events, dR.registry, dR.factures]);
+  // v252 : à quel projet (même nom et PO que l'onglet Projets) appartient chaque facture — pour les comptes à recevoir des contracteurs
+  const jobDeFac = useMemo(()=>{ const m = {}; Object.values(clientsR||{}).forEach(c=>(c.jobs||[]).forEach(j=>(j.factures||[]).forEach(n=>{ if(!m[n]) m[n] = j; }))); return m; },[clientsR]);
+  const regParPO = useMemo(()=>{ const m = {}; (dR.registry||[]).forEach(r=>{ if(r.po) m[r.po] = r; }); return m; },[dR.registry]);
+  const [cieOuv,setCieOuv]=useState({});   // v252 : contracteurs repliés par défaut dans « En attente de paiement »
   const R = useMemo(()=>repConstruire({clients:clientsR, registry:dR.registry||[], factures:dR.factures||{}, achats:dR.achats||[], soumissions:dR.soumissions||[], F:FR, contacts, gcmeq:dR.gcmeq||[]}),[clientsR, dR.registry, dR.factures, dR.achats, dR.soumissions, dR.fiches, contacts, dR.gcmeq]);
   const parCourriel = useMemo(()=>{ const m = {};
     R.pers.forEach(p=>p.courriels.forEach(e=>{ e = String(e).toLowerCase(); if(!m[e]) m[e] = {nom:p.nom, p}; }));
@@ -4598,8 +4602,9 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       {(()=>{ const G = paiGroupesCompagnies(aRecevoir, FR);   // v249 : même compagnie = une seule ligne
         return G.map(x=>[x.nom, x.fs.sort((a,b)=>(b.age||0)-(a.age||0)), x.k]).sort((a,b)=>(b[1][0].age||0)-(a[1][0].age||0)).map(([k,fs,cleG])=>
           <div key={cleG} style={{padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
-            <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center'}}>
-              <span><b style={{color:'var(--accent)'}}>{k}</b>{fs[0].nomRep && fs[0].client.includes('@') && <span className="muted" style={{fontSize:11.5}}> · {fs[0].client}</span>}
+            <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center',cursor:String(cleG).startsWith('C:')?'pointer':'default'}}
+              onClick={()=>{ if(String(cleG).startsWith('C:')) setCieOuv(o=>({...o, [cleG]:!o[cleG]})); }}>
+              <span>{String(cleG).startsWith('C:') && <span className="muted" style={{display:'inline-block',width:14}}>{cieOuv[cleG] ? '▾' : '▸'}</span>}<b style={{color:'var(--accent)'}}>{k}</b>{fs[0].nomRep && fs[0].client.includes('@') && <span className="muted" style={{fontSize:11.5}}> · {fs[0].client}</span>}
                 {fs[0].sansFiche && <> <span className="muted" style={{fontSize:11.5}}>{k!==fs[0].sansFiche ? '· '+fs[0].sansFiche+' ' : ''}pas dans le Répertoire</span> <button className="btn btn-sm" style={{fontSize:11.5,padding:'1px 7px'}} disabled={!!busy} onClick={()=>setAssoc({courriel:fs[0].sansFiche, q:k.includes('@')?'':k, nom:k.includes('@')?'':k})}>👤 Associer</button></>}</span>
               <b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(fs.reduce((s,f)=>s+f.solde,0))}<span className="muted" style={{fontWeight:400,fontSize:12}}> · {fs.length} facture{fs.length>1?'s':''}</span></b></div>
             {(()=>{ const ligneF = f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'3px 0'}}>
@@ -4614,13 +4619,27 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
                   : <button className="btn btn-sm" disabled={!!busy} title="Facture faite en double ou annulée : elle ne sera plus comptée à recevoir" onClick={()=>setAnnule(f.num)}>✕</button>}
               </span>
             </div>;
-              // v250 : contracteur → ses factures regroupées par projet (PO, sinon nom de la job)
               if(!String(cleG).startsWith('C:')) return fs.map(ligneF);
-              const P = {}; fs.forEach(f=>{ const pk = f.po || cvNorm(f.nom) || 'sans'; (P[pk] = P[pk] || {nom:'', po:'', fs:[]}).fs.push(f); if(!P[pk].nom && f.nom) P[pk].nom = f.nom; if(!P[pk].po && f.po) P[pk].po = f.po; });
-              return Object.values(P).map((pr,i)=><div key={i} style={{margin:'4px 0 2px 10px',paddingLeft:8,borderLeft:'2px solid var(--border2)'}}>
-                <div style={{display:'flex',justifyContent:'space-between',gap:8,fontSize:12.5}}><b>{pr.nom ? cvTitleCase(pr.nom) : 'Sans projet'}{pr.po && <span className="muted" style={{fontWeight:400}}> · {pr.po}</span>}</b>
-                  <span className="muted" style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(pr.fs.reduce((t,f)=>t+f.solde,0))} · {pr.fs.length} facture{pr.fs.length>1?'s':''}</span></div>
-                {pr.fs.map(ligneF)}</div>); })()}
+              // v252 : contracteur replié par défaut ; ouvert → ses projets nommés comme dans l'onglet Projets (nom · PO), une ligne courte par facture
+              if(!cieOuv[cleG]) return null;
+              const ligneC = f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'2px 0'}}>
+                <span>#{f.num} <span className="muted">· {cvFmtDay(f.date)}{f.age!=null ? ' · '+f.age+' j' : ''}</span>{f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}</span>
+                <span style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <span style={{fontVariantNumeric:'tabular-nums'}}>{f.estime ? '≈ ' : ''}{cvMoney(f.solde)}</span>
+                  {f.pdf && <a href={repPdf(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>PDF</a>}
+                  <button className="btn btn-sm" onClick={()=>ouvrirManuel([f])}>💵 Payée</button>
+                  {annule===f.num
+                    ? <button className="btn btn-sm btn-danger" disabled={busy==='a'+f.num} onClick={()=>annulerFacture(f)}>{busy==='a'+f.num?'…':'Confirmer : annuler'}</button>
+                    : <button className="btn btn-sm" disabled={!!busy} title="Facture faite en double ou annulée : elle ne sera plus comptée à recevoir" onClick={()=>setAnnule(f.num)}>✕</button>}
+                </span></div>;
+              const P = {}; fs.forEach(f=>{ const j = jobDeFac[f.num], reg = f.po ? regParPO[f.po] : null;
+                const pk = j ? 'j:'+j.id : f.po ? 'po:'+f.po : 'n:'+(cvNorm(f.nom)||'sans');
+                const x = P[pk] = P[pk] || {titre: j ? cvTitreJob(j) : reg && reg.nom ? reg.nom : f.nom ? cvTitleCase(f.nom) : 'Sans projet', po:(j && j.po) || f.po || '', fs:[]};
+                x.fs.push(f); });
+              return Object.values(P).sort((a,b)=>a.titre.localeCompare(b.titre,'fr')).map((pr,i)=><div key={i} style={{margin:'6px 0 2px 14px',paddingLeft:8,borderLeft:'2px solid var(--border2)'}}>
+                <div style={{display:'flex',justifyContent:'space-between',gap:8,fontSize:13}}><span><b>{pr.titre}</b>{pr.po && <span className="muted"> · {pr.po}</span>}</span>
+                  <span style={{fontVariantNumeric:'tabular-nums',fontWeight:600}}>{cvMoney(pr.fs.reduce((t,f)=>t+f.solde,0))}</span></div>
+                {pr.fs.sort((a,b)=>String(a.date).localeCompare(String(b.date))).map(ligneC)}</div>); })()}
           </div>); })()}
     </div>}
 
