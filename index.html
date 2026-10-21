@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v238';
+const APP_VERSION = 'v239';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2211,13 +2211,31 @@ const PJ_TYPE_MOTS = [
   ['Pièce',         /\b(CUISINE|CUI|SALON|SDB|SALLE DE BAINS?|SOUS-SOL|S-S|CHAMBRES?|BUREAU|GARAGE)\b/],
   ['Autre',         /\b(ENSEIGNES?|HOTTE|FOUR|FRIGO|LAVEUSE|SECHEUSE|ELECTROMENAGERS?)\b/],
 ];
+const pjMaj = x => String(x||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase();
 function pjTypeAuto(job){
-  const t = [job.name, ...(job.events||[]).map(e=>e.title)].filter(Boolean).join(' | ').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase();
+  const t = pjMaj([job.name, ...(job.events||[]).map(e=>e.title)].filter(Boolean).join(' | '));
   const mots = t.split(/[^A-Z0-9]+/);
   const code = mots.find(m=>PJ_TYPE_CODES[m]);
   if(code) return PJ_TYPE_CODES[code];
   const m = PJ_TYPE_MOTS.find(([, re])=>re.test(t));
-  return m ? m[0] : '';
+  if(m) return m[0];
+  // v239 : rien dans le titre → la description de l'événement, seulement si UN seul type y est reconnu (sinon on ne devine pas)
+  const d = pjMaj((job.events||[]).map(e=>String(e.desc||'').split(/──\s*Suivi/)[0]).join(' | '));
+  const ds = [...new Set(PJ_TYPE_MOTS.filter(([, re])=>re.test(d)).map(x=>x[0]))];
+  return ds.length===1 ? ds[0] : '';
+}
+// v239 : passage SERV d'un particulier → une phase au nom du type, avec « Faire … » tant que ce n'est pas fait
+const PJ_SERV_TXT = {'Borne':['Borne','Installer la borne','Borne installée'], 'Piscine':['Piscine','Faire la piscine','Piscine faite'], 'Spa':['Spa','Faire le spa','Spa fait'],
+  'Mise à niveau':['Mise à niveau','Faire la mise à niveau','Mise à niveau faite'], 'Chauffage':['Chauffage','Faire le chauffage','Chauffage fait'], 'Dépannage':['Dépannage','Faire le dépannage','Dépannage fait'],
+  'Éclairage':['Éclairage','Faire l\'éclairage','Éclairage fait'], 'Prise':['Prises','Faire les prises','Prises faites']};
+const PJ_PIECES = [[/\b(CUISINE|CUI)\b/,'Cuisine','la cuisine','faite'], [/\b(SDB|SALLES? DE BAINS?)\b/,'Salle de bain','la salle de bain','faite'], [/\b(SOUS-SOL|SOUS SOL|S-S)\b/,'Sous-sol','le sous-sol','fait'],
+  [/\bSALON\b/,'Salon','le salon','fait'], [/\bCHAMBRES?\b/,'Chambre','la chambre','faite'], [/\bBUREAU\b/,'Bureau','le bureau','fait'], [/\bGARAGE\b/,'Garage','le garage','fait']];
+function pjServiceTexte(type, job){
+  if(PJ_SERV_TXT[type]) return PJ_SERV_TXT[type];
+  if(type==='Pièce'){ const t = pjMaj([job.name, ...(job.events||[]).map(e=>e.title)].join(' | ')), x = PJ_PIECES.find(([re])=>re.test(t));
+    return x ? [x[1], 'Faire '+x[2], x[1]+' '+x[3]] : ['Pièce','Faire la pièce','Pièce faite']; }
+  if(type && type!=='Autre') return [type, 'Faire : '+type, type+' : fait'];
+  return ['Service','Faire le service','Service fait'];
 }
 const PJ_TYPES_BLOCAGE = ['SERV supplémentaire demandée','Matériel manquant','Retour au chantier','Problème d\'accès','Problème découvert pendant les travaux'];
 const PJ_BLOC_ENTETE = ['Id','Job','Étape','Type','Description','Date','Statut','Réglé le','Pièces jointes','Créé le'];
@@ -2254,12 +2272,13 @@ function pjPhases(job, s, ctx){
     if(L.length){ actif = true; source = 'dans l\'agenda'; }
     else if(plus){ actif = true; source = 'ajoutée à la main'; }
     else if(moins){ actif = false; source = 'retirée à la main'; }
+    else if(!pro){ actif = false; source = 'pas à l\'agenda'; }   // v239 : particulier — on se fie à l'agenda
     else if(dit==='oui' || dit==='non'){ actif = dit==='oui'; source = dit==='oui' ? 'selon le PO' : po.type==='Service' ? 'PO de service' : 'pas dans le PO'; }
     else if(P==='ENTREE'){ actif = false; source = ''; }
     else { const service = visites.some(v=>v.faite) && !avenir.length;   // job de service : pas de rough / finition
       actif = !service; source = service ? 'job de service' : ''; }
     phasesInfo[nom] = {actif, source, plus, moins, agenda: L.length>0};
-    if(!actif && P==='ENTREE') return;   // l'entrée électrique n'apparaît que si elle s'applique
+    if(!actif && (P==='ENTREE' || !pro)) return;   // l'entrée électrique (et chez un particulier, le rough / la finition) n'apparaît que si elle s'applique
     const na = !actif;
     const vs = visites.filter(v=>v.faite && (P==='ENTREE' ? v.events.some(estP) : v.phase===P));
     const nonCmd = futurs.filter(e=>!(ctx.commandes && cvCmd(ctx.commandes, job, e).fait));   // un passage déjà fait = la commande a été faite
@@ -2268,15 +2287,31 @@ function pjPhases(job, s, ctx){
     add(nom, FAIT[P][0], {non:FAIT[P][1], na, ok: faits.length>0 && !futurs.length, du: false,
       info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
     const sansAp = faits.filter(e=>!(e.as || e.fac));
-    add(nom, 'Appel de service inscrit', {non:'Appel de service non inscrit', na, ok: faits.length>0 && !sansAp.length, du: sansAp.length>0, info: sansAp.map(e=>cvFmtDay(e.day)).join(', ')+' sans appel de service'});
+    add(nom, 'Appel de service inscrit', {non:'Appel de service non inscrit', na, ok: faits.length>0 && !sansAp.length, du: sansAp.length>0 && !futurs.length, info: sansAp.length ? sansAp.map(e=>cvFmtDay(e.day)).join(', ')+' sans appel de service' : futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore de passage fait'});
     if(P==='ROUGH') add(nom, 'OT du rough reçu (liste de stock pour la finition)', {non:'OT du rough non reçu (liste de stock pour la finition)', na: na || !pro, ok: ots.length>0 || faits.some(e=>e.ot), du: faits.length>0,
       info:'Le rough est fait mais aucun OT n\'est classé (« B- REF OT » / « 1-PAD »)'});
     if(P==='ENTREE') add(nom, 'OT de l\'entrée électrique reçu', {non:'OT de l\'entrée électrique non reçu', na: na || !pro, ok: faits.some(e=>e.ot) || ots.length>0, du: faits.length>0,
       info:'L\'entrée est faite mais aucun OT n\'est classé'});
     const nonFac = vs.filter(v=>!v.facturee);
-    add(nom, 'Facture '+ART[P], {oui:'Facture '+ART[P]+' envoyée', non:'Facture '+ART[P]+' non envoyée', na, ok: vs.length>0 && !nonFac.length, du: nonFac.length>0, info: nonFac.map(v=>v.label).join(', ')+' : visite faite, pas de facture'});
+    add(nom, 'Facture '+ART[P], {oui:'Facture '+ART[P]+' envoyée', non:'Facture '+ART[P]+' non envoyée', na, ok: vs.length>0 && !nonFac.length, du: nonFac.length>0 && !futurs.length,
+      info: futurs.length && nonFac.length ? 'Retour prévu le '+cvFmtDay(futurs[0].day)+' : la facture suit le dernier passage' : nonFac.length ? nonFac.map(v=>v.label).join(', ')+' : visite faite, pas de facture' : futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore de passage fait'});
   };
   phase('ENTREE','Entrée électrique'); phase('ROUGH','Rough'); phase('FINITION','Finition');
+  // v239 : particulier — les passages SERV forment une phase au nom du type de job (« Faire l'éclairage », « Faire le garage »…)
+  if(!pro){
+    const estServ = e => !['ROUGH','FINITION','RAPUP'].includes(e.phase) && !PJ_ENTREE_RE.test(e.title||'');
+    const L = ev.filter(estServ);
+    if(L.length){
+      const [nomS, faire, fait] = pjServiceTexte(ctx.typeJob || '', job);
+      const faits = L.filter(passe), futurs = L.filter(e=>!passe(e)), apres = futurs.length ? 'Retour prévu le '+cvFmtDay(futurs[0].day) : '';
+      const vs = visites.filter(v=>v.faite && v.events.some(estServ)), nonFac = vs.filter(v=>!v.facturee), sansAp = faits.filter(e=>!(e.as || e.fac));
+      add(nomS, 'Service fait', {idPhase:'Service', oui:fait, non:faire, ok: faits.length>0 && !futurs.length, du: false, info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
+      add(nomS, 'Appel de service inscrit', {idPhase:'Service', non:'Appel de service non inscrit', ok: faits.length>0 && !sansAp.length, du: sansAp.length>0 && !futurs.length,
+        info: apres || sansAp.map(e=>cvFmtDay(e.day)).join(', ')+' sans appel de service'});
+      add(nomS, 'Facture du service', {idPhase:'Service', oui:'Facture envoyée', non:'Facture non envoyée', ok: vs.length>0 && !nonFac.length, du: nonFac.length>0 && !futurs.length,
+        info: apres ? apres+' : la facture suit le dernier passage' : nonFac.map(v=>v.label).join(', ')+' : visite faite, pas de facture'});
+    }
+  }
   // Wrap-up — v238 : pas pour les particuliers (sauf ajouté à la main ou passage WRAP-UP à l'agenda) ; on peut l'enlever chez un contracteur
   const ouverts = (ctx.blocages||[]).filter(b=>b.statut!=='Réglé');
   const travauxFaits = visites.some(v=>v.faite) && !avenir.length;
@@ -2287,7 +2322,7 @@ function pjPhases(job, s, ctx){
     info: ouverts.length ? ouverts.length+' blocage'+(ouverts.length>1?'s':'')+' pas réglé'+(ouverts.length>1?'s':'') : avenir.length ? 'Encore des passages à venir' : 'Aucun passage fait'}); }
   // Fermeture (toujours là) : factures, paiement, job fermée — clés gardées « Wrap-up — … »
   const nonFac = visites.filter(v=>v.faite && !v.facturee);
-  add('Fermeture', 'Toutes les factures envoyées', {idPhase:'Wrap-up', non:'Factures pas toutes envoyées', ok: travauxFaits && !nonFac.length, du: travauxFaits && nonFac.length>0, info: nonFac.map(v=>v.label).join(', ')+' sans facture'});
+  add('Fermeture', 'Toutes les factures envoyées', {idPhase:'Wrap-up', non:'Factures pas toutes envoyées', ok: travauxFaits && !nonFac.length, du: travauxFaits && nonFac.length>0, info: nonFac.length ? nonFac.map(v=>v.label).join(', ')+' sans facture' : avenir.length ? 'Encore des passages à venir' : 'Aucun passage fait'});
   const nums = [...new Set(ev.flatMap(e=>e.fac && e.fac!=='**' ? paiNums(e.fac) : []))];
   const F = ctx.factures || {}, nonPayees = nums.filter(n=>!(F[n] && F[n].etatPaie==='payee'));
   // v228 : « Paiement » — vert quand tout est payé ; rouge seulement si une facture est en souffrance (plus de 30 jours, N30) ;
@@ -2353,11 +2388,11 @@ const PJ_COULEUR = {ok:'var(--success)', manuel:'var(--success)', manque:'var(--
 function PjBarre({p, blocages, sel, onEtape}){
   const parEtape = id => (blocages||[]).filter(b=>b.etape===id);
   return <div style={{overflowX:'auto',margin:'8px 0 2px'}} onClick={e=>e.stopPropagation()}>
-    <div style={{display:'flex',gap:6,minWidth:420}}>
-      {PJ_PHASES.map(ph=>{ const L = p.steps.filter(x=>x.phase===ph); if(!L.length) return null; const fait = L.filter(x=>x.etat!=='na').every(x=>x.etat==='ok'||x.etat==='manuel') && L.some(x=>x.etat!=='na');
-        return <div key={ph} style={{flex:L.length,minWidth:0}}>
-          <div style={{fontSize:10.5,fontWeight:800,letterSpacing:'.05em',textTransform:'uppercase',color:fait?'var(--success)':'var(--muted)',marginBottom:3}}>{fait?'✓ ':''}{pjNomPhase(ph)}</div>
-          <div style={{display:'flex',gap:2}}>
+    <div style={{display:'flex',gap:14,minWidth:420}}>
+      {[...new Set(p.steps.map(x=>x.phase))].map(ph=>{ const L = p.steps.filter(x=>x.phase===ph); if(!L.length) return null; const fait = L.filter(x=>x.etat!=='na').every(x=>x.etat==='ok'||x.etat==='manuel') && L.some(x=>x.etat!=='na');
+        return <div key={ph} style={{flex:L.length+' 1 0',minWidth:'max-content'}}>
+          <div style={{fontSize:10.5,fontWeight:800,letterSpacing:'.05em',textTransform:'uppercase',color:fait?'var(--success)':'var(--muted)',marginBottom:4,textAlign:'center',whiteSpace:'nowrap'}}>{fait?'✓ ':''}{pjNomPhase(ph)}</div>
+          <div style={{display:'flex',gap:3}}>
             {L.map(x=>{ const bs = parEtape(x.id), ouvert = bs.some(b=>b.statut!=='Réglé'), choisi = sel===x.id;
               return <div key={x.id} style={{flex:1,minWidth:0,cursor:'pointer',position:'relative'}} title={x.texte+' — '+((x.etat==='futur' && x.libelle) || ({ok:'fait',manuel:'coché à la main',manque:'à faire',futur:'pas encore rendu là',na:'ne s\'applique pas'})[x.etat])+((x.etat==='manque'||x.etat==='futur') && x.info ? ' · '+x.info : '')+(ouvert?' · blocage à régler':'')} onClick={()=>onEtape(choisi ? null : x.id)}>
                 {bs.length>0 && <span style={{position:'absolute',top:-9,left:'50%',transform:'translateX(-50%)',zIndex:1,width:16,height:16,borderRadius:8,fontSize:10.5,fontWeight:900,lineHeight:'16px',textAlign:'center',
@@ -2508,7 +2543,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   const codes = [...new Set(Object.values(clients).map(c=>c.code))].sort((a,b)=>(a==='PART')-(b==='PART') || a.localeCompare(b,'fr'));
   const groupes = [['cours','En cours'],['avenir','À venir'],['done','Terminées (30 derniers jours)']];
   const Ligne = ({x})=>{ const {c,j,s}=x, k=c.code+j.id, o=ouvert===k;
-    const p = pjPhases(j, s, {appels:ap, commandes, factures, manuels, archives, poEtapes, blocages:B.parJob[j.id]||[]});   // v224
+    const p = pjPhases(j, s, {appels:ap, commandes, factures, manuels, archives, poEtapes, typeJob: c.code==='PART' ? (TJ.map[j.id] || pjTypeAuto(j)) : '', blocages:B.parJob[j.id]||[]});   // v224 ; v239 : type du particulier
     return <div className="opp-card" style={{padding:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:10,cursor:'pointer'}} onClick={()=>setOuvert(o?null:k)}>
         <div>
@@ -7628,7 +7663,7 @@ function cvParseEvent(e){
     code, phase: phase || (code?'SERV':''), servType, po, name, key: cvNorm(name), crew:[...crew],
     as: cvSuivi(e.description,'Appel de service'), ot: cvSuivi(e.description,'Ordre de travail'), fac: cvSuivi(e.description,'Facture'),
     client: e.calendarId===CREW_CAL ? cvClientDescription(e.description) : null,   // v206
-    attente: e.calendarId===EN_ATTENTE_CAL, id: e.id||'', calId: e.calendarId||'', day: cvDay(e.start), start: e.start||'', end: e.end||'', allDay: !!e.allDay, location: e.location||'', title, attachments: e.attachments||[], lien: e.htmlLink||'', colorId: e.colorId||'', calColor: e.calColor||'', couleurId: couleurIdEvenement(e)
+    attente: e.calendarId===EN_ATTENTE_CAL, id: e.id||'', calId: e.calendarId||'', day: cvDay(e.start), start: e.start||'', end: e.end||'', allDay: !!e.allDay, location: e.location||'', title, attachments: e.attachments||[], desc: e.description||'', lien: e.htmlLink||'', colorId: e.colorId||'', calColor: e.calColor||'', couleurId: couleurIdEvenement(e)
   };
 }
 
