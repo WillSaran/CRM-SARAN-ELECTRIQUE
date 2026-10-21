@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v257';
+const APP_VERSION = 'v258';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4079,6 +4079,78 @@ function paiMontant(v){ let x = String(v||'').replace(/[^\d,.\-]/g,''); if(!x) r
   else if(v1>=0) x = /,\d{1,2}$/.test(x) ? x.replace(/,(?=.*,)/g,'').replace(',','.') : x.replace(/,/g,'');
   else if((x.match(/\./g)||[]).length>1) x = x.replace(/\.(?=.*\.)/g,'');
   const n = parseFloat(x); return isNaN(n) ? null : Math.round(n*100)/100; }
+// v258 : relevé de compte Desjardins (PDF) → transactions. pages = [[{str, x, y, w}]] (texte lu par pdf.js).
+// Rien n'est deviné : le type (dépôt / retrait) vient de la colonne (sous « Dépôt » ou « Retrait »), vérifié avec le solde quand il est là.
+const RELEVE_MOIS = {JAN:1, FEV:2, 'FÉV':2, MAR:3, AVR:4, MAI:5, JUN:6, JUI:7, JUL:7, AOU:8, 'AOÛ':8, SEP:9, OCT:10, NOV:11, DEC:12, 'DÉC':12};
+const RELEVE_MOIS_LONG = {janvier:1, 'février':2, fevrier:2, mars:3, avril:4, mai:5, juin:6, juillet:7, 'août':8, aout:8, septembre:9, octobre:10, novembre:11, 'décembre':12, decembre:12};
+function releveLignes(items){
+  const L = [];
+  items.filter(it=>it.str && it.str.trim()).sort((a,b)=>b.y-a.y || a.x-b.x).forEach(it=>{
+    let l = L.find(x=>Math.abs(x.y-it.y)<=2); if(!l){ l = {y:it.y, items:[]}; L.push(l); } l.items.push(it); });
+  return L.sort((a,b)=>b.y-a.y).map(l=>{ const its = l.items.sort((a,b)=>a.x-b.x); let txt = '', pos = [];
+    its.forEach(it=>{ const cw = it.w / Math.max(1, it.str.length), fin = pos.length ? pos[pos.length-1] + cw : it.x;
+      if(txt && it.x - fin > cw*0.3){ txt += ' '; pos.push(fin); }
+      for(let i=0;i<it.str.length;i++){ txt += it.str[i]; pos.push(it.x + i*cw); } });
+    const cwMoy = its.reduce((s,it)=>s + it.w/Math.max(1,it.str.length),0) / Math.max(1,its.length);
+    return {txt, pos, cw:cwMoy}; });
+}
+// Montants d'une ligne : « 15 258.78 » (espace de milliers = petit écart) ; « PP23    851.52 » ou « AUBAINERIE 31    872.06 » → 851.52 / 872.06
+function releveMontants(l){ const s = l.txt, out = [], re = /(?<![\w\/.,])(\d{1,3}(?: \d{3})*\.\d{2})(-?)/g; let a;
+  while((a = re.exec(s))){ let debut = a.index, txt = a[1];
+    for(let k = txt.length-1; k >= 0; k--){ if(txt[k] !== ' ') continue;
+      const i = debut + k; if(l.pos[i+1] - l.pos[i-1] > 2.5*l.cw){ debut = i + 1; txt = s.slice(debut, a.index + a[1].length); break; } }
+    if(!/^\d{1,3}(?: \d{3})*\.\d{2}$/.test(txt)) continue;
+    out.push({val:parseFloat(txt.replace(/ /g,'')), neg:!!a[2], droite:l.pos[a.index + a[1].length - 1] + l.cw}); }
+  return out; }
+function releveLire(pages){
+  const tout = pages.map(p=>releveLignes(p).map(l=>l.txt).join('\n')).join('\n');
+  const per = tout.match(/au\s+\d{1,2}\s+([a-zéû]+)\s+(\d{4})/i);
+  const anFin = per ? +per[2] : new Date().getFullYear(), moisFin = per ? (RELEVE_MOIS_LONG[per[1].toLowerCase()] || 12) : 12;
+  const out = []; let col = null, cur = null, soldePrec = null;
+  const AMT = /(\d{1,3}(?: \d{3})*\.\d{2})(-?)/g, START = /^\s*(\d{1,2})\s+([A-ZÉÛ]{3})\s+([A-Z]{2,4})\b\s*(.*)$/;
+  const fermer = () => { if(!cur) return; const t = cur; cur = null;
+    const montants = t.montants; if(!montants.length) return;
+    let tr = null, solde = null;
+    if(col){ montants.forEach(m=>{ const d = k => Math.abs(m.droite - col[k]);
+        const k = ['retrait','depot','solde'].sort((a,b)=>d(a)-d(b))[0];
+        if(k==='solde') solde = m.neg ? -m.val : m.val; else if(!tr) tr = {val:m.val, depot:k==='depot'}; }); }
+    if(!tr && montants.length>=2){ const a = montants[montants.length-2], s = montants[montants.length-1]; solde = s.neg ? -s.val : s.val; tr = {val:a.val, depot:null}; }
+    if(!tr) return;
+    if(soldePrec!=null && solde!=null){ if(Math.abs(soldePrec + tr.val - solde) < 0.015) tr.depot = true; else if(Math.abs(soldePrec - tr.val - solde) < 0.015) tr.depot = false; }
+    if(solde!=null) soldePrec = solde;
+    if(tr.depot==null) return;
+    const an = t.mois > moisFin ? anFin - 1 : anFin;
+    const desc = t.desc.replace(AMT,' ').replace(/\s{2,}/g,' ').trim();
+    out.push({date: an+'-'+String(t.mois).padStart(2,'0')+'-'+String(t.jour).padStart(2,'0'), code:t.code, desc, montant:Math.round(tr.val*100)/100, depot:tr.depot}); };
+  pages.forEach(items=>{ let table = false;
+    releveLignes(items).forEach(l=>{ const s = l.txt;
+      if(/Retrait/.test(s) && /D[ée]p[ôo]t/.test(s) && /Solde/.test(s)){ fermer();
+        const bout = re => { const m = s.match(re); return m ? l.pos[m.index + m[0].length - 1] + l.cw : null; };
+        col = {retrait:bout(/Retrait/), depot:bout(/D[ée]p[ôo]t/), solde:bout(/Solde/)}; table = true; return; }
+      if(!table) return;
+      if(/CAISSE|DESJARDINS DU|Pour la p[ée]riode|Page \d+ de \d+|RELEV[ÉE] DE COMPTE|Solde (report|de cl|au )|Total des/i.test(s)){ fermer(); if(/CAISSE|Page \d+ de/.test(s)) table = false; return; }
+      const m = s.match(START), mois = m && RELEVE_MOIS[m[2]];
+      if(m && mois){ fermer(); cur = {jour:+m[1], mois, code:m[3], desc:m[4], montants:[]}; }
+      else if(cur && s.trim()) cur.desc += ' ' + s.trim();
+      else return;
+      releveMontants(l).forEach(x=>cur.montants.push(x)); });
+    fermer(); });
+  return out;
+}
+// Nom du payeur et message : « Virement Interac de / MICHELE BENOIT / » → MICHELE BENOIT ; « Paiement internet de / PAYNE INC/2589 » → PAYNE INC, « 2589 »
+function releveDe(desc){ const p = String(desc||'').replace(/\*{3,}\d*/g,' ').split('/').map(x=>x.trim()).filter(Boolean);   // jamais de numéro de carte ou de compte
+  return p.length>=2 ? {de:p[1], message:p.slice(2).join(' ')} : {de:/d[ée]p[ôo]t mobile/i.test(desc) ? 'Dépôt mobile (chèque)' : String(desc||'').trim(), message:''}; }
+// Pas des paiements de clients : marge de crédit, avance de carte, ristourne, dépôt au comptoir, virement entre comptes
+function releveHorsClient(t){ return /^(DCV|VWW|RIS|DSL)$/.test(t.code) || /marge de cr|avance fonds|ristourne|d[ée]p[ôo]t au comptoir/i.test(t.desc); }
+// Texte d'un PDF avec la position de chaque morceau (pdf.js, chargé seulement quand on importe un relevé)
+async function relevePdfPages(file){
+  if(!window.pdfjsLib){ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }
+  const doc = await window.pdfjsLib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise, pages = [];
+  for(let i=1;i<=doc.numPages;i++){ const tc = await (await doc.getPage(i)).getTextContent();
+    pages.push(tc.items.map(it=>({str:it.str, x:it.transform[4], y:it.transform[5], w:it.width}))); }
+  return pages;
+}
 function paiMots(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3 && !PAI_MOTS_VIDES.has(w) && !/^\d+$/.test(w)); }
 function paiJours(d){ const t = Date.parse(String(d||'').slice(0,10)); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
 function paiLireFactures(rows){
@@ -4371,6 +4443,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const [separes,setSepares]=useState(()=>new Set());   // v188 : groupes de virements que tu as séparés
   const [annule,setAnnule]=useState('');   // numéro de facture à annuler (confirmation)
   const [imp,setImp]=useState(null);   // {source, nouvelles:[], lignes:[], annuler:[], etape}
+  const [rel,setRel]=useState(null);   // v258 : relevé bancaire importé {source, lignes:[{t, de, message, garder, hors, sugg}], deja, retraits, etape}
   // v184 : les paiements « Sûr » (une seule proposition sûre) sont confirmés tout seuls ; ↩ dans « Tous les paiements » pour annuler
   const essayes = useRef(new Set());
   const [autoConf,setAutoConf]=useState([]);   // [{de, montant, factures}]
@@ -4455,6 +4528,33 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       const annuler = (j.annulees||[]).filter(n=>ex[n] && !ex[n].annulee && !String(ex[n].statut||'').trim());
       setImp({source:j.source||file.name, nouvelles, lignes:(j.lignes||[]).filter(l=>nums.has(String(l[0]))), annuler, etape:'apercu'}); }
     catch(e){ alert('Fichier illisible : '+e.message); } };
+  // v258 : relevé de compte (PDF de la Caisse) → seulement les dépôts pas encore dans les paiements (même montant, 5 jours près)
+  const lireReleve = async file => { setRel({source:file.name, etape:'lecture', lignes:[]});
+    try{ const T = releveLire(await relevePdfPages(file));
+      if(!T.length){ setRel(null); alert('Aucune transaction trouvée dans ce PDF. Est-ce bien un relevé de compte de la Caisse ?'); return; }
+      const dep = T.filter(t=>t.depot), jour = d => Date.parse(String(d).slice(0,10));
+      // Déjà dans les paiements : même montant, à 10 jours près (un dépôt direct arrive quelques jours après l'avis) — les dates les plus proches d'abord
+      const ids = new Set(data.paiements.map(p=>p.id)), vus = {}, lignes = [], deja = new Set(), pris = new Set();
+      dep.forEach(t=>{ const k = t.date+'-'+t.montant.toFixed(2); vus[k] = (vus[k]||0) + 1; t.id = 'releve-'+k+'-'+vus[k]; if(ids.has(t.id)) deja.add(t); });
+      const paires = [];
+      dep.forEach(t=>{ if(deja.has(t)) return; data.paiements.forEach(p=>{ const d = Math.abs(jour(p.date) - jour(t.date));
+        if(Math.abs(p.montant - t.montant) < 0.015 && d <= 10*864e5) paires.push({t, p, d}); }); });
+      paires.sort((a,b)=>a.d-b.d).forEach(x=>{ if(!deja.has(x.t) && !pris.has(x.p.row)){ deja.add(x.t); pris.add(x.p.row); } });
+      dep.forEach(t=>{ if(deja.has(t)) return;
+        const {de, message} = releveDe(t.desc), hors = releveHorsClient(t);
+        lignes.push({t, id:t.id, de, message, hors, garder:!hors}); });
+      // Factures proposées : même analyse que les paiements à confirmer
+      const synth = lignes.map((l,i)=>({row:900000+i, id:l.id, date:l.t.date+' 12:00', de:l.de, montant:l.t.montant, message:l.message, ref:'', lues:paiNums(l.message), lien:'', source:'Relevé', confirmees:[], statut:'', note:''}));
+      try{ const A2 = paiementsAnalyser(data.factures, [...data.paiements, ...synth], nomDe, separes, adr);
+        lignes.forEach((l,i)=>{ const o = (A2.propositions[900000+i]||[])[0]; if(o) l.sugg = o; }); }catch(e){}
+      setRel({source:file.name, lignes, deja:deja.size, retraits:T.length-dep.length, etape:'apercu'}); }
+    catch(e){ setRel(null); alert('Relevé illisible : '+e.message); } };
+  const faireReleve = async () => { const x = rel, L = x.lignes.filter(l=>l.garder); setRel({...x, etape:'en cours'});
+    try{ await paiOnglet(id); suivreEcritures();
+      const rows = L.map(l=>[l.id, l.t.date+' 12:00', l.de, l.t.montant, l.message || l.t.desc.replace(/\*+\d*/g,'').trim(), '', paiNums(l.message).join(', '), '', 'Relevé', '', '', '']);
+      for(let i=0;i<rows.length;i+=200) await window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:id, range:'Paiements!A1:L1', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:rows.slice(i,i+200)}});
+      setRel({...x, etape:'fini', nb:rows.length}); setTick(t=>t+1); }
+    catch(e){ setRel({...x, etape:'apercu'}); alert('Import interrompu : '+apiErrMsg(e)+' — relance-le : les dépôts déjà ajoutés seront sautés.'); } };
   const faireImport = async () => { const x = imp; setImp({...x, etape:'en cours'});
     try{ const S = window.gapi.client.sheets.spreadsheets; suivreEcritures();
       for(let i=0;i<x.nouvelles.length;i+=400) await S.values.append({spreadsheetId:id, range:'A1:K1', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:x.nouvelles.slice(i,i+400).map(f=>f.row)}});
@@ -4507,9 +4607,27 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       {[['confirmer','À confirmer ('+attente.length+')'],['recevoir','En attente de paiement ('+aRecevoir.length+')'],['payees','Payées ('+payees.length+')'],['tous','Tous les paiements'],...(aDeposer.length ? [['deposer','Factures à déposer ('+aDeposer.length+')']] : [])].map(([k,l])=>
         <button key={k} className={'btn btn-sm'+(sous===k?' btn-p':'')} onClick={()=>setSous(k)}>{l}</button>)}
       <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>ouvrirManuel([])}>💵 Paiement chèque / comptant</button>
-      <label className="btn btn-sm" style={{cursor:'pointer'}} title="Fichier .json de factures préparé par Claude à partir du logiciel comptable">📥 Importer des factures<input type="file" accept=".json,application/json" style={{display:'none'}} onChange={e=>{ const f = e.target.files[0]; e.target.value=''; if(f) lireImport(f); }}/></label>
+      <label className="btn btn-sm" style={{cursor:'pointer'}} title="Relevé de compte de la Caisse (PDF) — ou fichier .json de factures préparé par Claude">📥 Importer un relevé<input type="file" accept=".pdf,application/pdf,.json,application/json" style={{display:'none'}} onChange={e=>{ const f = e.target.files[0]; e.target.value=''; if(!f) return; if(/\.pdf$/i.test(f.name) || f.type==='application/pdf') lireReleve(f); else lireImport(f); }}/></label>
     </div>
 
+    {rel && <div className="card" style={{marginBottom:10,borderColor:'var(--accent)',fontSize:13}}>
+      <b>🏦 Relevé de compte</b> <span className="muted">— {rel.source}</span>
+      {rel.etape==='lecture' ? <div style={{marginTop:6}}>Lecture du relevé…</div>
+      : rel.etape==='fini' ? <div style={{marginTop:6,color:'var(--success)'}}>✓ {rel.nb} dépôt{rel.nb>1?'s':''} ajouté{rel.nb>1?'s':''} aux paiements. Les sûrs se confirment tout seuls ; les autres sont dans « À confirmer ». <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>{ setRel(null); setSous('confirmer'); }}>Voir</button></div>
+      : <>
+        <div className="muted" style={{marginTop:4}}>Rien n'est encore écrit. {rel.deja} dépôt{rel.deja>1?'s':''} déjà dans tes paiements (même montant, 5 jours près) et {rel.retraits} retrait{rel.retraits>1?'s':''} : pas repris. Seuls la date, le nom et le montant sont gardés.</div>
+        {!rel.lignes.length ? <div style={{marginTop:8,color:'var(--success)'}}>✓ Tous les dépôts de ce relevé sont déjà dans tes paiements.</div>
+        : <div style={{marginTop:8}}>{rel.lignes.map((l,i)=><label key={l.id} style={{display:'flex',gap:8,alignItems:'center',padding:'4px 0',borderBottom:'1px solid var(--border)',cursor:'pointer',opacity:l.garder?1:.55}}>
+            <input type="checkbox" checked={l.garder} disabled={rel.etape==='en cours'} onChange={()=>setRel({...rel, lignes:rel.lignes.map((x,j)=>j===i ? {...x, garder:!x.garder} : x)})}/>
+            <span style={{flex:'0 0 auto'}} className="muted">{cvFmtDay(l.t.date)}</span>
+            <span style={{flex:1,minWidth:0}}><b>{l.de}</b>{l.message ? <span className="muted"> · {l.message}</span> : null}
+              {l.hors ? <span className="muted"> · pas un paiement de client ?</span> : l.sugg ? <span style={{color:l.sugg.niveau==='sur'?'var(--success)':'var(--warning)'}}> → #{l.sugg.factures.join(', #')}{l.sugg.niveau==='sur' ? '' : ' (à vérifier)'}</span> : <span className="muted"> · aucune facture trouvée</span>}</span>
+            <b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(l.t.montant)}</b></label>)}</div>}
+        <div style={{display:'flex',gap:6,marginTop:8}}>
+          <button className="btn btn-sm btn-p" disabled={rel.etape!=='apercu' || !rel.lignes.some(l=>l.garder)} onClick={faireReleve}>{rel.etape==='en cours' ? 'Import en cours…' : 'Importer '+rel.lignes.filter(l=>l.garder).length+' dépôt'+(rel.lignes.filter(l=>l.garder).length>1?'s':'')}</button>
+          <button className="btn btn-sm" disabled={rel.etape==='en cours'} onClick={()=>setRel(null)}>Annuler</button></div>
+      </>}
+    </div>}
     {imp && <div className="card" style={{marginBottom:10,borderColor:'var(--accent)',fontSize:13}}>
       <b>📥 Importer des factures</b> <span className="muted">— {imp.source}</span>
       {imp.etape==='fini' ? <div style={{marginTop:6,color:'var(--success)'}}>✓ Import terminé : {imp.nouvelles.length} factures ajoutées au registre{imp.annuler.length ? ', '+imp.annuler.length+' marquée(s) annulée(s)' : ''}.</div>
