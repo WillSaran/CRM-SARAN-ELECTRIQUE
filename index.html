@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v241';
+const APP_VERSION = 'v242';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2177,7 +2177,7 @@ function CvPhasesJob({job, onDone}){
 }
 
 // ══ v224 : Projets — phases (Entrée, Rough, Finition, Wrap-up), barre d'état et blocages ══
-const PJ_PHASES = ['Entrée','Entrée électrique','Rough','Finition','Wrap-up','Fermeture'];
+const PJ_PHASES = ['Entrée','Entrée électrique','Rough','Finition','Wrap-up'];
 // v237 : « Entrée » s'affiche « Inscription » (la clé reste « Entrée » pour les étapes cochées et les blocages déjà faits).
 const PJ_PHASE_NOM = {'Entrée':'Inscription'};
 const pjNomPhase = ph => PJ_PHASE_NOM[ph] || ph;
@@ -2312,28 +2312,23 @@ function pjPhases(job, s, ctx){
         info: apres ? apres+' : la facture suit le dernier passage' : nonFac.map(v=>v.label).join(', ')+' : visite faite, pas de facture'});
     }
   }
-  // Wrap-up — v238 : pas pour les particuliers (sauf ajouté à la main ou passage WRAP-UP à l'agenda) ; on peut l'enlever chez un contracteur
+  // Wrap-up — v242 : seulement s'il y a un passage WRAP-UP à l'agenda (petits trucs à revoir) ou s'il est ajouté à la main.
+  // Pas de phase Fermeture : les factures sont déjà suivies dans chaque phase, et les paiements dans Comptabilité.
   const ouverts = (ctx.blocages||[]).filter(b=>b.statut!=='Réglé');
-  const travauxFaits = visites.some(v=>v.faite) && !avenir.length;
-  { const plus = !!M[job.id+'|+PHASE Wrap-up'], moins = !!M[job.id+'|-PHASE Wrap-up'], agenda = ev.some(e=>e.phase==='RAPUP');
-    const actif = agenda || plus || (!moins && pro);
-    phasesInfo['Wrap-up'] = {actif, plus, moins, agenda, source: agenda ? 'dans l\'agenda' : plus ? 'ajoutée à la main' : moins ? 'retirée à la main' : pro ? '' : 'pas pour les particuliers'};
-    if(actif) add('Wrap-up', 'Services et corrections terminés', {non:'Services et corrections non terminés', ok: travauxFaits && !ouverts.length, du: travauxFaits && ouverts.length>0,
-    info: ouverts.length ? ouverts.length+' blocage'+(ouverts.length>1?'s':'')+' pas réglé'+(ouverts.length>1?'s':'') : avenir.length ? 'Encore des passages à venir' : 'Aucun passage fait'}); }
-  // Fermeture (toujours là) : factures, paiement, job fermée — clés gardées « Wrap-up — … »
-  const nonFac = visites.filter(v=>v.faite && !v.facturee);
-  add('Fermeture', 'Toutes les factures envoyées', {idPhase:'Wrap-up', non:'Factures pas toutes envoyées', ok: travauxFaits && !nonFac.length, du: travauxFaits && nonFac.length>0, info: nonFac.length ? nonFac.map(v=>v.label).join(', ')+' sans facture' : avenir.length ? 'Encore des passages à venir' : 'Aucun passage fait'});
-  const nums = [...new Set(ev.flatMap(e=>e.fac && e.fac!=='**' ? paiNums(e.fac) : []))];
-  const F = ctx.factures || {}, nonPayees = nums.filter(n=>!(F[n] && F[n].etatPaie==='payee'));
-  // v228 : « Paiement » — vert quand tout est payé ; rouge seulement si une facture est en souffrance (plus de 30 jours, N30) ;
-  // sinon gris (facture envoyée, paiement attendu dans les délais). Clé gardée « Paiement reçu » pour les cochés et blocages déjà faits.
-  const jours = n => { const d = F[n] && (F[n].envoi || F[n].date); return d ? Math.floor((new Date(today+'T12:00:00') - new Date(String(d).slice(0,10)+'T12:00:00'))/864e5) : 0; };
-  const souffrance = nonPayees.filter(n=>jours(n) > 30);
-  add('Fermeture', 'Paiement', {idPhase:'Wrap-up', cle:'Paiement reçu', oui:'Paiement reçu', non: souffrance.length ? 'Paiement en souffrance' : nonPayees.length ? 'Paiement en attente' : 'Paiement non reçu',
-    libelle: nonPayees.length && !souffrance.length ? 'en attente du paiement' : '', ok: nums.length>0 && !nonPayees.length && !nonFac.length && travauxFaits, du: souffrance.length>0,
-    info: souffrance.length ? 'En souffrance (plus de 30 jours) : facture'+(souffrance.length>1?'s':'')+' #'+souffrance.map(n=>n+' ('+jours(n)+' j)').join(', #')
-      : nonPayees.length ? 'Paiement attendu : facture'+(nonPayees.length>1?'s':'')+' #'+nonPayees.join(', #')+' (moins de 30 jours)' : 'Pas encore de facture'});
-  add('Fermeture', 'Job fermée', {idPhase:'Wrap-up', non:'Job non fermée', ok: !!(ctx.archives||{})[job.id], du: false, info:'« Fermer la job » quand tout est réglé'});
+  { const plus = !!M[job.id+'|+PHASE Wrap-up'], moins = !!M[job.id+'|-PHASE Wrap-up'];
+    const L = ev.filter(e=>e.phase==='RAPUP'), agenda = L.length>0, actif = agenda || plus;
+    phasesInfo['Wrap-up'] = {actif, plus, moins, agenda, source: agenda ? 'dans l\'agenda' : plus ? 'ajoutée à la main' : ''};
+    if(actif){
+      const faits = L.filter(passe), futurs = L.filter(e=>!passe(e)), sansAp = faits.filter(e=>!(e.as || e.fac));
+      const vs = visites.filter(v=>v.faite && v.phase==='RAPUP'), nonFac = vs.filter(v=>!v.facturee);
+      add('Wrap-up', 'Wrap-up fait', {non:'Wrap-up non fait', ok: faits.length>0 && !futurs.length, du: false, info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
+      add('Wrap-up', 'Services et corrections terminés', {non:'Services et corrections non terminés', ok: faits.length>0 && !futurs.length && !ouverts.length, du: faits.length>0 && !futurs.length && ouverts.length>0,
+        info: ouverts.length ? ouverts.length+' blocage'+(ouverts.length>1?'s':'')+' pas réglé'+(ouverts.length>1?'s':'') : futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore fait'});
+      add('Wrap-up', 'Appel de service inscrit', {non:'Appel de service non inscrit', ok: faits.length>0 && !sansAp.length, du: sansAp.length>0 && !futurs.length,
+        info: sansAp.length ? sansAp.map(e=>cvFmtDay(e.day)).join(', ')+' sans appel de service' : 'Pas encore fait'});
+      add('Wrap-up', 'Facture du wrap-up', {oui:'Facture du wrap-up envoyée', non:'Facture du wrap-up non envoyée', ok: vs.length>0 && !nonFac.length, du: nonFac.length>0 && !futurs.length,
+        info: nonFac.length ? nonFac.map(v=>v.label).join(', ')+' : visite faite, pas de facture' : 'Pas encore fait'});
+    } }
   // Coché à la main (onglet Etapes)
   out.forEach(x=>{ x.manuel = !x.ok && !!M[job.id+'|'+x.id]; x.etat = x.na ? 'na' : x.ok ? 'ok' : x.manuel ? 'manuel' : x.du ? 'manque' : 'futur';
     x.texte = x.etat==='na' ? x.titre : (x.etat==='ok' || x.etat==='manuel') ? (x.oui || x.titre) : (x.non || x.titre); });   // v237 : « OT non reçu » tant que ce n'est pas fait
@@ -7818,6 +7813,21 @@ function cvBuildClients(events, registry, factures){
     }
   });
   ficheAppliquerJobs(jobs, registry.__fiches, regByPO);   // v151 : jobs regroupées / renommées dans le Répertoire
+  // v242 : particulier sans no de job — une facture inscrite sur un passage termine la job ; un passage plus tard = un nouveau projet
+  // (ex. éclairage en août facturé, puis un autre éclairage le 26 octobre). La première job garde son id (cochés, types, archives).
+  Object.values(jobs).filter(j=>j.client==='PART' && !j.po).forEach(j=>{
+    const reels = j.events.filter(e=>!e.attente).sort((a,b)=>a.day.localeCompare(b.day)), att = j.events.filter(e=>e.attente);
+    const facturee = e => /\d/.test(String(e.fac||'')) && e.fac!=='**';
+    // Les jours qui se suivent (3 jours ou moins d'écart) = la même visite, même si la facture est inscrite sur le premier jour.
+    const groupes = [[]]; let fac = false, dernier = '';
+    const ecart = (a, b) => (new Date(b+'T12:00:00') - new Date(a+'T12:00:00'))/864e5;
+    reels.forEach(e=>{ if(fac && dernier && ecart(dernier, e.day) > 3){ groupes.push([]); fac = false; }
+      groupes[groupes.length-1].push(e); dernier = e.day; if(facturee(e)) fac = true; });
+    if(groupes.length<2) return;
+    groupes[groupes.length-1].push(...att);   // En Attente = encore à faire : avec le projet le plus récent
+    j.events = groupes[0];
+    groupes.slice(1).forEach(g=>{ const id = j.id+'#'+g[0].day; jobs[id] = {...j, id, events:g}; });
+  });
   // Facture inscrite sur plus d'une job = à vérifier.
   const facJobs = {};
   Object.values(jobs).forEach(j=>j.events.forEach(e=>String(e.fac).split(/[\s,–-]+/).filter(t=>/\d/.test(t)).forEach(f=>{ (facJobs[f]=facJobs[f]||new Set()).add(j.id); })));
