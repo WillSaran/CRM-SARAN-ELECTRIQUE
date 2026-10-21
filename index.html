@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v242';
+const APP_VERSION = 'v243';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7818,10 +7818,10 @@ function cvBuildClients(events, registry, factures){
   Object.values(jobs).filter(j=>j.client==='PART' && !j.po).forEach(j=>{
     const reels = j.events.filter(e=>!e.attente).sort((a,b)=>a.day.localeCompare(b.day)), att = j.events.filter(e=>e.attente);
     const facturee = e => /\d/.test(String(e.fac||'')) && e.fac!=='**';
-    // Les jours qui se suivent (3 jours ou moins d'écart) = la même visite, même si la facture est inscrite sur le premier jour.
+    // Passages à une semaine ou moins d'écart = la même job, même si la facture est inscrite sur le premier jour (v243 : 7 jours).
     const groupes = [[]]; let fac = false, dernier = '';
     const ecart = (a, b) => (new Date(b+'T12:00:00') - new Date(a+'T12:00:00'))/864e5;
-    reels.forEach(e=>{ if(fac && dernier && ecart(dernier, e.day) > 3){ groupes.push([]); fac = false; }
+    reels.forEach(e=>{ if(fac && dernier && ecart(dernier, e.day) > 7){ groupes.push([]); fac = false; }
       groupes[groupes.length-1].push(e); dernier = e.day; if(facturee(e)) fac = true; });
     if(groupes.length<2) return;
     groupes[groupes.length-1].push(...att);   // En Attente = encore à faire : avec le projet le plus récent
