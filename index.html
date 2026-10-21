@@ -56,8 +56,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .nav-item:hover{background:var(--bg3)}
 .main{flex:1;min-width:0;padding:20px;box-sizing:border-box}   /* v130 : pleine largeur sur l'ordi, et le contenu ne déborde plus de la page */
 @media(max-width:899px){.nav{position:fixed;top:0;bottom:0;left:0;width:min(250px,80vw);transform:translateX(-102%);transition:transform .2s ease;overflow-y:auto;-webkit-overflow-scrolling:touch;z-index:61;padding:12px 10px 40px;border-right:1px solid var(--border);box-shadow:4px 0 18px rgba(0,0,0,.35)}.nav.ouvert{transform:none}.nav-fond{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60}.nav-item{font-size:15px;padding:12px}}
-.dash-mur{column-width:330px;column-gap:14px}.dash-mur>*{break-inside:avoid;-webkit-column-break-inside:avoid;display:inline-block;width:100%;vertical-align:top}
-.dash-tuiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:10px;margin-bottom:12px}
+.dash-rangee{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0 14px;align-items:start}.dash-mur{column-width:330px;column-gap:14px}.dash-mur>*{break-inside:avoid;-webkit-column-break-inside:avoid;display:inline-block;width:100%;vertical-align:top}
+.dash-tuiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;margin-bottom:12px}
 @media(max-width:760px){.main{padding:14px 12px}.remind-cols{grid-template-columns:1fr !important}}
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px}
 .grid{display:grid;gap:12px}
@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v265';
+const APP_VERSION = 'v266';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2886,27 +2886,6 @@ function ConvertisseurCard(){
     <div className="muted" style={{fontSize:11,marginTop:6}}>{nPi!=null && pi ? pouces(nPi)+' · ' : ''}1 m = 3,281 pi · 1 pi = 0,3048 m</div>
   </div>;
 }
-// v265 : blocs du Tableau de bord en colonnes équilibrées. Chaque bloc va dans la colonne la plus courte (hauteurs mesurées),
-// dans l'ordre : le dernier (convertisseur + rappels) comble donc l'espace vide à côté du bloc le plus long.
-function MurColonnes({blocs, min=330, gap=14}){
-  const boite = useRef(null), refs = useRef({});
-  const [w,setW] = useState(0), [hs,setHs] = useState({});
-  useLayoutEffect(()=>{ const el = boite.current; if(!el) return;
-    const f = ()=>setW(el.clientWidth); f();
-    if(window.ResizeObserver){ const ro = new ResizeObserver(f); ro.observe(el); return ()=>ro.disconnect(); }
-    window.addEventListener('resize', f); return ()=>window.removeEventListener('resize', f); },[]);
-  useLayoutEffect(()=>{ const n = {}; let diff = false;
-    blocs.forEach(b=>{ const el = refs.current[b.k]; if(!el) return; n[b.k] = el.offsetHeight; if(Math.abs((hs[b.k]||0) - n[b.k]) > 2) diff = true; });
-    if(diff) setHs(h=>({...h, ...n})); });
-  const nb = Math.max(1, Math.floor((w + gap) / (min + gap)) || 1);
-  const cols = Array.from({length:nb}, ()=>({h:0, items:[]}));
-  blocs.forEach(b=>{ const c = cols.reduce((m,x)=>x.h < m.h - 1 ? x : m, cols[0]); c.items.push(b); c.h += (hs[b.k] || 200); });
-  return <div ref={boite} style={{display:'flex',gap,alignItems:'flex-start'}}>
-    {cols.map((c,i)=><div key={i} style={{flex:'1 1 0',minWidth:0}}>
-      {c.items.map(b=><div key={b.k} ref={el=>{ refs.current[b.k] = el; }} style={{display:'flow-root'}}>{b.el}</div>)}
-    </div>)}
-  </div>;
-}
 // Petite boîte « Rappels » du Tableau de bord : notes rapides communes (pas de William / Isabelle, pas de date).
 // Onglet « Rappels » du CRM. Cocher = fait (la note disparaît, rien n'est effacé de la feuille).
 function RappelsBoite({cfg, data, toast}){
@@ -3338,31 +3317,23 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
       const vieille = af.reduce((m,x)=>Math.max(m, soumJours(x.date)||0),0);
       const T = [
         {n:suivi ? aFacturer.length : null, l:'À facturer', go:'factures', sub:sansFac ? sansFac+" sans rien d'inscrit, "+(aFacturer.length-sansFac)+' facture à faire' : 'appels faits, factures à faire', niv:sansFac ? 'urgent' : 'oui'},
-        {n:aCommander.length, l:'Commandes à placer', go:'commandes', sub:"d'ici le "+cvFmtDay(dans14), niv:aCommander.some(x=>x.e.day<=jour(3)) ? 'urgent' : 'oui'},
         {n:aRepondre.length, l:'Courriels à répondre', go:'courriels', sub:aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'le plus vieux : '+cvJoursDepuis(aRepondre[0].dernier)+' jours' : 'clients et contracteurs', niv:aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'urgent' : 'oui'},
         {n:soum.lu ? af.length : null, l:'Soumissions à produire', go:'soumissions', sub:af.length && vieille>=7 ? 'la plus vieille : '+vieille+' jours' : (att ? att+' envoyée'+(att>1?'s':'')+' en attente' : 'notes et demandes reçues'), niv:vieille>=7 ? 'urgent' : 'oui'},
         {n:anomalies.length, l:'À vérifier', go:'verif', sub:'factures, PO, appels', niv:'oui'},
         {n:aAssocier.length, l:'Achats à associer', go:'fournisseurs', sub:cvMoney(achatsMois)+' achetés ce mois-ci', niv:'oui'},
         {n:adresses.length, l:'Adresses à confirmer', go:'dashboard', sub:'proposées par La mémoire', niv:'oui'},
       ];
-      const actifs = T.filter(t=>t.n), ajour = T.filter(t=>t.n===0), lecture = T.filter(t=>t.n==null);
+      const actifs = T.filter(t=>t.n);
       return <>
         <div className="dash-tuiles">
           {actifs.map(t=><Tuile key={t.l} n={t.n} l={t.l} sub={t.sub} alerte={t.niv} go={t.go}/>)}
           <Tuile n={enCours.length} l="Jobs en cours" sub={aCompleter ? aCompleter+' étapes à compléter' : 'tout est complet'} go="projets"/>
           <DashboardHeuresCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
         </div>
-        {(ajour.length>0 || lecture.length>0 || nbSansAdresse>0) && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:14,fontSize:12.5}}>
-          {ajour.length>0 && <span className="muted">À jour :</span>}
-          {ajour.map(t=><span key={t.l} onClick={()=>t.go!=='dashboard' && onNavigate(t.go)} style={{padding:'3px 9px',borderRadius:999,background:'var(--bg3)',color:'var(--success)',fontWeight:600,cursor:t.go!=='dashboard'?'pointer':undefined}}>✓ {t.l}</span>)}
-          {lecture.map(t=><span key={t.l} className="muted" style={{padding:'3px 9px',borderRadius:999,background:'var(--bg3)'}}>{t.l} …</span>)}
-          {nbSansAdresse>0 && <span className="muted" title="Aucune adresse trouvée par La mémoire : à ajouter à la main dans l'agenda" style={{padding:'3px 9px',borderRadius:999,background:'var(--bg3)'}}>{nbSansAdresse} job{nbSansAdresse>1?'s':''} sans adresse</span>}
-          {urlAdresses && <span style={{color:'var(--accent)',cursor:'pointer',marginLeft:4}} title="Cherche l'adresse des jobs qui n'en ont pas (registre + courriels). Prêt dans environ 5 min." onClick={()=>window.open(urlAdresses,'_blank')}>🔎 Chercher les adresses manquantes</span>}
-        </div>}
       </>; })()}
 
-    {/* v265 : colonnes équilibrées — chaque bloc va dans la colonne la plus courte ; convertisseur + rappels comblent le dernier trou */}
-    <MurColonnes blocs={[
+    {/* v266 : Agenda | Convertisseur + Rappels | À facturer, puis Adresses, Courriels, Achats */}
+    {(()=>{ const B = Object.fromEntries([
         {k:'jour', el:(<div className="card" style={{marginBottom:14,borderLeft:auj.length?'4px solid var(--accent)':undefined}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:6}}>
           <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
@@ -3383,14 +3354,15 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
           : listeJour.length ? <div className="muted" style={{fontSize:13}}>Aucun passage pour les équipes cochées.</div>
           : <div className="muted" style={{fontSize:13}}>{vueJour==='auj' ? "Aucun passage aujourd'hui." : vueJour==='dem' ? 'Aucun passage demain.' : 'Aucun passage dans les 7 prochains jours.'}</div>}
       </div>)},
-        (adresses.length>0) && {k:'adresses', el:(<div className="card" style={{marginBottom:14,borderLeft:'4px solid var(--warning)'}}>
-        <div className="fh" style={{fontSize:15,marginBottom:4}}>Adresses à confirmer <span className="badge" style={{background:'var(--warning)',color:'#fff'}}>{adresses.length}</span></div>
+        (adresses.length>0 || nbSansAdresse>0) && {k:'adresses', el:(<div className="card" style={{marginBottom:14,borderLeft:'4px solid var(--warning)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,flexWrap:'wrap',marginBottom:4}}>
+          <div className="fh" style={{fontSize:15}}>Adresses à confirmer {adresses.length>0 && <span className="badge" style={{background:'var(--warning)',color:'#fff'}}>{adresses.length}</span>}</div>
+          {urlAdresses && <span style={{color:'var(--accent)',fontSize:12.5,cursor:'pointer'}} title="Cherche l'adresse des jobs qui n'en ont pas (registre + courriels). Prêt dans environ 5 min." onClick={()=>window.open(urlAdresses,'_blank')}>🔎 Chercher</span>}
+        </div>
         {adresses.slice(0,10).map(a=><CvAdresse key={a.row} a={a} onDecider={deciderAdresse}/>)}
-        <div className="muted" style={{fontSize:11.5,marginTop:6}}>✓ écrit l'adresse dans tous les passages de la job dans l'agenda. Tu peux la corriger avant.</div>
+        {nbSansAdresse>0 && <div className="muted" style={{fontSize:12.5,marginTop:6}}>{nbSansAdresse} job{nbSansAdresse>1?'s':''} sans adresse trouvée — à ajouter à la main dans l'agenda.</div>}
+        {adresses.length>0 && <div className="muted" style={{fontSize:11.5,marginTop:6}}>✓ écrit l'adresse dans tous les passages de la job dans l'agenda. Tu peux la corriger avant.</div>}
       </div>)},
-        (aCommander.length>0) && {k:'commandes', el:(<Bloc titre="Commandes à placer" n={aCommander.length} go="commandes" montre={8} niv={aCommander.some(x=>x.e.day<=jour(3)) ? 'urgent' : 'oui'}>
-        {aCommander.slice(0,8).map((x,i)=><Rang key={i} go="commandes" droite={<>{cvFmtDay(x.e.day)}<BoutonCmd x={x}/></>}><span style={{fontWeight:800,fontSize:11,color:x.e.day<=jour(3)?'var(--danger)':'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}</Rang>)}
-      </Bloc>)},
         (aRepondre.length>0) && {k:'courriels', el:(<Bloc titre="Courriels à répondre" n={aRepondre.length} go="courriels" montre={8} niv={cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'urgent' : 'oui'}>
         {aRepondre.slice(0,8).map((f,i)=>{ const j = cvJoursDepuis(f.dernier); return <Rang key={i} go="courriels" droite={j!=null ? <span style={{color:j>=3?'var(--danger)':undefined}}>il y a {j} j</span> : ''}>« {f.sujet} »<div className="muted" style={{fontSize:11.5}}>{nomPO(f.po)}{f.de ? ' · '+f.de : ''}</div></Rang>; })}
       </Bloc>)},
@@ -3407,7 +3379,9 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
         </Rang>)}
       </Bloc>)},
         {k:'outils', el:<><ConvertisseurCard/><RappelsBoite cfg={cfg} data={data} toast={toast}/></>}
-      ].filter(Boolean)}/>
+      ].filter(Boolean).map(b=>[b.k, b.el]));
+      return [['jour','outils','facturer'],['adresses','courriels','achats']].map(r=>r.filter(k=>B[k])).filter(r=>r.length)
+        .map((r,i)=><div key={i} className="dash-rangee">{r.map(k=><div key={k} style={{minWidth:0}}>{B[k]}</div>)}</div>); })()}
   </div>;
 }
 
