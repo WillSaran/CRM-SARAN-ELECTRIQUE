@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v261';
+const APP_VERSION = 'v262';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3281,7 +3281,8 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
     </div>
     {n ? children : <div className="muted" style={{fontSize:13}}>{vide}</div>}
   </div>;
-  const Rang = ({children, droite, go, couleur}) => <div onClick={()=>onNavigate(go)} style={{display:'flex',justifyContent:'space-between',gap:10,padding:couleur?'6px 0 6px 8px':'6px 0',borderBottom:'1px solid var(--border)',borderLeft:couleur?'3px solid '+couleur:undefined,fontSize:13,cursor:'pointer'}}>
+  // v262 : une rangée de job ouvre CETTE job dans Projets (avant : la liste complète, au même endroit que la dernière fois)
+  const Rang = ({children, droite, go, couleur, x}) => <div onClick={()=>{ if(x) NAV_FOCUS = {cible:go, t:Date.now(), jobIds:[x.j.id], nom:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name}; onNavigate(go); }} style={{display:'flex',justifyContent:'space-between',gap:10,padding:couleur?'6px 0 6px 8px':'6px 0',borderBottom:'1px solid var(--border)',borderLeft:couleur?'3px solid '+couleur:undefined,fontSize:13,cursor:'pointer'}}>
     <div style={{minWidth:0}}>{children}</div><div className="muted" style={{fontSize:12,whiteSpace:'nowrap'}}>{droite}</div>
   </div>;
   const Journee = ({liste, jours}) => liste.map((x,i)=>{ const k=cvCmd(cmds, x.j, x.e), c=k.statut, eq=equipeDe(x.e);
@@ -3289,7 +3290,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
     return <React.Fragment key={i}>
     {jours && nouveauJour && <div style={{fontSize:12,fontWeight:700,color:'var(--muted)',marginTop:i?12:2,textTransform:'capitalize'}}>{new Date(x.e.day+'T12:00:00').toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})}</div>}
     {nouvelleEquipe && <div style={{display:'flex',alignItems:'center',gap:6,fontSize:11.5,fontWeight:700,marginTop:nouveauJour&&!jours?2:8,color:'var(--text)'}}><span style={{width:9,height:9,borderRadius:'50%',background:equipeCouleur(eq),display:'inline-block'}}></span>{equipeNom(eq)}</div>}
-    <Rang go="projets" couleur={equipeCouleur(eq)} droite={<>{heure(x.e)}{k.fait ? (c==='Rien à commander'?' · ✓ rien':' · ✅ commandé') : <BoutonCmd x={x}/>}</>}>
+    <Rang go="projets" x={x} couleur={equipeCouleur(eq)} droite={<>{heure(x.e)}{k.fait ? (c==='Rien à commander'?' · ✓ rien':' · ✅ commandé') : <BoutonCmd x={x}/>}</>}>
       <span style={{fontWeight:800,fontSize:11,color:'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}
       {x.e.crew.length>0 && <div className="muted" style={{fontSize:11.5}}>{x.e.crew.join(', ')}</div>}
       {eq==='autre' && <AttitrerEquipe ev={x.e} toast={toast} onFait={()=>setTicAttitre(t=>t+1)}/>}
