@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v252';
+const APP_VERSION = 'v253';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2240,6 +2240,8 @@ function pjServiceTexte(type, job){
 const PJ_TYPES_BLOCAGE = ['SERV supplémentaire demandée','Matériel manquant','Retour au chantier','Problème d\'accès','Problème découvert pendant les travaux'];
 const PJ_BLOC_ENTETE = ['Id','Job','Étape','Type','Description','Date','Statut','Réglé le','Pièces jointes','Créé le'];
 // Les étapes d'une job, rangées par phase. État : ok / manuel (coché à la main) / manque (devrait être fait) / futur (pas encore rendu là) / na (ne s'applique pas)
+// v253 : texte d'une visite dans la barre (une visite en attente n'a pas de date : elle n'est pas encore cédulée)
+function pjPartTexte(pt){ return 'Visite '+pt.n+'/'+pt.tot+(pt.attente ? (pt.extra ? ' (extra)' : '')+' en attente — pas encore cédulée' : (pt.ok ? ' faite le ' : ' prévue le ')+cvFmtDay(pt.day)); }
 function pjPhases(job, s, ctx){
   const today = cvDay(new Date().toISOString()), pro = job.client!=='PART';
   const ev = job.events.filter(e=>!e.attente), att = job.events.filter(e=>e.attente);
@@ -2269,6 +2271,8 @@ function pjPhases(job, s, ctx){
   const phase = (P, nom) => {
     const estP = e => P==='ENTREE' ? PJ_ENTREE_RE.test(e.title||'') : e.phase===P;
     const L = ev.filter(estP), faits = L.filter(passe), futurs = L.filter(e=>!passe(e));
+    // v253 : un retour de la même phase dans l'agenda En Attente (ex. « CRS FINITION EXTRA CURPAS ») = une visite de plus, pas encore cédulée
+    const attP = L.length ? att.filter(estP) : [];
     const plus = !!M[job.id+'|+PHASE '+nom], moins = !!M[job.id+'|-PHASE '+nom], dit = po ? po[PO_CLE[P]] : '';
     let actif, source;
     if(L.length){ actif = true; source = 'dans l\'agenda'; }
@@ -2286,7 +2290,10 @@ function pjPhases(job, s, ctx){
     const nonCmd = futurs.filter(e=>!(ctx.commandes && cvCmd(ctx.commandes, job, e).fait));   // un passage déjà fait = la commande a été faite
     add(nom, 'Commande '+ART[P]+' placée', {non:'Commande '+ART[P]+' non placée', na, ok: L.length>0 && !nonCmd.length, du: nonCmd.some(e=>e.day<=fin7),
       info: nonCmd.length ? nonCmd.map(e=>cvFmtDay(e.day)).join(', ')+' : commande à placer' : 'Pas encore de passage à l\'agenda'});
-    add(nom, FAIT[P][0], {non:FAIT[P][1], na, parts:partsDe(estP), ok: faits.length>0 && !futurs.length, du: false,
+    let parts = partsDe(estP);
+    if(attP.length){ const base = parts || visites.filter(v=>v.events.some(estP)).map((v,i)=>({n:i+1, ok:v.faite, day:v.debut})), tot = base.length + attP.length;
+      parts = [...base.map(pt=>({...pt, tot})), ...attP.map((e,i)=>({n:base.length+i+1, tot, ok:false, day:e.day, attente:true, extra:/\bEXTRAS?\b/i.test(e.title||'')}))]; }
+    add(nom, FAIT[P][0], {non:FAIT[P][1], na, parts, ok: faits.length>0 && !futurs.length && !attP.length, du: attP.length>0 && !futurs.length,
       info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
     const sansAp = faits.filter(e=>!(e.as || e.fac));
     add(nom, 'Appel de service inscrit', {non:'Appel de service non inscrit', na, ok: faits.length>0 && !sansAp.length, du: sansAp.length>0 && !futurs.length, info: sansAp.length ? sansAp.map(e=>cvFmtDay(e.day)).join(', ')+' sans appel de service' : futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore de passage fait'});
@@ -2295,8 +2302,8 @@ function pjPhases(job, s, ctx){
     if(P==='ENTREE') add(nom, 'OT de l\'entrée électrique reçu', {non:'OT de l\'entrée électrique non reçu', na: na || !pro, ok: faits.some(e=>e.ot) || ots.length>0, du: faits.length>0,
       info:'L\'entrée est faite mais aucun OT n\'est classé'});
     const nonFac = vs.filter(v=>!v.facturee);
-    add(nom, 'Facture '+ART[P], {oui:'Facture '+ART[P]+' envoyée', non:'Facture '+ART[P]+' non envoyée', na, ok: vs.length>0 && !nonFac.length, du: nonFac.length>0 && !futurs.length,
-      info: futurs.length && nonFac.length ? 'Retour prévu le '+cvFmtDay(futurs[0].day)+' : la facture suit le dernier passage' : nonFac.length ? nonFac.map(v=>v.label).join(', ')+' : visite faite, pas de facture' : futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore de passage fait'});
+    add(nom, 'Facture '+ART[P], {oui:'Facture '+ART[P]+' envoyée', non:'Facture '+ART[P]+' non envoyée', na, ok: vs.length>0 && !nonFac.length && !attP.length, du: nonFac.length>0 && !futurs.length,
+      info: attP.length && !nonFac.length ? (attP.some(e=>/\bEXTRAS?\b/i.test(e.title||'')) ? 'Extra' : 'Retour')+' en attente : il devra être facturé une fois fait' : futurs.length && nonFac.length ? 'Retour prévu le '+cvFmtDay(futurs[0].day)+' : la facture suit le dernier passage' : nonFac.length ? nonFac.map(v=>v.label).join(', ')+' : visite faite, pas de facture' : futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore de passage fait'});
   };
   phase('ENTREE','Entrée électrique'); phase('ROUGH','Rough'); phase('FINITION','Finition');
   // v239 : particulier — les passages SERV forment une phase au nom du type de job (« Faire l'éclairage », « Faire le garage »…)
@@ -2335,8 +2342,9 @@ function pjPhases(job, s, ctx){
   out.forEach(x=>{ x.manuel = !x.ok && !!M[job.id+'|'+x.id]; x.etat = x.na ? 'na' : x.ok ? 'ok' : x.manuel ? 'manuel' : x.du ? 'manque' : 'futur';
     x.texte = x.etat==='na' ? x.titre : (x.etat==='ok' || x.etat==='manuel') ? (x.oui || x.titre) : (x.non || x.titre);
     if(x.parts && x.etat!=='na'){ const f = x.parts.filter(pt=>pt.ok).length;
-      if(x.etat!=='ok' && x.etat!=='manuel') x.texte += f ? ' — visite '+f+'/'+x.parts.length+' faite' : ' — '+x.parts.length+' visites prévues';
-      x.info = x.parts.map(pt=>'Visite '+pt.n+'/'+pt.tot+(pt.ok ? ' faite le ' : ' prévue le ')+cvFmtDay(pt.day)).join(' · '); } });   // v237 : « OT non reçu » tant que ce n'est pas fait
+      const enAtt = x.parts.filter(pt=>pt.attente), qui = enAtt.some(pt=>pt.extra) ? 'extra' : 'retour';
+      if(x.etat!=='ok' && x.etat!=='manuel') x.texte += f ? ' — visite '+f+'/'+x.parts.length+' faite'+(enAtt.length ? ', '+qui+' en attente' : '') : ' — '+x.parts.length+' visites prévues';
+      x.info = x.parts.map(pjPartTexte).join(' · '); } });   // v237 : « OT non reçu » tant que ce n'est pas fait
   const actifs = out.filter(x=>x.etat!=='na'), faits = actifs.filter(x=>x.etat==='ok'||x.etat==='manuel');
   // v245 : job encore seulement dans En Attente → on montre juste l'Inscription (pas de barre d'avancement)
   const attenteSeul = !ev.length && att.length>0;
@@ -2419,7 +2427,7 @@ function PjBarre({p, blocages, sel, onEtape}){
                   background:ouvert?'var(--warning)':'var(--success)',color:ouvert?'#1b1300':'#fff',boxShadow:'0 0 0 2px var(--bg2, #161b22)'}}>{ouvert?'!':'✓'}</span>}
                 {x.parts && x.etat!=='na' && x.etat!=='ok' && x.etat!=='manuel' && !ouvert
                   ? <div style={{display:'flex',gap:2,height:12,borderRadius:4,outline:choisi?'2px solid var(--accent)':'none'}}>   {/* v246 : 1/2, 2/2… */}
-                      {x.parts.map(pt=><div key={pt.n} title={'Visite '+pt.n+'/'+pt.tot+(pt.ok?' faite le ':' prévue le ')+cvFmtDay(pt.day)} style={{flex:1,borderRadius:3,background:pt.ok?'var(--success)':PJ_COULEUR[x.etat]}}/>)}</div>
+                      {x.parts.map(pt=><div key={pt.n} title={pjPartTexte(pt)} style={{flex:1,borderRadius:3,background:pt.ok?'var(--success)':PJ_COULEUR[x.etat]}}/>)}</div>
                   : <div style={{height:12,borderRadius:3,background:ouvert && x.etat!=='na' ? 'var(--warning)' : PJ_COULEUR[x.etat],border:x.etat==='na'?'1px dashed var(--border)':choisi?'2px solid var(--accent)':'none',
                   backgroundImage:x.etat==='manuel'?'repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,.25) 4px 7px)':undefined}}/>}
               </div>; })}
