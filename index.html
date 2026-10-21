@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v254';
+const APP_VERSION = 'v255';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4072,6 +4072,13 @@ const PAI_MOTS_VIDES = new Set(['inc','ltee','ltd','limited','quebec','qc','cana
 // v231 : un numéro civique (« 2311 rue du docteur Primeau ») n'est pas un numéro de facture
 const PAI_RUE = '\\s*,?\\s*(rue|av\\.?|avenue|boul\\.?|boulevard|ch\\.?|chemin|rang|mont[ée]e|place|croissant|terrasse|route|rte)\\b';
 function paiNums(s){ return [...new Set(String(s||'').replace(new RegExp('\\b\\d{3,5}'+PAI_RUE,'gi'),' ').replace(/\b(19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.](19|20)\d{2}\b/g,' ').match(/\b\d{4}\b/g)||[])]; }
+// v255 : montant tapé ou collé du relevé : « 56 912,64 $ » (espaces insécables), « 56,912.64 », « 56912.64 »
+function paiMontant(v){ let x = String(v||'').replace(/[^\d,.\-]/g,''); if(!x) return null;
+  const v1 = x.lastIndexOf(','), p1 = x.lastIndexOf('.');
+  if(v1>=0 && p1>=0) x = v1>p1 ? x.replace(/\./g,'').replace(',','.') : x.replace(/,/g,'');
+  else if(v1>=0) x = /,\d{1,2}$/.test(x) ? x.replace(/,(?=.*,)/g,'').replace(',','.') : x.replace(/,/g,'');
+  else if((x.match(/\./g)||[]).length>1) x = x.replace(/\.(?=.*\.)/g,'');
+  const n = parseFloat(x); return isNaN(n) ? null : Math.round(n*100)/100; }
 function paiMots(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3 && !PAI_MOTS_VIDES.has(w) && !/^\d+$/.test(w)); }
 function paiJours(d){ const t = Date.parse(String(d||'').slice(0,10)); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
 function paiLireFactures(rows){
@@ -4423,7 +4430,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       await sheetsAppendRow(id, 'Paiements', ['escompte-'+Date.now(), date, f.nomAffiche, montant.toFixed(2), 'Escompte accordé', '', num, '', 'Escompte', num, 'Confirmé', 'Escompte inscrit dans le CRM le '+paiAujourdhui()]);
       if(cible.membres) await confirmerGroupe(cible, [num], 'Confirmé'); else await confirmer(cible, [num], 'Confirmé'); }
     catch(e){ alert('Impossible : '+apiErrMsg(e)); setBusy(''); } };
-  const ajouterManuel = async ()=>{ const m = manuel; const nums = paiNums(m.nums); const mt = cvNum(m.montant);
+  const ajouterManuel = async ()=>{ const m = manuel; const nums = paiNums(m.nums); const mt = paiMontant(m.montant);
     if(!nums.length || !mt){ alert('Indique le ou les numéros de facture et le montant.'); return; }
     const inconnus = nums.filter(n=>!A.F[n]); if(inconnus.length && !confirm('Facture(s) introuvable(s) dans le registre : '+inconnus.join(', ')+'. Inscrire quand même ?')) return;
     setBusy('manuel');
@@ -4535,7 +4542,9 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
           <button className="btn btn-sm" onClick={()=>setAssoc(null)}>Annuler</button>
         </div>
       </div>; })()}
-    {manuel && <div className="card" style={{marginBottom:10,borderColor:'var(--accent)'}}>
+    {manuel && <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',zIndex:1000,display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'60px 12px',overflowY:'auto'}} onClick={e=>{ if(e.target===e.currentTarget && busy!=='manuel') setManuel(null); }}>
+    {/* v255 : fenêtre par-dessus la page — avant, le formulaire s'ouvrait en haut de la page, hors de vue quand on cliquait « Payée » plus bas */}
+    <div className="card" style={{width:'100%',maxWidth:620,borderColor:'var(--accent)',margin:0}}>
       <b>💵 Inscrire un paiement reçu</b>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:8,marginTop:8}}>
         <div className="field"><label>Facture(s)</label><input value={manuel.nums} onChange={e=>setManuel({...manuel, nums:e.target.value})} placeholder="1234, 1235"/></div>
@@ -4545,8 +4554,11 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       </div>
       <div className="field" style={{marginTop:6}}><label>Note (no de chèque, etc.)</label><input value={manuel.note} onChange={e=>setManuel({...manuel, note:e.target.value})}/></div>
       {paiNums(manuel.nums).length>0 && <div className="muted" style={{fontSize:12,marginTop:4}}>{paiNums(manuel.nums).map(descF).join(' · ')}</div>}
-      <div style={{display:'flex',gap:6,marginTop:8}}><button className="btn btn-sm btn-p" disabled={busy==='manuel'} onClick={ajouterManuel}>{busy==='manuel'?'…':'Inscrire'}</button><button className="btn btn-sm" onClick={()=>setManuel(null)}>Annuler</button></div>
-    </div>}
+      {(()=>{ const ns = paiNums(manuel.nums), tot = ns.reduce((t,n)=>t+((A.F[n] && A.F[n].solde>0) ? A.F[n].solde : (A.F[n] && A.F[n].remplaceePar) ? A.F[n].ttc-(A.F[n].escompte||0)-A.F[n].paye : 0),0), mt = paiMontant(manuel.montant)||0;
+        return ns.length>1 && <div style={{fontSize:12.5,marginTop:4,color:Math.abs(tot-mt)<=0.05?'var(--success)':'var(--warning)'}}>Total des factures : {cvMoney(tot)}{Math.abs(tot-mt)<=0.05 ? ' — balance avec le montant reçu' : ' — écart de '+cvMoney(Math.round((mt-tot)*100)/100)}</div>; })()}
+      {paiNums(manuel.nums).filter(n=>A.F[n] && A.F[n].remplaceePar).map(n=><div key={n} className="muted" style={{fontSize:12,marginTop:2}}>#{n} était vue comme un doublon de #{A.F[n].remplaceePar} : une fois les deux payées, elles comptent toutes les deux.</div>)}
+      <div style={{display:'flex',gap:6,marginTop:8}}><button className="btn btn-sm btn-p" disabled={busy==='manuel'} onClick={ajouterManuel}>{busy==='manuel'?'…':'Inscrire'}</button><button className="btn btn-sm" disabled={busy==='manuel'} onClick={()=>setManuel(null)}>Annuler</button></div>
+    </div></div>}
 
     {sous==='confirmer' && <div className="card">
       <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Virements reçus pas encore associés à une facture. Rien n'est associé tant que tu ne confirmes pas.{A.anciens.length>0 && <> {A.anciens.length} paiement{A.anciens.length>1?'s':''} pour des factures d'avant le 1er juin {A.anciens.length>1?'sont rangés':'est rangé'} dans « Tous les paiements ».</>}{A.archives.length>0 && <> Les paiements d'avant le 1er juin 2026 sont archivés.</>}</div>
