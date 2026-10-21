@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v235';
+const APP_VERSION = 'v236';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7190,6 +7190,33 @@ function useBonsCommande(cfg){
   return {bons, lire, ajouter, statut};
 }
 
+// v236 : Assemblages — listes d'articles préfaites (La mémoire — Jobs › « Assemblages », sans prix).
+// Lignes = JSON [{code, desc, qte, unite}] ; une ligne sans code = article libre. Actif « non » = retiré (jamais effacé).
+const AS_ENTETE = ['Nom','Description','Lignes','Mis à jour','Actif'];
+function useAssemblages(cfg){
+  const [liste,setListe]=useState([]); const [lu,setLu]=useState(false); const [existe,setExiste]=useState(false);
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async(force)=>{
+    if(!id){ setLu(true); return; }
+    try{ const r = await lireCache(id, qSheet('Assemblages')+'!A1:E', force); setExiste(true);
+      setListe((r.result.values||[]).slice(1).map((x,i)=>{ let lignes=[]; try{ lignes = JSON.parse(x[2]||'[]'); }catch(e){}
+        return {row:i+2, nom:String(x[0]||'').trim(), desc:String(x[1]||''), lignes:Array.isArray(lignes)?lignes:[], maj:x[3]||'', actif:!/^non$/i.test(String(x[4]||'').trim())}; })
+        .filter(a=>a.nom && a.actif)); }
+    catch(e){ setListe([]); }
+    setLu(true);
+  },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const enregistrer = async a => {
+    const ligne = [a.nom, a.desc||'', JSON.stringify(a.lignes||[]), cvDay(new Date().toISOString()), 'oui'];
+    if(a.row) await sheetsUpdateRow(id, qSheet('Assemblages'), a.row, ligne);
+    else { if(!existe) await ensureSheetsExist(id, [{name:'Assemblages', headers:AS_ENTETE}]); await sheetsAppendRow(id, qSheet('Assemblages'), ligne); }
+    await lire(true);
+  };
+  const retirer = async a => { setListe(l=>l.filter(x=>x.row!==a.row));
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:qSheet('Assemblages')+'!E'+a.row, valueInputOption:'RAW', resource:{values:[['non']]}}); await lire(true); };
+  return {liste, lu, lire, enregistrer, retirer};
+}
+
 function bcVide(){ return {fournisseur:'Dubo', courriel:bcCourriel('Dubo'), ref:'', job:'', passage:null, employe:'', mode:'À aller chercher', pour:cvDay(new Date(Date.now()+864e5).toISOString()), lignes:[], libre:'', note:''}; }
 
 function CommandesView({cfg, toast, refreshKey}){
@@ -7197,6 +7224,7 @@ function CommandesView({cfg, toast, refreshKey}){
   const [commandes, enregistrerCommande] = useCommandes(cfg);
   const C = useCatalogue(cfg);
   const B = useBonsCommande(cfg);
+  const AS = useAssemblages(cfg);
   const K = useContactsFournisseurs(cfg);
   const [bc,setBc]=useState(bcVide());
   const courrielDe = f => (K.map[f] && K.map[f].courriel) || bcCourriel(f);
@@ -7232,6 +7260,30 @@ function CommandesView({cfg, toast, refreshKey}){
   // Code du fournisseur choisi (ex. LEV-T5325-W chez Dubo) quand on l'a déjà acheté là
   const codeFourn = code => { const o = C.offresDe(code).find(x=>cvNorm(x.f)===cvNorm(bc.fournisseur)); if(o) return o.codeF; const a = C.coutsDe(code).find(c=>c.fournisseur===bc.fournisseur); return a ? a.code : ''; };
   const choisies = bc.lignes.filter(l=>cvNum(l.qte));
+  // v236 : assemblages — on ajoute ses articles au bon (les quantités s'additionnent), × le nombre choisi
+  const [asMult,setAsMult]=useState(1), [asVoir,setAsVoir]=useState(''), [asEdit,setAsEdit]=useState(null), [asNom,setAsNom]=useState(''), [asOcc,setAsOcc]=useState(false);
+  const prodDe = code => C.produits.find(p=>codeNorm(p.code)===codeNorm(code) || (p.alias && codeNorm(p.alias)===codeNorm(code)));
+  const asLigne = l => { const p = l.code ? prodDe(l.code) : null; return {code:p?p.code:(l.code||''), desc:(p&&p.desc)||l.desc||'', unite:(p&&p.unite)||l.unite||'', qte:cvNum(l.qte)||0}; };
+  const ajouterAssemblage = (a, mult) => { const m = mult || cvNum(asMult) || 1;
+    setBc(x=>{ let lignes = [...x.lignes], libre = x.libre;
+      a.lignes.forEach(l0=>{ const l = asLigne(l0);
+        if(!l.code){ if(l.desc) libre = (libre ? libre.replace(/\s+$/,'')+'\n' : '')+(l.qte?(l.qte*m)+' × ':'')+l.desc; return; }
+        const ex = lignes.find(y=>codeNorm(y.code)===codeNorm(l.code));
+        lignes = ex ? lignes.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+l.qte*m} : y) : [...lignes, {...l, qte:l.qte*m}]; });
+      return {...x, lignes, libre}; });
+    toast && toast('« '+a.nom+' »'+(m>1?' × '+m:'')+' ajouté au bon'); };
+  const lignesDuBon = () => [...choisies.map(l=>({code:l.code, desc:l.desc, qte:cvNum(l.qte), unite:l.unite||''})),
+    ...bc.libre.split('\n').map(t=>t.trim()).filter(Boolean).map(t=>{ const m = t.match(/^(\d+(?:[.,]\d+)?)\s*[×x]\s*(.+)$/i); return m ? {code:'', desc:m[2], qte:cvNum(m[1]), unite:''} : {code:'', desc:t, qte:0, unite:''}; })];
+  const sauverAssemblage = async (a, nom) => { const lignes = lignesDuBon();
+    if(!lignes.length){ toast && toast('Le bon est vide — ajoute les articles de l\'assemblage d\'abord'); return; }
+    const n = (nom||'').trim(); if(!a && !n){ toast && toast('Donne un nom à l\'assemblage'); return; }
+    if(!a && AS.liste.some(x=>cvNorm(x.nom)===cvNorm(n))){ toast && toast('Un assemblage porte déjà ce nom'); return; }
+    setAsOcc(true);
+    try{ await AS.enregistrer(a ? {...a, lignes} : {nom:n, desc:'', lignes}); toast && toast(a ? '« '+a.nom+' » mis à jour' : '« '+n+' » enregistré'); setAsEdit(null); setAsNom(''); }
+    catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
+    setAsOcc(false); };
+  const modifierAssemblage = a => { if((choisies.length || bc.libre.trim()) && !window.confirm('Le bon en cours sera remplacé par les articles de « '+a.nom+' ». Continuer ?')) return;
+    setAsEdit(a); setBc(x=>({...x, lignes:[], libre:''})); ajouterAssemblage(a, 1); };
   const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat) && (!q || rechercheOk(texteProduit(p), q)));
   const texteArticles = () => [...choisies.map(l=>{ const cf = codeFourn(l.code); return '- '+l.qte+' '+(l.unite&&l.unite!=='un'?l.unite+' ':'')+'× '+l.code+(cf && codeNorm(cf)!==codeNorm(l.code)?' ('+cf+')':'')+' — '+l.desc; }),
     ...bc.libre.split('\n').map(s=>s.trim()).filter(Boolean).map(s=>'- '+s)].join('\n');
@@ -7280,6 +7332,37 @@ function CommandesView({cfg, toast, refreshKey}){
       </div>
       {bc.passage ? <div style={{fontSize:12.5,marginTop:6,color:'var(--accent)'}}>📅 Pour le passage {cvFmtDay(bc.passage.e.day)} {bc.passage.e.phase} · {bc.job} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>maj({passage:null})}>✕</button></div>
         : <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:6,alignItems:'center'}}><span className="muted" style={{fontSize:12}}>Ou pour :</span>{CV_DESTS.map(d=><button key={d} className={'btn btn-sm'+(bc.job===d?' btn-p':'')} onClick={()=>choisirDest(d)}>{d}</button>)}</div>}
+    </div>
+
+    <div className="card" style={{marginBottom:10}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:6}}>
+        <b>Assemblages</b>
+        <label className="muted" style={{fontSize:12,display:'flex',alignItems:'center',gap:4}}>Quantité
+          <select value={asMult} onChange={e=>setAsMult(+e.target.value)}>{[1,2,3,4,5].map(n=><option key={n} value={n}>× {n}</option>)}</select></label>
+      </div>
+      <div className="muted" style={{fontSize:12,marginBottom:8}}>Listes préfaites pour une job ou pour remonter le stock du camion. « Ajouter » met les articles dans le bon ci-dessous ; tu ajustes ensuite les quantités.</div>
+      {!AS.lu && <div className="muted" style={{fontSize:13}}>Chargement…</div>}
+      {AS.lu && !AS.liste.length && <div className="muted" style={{fontSize:13}}>Aucun assemblage pour l'instant. Remplis le bon avec les articles, puis enregistre-le comme assemblage ci-dessous.</div>}
+      {AS.liste.map(a=><div key={a.row} style={{borderBottom:'1px solid var(--border)',padding:'6px 0'}}>
+        <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+          <button className="btn btn-sm" style={{background:'none',border:'none',padding:0,fontWeight:700,textAlign:'left',flex:'1 1 160px',cursor:'pointer'}} onClick={()=>setAsVoir(v=>v===a.nom?'':a.nom)}>{asVoir===a.nom?'▾ ':'▸ '}{a.nom} <span className="muted" style={{fontWeight:400,fontSize:12}}>· {a.lignes.length} articles</span></button>
+          <button className="btn btn-sm btn-p" onClick={()=>ajouterAssemblage(a)}>Ajouter{asMult>1?' × '+asMult:''}</button>
+          <button className="btn btn-sm" onClick={()=>modifierAssemblage(a)}>Modifier</button>
+        </div>
+        {a.desc && <div className="muted" style={{fontSize:12}}>{a.desc}</div>}
+        {asVoir===a.nom && <div style={{fontSize:12.5,marginTop:4}}>{a.lignes.map((l0,i)=>{ const l = asLigne(l0); return <div key={i} style={{display:'flex',gap:6,padding:'2px 0'}}>
+          <span style={{width:52,textAlign:'right',fontWeight:700}}>{l.qte||''}{l.unite && l.unite!=='un' ? ' '+l.unite : ''}</span><b style={{minWidth:90}}>{l.code}</b><span className="muted">{l.desc}</span></div>; })}</div>}
+      </div>)}
+      {asEdit ? <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginTop:8,padding:8,border:'1px solid var(--accent)',borderRadius:8}}>
+          <span style={{fontSize:12.5,flex:'1 1 200px'}}>Modification de <b>{asEdit.nom}</b> : ajuste le bon ci-dessous, puis enregistre.</span>
+          <button className="btn btn-sm btn-p" disabled={asOcc} onClick={()=>sauverAssemblage(asEdit)}>{asOcc?'…':'Enregistrer l\'assemblage'}</button>
+          <button className="btn btn-sm" disabled={asOcc} onClick={async()=>{ if(!window.confirm('Retirer l\'assemblage « '+asEdit.nom+' » ? (la ligne reste dans La mémoire, marquée Actif = non)')) return; setAsOcc(true); try{ await AS.retirer(asEdit); toast && toast('« '+asEdit.nom+' » retiré'); setAsEdit(null); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setAsOcc(false); }}>Retirer</button>
+          <button className="btn btn-sm" onClick={()=>setAsEdit(null)}>Annuler</button>
+        </div>
+        : (choisies.length>0 || bc.libre.trim()) && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginTop:8}}>
+          <input value={asNom} onChange={e=>setAsNom(e.target.value)} placeholder="Nom (ex. Finition salle de bain)" style={{flex:'1 1 200px'}}/>
+          <button className="btn btn-sm" disabled={asOcc || !asNom.trim()} onClick={()=>sauverAssemblage(null, asNom)}>{asOcc?'…':'Enregistrer le bon comme assemblage'}</button>
+        </div>}
     </div>
 
     <div className="card" style={{marginBottom:10}}>
