@@ -98,7 +98,7 @@ tr:hover td{background:var(--bg3)}
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-const {useState,useEffect,useMemo,useCallback,useRef} = React;
+const {useState,useEffect,useMemo,useCallback,useRef,useLayoutEffect} = React;
 
 // ── CONFIG ────────────────────────────────────────────────────────────────
 // clientId : créé dans Google Cloud Console (même projet que PunchPro),
@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v264';
+const APP_VERSION = 'v265';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2886,6 +2886,27 @@ function ConvertisseurCard(){
     <div className="muted" style={{fontSize:11,marginTop:6}}>{nPi!=null && pi ? pouces(nPi)+' · ' : ''}1 m = 3,281 pi · 1 pi = 0,3048 m</div>
   </div>;
 }
+// v265 : blocs du Tableau de bord en colonnes équilibrées. Chaque bloc va dans la colonne la plus courte (hauteurs mesurées),
+// dans l'ordre : le dernier (convertisseur + rappels) comble donc l'espace vide à côté du bloc le plus long.
+function MurColonnes({blocs, min=330, gap=14}){
+  const boite = useRef(null), refs = useRef({});
+  const [w,setW] = useState(0), [hs,setHs] = useState({});
+  useLayoutEffect(()=>{ const el = boite.current; if(!el) return;
+    const f = ()=>setW(el.clientWidth); f();
+    if(window.ResizeObserver){ const ro = new ResizeObserver(f); ro.observe(el); return ()=>ro.disconnect(); }
+    window.addEventListener('resize', f); return ()=>window.removeEventListener('resize', f); },[]);
+  useLayoutEffect(()=>{ const n = {}; let diff = false;
+    blocs.forEach(b=>{ const el = refs.current[b.k]; if(!el) return; n[b.k] = el.offsetHeight; if(Math.abs((hs[b.k]||0) - n[b.k]) > 2) diff = true; });
+    if(diff) setHs(h=>({...h, ...n})); });
+  const nb = Math.max(1, Math.floor((w + gap) / (min + gap)) || 1);
+  const cols = Array.from({length:nb}, ()=>({h:0, items:[]}));
+  blocs.forEach(b=>{ const c = cols.reduce((m,x)=>x.h < m.h - 1 ? x : m, cols[0]); c.items.push(b); c.h += (hs[b.k] || 200); });
+  return <div ref={boite} style={{display:'flex',gap,alignItems:'flex-start'}}>
+    {cols.map((c,i)=><div key={i} style={{flex:'1 1 0',minWidth:0}}>
+      {c.items.map(b=><div key={b.k} ref={el=>{ refs.current[b.k] = el; }} style={{display:'flow-root'}}>{b.el}</div>)}
+    </div>)}
+  </div>;
+}
 // Petite boîte « Rappels » du Tableau de bord : notes rapides communes (pas de William / Isabelle, pas de date).
 // Onglet « Rappels » du CRM. Cocher = fait (la note disparaît, rien n'est effacé de la feuille).
 function RappelsBoite({cfg, data, toast}){
@@ -3340,8 +3361,9 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
         </div>}
       </>; })()}
 
-    <div className="dash-mur">
-      <div className="card" style={{marginBottom:14,borderLeft:auj.length?'4px solid var(--accent)':undefined}}>
+    {/* v265 : colonnes équilibrées — chaque bloc va dans la colonne la plus courte ; convertisseur + rappels comblent le dernier trou */}
+    <MurColonnes blocs={[
+        {k:'jour', el:(<div className="card" style={{marginBottom:14,borderLeft:auj.length?'4px solid var(--accent)':undefined}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:6}}>
           <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
             {[['auj',"Aujourd'hui",auj.length],['dem','Demain',dem.length],['sem','Semaine',semaine.length]].map(([k,l,n])=>
@@ -3360,33 +3382,32 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
         {listeVue.length ? <Journee liste={listeVue} jours={vueJour==='sem'}/>
           : listeJour.length ? <div className="muted" style={{fontSize:13}}>Aucun passage pour les équipes cochées.</div>
           : <div className="muted" style={{fontSize:13}}>{vueJour==='auj' ? "Aucun passage aujourd'hui." : vueJour==='dem' ? 'Aucun passage demain.' : 'Aucun passage dans les 7 prochains jours.'}</div>}
-      </div>
-      {adresses.length>0 && <div className="card" style={{marginBottom:14,borderLeft:'4px solid var(--warning)'}}>
+      </div>)},
+        (adresses.length>0) && {k:'adresses', el:(<div className="card" style={{marginBottom:14,borderLeft:'4px solid var(--warning)'}}>
         <div className="fh" style={{fontSize:15,marginBottom:4}}>Adresses à confirmer <span className="badge" style={{background:'var(--warning)',color:'#fff'}}>{adresses.length}</span></div>
         {adresses.slice(0,10).map(a=><CvAdresse key={a.row} a={a} onDecider={deciderAdresse}/>)}
         <div className="muted" style={{fontSize:11.5,marginTop:6}}>✓ écrit l'adresse dans tous les passages de la job dans l'agenda. Tu peux la corriger avant.</div>
-      </div>}
-      {aCommander.length>0 && <Bloc titre="Commandes à placer" n={aCommander.length} go="commandes" montre={8} niv={aCommander.some(x=>x.e.day<=jour(3)) ? 'urgent' : 'oui'}>
+      </div>)},
+        (aCommander.length>0) && {k:'commandes', el:(<Bloc titre="Commandes à placer" n={aCommander.length} go="commandes" montre={8} niv={aCommander.some(x=>x.e.day<=jour(3)) ? 'urgent' : 'oui'}>
         {aCommander.slice(0,8).map((x,i)=><Rang key={i} go="commandes" droite={<>{cvFmtDay(x.e.day)}<BoutonCmd x={x}/></>}><span style={{fontWeight:800,fontSize:11,color:x.e.day<=jour(3)?'var(--danger)':'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}</Rang>)}
-      </Bloc>}
-      {aRepondre.length>0 && <Bloc titre="Courriels à répondre" n={aRepondre.length} go="courriels" montre={8} niv={cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'urgent' : 'oui'}>
+      </Bloc>)},
+        (aRepondre.length>0) && {k:'courriels', el:(<Bloc titre="Courriels à répondre" n={aRepondre.length} go="courriels" montre={8} niv={cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'urgent' : 'oui'}>
         {aRepondre.slice(0,8).map((f,i)=>{ const j = cvJoursDepuis(f.dernier); return <Rang key={i} go="courriels" droite={j!=null ? <span style={{color:j>=3?'var(--danger)':undefined}}>il y a {j} j</span> : ''}>« {f.sujet} »<div className="muted" style={{fontSize:11.5}}>{nomPO(f.po)}{f.de ? ' · '+f.de : ''}</div></Rang>; })}
-      </Bloc>}
-      {aFacturer.length>0 && <Bloc titre="À facturer" n={aFacturer.length} go="factures" montre={8} niv={sansFac ? 'urgent' : 'oui'}>
+      </Bloc>)},
+        (aFacturer.length>0) && {k:'facturer', el:(<Bloc titre="À facturer" n={aFacturer.length} go="factures" montre={8} niv={sansFac ? 'urgent' : 'oui'}>
         {aFacturer.slice(0,8).map((r,i)=><Rang key={i} go="factures" droite={r.date}>
           <b style={{color:'var(--accent)'}}>{r.contracteur==='PARTICULIER'?'':r.contracteur+' '}</b>{r.projet||r.adresse}
           <div style={{fontSize:11.5,color:r.statutFacture==='manquant'?'var(--danger)':'var(--warning)'}}>{r.statutFacture==='manquant' ? "rien d'inscrit" : 'appel '+r.appelService+' — facture à faire'}</div>
         </Rang>)}
-      </Bloc>}
-      {aAssocier.length>0 && <Bloc titre="Achats à associer" n={aAssocier.length} go="fournisseurs" montre={6}>
+      </Bloc>)},
+        (aAssocier.length>0) && {k:'achats', el:(<Bloc titre="Achats à associer" n={aAssocier.length} go="fournisseurs" montre={6}>
         {aAssocier.slice().sort((a,b)=>String(b.date||b.recue).localeCompare(String(a.date||a.recue))).slice(0,6).map((a,i)=><Rang key={i} go="fournisseurs" droite={cvMoney(a.st)}>
           <b>{a.fournisseur}</b> <span className="muted">· {cvFmtDay(a.date||a.recue)}</span>{a.ref && <span className="muted"> · « {a.ref} »</span>}
           {a.propose && <div style={{fontSize:11.5,color:'var(--accent)'}}>proposé : {a.propose}</div>}
         </Rang>)}
-      </Bloc>}
-      <ConvertisseurCard/>
-      <RappelsBoite cfg={cfg} data={data} toast={toast}/>
-    </div>
+      </Bloc>)},
+        {k:'outils', el:<><ConvertisseurCard/><RappelsBoite cfg={cfg} data={data} toast={toast}/></>}
+      ].filter(Boolean)}/>
   </div>;
 }
 
