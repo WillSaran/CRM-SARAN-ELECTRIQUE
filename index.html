@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v259';
+const APP_VERSION = 'v260';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4142,6 +4142,61 @@ function releveDe(desc){ const p = String(desc||'').replace(/\*{3,}\d*/g,' ').sp
   return p.length>=2 ? {de:p[1], message:p.slice(2).join(' ')} : {de:/d[ée]p[ôo]t mobile/i.test(desc) ? 'Dépôt mobile (chèque)' : String(desc||'').trim(), message:''}; }
 // Pas des paiements de clients : marge de crédit, avance de carte, ristourne, dépôt au comptoir, virement entre comptes
 function releveHorsClient(t){ return /^(DCV|VWW|RIS|DSL)$/.test(t.code) || /marge de cr|avance fonds|ristourne|d[ée]p[ôo]t au comptoir/i.test(t.desc); }
+// v260 : facture Saran Électrique (PDF du logiciel comptable) → { num, date, client, po, nom, desc, ht, ttc, esc, pay, credit }.
+// Rien n'est deviné : les montants doivent balancer (sous-total + TPS 5 % + TVQ 9,975 % = total), sinon null.
+function factPdfLire(pages){
+  const items = [], lignes = [];
+  pages.forEach(p=>{ const its = p.filter(it=>it.str && it.str.trim()).sort((a,b)=>b.y-a.y || a.x-b.x);
+    const L = []; its.forEach(it=>{ let l = L.find(x=>Math.abs(x.y-it.y)<=2); if(!l){ l = {y:it.y, its:[]}; L.push(l); } l.its.push(it); });
+    L.sort((a,b)=>b.y-a.y).forEach(l=>{ l.its.sort((a,b)=>a.x-b.x); l.its.forEach(it=>items.push(it.str)); lignes.push(l.its.map(it=>it.str.trim()).join(' ')); }); });
+  const texte = lignes.join('\n'), plat = texte.replace(/[  ]/g,' ').replace(/[ \t]+/g,' ');
+  // En haut à droite : « FACTURE » / « 2657 » / « 14-10-2026 » (lignes séparées) — la date jj-mm-aaaa et le numéro juste au-dessus
+  let m = plat.match(/FACTURE\s+(\d{4,5})\s+(\d{2})-(\d{2})-(\d{4})/);
+  if(!m){ const p1 = (pages[0]||[]).filter(it=>it.str && it.str.trim());
+    const d = p1.find(it=>/^\s*\d{2}-\d{2}-\d{4}\s*$/.test(it.str));
+    const n = d && p1.filter(it=>/^\s*\d{4,5}\s*$/.test(it.str) && it.y>d.y && it.y-d.y<30 && Math.abs(it.x-d.x)<40).sort((a,b)=>a.y-b.y)[0];
+    const f = n && p1.find(it=>/^\s*FACTURE\s*$/.test(it.str) && it.y>n.y && it.y-n.y<30 && Math.abs(it.x-n.x)<40);
+    if(f){ const dd = d.str.trim().split('-'); m = [null, n.str.trim(), dd[0], dd[1], dd[2]]; } }
+  if(!m) return null;
+  const montantsDe = s => (String(s).replace(/[  ]/g,' ').match(/\d{1,3}(?: \d{3})+,\d{2}|\d+,\d{2}/g)||[]).map(x=>Number(x.replace(/ /g,'').replace(',','.')));
+  const parItem = items.map(montantsDe);
+  const argent = [].concat(...parItem);
+  const present = v => argent.some(a=>Math.abs(a-v)<0.015);
+  let best = null;
+  argent.forEach(st=>{ const tps = Math.round(st*5)/100, tvq = Math.round(st*9.975)/100, tot = st+tps+tvq;
+    if(st>0 && present(tps) && present(tvq) && argent.some(a=>Math.abs(a-tot)<=0.02) && (!best || st>best.st)) best = {st, tot:argent.find(a=>Math.abs(a-tot)<=0.02)}; });
+  if(!best){   // sans taxes : « MONTANT DÛ vente retenue sous-total 0,00 0,00 total »
+    const i = plat.search(/MONTANT\s+D[ÛU]/i), n = i<0 ? [] : montantsDe(plat.slice(i));
+    if(n.length>=6 && n[3]===0 && n[4]===0 && Math.abs(n[2]-n[5])<0.015 && n[2]>0) best = {st:n[2], tot:n[5]}; }
+  if(!best) return null;
+  // Escompte et paiement de la rangée des totaux (… Total, Paiement, Escompte, MONTANT DÛ) : on essaie chaque « Escompte », du dernier au premier, jusqu'à ce que ça balance
+  let tx = null;
+  for(let k = items.length-1; k>=0 && !tx; k--){ if(!/Escompte/i.test(items[k])) continue;
+    const n = [].concat(...parItem.slice(k)).slice(0,9); if(n.length<9) continue;
+    const tot = best.tot, c = i => n[((i%9)+9)%9];
+    for(let i=0;i<9 && !tx;i++){ if(Math.abs(n[i]-tot)>0.011) continue;
+      const st = c(i-3), tps = c(i-2), tvq = c(i-1), pay = c(i+1), esc = c(i+2), du = c(i+3);
+      if(Math.abs(st+tps+tvq-tot)<=0.02 && Math.abs(tot-pay-esc-du)<=0.02) tx = {esc:Math.round(esc*100)/100, pay:Math.round(pay*100)/100}; } }
+  if(!tx && !/Escompte/i.test(plat)) tx = {esc:0, pay:0};
+  const credit = /\bCRÉDIT\b/.test(texte), sg = credit ? -1 : 1;
+  const courriels = (plat.match(/[\w.+'-]+@[\w-]+(?:\.[\w-]+)+/g)||[]).map(x=>x.toLowerCase()).filter(x=>!/@saranelectrique\.com$/.test(x));
+  const po = (plat.match(/\bP[O0]\s?-?\s?0?(\d{4})\b/i)||[])[1];
+  const iProd = lignes.findIndex(l=>/Produit/.test(l) && /Description/.test(l));
+  const desc = iProd>0 && !/@|T[ée]l|facturation|Taschereau|No de contrat/i.test(lignes[iProd-1]) ? lignes[iProd-1].slice(0,60) : '';
+  return {num:m[1], date:m[4]+'-'+m[3]+'-'+m[2], credit,
+    client: courriels.indexOf('facturation.crs@dext.cc')>=0 ? 'CRS' : (courriels[0]||''), po: po ? 'P0'+po : '', desc,
+    ht:(sg*best.st).toFixed(2), ttc:(sg*best.tot).toFixed(2), esc: tx ? tx.esc.toFixed(2) : '', pay: tx ? tx.pay.toFixed(2) : ''};
+}
+// v260 : dossier « La mémoire › Factures PDF » — le CRM y lit les factures déposées à la main
+const FACT_PDF_DOSSIER = '1AeL-4Q6NFltkNJpmD96VFMY1APGhzDpH';
+async function factPdfListe(){ const out = []; let page = '';
+  do { const q = encodeURIComponent("'"+FACT_PDF_DOSSIER+"' in parents and trashed=false and mimeType='application/pdf'");
+    const r = await driveFetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=nextPageToken,files(id,name,createdTime)&pageSize=1000'+(page?'&pageToken='+page:''));
+    out.push(...(r.files||[])); page = r.nextPageToken || ''; } while(page);
+  return out; }
+async function factPdfTelecharger(id){ const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+  const r = await fetch('https://www.googleapis.com/drive/v3/files/'+id+'?alt=media', {headers:{Authorization:'Bearer '+tok}});
+  if(!r.ok) throw new Error('Drive '+r.status); return r.blob(); }
 // Texte d'un PDF avec la position de chaque morceau (pdf.js, chargé seulement quand on importe un relevé)
 async function relevePdfPages(file){
   if(!window.pdfjsLib){ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
@@ -4444,6 +4499,19 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const [annule,setAnnule]=useState('');   // numéro de facture à annuler (confirmation)
   const [imp,setImp]=useState(null);   // {source, nouvelles:[], lignes:[], annuler:[], etape}
   const [rel,setRel]=useState(null);   // v258 : relevé bancaire importé {source, lignes:[{t, de, message, garder, hors, sugg}], deja, retraits, etape}
+  const [fp,setFp]=useState(null);     // v260 : factures PDF déposées dans « Factures PDF » pas encore liées {cands:[fichiers], lignes, etape}
+  useEffect(()=>{ if(!data || !data.factures) return; let vivant = true;
+    (async()=>{ try{ const F = data.factures, V = F.__vieilles || {}, toutes = [...Object.values(F), ...Object.values(V)];
+        const liees = new Set(toutes.map(f=>f.pdf).filter(Boolean));
+        let ignores = []; try{ ignores = JSON.parse(localStorage.getItem('crm_factpdf_ignores')||'[]'); }catch(e){}
+        const cands = (await factPdfListe()).filter(f=>{ if(liees.has(f.id) || ignores.indexOf(f.id)>=0) return false;
+          const n = (String(f.name).match(/\b(\d{4,5})\b/)||[])[1];
+          if(n && V[n]) return false;                 // facture d'avant juin : le CRM ne la suit pas
+          if(n && F[n] && F[n].pdf) return false;     // la facture a déjà son PDF (copie en double dans le dossier)
+          return true; });
+        if(vivant) setFp(cands.length ? {cands, etape:'liste'} : null); }
+      catch(e){ /* pas de permission Drive : rien à montrer */ } })();
+    return ()=>{ vivant = false; }; },[data]);
   // v184 : les paiements « Sûr » (une seule proposition sûre) sont confirmés tout seuls ; ↩ dans « Tous les paiements » pour annuler
   const essayes = useRef(new Set());
   const [autoConf,setAutoConf]=useState([]);   // [{de, montant, factures}]
@@ -4530,8 +4598,9 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
     catch(e){ alert('Fichier illisible : '+e.message); } };
   // v258 : relevé de compte (PDF de la Caisse) → seulement les dépôts pas encore dans les paiements (même montant, 5 jours près)
   const lireReleve = async file => { setRel({source:file.name, etape:'lecture', lignes:[]});
-    try{ const T = releveLire(await relevePdfPages(file));
-      if(!T.length){ setRel(null); alert('Aucune transaction trouvée dans ce PDF. Est-ce bien un relevé de compte de la Caisse ?'); return; }
+    try{ const pages = await relevePdfPages(file), T = releveLire(pages);
+      if(!T.length){ setRel(null); const f = factPdfLire(pages);
+        alert(f ? 'Ce PDF est la facture #'+f.num+'. Dépose-la dans « La mémoire › Factures PDF » : le CRM la lira (bouton « Lire » en haut de Paiements).' : 'Aucune transaction trouvée dans ce PDF. Est-ce bien un relevé de compte de la Caisse ?'); return; }
       const dep = T.filter(t=>t.depot), jour = d => Date.parse(String(d).slice(0,10));
       // Déjà dans les paiements : même montant, à 10 jours près (un dépôt direct arrive quelques jours après l'avis) — les dates les plus proches d'abord
       const ids = new Set(data.paiements.map(p=>p.id)), vus = {}, lignes = [], deja = new Set(), pris = new Set();
@@ -4555,6 +4624,34 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       for(let i=0;i<rows.length;i+=200) await window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:id, range:'Paiements!A1:L1', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:rows.slice(i,i+200)}});
       setRel({...x, etape:'fini', nb:rows.length}); setTick(t=>t+1); }
     catch(e){ setRel({...x, etape:'apercu'}); alert('Import interrompu : '+apiErrMsg(e)+' — relance-le : les dépôts déjà ajoutés seront sautés.'); } };
+  // v260 : lire les factures PDF du dossier « Factures PDF » et préparer ce qui serait inscrit au registre
+  const lireFacturesPdf = async () => { const x = fp, F = data.factures, V = F.__vieilles || {}, lignes = [];
+    setFp({...x, etape:'lecture', lu:0});
+    for(let i=0;i<x.cands.length;i++){ const fi = x.cands[i]; setFp({...x, etape:'lecture', lu:i});
+      let lu = null; try{ lu = factPdfLire(await relevePdfPages(await factPdfTelecharger(fi.id))); }catch(e){}
+      if(!lu){ lignes.push({fi, action:'illisible', garder:false}); continue; }
+      const r = F[lu.num] || V[lu.num];
+      if(!r){ lignes.push({fi, lu, action:'ajouter', garder:true}); continue; }
+      if(r.pdf && r.pdf!==fi.id){ lignes.push({fi, lu, r, action:'deja', garder:false}); continue; }
+      const imp = /^(montant calcul|ouverte)/i.test(r.statut||''), ecart = Math.abs(r.ttc - Number(lu.ttc)) > 0.05;
+      lignes.push({fi, lu, r, action: imp ? 'corriger' : 'lier', ecart: !imp && ecart, garder:true}); }
+    setFp({...x, lignes, etape:'apercu'}); };
+  const inscrireFacturesPdf = async () => { const x = fp, L = x.lignes.filter(l=>l.garder && ['ajouter','corriger','lier'].includes(l.action)); setFp({...x, etape:'en cours'});
+    try{ const S = window.gapi.client.sheets.spreadsheets, c = data.factures.__cols, lettre = i => String.fromCharCode(65+i); suivreEcritures();
+      const maj = [];
+      L.filter(l=>l.action!=='ajouter').forEach(l=>{ const r = l.r, lu = l.lu, ligne = r.row, set = (k, v) => { if(c[k]>=0) maj.push({range:lettre(c[k])+ligne, values:[[v]]}); };
+        if(!r.pdf) set('pdf', l.fi.id);
+        if(l.action==='corriger'){ set('ht', lu.ht); set('ttc', lu.ttc); set('st', ''); }
+        if(lu.esc!=='' && !(r.escompte>0)) set('esc', lu.esc);
+        if(!lu.credit && lu.pay!=='' && !(r.payeLog>0)) set('plog', lu.pay); });
+      if(maj.length) await S.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:maj}});
+      const nouvelles = L.filter(l=>l.action==='ajouter').map(l=>{ const lu = l.lu;
+        return [lu.num, lu.date, lu.client, lu.po || 'AUCUN', '', lu.desc, lu.ht, lu.ttc, '', l.fi.id, '', lu.esc, lu.credit ? '' : lu.pay]; });
+      if(nouvelles.length) await S.values.append({spreadsheetId:id, range:'A1:M1', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:nouvelles}});
+      setFp({...x, etape:'fini', nb:L.length}); setTick(t=>t+1); }
+    catch(e){ setFp({...x, etape:'apercu'}); alert('Inscription interrompue : '+apiErrMsg(e)); } };
+  const ignorerFacturesPdf = () => { try{ const l = JSON.parse(localStorage.getItem('crm_factpdf_ignores')||'[]');
+      fp.lignes.filter(x=>!x.garder).forEach(x=>l.push(x.fi.id)); localStorage.setItem('crm_factpdf_ignores', JSON.stringify(l.slice(-500))); }catch(e){} };
   const faireImport = async () => { const x = imp; setImp({...x, etape:'en cours'});
     try{ const S = window.gapi.client.sheets.spreadsheets; suivreEcritures();
       for(let i=0;i<x.nouvelles.length;i+=400) await S.values.append({spreadsheetId:id, range:'A1:K1', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:x.nouvelles.slice(i,i+400).map(f=>f.row)}});
@@ -4610,6 +4707,30 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       <label className="btn btn-sm" style={{cursor:'pointer'}} title="Relevé de compte de la Caisse (PDF) ou factures (.json préparé par Claude)">📥 Importer<input type="file" accept=".pdf,application/pdf,.json,application/json" style={{display:'none'}} onChange={e=>{ const f = e.target.files[0]; e.target.value=''; if(!f) return; if(/\.pdf$/i.test(f.name) || f.type==='application/pdf') lireReleve(f); else lireImport(f); }}/></label>
     </div>
 
+    {fp && <div className="card" style={{marginBottom:10,borderColor:'var(--accent)',fontSize:13}}>
+      <b>📄 Factures PDF</b> <span className="muted">— dossier « La mémoire › Factures PDF »</span>
+      {fp.etape==='liste' ? <div style={{marginTop:6,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          <span>{fp.cands.length} PDF pas encore lié{fp.cands.length>1?'s':''} à une facture du registre.</span>
+          <button className="btn btn-sm btn-p" onClick={lireFacturesPdf}>Lire</button><button className="btn btn-sm" onClick={()=>setFp(null)}>Plus tard</button></div>
+      : fp.etape==='lecture' ? <div style={{marginTop:6}}>Lecture {fp.lu+1} / {fp.cands.length}…</div>
+      : fp.etape==='fini' ? <div style={{marginTop:6,color:'var(--success)'}}>✓ {fp.nb} facture{fp.nb>1?'s':''} inscrite{fp.nb>1?'s':''} au registre. <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>setFp(null)}>Fermer</button></div>
+      : <>
+        <div className="muted" style={{marginTop:4}}>Rien n'est encore écrit. Un montant n'est pris que si sous-total + TPS + TVQ = total.</div>
+        <div style={{marginTop:8}}>{fp.lignes.map((l,i)=>{ const lu = l.lu, actif = ['ajouter','corriger','lier'].includes(l.action);
+          const quoi = l.action==='illisible' ? <span style={{color:'var(--danger)'}}>PDF illisible ou totaux qui ne balancent pas — rien d'inscrit</span>
+            : l.action==='deja' ? <span className="muted">#{lu.num} a déjà un autre PDF — pas touché</span>
+            : l.action==='ajouter' ? <span>#{lu.num} · {cvFmtDay(lu.date)} · {lu.client || 'client ?'}{lu.po ? ' · '+lu.po : ''} — <b>nouvelle facture</b> {cvMoney(Number(lu.ttc))}</span>
+            : l.action==='corriger' ? <span>#{lu.num} · {l.r.nomAffiche || l.r.nom || l.r.client} — montant de l'import {cvMoney(l.r.ttc)} → <b>{cvMoney(Number(lu.ttc))}</b> (PDF lié)</span>
+            : <span>#{lu.num} · {l.r.nomAffiche || l.r.nom || l.r.client} — PDF lié{l.ecart ? <span style={{color:'var(--warning)'}}> · ATTENTION : total du PDF {cvMoney(Number(lu.ttc))} ≠ registre {cvMoney(l.r.ttc)} (registre pas changé)</span> : ''}</span>;
+          return <label key={l.fi.id} style={{display:'flex',gap:8,alignItems:'center',padding:'4px 0',borderBottom:'1px solid var(--border)',opacity:l.garder?1:.6,cursor:actif?'pointer':'default'}}>
+            <input type="checkbox" checked={l.garder} disabled={!actif || fp.etape==='en cours'} onChange={()=>setFp({...fp, lignes:fp.lignes.map((x,j)=>j===i ? {...x, garder:!x.garder} : x)})}/>
+            <span style={{flex:1,minWidth:0}}>{quoi}{lu && Number(lu.esc)>0 ? <span style={{color:'var(--accent)'}}> · escompte {cvMoney(Number(lu.esc))}</span> : null}{lu && lu.credit ? <span className="muted"> · note de crédit</span> : null}</span>
+            <a href={repPdf(l.fi.id)} target="_blank" rel="noopener" style={{color:'var(--accent)',flex:'0 0 auto'}} onClick={e=>e.stopPropagation()}>{l.fi.name}</a></label>; })}</div>
+        <div style={{display:'flex',gap:6,marginTop:8,flexWrap:'wrap'}}>
+          <button className="btn btn-sm btn-p" disabled={fp.etape!=='apercu' || !fp.lignes.some(l=>l.garder)} onClick={()=>{ ignorerFacturesPdf(); inscrireFacturesPdf(); }}>{fp.etape==='en cours' ? 'Inscription…' : 'Inscrire '+fp.lignes.filter(l=>l.garder).length}</button>
+          <button className="btn btn-sm" disabled={fp.etape==='en cours'} onClick={()=>{ ignorerFacturesPdf(); setFp(null); }} title="Les PDF décochés ne seront plus proposés">Fermer</button></div>
+      </>}
+    </div>}
     {rel && <div className="card" style={{marginBottom:10,borderColor:'var(--accent)',fontSize:13}}>
       <b>🏦 Relevé de compte</b> <span className="muted">— {rel.source}</span>
       {rel.etape==='lecture' ? <div style={{marginTop:6}}>Lecture du relevé…</div>
