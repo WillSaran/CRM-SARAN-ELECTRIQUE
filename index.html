@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v243';
+const APP_VERSION = 'v244';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7845,7 +7845,8 @@ function cvBuildClients(events, registry, factures){
     // Un passage dans l'agenda En Attente = encore à faire, pas encore cédulé : la job est « À venir » (partout).
     if(j.attente.length && (!reels.length || j.status==='done')) j.status = 'avenir';
     j.etatClient = j.status;
-    const fromPO = j.po ? Object.values(factures).filter(f=>f.po===j.po).map(f=>f.num) : [];
+    const posJ = [j.po, ...(j.posLies||[])].filter(Boolean);
+    const fromPO = posJ.length ? Object.values(factures).filter(f=>f.po && posJ.includes(f.po)).map(f=>f.num) : [];
     j.factures = [...new Set([...j.events.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(t=>/\d/.test(t))), ...fromPO])].sort();
     j.billed = j.factures.reduce((t,f)=>t+((factures[f]&&!factures[f].annulee&&factures[f].ht)||0),0);
     j.crew = [...new Set(j.events.flatMap(e=>e.crew))];
@@ -7974,6 +7975,34 @@ async function cvRenommerPassages(job, ancien, nouveau, setEtat){
   }
 }
 // Numéro de job : créer, prendre un numéro existant (fusion de doublons), ou changer / fusionner un numéro.
+// v244 : deux PO pour le même projet (ex. P02617 = ajustement d'Atallah, P02335 = la job) → une seule job dans le CRM.
+// Écrit une fiche « Job » (onglet Fiches) qui regroupe les deux ; l'agenda et le registre ne sont pas modifiés. Le PO qui a le dossier et le montant reste le principal.
+function CvMemeProjet({cfg, job, clients, onChanged}){
+  const [ouvert,setOuvert]=useState(false);
+  const [etat,setEtat]=useState('');
+  if(!cfg || !job || job.client==='PART' || !clients || !clients[job.client]) return null;
+  const autres = clients[job.client].jobs.filter(j=>j.id!==job.id)
+    .sort((a,b)=>(cvMemeJob(b.name, job.name)?1:0)-(cvMemeJob(a.name, job.name)?1:0) || String(b.last).localeCompare(String(a.last)));
+  const regrouper = async autre => { setEtat('Enregistrement…');
+    try{ const L = [job, autre], score = j => (j.reg && j.reg.dossier ? 2 : 0) + (j.reg && j.reg.ht!=null ? 1 : 0);
+      const main = score(autre) > score(job) ? autre : score(job) > score(autre) ? job : (String(autre.first) < String(job.first) ? autre : job);
+      const F = await lireCache(cfg.memoireJobsSpreadsheetId, 'Fiches!A1:L', true).then(r=>lireFiches(r.result.values||[])).catch(()=>({jobs:[]}));
+      const fj = (F.jobs||[]).find(f=>f.row===job.ficheJob || f.row===autre.ficheJob);
+      const ids = [...new Set([...(fj ? [...fj.ids] : []), job.id, autre.id])];
+      await ficheEcrire(cfg, {...(fj||{}), type:'Job', code:job.client, nom: main.name, alias:[...(fj ? fj.alias : []), ...ids.map(i=>'id:'+i)], po: main.po || '', client:(fj && fj.client) || ''});
+      setEtat(''); setOuvert(false); onChanged && onChanged(); }
+    catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
+  if(!ouvert) return <button className="btn btn-sm" style={{marginBottom:10}} title="Deux PO pour le même projet : les voir comme une seule job" onClick={()=>setOuvert(true)}>🔗 Même projet qu'un autre PO</button>;
+  return <div className="card" style={{padding:10,marginBottom:10,borderColor:'var(--accent)'}}>
+    <div style={{fontWeight:800,marginBottom:4}}>{job.po || job.name} fait partie de quel projet ?</div>
+    <div className="muted" style={{fontSize:12,marginBottom:6}}>Les deux deviennent une seule job (passages, factures, dossier). L'agenda n'est pas modifié ; tu peux défaire le regroupement dans le Répertoire.</div>
+    <div style={{display:'grid',gap:3,maxHeight:240,overflowY:'auto'}}>
+      {autres.map(j=><button key={j.id} className="btn btn-sm" disabled={!!etat} style={{textAlign:'left',justifyContent:'flex-start'}} onClick={()=>regrouper(j)}>
+        <b>{j.name}</b><span className="muted"> · {j.po || 'sans PO'} · {cvFmtDay(j.first)}{j.reg && j.reg.dossier ? ' · 📁' : ''}</span></button>)}
+    </div>
+    <div style={{display:'flex',gap:6,marginTop:8,alignItems:'center'}}><button className="btn btn-sm" onClick={()=>setOuvert(false)}>Annuler</button>{etat && <span className="muted" style={{fontSize:12}}>{etat}</span>}</div>
+  </div>;
+}
 // v240 : PO d'un contracteur absent du registre des jobs (ex. PO d'ajustement envoyé par le service après-vente) ou sans dossier :
 // on l'inscrit (Montant PO facultatif) et on lui rattache un dossier Drive existant. N'écrase rien : seules les cases vides sont remplies.
 function CvInscrirePO({cfg, job, registry, onChanged}){
@@ -8153,7 +8182,7 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
     <h2 className="fh" style={{margin:'8px 0 2px',fontSize:20}}>{job.name}</h2>
     {r.projet && <div className="muted" style={{fontSize:13}}>{r.projet}</div>}
     <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'5px 14px',margin:'12px 0'}}>
-      <Row k={job.client==='CRS'?'PO':'No de job'}>{job.po || (job.client==='CRS'?'Pas de PO':'Pas encore de numéro')}</Row>
+      <Row k={job.client==='CRS'?'PO':'No de job'}>{job.po || (job.client==='CRS'?'Pas de PO':'Pas encore de numéro')}{(job.posLies||[]).length>0 && <span className="muted"> + {job.posLies.join(', ')} (même projet)</span>}</Row>
       <Row k="Adresse">{job.address && <>{job.address} {maps && <a href={maps} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5}}>Maps ↗</a>}</>}</Row>
       <Row k="Client">{r.client}</Row>
       <Row k="Téléphone">{r.tel && <span style={{userSelect:'all'}}>{r.tel}</span>}</Row>
@@ -8161,7 +8190,7 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
       <Row k="Équipe">{job.crew.join(', ')}</Row>
       <Row k="Montant PO">{r.ht!=null && <>{cvMoney(r.ht)} avant taxes · {cvMoney(r.ht*1.14975)} taxes incluses</>}</Row>
     </div>
-    {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvRattacherPO job={job} clients={clients} onDone={onChanged}/><CvInscrirePO cfg={cfg} job={job} registry={registry} onChanged={onChanged}/><CvCreerNoJob cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
+    {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvRattacherPO job={job} clients={clients} onDone={onChanged}/><CvMemeProjet cfg={cfg} job={job} clients={clients} onChanged={onChanged}/><CvInscrirePO cfg={cfg} job={job} registry={registry} onChanged={onChanged}/><CvCreerNoJob cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
     <CvGauge job={job}/>
     <CvAcheteFacture job={job} achats={achats} facLignes={facLignes}/>
     {(()=>{ const m=cvMateriel(job, achats); return m.liste.length ? <div style={{fontSize:13,margin:'0 0 10px'}}>
@@ -8336,7 +8365,9 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
   const [manuelsAv] = useEtapesManuelles(cfg);
   const [commandesAv] = useCommandes(cfg);
   const BLav = useBlocages(cfg), TJav = useTypesJob(cfg);
-  const avancement = j => { try{ const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
+  const [voirAv,setVoirAvS]=useState(()=>{ try{ return localStorage.getItem('crmVoirAvancement')==='1'; }catch(e){ return false; } });
+  const setVoirAv = b => { setVoirAvS(b); try{ localStorage.setItem('crmVoirAvancement', b?'1':'0'); }catch(e){} };
+  const avancement = j => { if(!voirAv) return null; try{ const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
     return pjPhases(j, pjEtapes(j, ap, commandesAv, courriels, manuelsAv), {appels:ap, commandes:commandesAv, factures, manuels:manuelsAv, archives, blocages:BLav.parJob[j.id]||[],
       typeJob: j.client==='PART' ? (TJav.map[j.id] || pjTypeAuto(j)) : ''}).pct; }catch(e){ return null; } };
   const [filter,setFilter]=useState('all');
@@ -8378,23 +8409,25 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
           {[['all','Toutes'],['done','Terminées'],['cours','En cours'],['avenir','À venir'],['flag','À vérifier'],['arch','Archivées']].map(([k,l])=>
             <button key={k} className={'btn btn-sm'+(filter===k?' btn-p':'')} onClick={()=>setFilter(k)}>{l}</button>)}
           <CaseTerminees v={voirTerm} set={setVoirTerm} n={nbTerm}/>
+          <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,whiteSpace:'nowrap'}} title="Barre orange : % des étapes faites (comme dans Projets)"><input type="checkbox" checked={voirAv} onChange={e=>setVoirAv(e.target.checked)}/> Avancement</label>
           <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Nom, PO, ville, facture…" style={{flex:'1 1 150px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
         </div>
         {q.trim() && <div className="muted" style={{fontSize:12,margin:'-4px 0 8px'}}>Recherche dans toutes les jobs (terminées et archivées comprises) : {list.length} résultat{list.length>1?'s':''}</div>}
         <div style={{overflowX:'auto'}}>
           <table>
-            <thead><tr><th>PO</th><th>Job</th><th>Rough</th><th>Finition</th><th>Avancement · Facturé</th><th>État</th></tr></thead>
+            <thead><tr><th>PO</th><th>Job</th><th>Rough</th><th>Finition</th><th>{voirAv ? 'Avancement · ' : ''}Facturé / PO</th><th>État</th></tr></thead>
             <tbody>
               {list.map(j=><tr key={j.id} onClick={()=>pick(j.id)} style={{cursor:'pointer',background:sel===j.id?'rgba(var(--accent-rgb),0.10)':undefined}}>
-                <td style={{whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>{j.po||'—'}</td>
+                <td style={{whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>{j.po||'—'}{(j.posLies||[]).length>0 && <div className="muted" style={{fontSize:11}}>+ {j.posLies.join(', ')}</div>}</td>
                 <td><b>{j.name}</b>{av.ids.has(j.id) && <span style={{color:'var(--danger)',fontWeight:800}}> !</span>}{q.trim() && arch(j) && <span className="badge" style={{marginLeft:6,fontSize:10.5}}>archivée</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></td>
                 <td><CvPhaseCell job={j} phase="ROUGH"/></td>
                 <td><CvPhaseCell job={j} phase="FINITION"/></td>
                 <td style={{fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>
-                  {(()=>{ const av = avancement(j), ref = (j.reg && j.reg.ht) ? {m:j.reg.ht, l:'du PO'} : (soumDe && soumDe[j.id]) ? {m:soumDe[j.id].montant, l:'de la soumission #'+soumDe[j.id].no} : null;
+                  {(()=>{ const av = avancement(j), htLies = (j.posLies||[]).reduce((t,x)=>t+(((registry||[]).find(r=>r.po===x)||{}).ht||0),0);   // v244 : + le montant des PO liés
+                    const ref = (j.reg && j.reg.ht) ? {m:j.reg.ht+htLies, l:htLies ? 'des PO '+[j.po, ...j.posLies].join(' + ') : 'du PO'} : (soumDe && soumDe[j.id]) ? {m:soumDe[j.id].montant, l:'de la soumission #'+soumDe[j.id].no} : null;
                     const barre = (p, c, t) => <div title={t} style={{whiteSpace:'nowrap'}}><span style={{display:'inline-block',width:46,height:6,borderRadius:3,background:'var(--bg4)',verticalAlign:'middle',marginRight:6,position:'relative',overflow:'hidden'}}><i style={{position:'absolute',left:0,top:0,bottom:0,width:Math.min(Math.max(p,0),1)*100+'%',background:c}}></i></span>{Math.round(p*100)} %</div>;
                     return <>{av!=null && barre(av/100, 'var(--accent)', 'Avancement de la job : '+av+' % des étapes faites')}
-                      {ref && j.billed>0 && barre(j.billed/ref.m, j.billed/ref.m>1.0001?'var(--danger)':'var(--success)', 'Facturé '+cvMoney(j.billed)+' sur '+cvMoney(ref.m)+' '+ref.l)}</>; })()}
+                      {ref && barre(j.billed/ref.m, j.billed/ref.m>1.0001?'var(--danger)':'var(--success)', 'Facturé '+cvMoney(j.billed)+' sur '+cvMoney(ref.m)+' '+ref.l)}</>; })()}
                   <div className="muted" style={{fontSize:12}}>{j.factures.join(', ')||'—'}</div>
                 </td>
                 <td><CvPill status={j.etatClient||j.status}/></td>
@@ -9015,7 +9048,9 @@ function ficheAppliquerJobs(jobs, F, regByPO){
     if(!membres.length) return;
     const p = membres.find(j=>f.po && j.po===f.po) || membres.find(j=>j.po) || membres[0];
     membres.forEach(j=>{ if(j===p) return; p.events.push(...j.events); if(!p.reg && j.reg) p.reg = j.reg; delete jobs[j.id]; });
+    const pos = [...new Set(membres.map(j=>j.po).filter(Boolean))];
     p.name = ficheNomJob(f); p.po = f.po; p.reg = (f.po && regByPO[f.po]) || p.reg; p.ficheJob = f.row;
+    p.posLies = pos.filter(x=>x!==p.po);   // v244 : autres PO du même projet (ex. PO d'ajustement) — leurs factures comptent aussi
   });
 }
 
