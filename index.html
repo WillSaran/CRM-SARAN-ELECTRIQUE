@@ -4,9 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="SoumissionPro">
+<meta name="apple-mobile-web-app-title" content="Saran Électrique">
 <meta name="theme-color" content="#0d1117">
-<title>SoumissionPro — Saran Électrique</title>
+<title>Saran Électrique</title>
+<link rel="icon" type="image/png" href="logo-se.png">
+<link rel="apple-touch-icon" href="logo-se.png">
 <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
@@ -54,6 +56,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .nav-item:hover{background:var(--bg3)}
 .main{flex:1;min-width:0;padding:20px;box-sizing:border-box}   /* v130 : pleine largeur sur l'ordi, et le contenu ne déborde plus de la page */
 @media(max-width:899px){.nav{position:fixed;top:0;bottom:0;left:0;width:min(250px,80vw);transform:translateX(-102%);transition:transform .2s ease;overflow-y:auto;-webkit-overflow-scrolling:touch;z-index:61;padding:12px 10px 40px;border-right:1px solid var(--border);box-shadow:4px 0 18px rgba(0,0,0,.35)}.nav.ouvert{transform:none}.nav-fond{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60}.nav-item{font-size:15px;padding:12px}}
+.dash-mur{column-width:330px;column-gap:14px}.dash-mur>*{break-inside:avoid;-webkit-column-break-inside:avoid;display:inline-block;width:100%;vertical-align:top}
+.dash-tuiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:10px;margin-bottom:12px}
 @media(max-width:760px){.main{padding:14px 12px}.remind-cols{grid-template-columns:1fr !important}}
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px}
 .grid{display:grid;gap:12px}
@@ -149,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v262';
+const APP_VERSION = 'v263';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1253,7 +1257,7 @@ function CreateJobModal({opp, contact, cfg, onClose, onDone, addProjet, toast}){
         calendarId: calId,
         resource: {
           summary: titre || opp.adresse,
-          description: 'Type de travail: '+(opp.typeTravail||'')+'\nNotes: '+(opp.notes||'')+'\n(créé depuis SoumissionPro)',
+          description: 'Type de travail: '+(opp.typeTravail||'')+'\nNotes: '+(opp.notes||'')+'\n(créé depuis le CRM Saran Électrique)',
           location: opp.adresse,
           start:{dateTime:start, timeZone:'America/Toronto'},
           end:{dateTime:end, timeZone:'America/Toronto'}
@@ -2872,7 +2876,7 @@ function ConvertisseurCard(){
   const f = n => n==null ? '' : String(Math.round(n*100)/100).replace('.',',');
   const pouces = n => { if(n==null) return ''; const tot = Math.round(n*12); return Math.floor(tot/12)+"' "+(tot%12)+'"'; };
   const nPi = lire(pi);
-  return <div className="card" style={{maxWidth:420,marginBottom:16,boxSizing:'border-box'}}>
+  return <div className="card" style={{marginBottom:14,boxSizing:'border-box'}}>
     <div style={{fontWeight:700,fontSize:13.5,marginBottom:8}}>📏 Pieds ⇄ mètres</div>
     <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
       <input value={pi} inputMode="decimal" placeholder="pieds" onChange={e=>{ setPi(e.target.value); const n=lire(e.target.value); setM(n==null ? '' : f(n*0.3048)); }} style={{flex:'1 1 70px',minWidth:0,textAlign:'right'}}/><span>pi</span>
@@ -3269,17 +3273,19 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const heure = e => e.allDay || !/T/.test(e.start) ? '' : new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'});
   const etiquette = x => <><b style={{color:'var(--accent)'}}>{x.c.code!=='PART'?x.c.code+' ':''}</b>{x.j.name}{x.j.po && <span className="muted"> · {x.j.po}</span>}</>;
 
-  const Tuile = ({n, l, sub, alerte, go}) => <div className="card" style={{padding:14,cursor:'pointer',borderColor:alerte?'var(--warning)':undefined}} onClick={()=>onNavigate(go)}>
-    <div style={{fontSize:26,fontWeight:800,color:alerte?'var(--warning)':'var(--text)'}}>{n}</div>
+  const couleurNiv = niv => niv==='urgent' ? 'var(--danger)' : niv ? 'var(--warning)' : 'var(--text)';
+  const Tuile = ({n, l, sub, alerte, go}) => <div className="card" style={{padding:14,cursor:'pointer',minWidth:0,borderLeft:alerte?'4px solid '+couleurNiv(alerte):undefined,background:alerte?'rgba(var(--accent-rgb),0.06)':undefined}} onClick={()=>onNavigate(go)}>
+    <div style={{fontSize:26,fontWeight:800,color:couleurNiv(alerte)}}>{n}</div>
     <div style={{fontSize:13,fontWeight:600}}>{l}</div>
     {sub && <div className="muted" style={{fontSize:11.5,marginTop:2}}>{sub}</div>}
   </div>;
-  const Bloc = ({titre, n, go, vide, children}) => <div className="card" style={{marginBottom:14}}>
+  const Bloc = ({titre, n, go, vide, children, montre, niv}) => <div className="card" style={{marginBottom:14,borderLeft:n?'4px solid '+couleurNiv(niv||'oui'):undefined}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:6}}>
-      <div className="fh" style={{fontSize:15}}>{titre} {n>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{n}</span>}</div>
+      <div className="fh" style={{fontSize:15}}>{titre} {n>0 && <span className="badge" style={{background:couleurNiv(niv||'oui'),color:'#fff'}}>{n}</span>}</div>
       <span style={{color:'var(--accent)',fontSize:12.5,cursor:'pointer'}} onClick={()=>onNavigate(go)}>Ouvrir ›</span>
     </div>
     {n ? children : <div className="muted" style={{fontSize:13}}>{vide}</div>}
+    {montre && n>montre && <div style={{color:'var(--accent)',fontSize:12.5,cursor:'pointer',marginTop:6}} onClick={()=>onNavigate(go)}>+ {n-montre} autre{n-montre>1?'s':''} ›</div>}
   </div>;
   // v262 : une rangée de job ouvre CETTE job dans Projets (avant : la liste complète, au même endroit que la dernière fois)
   const Rang = ({children, droite, go, couleur, x}) => <div onClick={()=>{ if(x) NAV_FOCUS = {cible:go, t:Date.now(), jobIds:[x.j.id], nom:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name}; onNavigate(go); }} style={{display:'flex',justifyContent:'space-between',gap:10,padding:couleur?'6px 0 6px 8px':'6px 0',borderBottom:'1px solid var(--border)',borderLeft:couleur?'3px solid '+couleur:undefined,fontSize:13,cursor:'pointer'}}>
@@ -3298,80 +3304,88 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
 
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:4}}>
-      <h2 className="fh" style={{margin:0,fontSize:22}}>Tableau de bord</h2>
+      <h2 className="fh" style={{margin:0,fontSize:24}}>Bonjour, Saran Électrique !</h2>
       {cfg.memoireMajUrl && <button className="btn btn-sm" title="Va chercher les nouveaux PO, factures, courriels et achats (prêt dans environ 15 min)" onClick={()=>window.open(cfg.memoireMajUrl,'_blank')}>⟳ Mettre à jour La mémoire</button>}
     </div>
-    <div className="muted" style={{fontSize:13,marginBottom:14}}>{new Date().toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})} — ce qui demande ton attention. Clique un bloc pour aller à sa section.</div>
+    <div className="muted" style={{fontSize:13,marginBottom:14}}><span style={{textTransform:'capitalize'}}>{new Date().toLocaleDateString('fr-CA',{weekday:'long'})}</span> {new Date().toLocaleDateString('fr-CA',{day:'numeric',month:'long'})} — ce qui demande ton attention. Clique un bloc pour aller à sa section.</div>
     {lent && lent.length>0 && <div className="card" style={{marginBottom:12,fontSize:13,borderColor:'var(--warning)'}}>⚠️ Trop long à lire : {lent.join(', ')}. Certains chiffres sont incomplets — essaie « Refresh ».</div>}
 
-    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:16}}>
-      <Tuile n={enCours.length} l="Jobs en cours" sub={aCompleter ? aCompleter+' étapes à compléter' : 'tout est complet'} go="projets"/>
-      <Tuile n={suivi ? aFacturer.length : '…'} l="À facturer" sub={suivi ? (sansFac ? sansFac+" sans rien d'inscrit, "+(aFacturer.length-sansFac)+' facture à faire' : (aFacturer.length ? 'appels faits, factures à faire' : 'tout est facturé')) : 'Suivi Travaux'} alerte={aFacturer.length>0} go="factures"/>
-      <Tuile n={anomalies.length} l="À vérifier" sub="factures, PO, appels" alerte={anomalies.length>0} go="verif"/>
-      <Tuile n={aCommander.length} l="Commandes à placer" sub={'cette semaine et la prochaine (jusqu\'au '+cvFmtDay(dans14)+')'} alerte={aCommander.some(x=>x.e.day<=jour(3))} go="commandes"/>
-      {(()=>{ const af = soum.liste.filter(x=>x.type==='À faire' && !SOUM_FINI.includes(x.statut));
-        const att = soum.liste.filter(x=>x.type==='Envoyée' && !['Acceptée','Refusée'].includes(x.statut)).length;
-        const vieille = af.reduce((m,x)=>Math.max(m, soumJours(x.date)||0),0);
-        return <Tuile n={soum.lu ? af.length : '…'} l="Soumissions à produire" sub={soum.lu ? (att ? att+' envoyée'+(att>1?'s':'')+' en attente de réponse' : (af.length && vieille>=7 ? 'la plus vieille : '+vieille+' jours' : 'notes et demandes reçues')) : 'Soumissions'} alerte={af.length>0} go="soumissions"/>; })()}
-      <Tuile n={aRepondre.length} l="Courriels à répondre" sub={aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'le plus vieux : '+cvJoursDepuis(aRepondre[0].dernier)+' jours' : 'clients et contracteurs'} alerte={aRepondre.length>0} go="courriels"/>
-      <Tuile n={aAssocier.length} l="Achats à associer" sub={cvMoney(achatsMois)+' achetés ce mois-ci'} go="fournisseurs"/>
-      <DashboardHeuresCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
-    </div>
-    <ConvertisseurCard/>
+    {(()=>{
+      // v263 : en haut, seulement ce qui demande une action (bien en couleur) ; ce qui est à jour tient sur une ligne.
+      const af = soum.liste.filter(x=>x.type==='À faire' && !SOUM_FINI.includes(x.statut));
+      const att = soum.liste.filter(x=>x.type==='Envoyée' && !['Acceptée','Refusée'].includes(x.statut)).length;
+      const vieille = af.reduce((m,x)=>Math.max(m, soumJours(x.date)||0),0);
+      const T = [
+        {n:suivi ? aFacturer.length : null, l:'À facturer', go:'factures', sub:sansFac ? sansFac+" sans rien d'inscrit, "+(aFacturer.length-sansFac)+' facture à faire' : 'appels faits, factures à faire', niv:sansFac ? 'urgent' : 'oui'},
+        {n:aCommander.length, l:'Commandes à placer', go:'commandes', sub:"d'ici le "+cvFmtDay(dans14), niv:aCommander.some(x=>x.e.day<=jour(3)) ? 'urgent' : 'oui'},
+        {n:aRepondre.length, l:'Courriels à répondre', go:'courriels', sub:aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'le plus vieux : '+cvJoursDepuis(aRepondre[0].dernier)+' jours' : 'clients et contracteurs', niv:aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'urgent' : 'oui'},
+        {n:soum.lu ? af.length : null, l:'Soumissions à produire', go:'soumissions', sub:af.length && vieille>=7 ? 'la plus vieille : '+vieille+' jours' : (att ? att+' envoyée'+(att>1?'s':'')+' en attente' : 'notes et demandes reçues'), niv:vieille>=7 ? 'urgent' : 'oui'},
+        {n:anomalies.length, l:'À vérifier', go:'verif', sub:'factures, PO, appels', niv:'oui'},
+        {n:aAssocier.length, l:'Achats à associer', go:'fournisseurs', sub:cvMoney(achatsMois)+' achetés ce mois-ci', niv:'oui'},
+        {n:adresses.length, l:'Adresses à confirmer', go:'dashboard', sub:'proposées par La mémoire', niv:'oui'},
+      ];
+      const actifs = T.filter(t=>t.n), ajour = T.filter(t=>t.n===0), lecture = T.filter(t=>t.n==null);
+      return <>
+        <div className="dash-tuiles">
+          {actifs.map(t=><Tuile key={t.l} n={t.n} l={t.l} sub={t.sub} alerte={t.niv} go={t.go}/>)}
+          <Tuile n={enCours.length} l="Jobs en cours" sub={aCompleter ? aCompleter+' étapes à compléter' : 'tout est complet'} go="projets"/>
+          <DashboardHeuresCard cfg={cfg} refreshKey={refreshKey} onNavigate={onNavigate}/>
+        </div>
+        {(ajour.length>0 || lecture.length>0 || nbSansAdresse>0) && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:14,fontSize:12.5}}>
+          {ajour.length>0 && <span className="muted">À jour :</span>}
+          {ajour.map(t=><span key={t.l} onClick={()=>t.go!=='dashboard' && onNavigate(t.go)} style={{padding:'3px 9px',borderRadius:999,background:'var(--bg3)',color:'var(--success)',fontWeight:600,cursor:t.go!=='dashboard'?'pointer':undefined}}>✓ {t.l}</span>)}
+          {lecture.map(t=><span key={t.l} className="muted" style={{padding:'3px 9px',borderRadius:999,background:'var(--bg3)'}}>{t.l} …</span>)}
+          {nbSansAdresse>0 && <span className="muted" title="Aucune adresse trouvée par La mémoire : à ajouter à la main dans l'agenda" style={{padding:'3px 9px',borderRadius:999,background:'var(--bg3)'}}>{nbSansAdresse} job{nbSansAdresse>1?'s':''} sans adresse</span>}
+          {urlAdresses && <span style={{color:'var(--accent)',cursor:'pointer',marginLeft:4}} title="Cherche l'adresse des jobs qui n'en ont pas (registre + courriels). Prêt dans environ 5 min." onClick={()=>window.open(urlAdresses,'_blank')}>🔎 Chercher les adresses manquantes</span>}
+        </div>}
+      </>; })()}
 
-    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,360px),1fr))',gap:14,alignItems:'start'}}>
-      <div>
-        <div className="card" style={{marginBottom:14}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:6}}>
-            <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
-              {[['auj',"Aujourd'hui",auj.length],['dem','Demain',dem.length],['sem','Toute la semaine',semaine.length]].map(([k,l,n])=>
-                <button key={k} className={'btn btn-sm'+(vueJour===k?' btn-p':'')} onClick={()=>setVueJour(k)}>{l}{n>0 && <span style={{opacity:.75}}> · {n}</span>}</button>)}
-            </div>
-            <span style={{color:'var(--accent)',fontSize:12.5,cursor:'pointer'}} onClick={()=>onNavigate('agenda')}>Agenda ›</span>
+    <div className="dash-mur">
+      <div className="card" style={{marginBottom:14,borderLeft:auj.length?'4px solid var(--accent)':undefined}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:6}}>
+          <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+            {[['auj',"Aujourd'hui",auj.length],['dem','Demain',dem.length],['sem','Semaine',semaine.length]].map(([k,l,n])=>
+              <button key={k} className={'btn btn-sm'+(vueJour===k?' btn-p':'')} onClick={()=>setVueJour(k)}>{l}{n>0 && <span style={{opacity:.75}}> · {n}</span>}</button>)}
           </div>
-          {equipesJour.length>1 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:6}}>
-            {equipesJour.map(k=>{ const on = !cachees.includes(k);
-              return <button key={k} className="btn btn-sm" onClick={()=>basculerEquipe(k)} title={on?'Cacher cette équipe':'Montrer cette équipe'}
-                style={{display:'inline-flex',alignItems:'center',gap:5,opacity:on?1:.45,borderColor:on?equipeCouleur(k):undefined}}>
-                <span style={{width:10,height:10,borderRadius:'50%',background:on?equipeCouleur(k):'transparent',border:'2px solid '+equipeCouleur(k),display:'inline-block',boxSizing:'border-box'}}></span>
-                {equipeNom(k)} <span className="muted">{nbEquipe(k)}</span></button>; })}
-            {cachees.some(k=>equipesJour.includes(k)) && <span style={{color:'var(--accent)',fontSize:12,cursor:'pointer'}} onClick={toutesEquipes}>Tout montrer</span>}
-          </div>}
-          {listeVue.length ? <Journee liste={listeVue} jours={vueJour==='sem'}/>
-            : listeJour.length ? <div className="muted" style={{fontSize:13}}>Aucun passage pour les équipes cochées.</div>
-            : <div className="muted" style={{fontSize:13}}>{vueJour==='auj' ? "Aucun passage aujourd'hui." : vueJour==='dem' ? 'Aucun passage demain.' : 'Aucun passage dans les 7 prochains jours.'}</div>}
+          <span style={{color:'var(--accent)',fontSize:12.5,cursor:'pointer'}} onClick={()=>onNavigate('agenda')}>Agenda ›</span>
         </div>
-        <Bloc titre="Commandes à placer" n={aCommander.length} go="commandes" vide="✅ Toutes les commandes de cette semaine et de la prochaine sont réglées.">
-          {aCommander.slice(0,8).map((x,i)=><Rang key={i} go="commandes" droite={<>{cvFmtDay(x.e.day)}<BoutonCmd x={x}/></>}><span style={{fontWeight:800,fontSize:11,color:'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}</Rang>)}
-        </Bloc>
+        {equipesJour.length>1 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:6}}>
+          {equipesJour.map(k=>{ const on = !cachees.includes(k);
+            return <button key={k} className="btn btn-sm" onClick={()=>basculerEquipe(k)} title={on?'Cacher cette équipe':'Montrer cette équipe'}
+              style={{display:'inline-flex',alignItems:'center',gap:5,opacity:on?1:.45,borderColor:on?equipeCouleur(k):undefined}}>
+              <span style={{width:10,height:10,borderRadius:'50%',background:on?equipeCouleur(k):'transparent',border:'2px solid '+equipeCouleur(k),display:'inline-block',boxSizing:'border-box'}}></span>
+              {equipeNom(k)} <span className="muted">{nbEquipe(k)}</span></button>; })}
+          {cachees.some(k=>equipesJour.includes(k)) && <span style={{color:'var(--accent)',fontSize:12,cursor:'pointer'}} onClick={toutesEquipes}>Tout montrer</span>}
+        </div>}
+        {listeVue.length ? <Journee liste={listeVue} jours={vueJour==='sem'}/>
+          : listeJour.length ? <div className="muted" style={{fontSize:13}}>Aucun passage pour les équipes cochées.</div>
+          : <div className="muted" style={{fontSize:13}}>{vueJour==='auj' ? "Aucun passage aujourd'hui." : vueJour==='dem' ? 'Aucun passage demain.' : 'Aucun passage dans les 7 prochains jours.'}</div>}
       </div>
-      <div>
-        <RappelsBoite cfg={cfg} data={data} toast={toast}/>
-        <div className="card" style={{marginBottom:14,borderColor:adresses.length?'var(--accent)':undefined}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:4}}>
-            <div className="fh" style={{fontSize:15}}>Adresses à confirmer {adresses.length>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{adresses.length}</span>}</div>
-            {urlAdresses && <button className="btn btn-sm" title="Cherche l'adresse des jobs qui n'en ont pas (registre + courriels). Prêt dans environ 5 min." onClick={()=>window.open(urlAdresses,'_blank')}>🔎 Chercher les adresses manquantes</button>}
-          </div>
-          {adresses.length ? adresses.slice(0,10).map(a=><CvAdresse key={a.row} a={a} onDecider={deciderAdresse}/>)
-            : <div className="muted" style={{fontSize:13}}>Aucune adresse à confirmer.{nbSansAdresse ? ' '+nbSansAdresse+' job'+(nbSansAdresse>1?'s':'')+' sans adresse trouvée — à ajouter à la main dans l\'agenda.' : ''}</div>}
-          {adresses.length>0 && <div className="muted" style={{fontSize:11.5,marginTop:6}}>✓ écrit l'adresse dans tous les passages de la job dans l'agenda. Tu peux la corriger avant.</div>}
-        </div>
-        <Bloc titre="Courriels à répondre" n={aRepondre.length} go="courriels" vide="✅ Aucun courriel n'attend ta réponse.">
-          {aRepondre.slice(0,8).map((f,i)=><Rang key={i} go="courriels" droite={cvJoursDepuis(f.dernier)!=null ? 'il y a '+cvJoursDepuis(f.dernier)+' j' : ''}>« {f.sujet} »<div className="muted" style={{fontSize:11.5}}>{nomPO(f.po)}{f.de ? ' · '+f.de : ''}</div></Rang>)}
-        </Bloc>
-        <Bloc titre="À facturer" n={aFacturer.length} go="factures" vide={suivi ? '✅ Tout est facturé.' : 'Lecture du Suivi Travaux…'}>
-          {aFacturer.slice(0,8).map((r,i)=><Rang key={i} go="factures" droite={r.date}>
-            <b style={{color:'var(--accent)'}}>{r.contracteur==='PARTICULIER'?'':r.contracteur+' '}</b>{r.projet||r.adresse}
-            <div style={{fontSize:11.5,color:r.statutFacture==='manquant'?'var(--danger)':'var(--warning)'}}>{r.statutFacture==='manquant' ? "rien d'inscrit" : 'appel '+r.appelService+' — facture à faire'}</div>
-          </Rang>)}
-        </Bloc>
-        <Bloc titre="Achats à associer" n={aAssocier.length} go="fournisseurs" vide="✅ Toutes les factures fournisseurs sont associées.">
-          {aAssocier.slice().sort((a,b)=>String(b.date||b.recue).localeCompare(String(a.date||a.recue))).slice(0,6).map((a,i)=><Rang key={i} go="fournisseurs" droite={cvMoney(a.st)}>
-            <b>{a.fournisseur}</b> <span className="muted">· {cvFmtDay(a.date||a.recue)}</span>{a.ref && <span className="muted"> · « {a.ref} »</span>}
-            {a.propose && <div style={{fontSize:11.5,color:'var(--accent)'}}>proposé : {a.propose}</div>}
-          </Rang>)}
-        </Bloc>
-      </div>
+      <RappelsBoite cfg={cfg} data={data} toast={toast}/>
+      {adresses.length>0 && <div className="card" style={{marginBottom:14,borderLeft:'4px solid var(--warning)'}}>
+        <div className="fh" style={{fontSize:15,marginBottom:4}}>Adresses à confirmer <span className="badge" style={{background:'var(--warning)',color:'#fff'}}>{adresses.length}</span></div>
+        {adresses.slice(0,10).map(a=><CvAdresse key={a.row} a={a} onDecider={deciderAdresse}/>)}
+        <div className="muted" style={{fontSize:11.5,marginTop:6}}>✓ écrit l'adresse dans tous les passages de la job dans l'agenda. Tu peux la corriger avant.</div>
+      </div>}
+      {aCommander.length>0 && <Bloc titre="Commandes à placer" n={aCommander.length} go="commandes" montre={8} niv={aCommander.some(x=>x.e.day<=jour(3)) ? 'urgent' : 'oui'}>
+        {aCommander.slice(0,8).map((x,i)=><Rang key={i} go="commandes" droite={<>{cvFmtDay(x.e.day)}<BoutonCmd x={x}/></>}><span style={{fontWeight:800,fontSize:11,color:x.e.day<=jour(3)?'var(--danger)':'var(--accent)',marginRight:6}}>{x.e.phase}</span>{etiquette(x)}</Rang>)}
+      </Bloc>}
+      {aRepondre.length>0 && <Bloc titre="Courriels à répondre" n={aRepondre.length} go="courriels" montre={8} niv={cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'urgent' : 'oui'}>
+        {aRepondre.slice(0,8).map((f,i)=>{ const j = cvJoursDepuis(f.dernier); return <Rang key={i} go="courriels" droite={j!=null ? <span style={{color:j>=3?'var(--danger)':undefined}}>il y a {j} j</span> : ''}>« {f.sujet} »<div className="muted" style={{fontSize:11.5}}>{nomPO(f.po)}{f.de ? ' · '+f.de : ''}</div></Rang>; })}
+      </Bloc>}
+      {aFacturer.length>0 && <Bloc titre="À facturer" n={aFacturer.length} go="factures" montre={8} niv={sansFac ? 'urgent' : 'oui'}>
+        {aFacturer.slice(0,8).map((r,i)=><Rang key={i} go="factures" droite={r.date}>
+          <b style={{color:'var(--accent)'}}>{r.contracteur==='PARTICULIER'?'':r.contracteur+' '}</b>{r.projet||r.adresse}
+          <div style={{fontSize:11.5,color:r.statutFacture==='manquant'?'var(--danger)':'var(--warning)'}}>{r.statutFacture==='manquant' ? "rien d'inscrit" : 'appel '+r.appelService+' — facture à faire'}</div>
+        </Rang>)}
+      </Bloc>}
+      {aAssocier.length>0 && <Bloc titre="Achats à associer" n={aAssocier.length} go="fournisseurs" montre={6}>
+        {aAssocier.slice().sort((a,b)=>String(b.date||b.recue).localeCompare(String(a.date||a.recue))).slice(0,6).map((a,i)=><Rang key={i} go="fournisseurs" droite={cvMoney(a.st)}>
+          <b>{a.fournisseur}</b> <span className="muted">· {cvFmtDay(a.date||a.recue)}</span>{a.ref && <span className="muted"> · « {a.ref} »</span>}
+          {a.propose && <div style={{fontSize:11.5,color:'var(--accent)'}}>proposé : {a.propose}</div>}
+        </Rang>)}
+      </Bloc>}
+      <ConvertisseurCard/>
     </div>
   </div>;
 }
@@ -3588,7 +3602,7 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate, ini
         calendarId: calId,
         resource: {
           summary: titre || adresse,
-          description: 'Client: '+(client||'')+'\nTéléphone: '+(telephone||'')+'\nNotes: '+(notes||'')+'\n(créé depuis SoumissionPro — Agenda)',
+          description: 'Client: '+(client||'')+'\nTéléphone: '+(telephone||'')+'\nNotes: '+(notes||'')+'\n(créé depuis le CRM Saran Électrique — Agenda)',
           location: adresse,
           start:{dateTime:start, timeZone:'America/Toronto'},
           end:{dateTime:end, timeZone:'America/Toronto'}
@@ -10694,7 +10708,7 @@ function App(){
 
   if(!ready) return <div className="login-screen"><div className="spin"></div>{initErr && <div className="muted">{initErr}</div>}</div>;
   if(!authed) return <div className="login-screen">
-    <div className="logo"><span className="dot"></span>SoumissionPro</div>
+    <div className="logo" style={{fontSize:20}}><img src="logo-se.png" alt="" style={{width:44,height:44}}/>Saran Électrique</div>
     <div className="muted" style={{fontSize:11.5,marginTop:-12}}>{APP_VERSION}</div>
     <div className="muted">Gestion de contacts, pipeline de vente et soumissions — Saran Électrique</div>
     <button className="btn btn-p" onClick={handleLogin}>Se connecter avec Google</button>
@@ -10720,7 +10734,7 @@ function App(){
 
   return <div>
     <div className="topbar">
-      <div style={{display:'flex',alignItems:'center',gap:10}}>{!isDesktop && <button className="btn btn-sm" onClick={()=>setMenuMobile(true)} aria-label="Menu" style={{fontSize:18,padding:'4px 11px'}}>☰</button>}<div className="logo"><span className="dot"></span>SoumissionPro <span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div></div>
+      <div style={{display:'flex',alignItems:'center',gap:10}}>{!isDesktop && <button className="btn btn-sm" onClick={()=>setMenuMobile(true)} aria-label="Menu" style={{fontSize:18,padding:'4px 11px'}}>☰</button>}<div className="logo"><img src="logo-se.png" alt="" style={{width:30,height:30,flexShrink:0}}/>Saran Électrique <span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div></div>
       <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
         {configuredCals.length>1 && <div style={{display:'flex',gap:10,alignItems:'center'}}>
           {configuredCals.map(email=>
