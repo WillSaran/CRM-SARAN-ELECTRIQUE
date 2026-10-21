@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v239';
+const APP_VERSION = 'v240';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4717,7 +4717,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts}){
     : r.statutFacture==='annule' ? <span className="muted" style={{fontWeight:700}}>{r.appelService==='-'||r.facture==='-' ? '- ' : '** '}Pas à facturer</span>
     : r.estPasseOuAujourdhui ? <span style={{color:'var(--danger)',fontWeight:700}}>Rien d'inscrit</span> : <span className="muted">À venir</span>;
   return <div>
-    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Factures clients</h2>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Facture appel de service</h2>
     <div className="muted" style={{fontSize:13,marginBottom:12}}>Tiré du Sheet « SUIVI TRAVAUX SARAN ÉLECTRIQUE ». Tout passage fait qui n'a pas encore de facture est ici, le plus vieux en premier. Un passage qui ne se facture pas (annulé, garantie, visite) : « Pas à facturer » met « ** » dans le Sheet.</div>
     {!id && <div className="card">Configure l'ID du Sheet "SUIVI TRAVAUX" dans Réglages.</div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
@@ -7763,6 +7763,7 @@ function useClientsData(cfg, refreshKey){
           client:g(r,'cli'), tel:g(r,'tel'), courriel:g(r,'mail'), projet:g(r,'proj'), note:g(r,'note')
         })).filter(r=>!/^fusionn/i.test(cvNorm(r.statut)));
         Object.defineProperty(registry,'__colStatut',{value: ix.st>=0 ? ix.st : Math.max(head.length, 12), enumerable:false});
+        Object.defineProperty(registry,'__cols',{value: ix, enumerable:false});   // v240
         Object.defineProperty(registry,'__fiches',{value: fiches, enumerable:false});
         CV_CACHE[cle] = {err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent, fiches, soumissions, gcmeq, contactsAuto, t:Date.now(), force};
         if(alive) setState({loading:false, maj:false, err:'', events, registry, factures, appels, courriels, achats, facLignes, archives, documents, lent, fiches, soumissions, gcmeq, contactsAuto});
@@ -7963,6 +7964,52 @@ async function cvRenommerPassages(job, ancien, nouveau, setEtat){
   }
 }
 // Numéro de job : créer, prendre un numéro existant (fusion de doublons), ou changer / fusionner un numéro.
+// v240 : PO d'un contracteur absent du registre des jobs (ex. PO d'ajustement envoyé par le service après-vente) ou sans dossier :
+// on l'inscrit (Montant PO facultatif) et on lui rattache un dossier Drive existant. N'écrase rien : seules les cases vides sont remplies.
+function CvInscrirePO({cfg, job, registry, onChanged}){
+  const reg = job.reg && job.reg.po===job.po ? job.reg : null;
+  const [ouvert,setOuvert]=useState(false);
+  const [montant,setMontant]=useState('');
+  const [q,setQ]=useState(String(job.name||'').split(/\s+/).filter(m=>m.length>2)[0] || '');
+  const [dossiers,setDossiers]=useState(null);
+  const [choix,setChoix]=useState('');
+  const [etat,setEtat]=useState('');
+  if(job.client==='PART' || !job.po || !cfg || (reg && reg.dossier && reg.ht!=null)) return null;
+  const chercher = async () => { setEtat('Recherche dans le Drive…');
+    try{ const qq = encodeURIComponent("mimeType='application/vnd.google-apps.folder' and trashed=false and name contains '"+q.trim().replace(/'/g,"\\'")+"'");
+      const r = await driveFetch('https://www.googleapis.com/drive/v3/files?q='+qq+'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=15');
+      setDossiers(r.files||[]); setEtat(''); }
+    catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
+  const enregistrer = async () => { setEtat('Enregistrement…');
+    try{ const id = cfg.memoireJobsSpreadsheetId, ix = (registry && registry.__cols) || {}, ht = cvNum(montant);
+      if(reg){ const maj = [];
+        if(choix && !reg.dossier && ix.dos>=0) maj.push({range:String.fromCharCode(65+ix.dos)+reg.row, values:[[choix]]});
+        if(ht!=null && reg.ht==null && ix.ht>=0) maj.push({range:String.fromCharCode(65+ix.ht)+reg.row, values:[[ht]]});
+        if(maj.length) await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:maj}}); }
+      else await window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:id, range:'A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS',
+        resource:{values:[[job.client, job.po, String(job.name||'').toUpperCase(), job.address||'', '', ht!=null ? ht : '', choix || '', '', '', '', '', 'Inscrit dans le CRM le '+new Date().toLocaleDateString('fr-CA')]]}});
+      setEtat(''); setOuvert(false); onChanged && onChanged(); }
+    catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
+  if(!ouvert) return <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>{ setOuvert(true); if(!dossiers) chercher(); }}>
+    {reg ? (!reg.dossier ? '📁 Rattacher le dossier' : '＋ Montant du PO') : '📁 Inscrire '+job.po+' (dossier et montant)'}</button>;
+  return <div className="card" style={{padding:10,marginBottom:10,borderColor:'var(--accent)'}}>
+    <div style={{fontWeight:800,marginBottom:6}}>{job.po} — {job.name}{reg ? '' : <span className="muted" style={{fontWeight:400,fontSize:12}}> · pas encore dans le registre des jobs</span>}</div>
+    {(!reg || reg.ht==null) && <div className="field"><label>Montant du PO avant taxes (facultatif)</label><input value={montant} inputMode="decimal" onChange={e=>setMontant(e.target.value)} placeholder="ex. 500"/></div>}
+    {(!reg || !reg.dossier) && <>
+      <div style={{display:'flex',gap:6,margin:'4px 0'}}><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Nom du dossier dans le Drive" style={{flex:1}}/><button className="btn btn-sm" onClick={chercher}>Chercher</button></div>
+      {dossiers && <div style={{maxHeight:180,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
+        {dossiers.map(f=><label key={f.id} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
+          <input type="radio" checked={choix===f.id} onChange={()=>setChoix(f.id)} style={{width:'auto'}}/><span style={{flex:1}}>📁 {f.name}</span>
+          <a href={'https://drive.google.com/drive/folders/'+f.id} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12}} onClick={e=>e.stopPropagation()}>voir ↗</a></label>)}
+        {!dossiers.length && <div className="muted" style={{padding:8,fontSize:12.5}}>Aucun dossier trouvé avec ce nom.</div>}
+      </div>}</>}
+    <div style={{display:'flex',gap:6,marginTop:8,alignItems:'center',flexWrap:'wrap'}}>
+      <button className="btn btn-sm btn-p" disabled={!!etat || (!choix && cvNum(montant)==null && !!reg)} onClick={enregistrer}>{reg ? 'Enregistrer' : 'Inscrire au registre'}</button>
+      <button className="btn btn-sm" onClick={()=>setOuvert(false)}>Annuler</button>
+      {etat && <span className="muted" style={{fontSize:12}}>{etat}</span>}
+    </div>
+  </div>;
+}
 function CvCreerNoJob({cfg, job, registry, events, onChanged}){
   const code = job.client==='PART' ? 'PART' : job.client;
   const [mode,setMode]=useState('');
@@ -8104,7 +8151,7 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
       <Row k="Équipe">{job.crew.join(', ')}</Row>
       <Row k="Montant PO">{r.ht!=null && <>{cvMoney(r.ht)} avant taxes · {cvMoney(r.ht*1.14975)} taxes incluses</>}</Row>
     </div>
-    {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvRattacherPO job={job} clients={clients} onDone={onChanged}/><CvCreerNoJob cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
+    {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvRattacherPO job={job} clients={clients} onDone={onChanged}/><CvInscrirePO cfg={cfg} job={job} registry={registry} onChanged={onChanged}/><CvCreerNoJob cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
     <CvGauge job={job}/>
     <CvAcheteFacture job={job} achats={achats} facLignes={facLignes}/>
     {(()=>{ const m=cvMateriel(job, achats); return m.liste.length ? <div style={{fontSize:13,margin:'0 0 10px'}}>
@@ -8274,7 +8321,14 @@ function CvAVerifierClient({av, cfg, factures, marquerRegle, onPick, onChanged, 
   </div>;
 }
 
-function ClientDetailView({client, clients, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged, onBack, isDesktop}){
+function ClientDetailView({client, clients, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged, onBack, isDesktop, soumDe}){
+  // v240 : avancement de la job (même calcul que Projets)
+  const [manuelsAv] = useEtapesManuelles(cfg);
+  const [commandesAv] = useCommandes(cfg);
+  const BLav = useBlocages(cfg), TJav = useTypesJob(cfg);
+  const avancement = j => { try{ const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
+    return pjPhases(j, pjEtapes(j, ap, commandesAv, courriels, manuelsAv), {appels:ap, commandes:commandesAv, factures, manuels:manuelsAv, archives, blocages:BLav.parJob[j.id]||[],
+      typeJob: j.client==='PART' ? (TJav.map[j.id] || pjTypeAuto(j)) : ''}).pct; }catch(e){ return null; } };
   const [filter,setFilter]=useState('all');
   const [q,setQ]=useState('');
   const [sel,setSel]=useState(null);
@@ -8319,7 +8373,7 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
         {q.trim() && <div className="muted" style={{fontSize:12,margin:'-4px 0 8px'}}>Recherche dans toutes les jobs (terminées et archivées comprises) : {list.length} résultat{list.length>1?'s':''}</div>}
         <div style={{overflowX:'auto'}}>
           <table>
-            <thead><tr><th>PO</th><th>Job</th><th>Rough</th><th>Finition</th><th>Facturé / PO</th><th>État</th></tr></thead>
+            <thead><tr><th>PO</th><th>Job</th><th>Rough</th><th>Finition</th><th>Avancement · Facturé</th><th>État</th></tr></thead>
             <tbody>
               {list.map(j=><tr key={j.id} onClick={()=>pick(j.id)} style={{cursor:'pointer',background:sel===j.id?'rgba(var(--accent-rgb),0.10)':undefined}}>
                 <td style={{whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>{j.po||'—'}</td>
@@ -8327,7 +8381,10 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
                 <td><CvPhaseCell job={j} phase="ROUGH"/></td>
                 <td><CvPhaseCell job={j} phase="FINITION"/></td>
                 <td style={{fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>
-                  {(j.reg&&j.reg.ht&&j.billed) ? (()=>{ const p=j.billed/j.reg.ht; return <div><span style={{display:'inline-block',width:46,height:6,borderRadius:3,background:'var(--bg4)',verticalAlign:'middle',marginRight:6,position:'relative',overflow:'hidden'}}><i style={{position:'absolute',left:0,top:0,bottom:0,width:Math.min(p,1)*100+'%',background:p>1?'var(--danger)':'var(--success)'}}></i></span>{Math.round(p*100)} %</div>; })() : null}
+                  {(()=>{ const av = avancement(j), ref = (j.reg && j.reg.ht) ? {m:j.reg.ht, l:'du PO'} : (soumDe && soumDe[j.id]) ? {m:soumDe[j.id].montant, l:'de la soumission #'+soumDe[j.id].no} : null;
+                    const barre = (p, c, t) => <div title={t} style={{whiteSpace:'nowrap'}}><span style={{display:'inline-block',width:46,height:6,borderRadius:3,background:'var(--bg4)',verticalAlign:'middle',marginRight:6,position:'relative',overflow:'hidden'}}><i style={{position:'absolute',left:0,top:0,bottom:0,width:Math.min(Math.max(p,0),1)*100+'%',background:c}}></i></span>{Math.round(p*100)} %</div>;
+                    return <>{av!=null && barre(av/100, 'var(--accent)', 'Avancement de la job : '+av+' % des étapes faites')}
+                      {ref && j.billed>0 && barre(j.billed/ref.m, j.billed/ref.m>1.0001?'var(--danger)':'var(--success)', 'Facturé '+cvMoney(j.billed)+' sur '+cvMoney(ref.m)+' '+ref.l)}</>; })()}
                   <div className="muted" style={{fontSize:12}}>{j.factures.join(', ')||'—'}</div>
                 </td>
                 <td><CvPill status={j.etatClient||j.status}/></td>
@@ -9375,9 +9432,9 @@ function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.se
 
 // v202 : Comptabilité — comptes fournisseurs, factures clients (et paiements reçus), appels de service, à vérifier. Les pages gardent toutes leurs fonctions.
 const CPT_NAV = {factures:'factures', fournisseurs:'fourn', appel:'appel', verif:'verif'};   // anciens menus → onglet de Comptabilité
-const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['factures','Factures clients'],['appel','Appels de service'],['verif','À vérifier']];
+const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Factures clients'],['factures','Facture appel de service'],['appel','Appels de service'],['verif','À vérifier']];   // v240
 function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, onglet0}){
-  const [onglet,setOnglet]=useState(onglet0 || 'factures');
+  const [onglet,setOnglet]=useState(onglet0 || 'clients');
   const [cles,setCles]=useState({});
   const choisir = k => { if(k===onglet) setCles(c=>({...c, [k]:(c[k]||0)+1})); setOnglet(k); NAV_FOCUS = null; window.scrollTo(0,0); };
   return <div>
@@ -9386,6 +9443,10 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
       {CPT_ONGLETS.map(([k,l])=><button key={k} className={'btn btn-sm'+(onglet===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
     </div>
     {onglet==='fourn' && <FournisseursView key={'f'+(cles.fourn||0)} cfg={cfgRep} refreshKey={refreshKey} isDesktop={isDesktop}/>}
+    {onglet==='clients' && <>
+      <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Factures clients</h2>
+      <div className="muted" style={{fontSize:13,marginBottom:10}}>Tous tes clients : contracteurs et particuliers. Clique un client pour voir ses jobs (en cours, terminées), puis une job pour ses factures, achats, PO et dossier.</div>
+      <RepertoireView key={'c'+(cles.clients||0)} mode="factures" cfg={cfgRep} refreshKey={refreshKey} toast={toast} isDesktop={isDesktop} contacts={contacts}/></>}
     {onglet==='factures' && <FacturesView key={'x'+(cles.factures||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='appel' && <AppelServiceView key={'a'+(cles.appel||0)} cfg={cfgRep} toast={toast}/>}
     {onglet==='verif' && <>
@@ -9398,12 +9459,13 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
   const [tick,setTick]=useState(0);
   const d = useClientsData(cfg, refreshKey+'|r'+tick);
   const [reglees] = useVerifsReglees(cfg);
+  const suiviMode = mode==='verif' || mode==='factures';   // v240 : « Factures clients » = même présentation que « À vérifier », pour tout le monde
   const [suivi,setSuivi]=useState(()=>mode==='verif' ? (navFocus('verif')||{}).suivi || null : null);       // v156 : suivi et vérifications (ancien onglet Clients) : code contracteur, 'PART' ou id d'un particulier
   const K = useContactsFournisseurs(cfg);
   // v177 : une seule vue choisie dans un menu déroulant ; la recherche reste en haut
   // v202 : « À vérifier » est maintenant dans Comptabilité (mode « verif ») ; le Répertoire = les fiches de contact
-  const [vue,setVueS]=useState(()=>{ if(mode==='verif') return 'verif'; try{ const v = localStorage.getItem('crm_rep_vue')||'contr'; return ['part','com','contr','fourn'].includes(v) ? v : 'contr'; }catch(e){ return 'contr'; } });   // v204 : plus de vue d'ensemble
-  const setVue = v => { setVueS(v); setSel(null); if(mode!=='verif') try{ localStorage.setItem('crm_rep_vue', v); }catch(e){} };
+  const [vue,setVueS]=useState(()=>{ if(mode==='verif') return 'verif'; if(mode==='factures') return 'factures'; try{ const v = localStorage.getItem('crm_rep_vue')||'contr'; return ['part','com','contr','fourn'].includes(v) ? v : 'contr'; }catch(e){ return 'contr'; } });   // v204 : plus de vue d'ensemble
+  const setVue = v => { setVueS(v); setSel(null); if(!suiviMode) try{ localStorage.setItem('crm_rep_vue', v); }catch(e){} };
   const [q,setQ]=useState('');
   const [sel,setSelId]=useState(null);       // id d'un client ou 'F:<fournisseur>'
   const [selNom,setSelNom]=useState('');      // pour retrouver le client après une fusion (son id change)
@@ -9425,7 +9487,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
       setAttendu(null); } },[R, d.maj, d.loading, attendu]);
   // v206 : nouveau client écrit dans la description d'une job de The Crew → sa fiche est créée toute seule, une seule fois (jamais par-dessus une fiche)
   const autoFait = useRef(new Set());
-  useEffect(()=>{ if(mode==='verif' || d.loading || d.maj || !d.fiches || !cfg.memoireJobsSpreadsheetId) return;
+  useEffect(()=>{ if(suiviMode || d.loading || d.maj || !d.fiches || !cfg.memoireJobsSpreadsheetId) return;
     let deja; try{ deja = new Set(JSON.parse(localStorage.getItem('crm_fiches_agenda')||'[]')); }catch(e){ deja = new Set(); }
     const existants = new Set((F.clients||[]).flatMap(f=>[f.nom, ...(f.alias||[]), ...(f.conjoints||[])]).map(persCle).filter(Boolean));
     const vus = new Set();
@@ -9477,7 +9539,10 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
       if(p && clients.PART){ const jobs = p.srcJobs; cl = {...clients.PART, label:p.nom, contact:'', jobs, active:jobs.filter(j=>j.status!=='done').length,
         poTotal:jobs.reduce((t,j)=>t+((j.reg&&j.reg.ht)||0),0), billed:jobs.reduce((t,j)=>t+(j.billed||0),0), lastDay:jobs.reduce((m,j)=>j.last>m?j.last:m,'')}; } }
     else cl = clients[suivi];
-    if(cl) return <ClientDetailView client={cl} clients={clients} factures={d.factures} appels={d.appels || {parNumero:{}, parFacture:{}, liste:[]}} courriels={d.courriels} achats={d.achats}
+    // v240 : pour un particulier sans PO, le montant de référence = sa soumission (la dernière envoyée avant le premier passage)
+    const soumDe = {}; R.pers.forEach(p=>{ const S = (p.soum||[]).filter(x=>x.montant>0).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+      if(S.length) (p.srcJobs||[]).forEach(j=>{ const d0 = j.first || (j.events[0]||{}).day || '9999'; const x = S.filter(y=>String(y.date)<=d0).pop() || S[S.length-1]; soumDe[j.id] = {montant:x.montant, no:x.no}; }); });
+    if(cl) return <ClientDetailView soumDe={soumDe} client={cl} clients={clients} factures={d.factures} appels={d.appels || {parNumero:{}, parFacture:{}, liste:[]}} courriels={d.courriels} achats={d.achats}
       facLignes={d.facLignes} archives={d.archives} cfg={cfg} registry={d.registry} events={d.events} onChanged={()=>setTick(t=>t+1)} onBack={()=>setSuivi(null)} isDesktop={isDesktop}/>;
   }
   const nq = cvNorm(q);
@@ -9498,7 +9563,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
   const entete = <div style={{marginBottom:12}}>
     <input value={q} onChange={e=>{ setQ(e.target.value); if(sel) setSel(null); }} placeholder="🔎 Chercher un client, commerce, contracteur, fournisseur — nom, courriel, téléphone, adresse, PO, no de facture…"
       style={{width:'100%',padding:'9px 12px',fontSize:14,marginBottom:8}}/>
-    {mode!=='verif' && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+    {!suiviMode && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
       {VUES.map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k && !sel ? ' btn-p' : '')} onClick={()=>setVue(k)}>{l}</button>)}
       {d.maj && <span className="muted" style={{fontSize:11.5}}>mise à jour…</span>}
       <span style={{marginLeft:'auto',display:'flex',gap:6}}>
@@ -9535,7 +9600,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
       </React.Fragment>; })}
     {!l.length && <div className="muted" style={{padding:14}}>Aucun résultat.</div>}
   </div>;
-  const ouvrirC = c => { if(mode==='verif'){ if(c.type==='contr' && clients[c.code]){ setSuivi(c.code); return; } if(c.type!=='contr' && c.srcJobs && c.srcJobs.length){ setSuivi(c.id); return; } } setSel(c.id); };
+  const ouvrirC = c => { if(suiviMode){ if(c.type==='contr' && clients[c.code]){ setSuivi(c.code); return; } if(c.type!=='contr' && c.srcJobs && c.srcJobs.length){ setSuivi(c.id); return; } } setSel(c.id); };
   const Cubes = ({l}) => <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:8}}>
     {l.map(c=><div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0}} onClick={()=>ouvrirC(c)}>
       <div><b style={{color:'var(--accent)'}}>{c.code}</b> {c.nom}</div>
@@ -9606,11 +9671,28 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
       {clients.PART && <div style={{marginTop:10}}><button className="btn btn-sm" onClick={()=>setSuivi('PART')}>🔎 Suivi de toutes les jobs de particuliers{aVerif.PART ? ' · '+aVerif.PART+' à vérifier' : ''}</button></div>}
       <div style={{height:16}}/>
       <CvAnomalies cfg={cfg} factures={d.factures} clients={clients} appels={d.appels || {parNumero:{}, parFacture:{}, liste:[]}} onOpen={code=>setSuivi(code)} onChanged={()=>setTick(t=>t+1)}/></>;
+  } else if(vue==='factures'){   // v240 : Factures clients — contracteurs en cubes + un cube Particuliers
+    const stats = cl => { const L = (cl && cl.jobs) || []; const n = L.filter(j=>!(d.archives||{})[j.id]);
+      return n.length ? n.length+' job'+(n.length>1?'s':'')+' · '+n.filter(j=>j.status!=='done').length+' en cours ou à venir' : 'Aucune job récente'; };
+    corps = <>{titre('Contracteurs', contrTri.length)}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:8}}>
+        {contrTri.map(c=><div key={c.id} className="card" style={{padding:'10px 12px',cursor:'pointer',margin:0}} onClick={()=>ouvrirC(c)}>
+          <div><b style={{color:'var(--accent)'}}>{c.code}</b> {c.nom}</div>
+          <div className="muted" style={{fontSize:12}}>{stats(clients[c.code])}</div>
+        </div>)}
+      </div>
+      {titre('Particuliers', null)}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:8}}>
+        <div className="card" style={{padding:'10px 12px',cursor:clients.PART?'pointer':'default',margin:0}} onClick={()=>clients.PART && setSuivi('PART')}>
+          <div><b style={{color:'var(--accent)'}}>PART</b> Particuliers</div>
+          <div className="muted" style={{fontSize:12}}>{stats(clients.PART)}</div>
+        </div>
+      </div></>;
   } else {   // vue d'ensemble : contracteurs en cubes (v202 : « À vérifier » est dans Comptabilité)
     corps = <>{titre('Contracteurs', contrTri.length)}<Cubes l={contrTri}/>
       <div className="muted" style={{fontSize:12.5,marginTop:12}}>Choisis un onglet pour voir les fiches.</div></>;
   }
-  if(mode==='verif') return <div>{entete}{corps}</div>;
+  if(suiviMode) return <div>{entete}{corps}</div>;
   return <div>{entete}{formNouveau}{corps}</div>;
 }
 
