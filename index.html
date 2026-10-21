@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v236';
+const APP_VERSION = 'v237';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2177,7 +2177,23 @@ function CvPhasesJob({job, onDone}){
 }
 
 // ══ v224 : Projets — phases (Entrée, Rough, Finition, Wrap-up), barre d'état et blocages ══
-const PJ_PHASES = ['Entrée','Rough','Finition','Wrap-up'];
+const PJ_PHASES = ['Entrée','Entrée électrique','Rough','Finition','Wrap-up'];
+// v237 : « Entrée » s'affiche « Inscription » (la clé reste « Entrée » pour les étapes cochées et les blocages déjà faits).
+const PJ_PHASE_NOM = {'Entrée':'Inscription'};
+const pjNomPhase = ph => PJ_PHASE_NOM[ph] || ph;
+// Passage d'entrée électrique : « ENTREE ELEC » / « ENTRÉE ÉLECTRIQUE » dans le titre de l'événement
+const PJ_ENTREE_RE = /\bENTR[EÉ]E\s*([EÉ]LEC|[EÉ]LECTRIQUE)\b/i;
+// v237 : ce que dit le PO (onglet privé « PO étapes » de La mémoire — Jobs, rempli par le script poEtapes) : Rough / Finition / Entrée électrique
+function usePOEtapes(cfg){
+  const id = cfg.memoireJobsSpreadsheetId;
+  const [map,setMap]=useState({});
+  useEffect(()=>{ if(!id) return; let ok = true;
+    lireCache(id, qSheet('PO étapes')+'!A1:K').then(r=>{ const m = {};
+      (r.result.values||[]).slice(1).forEach(x=>{ const po = cvPO(x[0]); if(po && !m[po]) m[po] = {type:x[4]||'', rough:String(x[5]||'').toLowerCase(), finition:String(x[6]||'').toLowerCase(), rapup:String(x[7]||'').toLowerCase(), entree:String(x[8]||'').toLowerCase(), sujet:x[1]||''}; });
+      if(ok) setMap(m); }, ()=>{});
+    return ()=>{ ok = false; }; },[id]);
+  return map;
+}
 const PJ_TYPES_PART = ['Piscine','Spa','Éclairage','Prise','Pièce','Mise à niveau','Borne','Chauffage','Dépannage'];
 // v226-227 : type de job trouvé dans le titre (nomenclature imprimée pour les gars : « NOM SERV CODE … INITIALES »).
 // 1) un CODE écrit dans le titre gagne (le premier dans le titre) ; 2) sinon les autres mots reconnus, dans l'ordre de la liste.
@@ -2218,52 +2234,72 @@ function pjPhases(job, s, ctx){
   const add = (phase, titre, o) => out.push({id:phase+' — '+(o.cle||titre), phase, titre, ...o});
   // Entrée
   const coordOk = pro ? true : !!(E('Coordonnées complètes') ? E('Coordonnées complètes').ok : true);
-  add('Entrée', pro ? 'PO reçu' : 'Soumission acceptée et coordonnées complètes', {ok: pro ? !!job.po : coordOk, du: ev.length>0,
+  add('Entrée', pro ? 'PO reçu' : 'Soumission acceptée et coordonnées complètes', {non: pro ? 'PO non reçu' : 'Soumission non acceptée ou coordonnées incomplètes', ok: pro ? !!job.po : coordOk, du: ev.length>0,
     info: pro ? 'Aucun PO trouvé pour cette job (P0xxxx dans le titre de l\'événement)' : (E('Coordonnées complètes')||{}).manque || 'À confirmer'});
-  add('Entrée', 'Adresse du chantier', {ok: !!job.address, du: true, info:'Pas d\'adresse dans l\'événement'});
-  add('Entrée', 'Plans reçus', {na: !pro && !plans, ok: plans, du: pro && ev.some(e=>e.phase==='ROUGH'), info:'Aucun plan attaché aux passages'});
-  add('Entrée', 'Job cédulée dans l\'agenda', {ok: ev.length>0, du: att.length>0, info: att.length ? 'Encore dans l\'agenda En Attente' : 'Pas encore à l\'agenda'});
-  // Rough et Finition
+  add('Entrée', 'Adresse du chantier', {non:'Adresse du chantier manquante', ok: !!job.address, du: true, info:'Pas d\'adresse dans l\'événement'});
+  add('Entrée', 'Plans reçus', {non:'Plans non reçus', na: !pro && !plans, ok: plans, du: pro && ev.some(e=>e.phase==='ROUGH'), info:'Aucun plan attaché aux passages'});
+  add('Entrée', 'Job cédulée dans l\'agenda', {non:'Job pas encore cédulée dans l\'agenda', ok: ev.length>0, du: att.length>0, info: att.length ? 'Encore dans l\'agenda En Attente' : 'Pas encore à l\'agenda'});
+  // Entrée électrique, Rough et Finition — v237 : la phase s'applique selon l'agenda, puis l'ajout / retrait à la main, puis le PO
+  const M = ctx.manuels || {};
+  const po = (job.po && ctx.poEtapes && ctx.poEtapes[job.po]) || null;
+  const phasesInfo = {};
+  const ART = {ENTREE:'de l\'entrée électrique', ROUGH:'du rough', FINITION:'de la finition'};
+  const FAIT = {ENTREE:['Entrée électrique faite','Entrée électrique non faite'], ROUGH:['Rough fait','Rough non fait'], FINITION:['Finition faite','Finition non faite']};
+  const PO_CLE = {ENTREE:'entree', ROUGH:'rough', FINITION:'finition'};
   const phase = (P, nom) => {
-    const L = ev.filter(e=>e.phase===P), faits = L.filter(passe), futurs = L.filter(e=>!passe(e));
-    const autreVisitesFaites = visites.some(v=>v.faite);
-    const na = !L.length && autreVisitesFaites && !avenir.length;   // job de service : pas de rough / finition
-    const vs = visites.filter(v=>v.phase===P && v.faite);
+    const estP = e => P==='ENTREE' ? PJ_ENTREE_RE.test(e.title||'') : e.phase===P;
+    const L = ev.filter(estP), faits = L.filter(passe), futurs = L.filter(e=>!passe(e));
+    const plus = !!M[job.id+'|+PHASE '+nom], moins = !!M[job.id+'|-PHASE '+nom], dit = po ? po[PO_CLE[P]] : '';
+    let actif, source;
+    if(L.length){ actif = true; source = 'dans l\'agenda'; }
+    else if(plus){ actif = true; source = 'ajoutée à la main'; }
+    else if(moins){ actif = false; source = 'retirée à la main'; }
+    else if(dit==='oui' || dit==='non'){ actif = dit==='oui'; source = dit==='oui' ? 'selon le PO' : po.type==='Service' ? 'PO de service' : 'pas dans le PO'; }
+    else if(P==='ENTREE'){ actif = false; source = ''; }
+    else { const service = visites.some(v=>v.faite) && !avenir.length;   // job de service : pas de rough / finition
+      actif = !service; source = service ? 'job de service' : ''; }
+    phasesInfo[nom] = {actif, source, plus, moins, agenda: L.length>0};
+    if(!actif && P==='ENTREE') return;   // l'entrée électrique n'apparaît que si elle s'applique
+    const na = !actif;
+    const vs = visites.filter(v=>v.faite && (P==='ENTREE' ? v.events.some(estP) : v.phase===P));
     const nonCmd = futurs.filter(e=>!(ctx.commandes && cvCmd(ctx.commandes, job, e).fait));   // un passage déjà fait = la commande a été faite
-    add(nom, 'Commande '+(P==='ROUGH'?'du rough':'de la finition')+' placée', {na, ok: L.length>0 && !nonCmd.length, du: nonCmd.some(e=>e.day<=fin7),
-      info: nonCmd.map(e=>cvFmtDay(e.day)).join(', ')+' : commande à placer'});
-    add(nom, (P==='ROUGH'?'Rough fait':'Finition faite'), {na, ok: faits.length>0 && !futurs.length, du: false,
+    add(nom, 'Commande '+ART[P]+' placée', {non:'Commande '+ART[P]+' non placée', na, ok: L.length>0 && !nonCmd.length, du: nonCmd.some(e=>e.day<=fin7),
+      info: nonCmd.length ? nonCmd.map(e=>cvFmtDay(e.day)).join(', ')+' : commande à placer' : 'Pas encore de passage à l\'agenda'});
+    add(nom, FAIT[P][0], {non:FAIT[P][1], na, ok: faits.length>0 && !futurs.length, du: false,
       info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
     const sansAp = faits.filter(e=>!(e.as || e.fac));
-    add(nom, 'Appel de service inscrit', {na, ok: faits.length>0 && !sansAp.length, du: sansAp.length>0, info: sansAp.map(e=>cvFmtDay(e.day)).join(', ')+' sans appel de service'});
-    if(P==='ROUGH') add(nom, 'OT du rough reçu (liste de stock pour la finition)', {na: na || !pro, ok: ots.length>0 || faits.some(e=>e.ot), du: faits.length>0,
+    add(nom, 'Appel de service inscrit', {non:'Appel de service non inscrit', na, ok: faits.length>0 && !sansAp.length, du: sansAp.length>0, info: sansAp.map(e=>cvFmtDay(e.day)).join(', ')+' sans appel de service'});
+    if(P==='ROUGH') add(nom, 'OT du rough reçu (liste de stock pour la finition)', {non:'OT du rough non reçu (liste de stock pour la finition)', na: na || !pro, ok: ots.length>0 || faits.some(e=>e.ot), du: faits.length>0,
       info:'Le rough est fait mais aucun OT n\'est classé (« B- REF OT » / « 1-PAD »)'});
+    if(P==='ENTREE') add(nom, 'OT de l\'entrée électrique reçu', {non:'OT de l\'entrée électrique non reçu', na: na || !pro, ok: faits.some(e=>e.ot) || ots.length>0, du: faits.length>0,
+      info:'L\'entrée est faite mais aucun OT n\'est classé'});
     const nonFac = vs.filter(v=>!v.facturee);
-    add(nom, 'Facture '+(P==='ROUGH'?'du rough':'de la finition'), {na, ok: vs.length>0 && !nonFac.length, du: nonFac.length>0, info: nonFac.map(v=>v.label).join(', ')+' : visite faite, pas de facture'});
+    add(nom, 'Facture '+ART[P], {oui:'Facture '+ART[P]+' envoyée', non:'Facture '+ART[P]+' non envoyée', na, ok: vs.length>0 && !nonFac.length, du: nonFac.length>0, info: nonFac.map(v=>v.label).join(', ')+' : visite faite, pas de facture'});
   };
-  phase('ROUGH','Rough'); phase('FINITION','Finition');
+  phase('ENTREE','Entrée électrique'); phase('ROUGH','Rough'); phase('FINITION','Finition');
   // Wrap-up
   const ouverts = (ctx.blocages||[]).filter(b=>b.statut!=='Réglé');
   const travauxFaits = visites.some(v=>v.faite) && !avenir.length;
-  add('Wrap-up', 'Services et corrections terminés', {ok: travauxFaits && !ouverts.length, du: travauxFaits && ouverts.length>0,
+  add('Wrap-up', 'Services et corrections terminés', {non:'Services et corrections non terminés', ok: travauxFaits && !ouverts.length, du: travauxFaits && ouverts.length>0,
     info: ouverts.length ? ouverts.length+' blocage'+(ouverts.length>1?'s':'')+' pas réglé'+(ouverts.length>1?'s':'') : avenir.length ? 'Encore des passages à venir' : 'Aucun passage fait'});
   const nonFac = visites.filter(v=>v.faite && !v.facturee);
-  add('Wrap-up', 'Toutes les factures envoyées', {ok: travauxFaits && !nonFac.length, du: travauxFaits && nonFac.length>0, info: nonFac.map(v=>v.label).join(', ')+' sans facture'});
+  add('Wrap-up', 'Toutes les factures envoyées', {non:'Factures pas toutes envoyées', ok: travauxFaits && !nonFac.length, du: travauxFaits && nonFac.length>0, info: nonFac.map(v=>v.label).join(', ')+' sans facture'});
   const nums = [...new Set(ev.flatMap(e=>e.fac && e.fac!=='**' ? paiNums(e.fac) : []))];
   const F = ctx.factures || {}, nonPayees = nums.filter(n=>!(F[n] && F[n].etatPaie==='payee'));
   // v228 : « Paiement » — vert quand tout est payé ; rouge seulement si une facture est en souffrance (plus de 30 jours, N30) ;
   // sinon gris (facture envoyée, paiement attendu dans les délais). Clé gardée « Paiement reçu » pour les cochés et blocages déjà faits.
   const jours = n => { const d = F[n] && (F[n].envoi || F[n].date); return d ? Math.floor((new Date(today+'T12:00:00') - new Date(String(d).slice(0,10)+'T12:00:00'))/864e5) : 0; };
   const souffrance = nonPayees.filter(n=>jours(n) > 30);
-  add('Wrap-up', 'Paiement', {cle:'Paiement reçu', libelle: nonPayees.length && !souffrance.length ? 'en attente du paiement' : '', ok: nums.length>0 && !nonPayees.length && !nonFac.length && travauxFaits, du: souffrance.length>0,
+  add('Wrap-up', 'Paiement', {cle:'Paiement reçu', oui:'Paiement reçu', non: souffrance.length ? 'Paiement en souffrance' : nonPayees.length ? 'Paiement en attente' : 'Paiement non reçu',
+    libelle: nonPayees.length && !souffrance.length ? 'en attente du paiement' : '', ok: nums.length>0 && !nonPayees.length && !nonFac.length && travauxFaits, du: souffrance.length>0,
     info: souffrance.length ? 'En souffrance (plus de 30 jours) : facture'+(souffrance.length>1?'s':'')+' #'+souffrance.map(n=>n+' ('+jours(n)+' j)').join(', #')
       : nonPayees.length ? 'Paiement attendu : facture'+(nonPayees.length>1?'s':'')+' #'+nonPayees.join(', #')+' (moins de 30 jours)' : 'Pas encore de facture'});
-  add('Wrap-up', 'Job fermée', {ok: !!(ctx.archives||{})[job.id], du: false, info:'« Fermer la job » quand tout est réglé'});
+  add('Wrap-up', 'Job fermée', {non:'Job non fermée', ok: !!(ctx.archives||{})[job.id], du: false, info:'« Fermer la job » quand tout est réglé'});
   // Coché à la main (onglet Etapes)
-  const M = ctx.manuels || {};
-  out.forEach(x=>{ x.manuel = !x.ok && !!M[job.id+'|'+x.id]; x.etat = x.na ? 'na' : x.ok ? 'ok' : x.manuel ? 'manuel' : x.du ? 'manque' : 'futur'; });
+  out.forEach(x=>{ x.manuel = !x.ok && !!M[job.id+'|'+x.id]; x.etat = x.na ? 'na' : x.ok ? 'ok' : x.manuel ? 'manuel' : x.du ? 'manque' : 'futur';
+    x.texte = x.etat==='na' ? x.titre : (x.etat==='ok' || x.etat==='manuel') ? (x.oui || x.titre) : (x.non || x.titre); });   // v237 : « OT non reçu » tant que ce n'est pas fait
   const actifs = out.filter(x=>x.etat!=='na'), faits = actifs.filter(x=>x.etat==='ok'||x.etat==='manuel');
-  return {steps:out, pct: actifs.length ? Math.round(faits.length*100/actifs.length) : 0, prochaine: actifs.find(x=>x.etat==='manque') || actifs.find(x=>x.etat==='futur'), ouverts};
+  return {steps:out, phasesInfo, pct: actifs.length ? Math.round(faits.length*100/actifs.length) : 0, prochaine: actifs.find(x=>x.etat==='manque') || actifs.find(x=>x.etat==='futur'), ouverts};
 }
 
 // Blocages (onglet privé « Blocages » de La mémoire — Jobs) ; pièces jointes dans Drive › « Saran CRM — Blocages »
@@ -2313,21 +2349,39 @@ const PJ_COULEUR = {ok:'var(--success)', manuel:'var(--success)', manque:'var(--
 function PjBarre({p, blocages, sel, onEtape}){
   const parEtape = id => (blocages||[]).filter(b=>b.etape===id);
   return <div style={{overflowX:'auto',margin:'8px 0 2px'}} onClick={e=>e.stopPropagation()}>
-    <div style={{display:'flex',gap:6,minWidth:760}}>
-      {PJ_PHASES.map(ph=>{ const L = p.steps.filter(x=>x.phase===ph); const fait = L.filter(x=>x.etat!=='na').every(x=>x.etat==='ok'||x.etat==='manuel') && L.some(x=>x.etat!=='na');
+    <div style={{display:'flex',gap:6,minWidth:420}}>
+      {PJ_PHASES.map(ph=>{ const L = p.steps.filter(x=>x.phase===ph); if(!L.length) return null; const fait = L.filter(x=>x.etat!=='na').every(x=>x.etat==='ok'||x.etat==='manuel') && L.some(x=>x.etat!=='na');
         return <div key={ph} style={{flex:L.length,minWidth:0}}>
-          <div style={{fontSize:10.5,fontWeight:800,letterSpacing:'.05em',textTransform:'uppercase',color:fait?'var(--success)':'var(--muted)',marginBottom:3}}>{fait?'✓ ':''}{ph}</div>
+          <div style={{fontSize:10.5,fontWeight:800,letterSpacing:'.05em',textTransform:'uppercase',color:fait?'var(--success)':'var(--muted)',marginBottom:3}}>{fait?'✓ ':''}{pjNomPhase(ph)}</div>
           <div style={{display:'flex',gap:2}}>
             {L.map(x=>{ const bs = parEtape(x.id), ouvert = bs.some(b=>b.statut!=='Réglé'), choisi = sel===x.id;
-              return <div key={x.id} style={{flex:1,minWidth:0,cursor:'pointer',position:'relative'}} title={x.titre+' — '+((x.etat==='futur' && x.libelle) || ({ok:'fait',manuel:'coché à la main',manque:'à faire',futur:'pas encore rendu là',na:'ne s\'applique pas'})[x.etat])+(ouvert?' · blocage à régler':'')} onClick={()=>onEtape(choisi ? null : x.id)}>
+              return <div key={x.id} style={{flex:1,minWidth:0,cursor:'pointer',position:'relative'}} title={x.texte+' — '+((x.etat==='futur' && x.libelle) || ({ok:'fait',manuel:'coché à la main',manque:'à faire',futur:'pas encore rendu là',na:'ne s\'applique pas'})[x.etat])+((x.etat==='manque'||x.etat==='futur') && x.info ? ' · '+x.info : '')+(ouvert?' · blocage à régler':'')} onClick={()=>onEtape(choisi ? null : x.id)}>
                 {bs.length>0 && <span style={{position:'absolute',top:-9,left:'50%',transform:'translateX(-50%)',zIndex:1,width:16,height:16,borderRadius:8,fontSize:10.5,fontWeight:900,lineHeight:'16px',textAlign:'center',
                   background:ouvert?'var(--warning)':'var(--success)',color:ouvert?'#1b1300':'#fff',boxShadow:'0 0 0 2px var(--bg2, #161b22)'}}>{ouvert?'!':'✓'}</span>}
                 <div style={{height:12,borderRadius:3,background:ouvert && x.etat!=='na' ? 'var(--warning)' : PJ_COULEUR[x.etat],border:x.etat==='na'?'1px dashed var(--border)':choisi?'2px solid var(--accent)':'none',
                   backgroundImage:x.etat==='manuel'?'repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,.25) 4px 7px)':undefined}}/>
-                <div style={{fontSize:9.5,lineHeight:1.15,marginTop:3,textAlign:'center',color:ouvert?'var(--warning)':x.etat==='manque'?'var(--danger)':x.etat==='na'?'var(--muted)':'var(--text)',opacity:x.etat==='na'?.5:1,fontWeight:choisi||ouvert?800:400,wordBreak:'break-word'}}>{x.titre.replace(/ \(liste de stock pour la finition\)/,'')}</div>
               </div>; })}
           </div></div>; })}
     </div>
+  </div>;
+}
+
+// v237 : ajouter ou retirer une phase à la main (onglet Etapes : « +PHASE Rough » / « -PHASE Rough »). Une phase déjà dans l'agenda reste.
+function PjPhasesReglage({job, info, basculer}){
+  const [occ,setOcc]=useState('');
+  const fixer = async (nom, actif) => { setOcc(nom);
+    try{ const x = info[nom] || {};
+      if(actif){ if(x.moins) await basculer(job.id, '-PHASE '+nom, false); if(!x.plus) await basculer(job.id, '+PHASE '+nom, true); }
+      else { if(x.plus) await basculer(job.id, '+PHASE '+nom, false); if(!x.moins) await basculer(job.id, '-PHASE '+nom, true); } }
+    finally{ setOcc(''); } };
+  return <div onClick={e=>e.stopPropagation()} style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',fontSize:12,margin:'6px 0 2px',cursor:'default'}}>
+    <span className="muted">Phases :</span>
+    {['Entrée électrique','Rough','Finition'].map(nom=>{ const x = info[nom] || {};
+      return x.actif
+        ? <span key={nom} style={{display:'inline-flex',gap:4,alignItems:'center',border:'1px solid var(--border2)',borderRadius:6,padding:'1px 4px 1px 7px'}}>
+            <b>{nom}</b>{x.source && <span className="muted">· {x.source}</span>}
+            {!x.agenda && <button className="btn btn-sm" style={{padding:'0 6px',fontSize:11}} disabled={!!occ} title="Cette phase ne s'applique pas à cette job" onClick={()=>fixer(nom, false)}>{occ===nom?'…':'Retirer'}</button>}</span>
+        : <button key={nom} className="btn btn-sm" style={{padding:'1px 8px',fontSize:11.5}} disabled={!!occ} title={x.source ? 'Pas prévue ('+x.source+') — l\'ajouter si ça se rajoute' : 'Ajouter cette phase à la job'} onClick={()=>fixer(nom, true)}>{occ===nom?'…':'+ '+nom}</button>; })}
   </div>;
 }
 
@@ -2367,7 +2421,7 @@ function PjEtapeDetail({job, x, blocages, B, basculerEtape, toast}){
   </div>;
   return <div className="card" style={{margin:'6px 0 2px',padding:10,fontSize:13}} onClick={e=>e.stopPropagation()}>
     <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center'}}>
-      <div><span className="muted" style={{fontSize:11,textTransform:'uppercase',fontWeight:700}}>{x.phase}</span> <b>{x.titre}</b>{' '}
+      <div><span className="muted" style={{fontSize:11,textTransform:'uppercase',fontWeight:700}}>{pjNomPhase(x.phase)}</span> <b>{x.texte || x.titre}</b>{' '}
         <span style={{color:x.etat==='manque'?'var(--danger)':x.etat==='ok'||x.etat==='manuel'?'var(--success)':'var(--muted)',fontWeight:700}}>
           {(x.etat==='futur' && x.libelle) || ({ok:'✓ fait', manuel:'✓ coché à la main', manque:'à faire', futur:'pas encore rendu là', na:'ne s\'applique pas'})[x.etat]}</span>
         {(x.etat==='manque'||x.etat==='futur') && x.info && <div className="muted" style={{fontSize:12.5}}>{x.info}</div>}</div>
@@ -2379,7 +2433,7 @@ function PjEtapeDetail({job, x, blocages, B, basculerEtape, toast}){
       </span>
     </div>
     {form && !form.pour && <div style={{marginTop:8,paddingTop:8,borderTop:'1px solid var(--border)',display:'grid',gap:6}}>
-      <b>Nouveau blocage — {x.titre}</b>
+      <b>Nouveau blocage — {x.texte || x.titre}</b>
       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
         <select value={form.type} onChange={e=>setForm({...form, type:e.target.value})} style={{width:'auto',padding:'5px 8px'}}>{[...PJ_TYPES_BLOCAGE,'Autre'].map(t=><option key={t}>{t}</option>)}</select>
         {form.type==='Autre' && <input value={form.autre} onChange={e=>setForm({...form, autre:e.target.value})} placeholder="Quel contretemps ?" style={{flex:'1 1 180px',padding:'5px 8px'}}/>}
@@ -2428,6 +2482,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   const [seulManque,setSeulManque]=useState(false);
   const [ouvert,setOuvert]=useState(null);
   const B = useBlocages(cfg), TJ = useTypesJob(cfg);   // v224 : blocages et type de job
+  const poEtapes = usePOEtapes(cfg);                   // v237 : Rough / Finition / Entrée électrique selon le PO
   const [selEt,setSelEt]=useState(null);              // {k, id} : étape choisie sur la barre d'une job
   const [typeAutre,setTypeAutre]=useState(null);      // {k, v} : type « Autre » en train d'être écrit
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
@@ -2449,7 +2504,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   const codes = [...new Set(Object.values(clients).map(c=>c.code))].sort((a,b)=>(a==='PART')-(b==='PART') || a.localeCompare(b,'fr'));
   const groupes = [['cours','En cours'],['avenir','À venir'],['done','Terminées (30 derniers jours)']];
   const Ligne = ({x})=>{ const {c,j,s}=x, k=c.code+j.id, o=ouvert===k;
-    const p = pjPhases(j, s, {appels:ap, commandes, factures, manuels, archives, blocages:B.parJob[j.id]||[]});   // v224
+    const p = pjPhases(j, s, {appels:ap, commandes, factures, manuels, archives, poEtapes, blocages:B.parJob[j.id]||[]});   // v224
     return <div className="opp-card" style={{padding:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:10,cursor:'pointer'}} onClick={()=>setOuvert(o?null:k)}>
         <div>
@@ -2465,8 +2520,9 @@ function ProjetsSuivi({cfg, refreshKey}){
                     <option value="">Type de job…</option>{[...new Set([...PJ_TYPES_PART, ...(val ? [val] : [])])].map(t=><option key={t} value={t}>{t}</option>)}<option value="__autre">Autre…</option></select>
                     {auto && <span className="muted" style={{fontSize:10.5,marginLeft:4}}>auto</span>}</>; })()}</span>}</div>
           <CvPhasesJob job={j} onDone={()=>setTick(t=>t+1)}/>
-          <div className="a">Prochaine étape : <b>{s.etape}</b>{p.prochaine ? <span className="muted"> · à faire : {p.prochaine.phase} › {p.prochaine.titre}</span> : ''} <span style={{fontWeight:800,color:p.pct===100?'var(--success)':'var(--text)'}}>· {p.pct} %</span></div>
+          <div className="a">Prochaine étape : <b>{s.etape}</b>{p.prochaine ? <span className="muted"> · à faire : {pjNomPhase(p.prochaine.phase)} › {p.prochaine.texte || p.prochaine.titre}</span> : ''} <span style={{fontWeight:800,color:p.pct===100?'var(--success)':'var(--text)'}}>· {p.pct} %</span></div>
           <PjBarre p={p} blocages={B.parJob[j.id]||[]} sel={selEt && selEt.k===k ? selEt.id : null} onEtape={id=>setSelEt(id ? {k, id} : null)}/>
+          {o && <PjPhasesReglage job={j} info={p.phasesInfo||{}} basculer={basculerEtape}/>}
           {selEt && selEt.k===k && (()=>{ const x = p.steps.find(y=>y.id===selEt.id); return x ? <PjEtapeDetail job={j} x={x} blocages={B.parJob[j.id]||[]} B={B} basculerEtape={basculerEtape} toast={m=>{ if(/^Erreur|^Micro/.test(m)) alert(m); }}/> : null; })()}
           <div style={{display:'none'}}>{s.G.map(g=><span key={g.k} title={g.label+' — '+(g.segments && g.segments.length ? g.segments.map(x=>(x.etat==='na'?'⏳ ':x.etat==='manque'?'✗ ':'✓ ')+x.label).join(' · ') : g.L.length ? g.L.map(x=>(x.ok?'✓ ':'✗ ')+x.titre).join(' · ') : 'pas encore rendu là')} style={{display:'inline-flex',flexDirection:'column',alignItems:'center',gap:2}}>
             {(g.segments && g.segments.length>1)
