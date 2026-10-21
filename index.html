@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v253';
+const APP_VERSION = 'v254';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4170,11 +4170,15 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   conf.forEach(p=>{ if(!p.de || /^manuel-/.test(p.id)) return; p.confirmees.forEach(n=>{ if(F[n]) nomsAppris[paiClientCle(F[n])] = titre(p.de); }); });
   // v200 : note de crédit (facture négative) — annule la facture ouverte du même client au même montant (ex. #2320 annule #2319)
   Object.values(F).filter(f=>f.ttc < -0.05 && !f.annulee).sort((a,b)=>+a.num - +b.num).forEach(nc=>{
-    const cible = Object.values(F).filter(f=>!f.creditee && !f.annulee && f.ttc>0.05 && f.paye<0.05 && !(f.payeLog>0.05) && +f.num < +nc.num && cleG(f)===cleG(nc) && Math.abs(f.ttc + nc.ttc)<=0.02).sort((a,b)=>+a.num - +b.num)[0];
+    // v254 : même montant exact — d'abord la facture à la même adresse / description (ex. crédit du 297 Salaberry → facture du 297), puis la plus vieille
+    const dnT = f => cvNorm(String(f.desc||'').replace(/[·\-–]?\s*travaux\s+\d{4}-\d{2}-\d{2}/ig,''));
+    const cible = Object.values(F).filter(f=>!f.creditee && !f.annulee && f.ttc>0.05 && f.paye<0.05 && !(f.payeLog>0.05) && +f.num < +nc.num && cleG(f)===cleG(nc) && Math.abs(f.ttc + nc.ttc)<=0.02)
+      .sort((a,b)=>((dnT(b)===dnT(nc))-(dnT(a)===dnT(nc))) || (+a.num - +b.num))[0];
     // v232 : note de crédit au montant calculé (≈, souvent faux) : on la jumelle par la description détaillée identique (même client, 60 jours)
+    // v254 : seulement si les montants se ressemblent (à 10 % près) — sinon c'est sûrement une autre facture
     const dn = f => cvNorm(f.desc||''), detail = f => /·/.test(String(f.desc||''));
     const cible2 = !cible && nc.estime && detail(nc) ? Object.values(F).filter(f=>!f.creditee && !f.annulee && f.ttc>0.05 && f.paye<0.05 && !(f.payeLog>0.05) && +f.num < +nc.num && paiClientCle(f)===paiClientCle(nc)
-      && dn(f)===dn(nc) && Math.abs(Date.parse(String(nc.date).slice(0,10))-Date.parse(String(f.date).slice(0,10)))<=60*864e5).sort((a,b)=>+b.num - +a.num)[0] : null;
+      && dn(f)===dn(nc) && Math.abs(f.ttc + nc.ttc) <= 0.10*f.ttc && Math.abs(Date.parse(String(nc.date).slice(0,10))-Date.parse(String(f.date).slice(0,10)))<=60*864e5).sort((a,b)=>+b.num - +a.num)[0] : null;
     if(cible || cible2) (cible || cible2).creditee = nc.num; });
   // v231-232 : facture refaite (nom, date, adresse ou erreur corrigés) : même client, même montant, même description (sans la date des travaux),
   // à 14 jours près (30 si l'une des deux est payée). Si une seule est payée, l'autre est le doublon ; sinon, la plus récente remplace l'ancienne.
