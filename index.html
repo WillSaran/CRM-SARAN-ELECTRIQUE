@@ -149,7 +149,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v245';
+const APP_VERSION = 'v246';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2261,6 +2261,8 @@ function pjPhases(job, s, ctx){
   const M = ctx.manuels || {};
   const po = (job.po && ctx.poEtapes && ctx.poEtapes[job.po]) || null;
   const phasesInfo = {};
+  // v246 : plusieurs visites pour la même phase (ex. on doit retourner finir) → l'étape « fait » se découpe en 1/2, 2/2…
+  const partsDe = est => { const vs = visites.filter(v=>v.events.some(est)); return vs.length>1 ? vs.map((v,i)=>({n:i+1, tot:vs.length, ok:v.faite, day:v.debut})) : null; };
   const ART = {ENTREE:'de l\'entrée électrique', ROUGH:'du rough', FINITION:'de la finition'};
   const FAIT = {ENTREE:['Entrée électrique faite','Entrée électrique non faite'], ROUGH:['Rough fait','Rough non fait'], FINITION:['Finition faite','Finition non faite']};
   const PO_CLE = {ENTREE:'entree', ROUGH:'rough', FINITION:'finition'};
@@ -2284,7 +2286,7 @@ function pjPhases(job, s, ctx){
     const nonCmd = futurs.filter(e=>!(ctx.commandes && cvCmd(ctx.commandes, job, e).fait));   // un passage déjà fait = la commande a été faite
     add(nom, 'Commande '+ART[P]+' placée', {non:'Commande '+ART[P]+' non placée', na, ok: L.length>0 && !nonCmd.length, du: nonCmd.some(e=>e.day<=fin7),
       info: nonCmd.length ? nonCmd.map(e=>cvFmtDay(e.day)).join(', ')+' : commande à placer' : 'Pas encore de passage à l\'agenda'});
-    add(nom, FAIT[P][0], {non:FAIT[P][1], na, ok: faits.length>0 && !futurs.length, du: false,
+    add(nom, FAIT[P][0], {non:FAIT[P][1], na, parts:partsDe(estP), ok: faits.length>0 && !futurs.length, du: false,
       info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
     const sansAp = faits.filter(e=>!(e.as || e.fac));
     add(nom, 'Appel de service inscrit', {non:'Appel de service non inscrit', na, ok: faits.length>0 && !sansAp.length, du: sansAp.length>0 && !futurs.length, info: sansAp.length ? sansAp.map(e=>cvFmtDay(e.day)).join(', ')+' sans appel de service' : futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore de passage fait'});
@@ -2305,7 +2307,7 @@ function pjPhases(job, s, ctx){
       const [nomS, faire, fait] = pjServiceTexte(ctx.typeJob || '', job);
       const faits = L.filter(passe), futurs = L.filter(e=>!passe(e)), apres = futurs.length ? 'Retour prévu le '+cvFmtDay(futurs[0].day) : '';
       const vs = visites.filter(v=>v.faite && v.events.some(estServ)), nonFac = vs.filter(v=>!v.facturee), sansAp = faits.filter(e=>!(e.as || e.fac));
-      add(nomS, 'Service fait', {idPhase:'Service', oui:fait, non:faire, ok: faits.length>0 && !futurs.length, du: false, info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
+      add(nomS, 'Service fait', {idPhase:'Service', oui:fait, non:faire, parts:partsDe(estServ), ok: faits.length>0 && !futurs.length, du: false, info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
       add(nomS, 'Appel de service inscrit', {idPhase:'Service', non:'Appel de service non inscrit', ok: faits.length>0 && !sansAp.length, du: sansAp.length>0 && !futurs.length,
         info: apres || sansAp.map(e=>cvFmtDay(e.day)).join(', ')+' sans appel de service'});
       add(nomS, 'Facture du service', {idPhase:'Service', oui:'Facture envoyée', non:'Facture non envoyée', ok: vs.length>0 && !nonFac.length, du: nonFac.length>0 && !futurs.length,
@@ -2321,7 +2323,7 @@ function pjPhases(job, s, ctx){
     if(actif){
       const faits = L.filter(passe), futurs = L.filter(e=>!passe(e)), sansAp = faits.filter(e=>!(e.as || e.fac));
       const vs = visites.filter(v=>v.faite && v.phase==='RAPUP'), nonFac = vs.filter(v=>!v.facturee);
-      add('Wrap-up', 'Wrap-up fait', {non:'Wrap-up non fait', ok: faits.length>0 && !futurs.length, du: false, info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
+      add('Wrap-up', 'Wrap-up fait', {non:'Wrap-up non fait', parts:partsDe(e=>e.phase==='RAPUP'), ok: faits.length>0 && !futurs.length, du: false, info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
       add('Wrap-up', 'Services et corrections terminés', {non:'Services et corrections non terminés', ok: faits.length>0 && !futurs.length && !ouverts.length, du: faits.length>0 && !futurs.length && ouverts.length>0,
         info: ouverts.length ? ouverts.length+' blocage'+(ouverts.length>1?'s':'')+' pas réglé'+(ouverts.length>1?'s':'') : futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore fait'});
       add('Wrap-up', 'Appel de service inscrit', {non:'Appel de service non inscrit', ok: faits.length>0 && !sansAp.length, du: sansAp.length>0 && !futurs.length,
@@ -2331,7 +2333,10 @@ function pjPhases(job, s, ctx){
     } }
   // Coché à la main (onglet Etapes)
   out.forEach(x=>{ x.manuel = !x.ok && !!M[job.id+'|'+x.id]; x.etat = x.na ? 'na' : x.ok ? 'ok' : x.manuel ? 'manuel' : x.du ? 'manque' : 'futur';
-    x.texte = x.etat==='na' ? x.titre : (x.etat==='ok' || x.etat==='manuel') ? (x.oui || x.titre) : (x.non || x.titre); });   // v237 : « OT non reçu » tant que ce n'est pas fait
+    x.texte = x.etat==='na' ? x.titre : (x.etat==='ok' || x.etat==='manuel') ? (x.oui || x.titre) : (x.non || x.titre);
+    if(x.parts && x.etat!=='na'){ const f = x.parts.filter(pt=>pt.ok).length;
+      if(x.etat!=='ok' && x.etat!=='manuel') x.texte += f ? ' — visite '+f+'/'+x.parts.length+' faite' : ' — '+x.parts.length+' visites prévues';
+      x.info = x.parts.map(pt=>'Visite '+pt.n+'/'+pt.tot+(pt.ok ? ' faite le ' : ' prévue le ')+cvFmtDay(pt.day)).join(' · '); } });   // v237 : « OT non reçu » tant que ce n'est pas fait
   const actifs = out.filter(x=>x.etat!=='na'), faits = actifs.filter(x=>x.etat==='ok'||x.etat==='manuel');
   // v245 : job encore seulement dans En Attente → on montre juste l'Inscription (pas de barre d'avancement)
   const attenteSeul = !ev.length && att.length>0;
@@ -2397,8 +2402,11 @@ function PjBarre({p, blocages, sel, onEtape}){
               return <div key={x.id} style={{flex:1,minWidth:0,cursor:'pointer',position:'relative'}} title={x.texte+' — '+((x.etat==='futur' && x.libelle) || ({ok:'fait',manuel:'coché à la main',manque:'à faire',futur:'pas encore rendu là',na:'ne s\'applique pas'})[x.etat])+((x.etat==='manque'||x.etat==='futur') && x.info ? ' · '+x.info : '')+(ouvert?' · blocage à régler':'')} onClick={()=>onEtape(choisi ? null : x.id)}>
                 {bs.length>0 && <span style={{position:'absolute',top:-9,left:'50%',transform:'translateX(-50%)',zIndex:1,width:16,height:16,borderRadius:8,fontSize:10.5,fontWeight:900,lineHeight:'16px',textAlign:'center',
                   background:ouvert?'var(--warning)':'var(--success)',color:ouvert?'#1b1300':'#fff',boxShadow:'0 0 0 2px var(--bg2, #161b22)'}}>{ouvert?'!':'✓'}</span>}
-                <div style={{height:12,borderRadius:3,background:ouvert && x.etat!=='na' ? 'var(--warning)' : PJ_COULEUR[x.etat],border:x.etat==='na'?'1px dashed var(--border)':choisi?'2px solid var(--accent)':'none',
-                  backgroundImage:x.etat==='manuel'?'repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,.25) 4px 7px)':undefined}}/>
+                {x.parts && x.etat!=='na' && x.etat!=='ok' && x.etat!=='manuel' && !ouvert
+                  ? <div style={{display:'flex',gap:2,height:12,borderRadius:4,outline:choisi?'2px solid var(--accent)':'none'}}>   {/* v246 : 1/2, 2/2… */}
+                      {x.parts.map(pt=><div key={pt.n} title={'Visite '+pt.n+'/'+pt.tot+(pt.ok?' faite le ':' prévue le ')+cvFmtDay(pt.day)} style={{flex:1,borderRadius:3,background:pt.ok?'var(--success)':PJ_COULEUR[x.etat]}}/>)}</div>
+                  : <div style={{height:12,borderRadius:3,background:ouvert && x.etat!=='na' ? 'var(--warning)' : PJ_COULEUR[x.etat],border:x.etat==='na'?'1px dashed var(--border)':choisi?'2px solid var(--accent)':'none',
+                  backgroundImage:x.etat==='manuel'?'repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,.25) 4px 7px)':undefined}}/>}
               </div>; })}
           </div></div>; })}
     </div>
