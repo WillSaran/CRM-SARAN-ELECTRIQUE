@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v270';
+const APP_VERSION = 'v271';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5636,6 +5636,20 @@ function SoumNote({txt}){
   </div>;
 }
 
+// v271 : section « Appels de service » (avant : « Soumissions ») — Soumissions (comme avant), Ordres de travail, Factures (brouillons).
+// Les Ordres de travail et Factures viennent de Comptabilité › Appels de service (même éditeur, même onglet « Documents CRM »).
+function AppelsServiceSection({cfg, data, toast, refreshKey, onNavigate}){
+  const [sous,setSous]=useState(()=>{ if(navFocus('soumissions')) return 'soum'; try{ return localStorage.getItem('appels_sous')||'soum'; }catch(e){ return 'soum'; } });
+  const choisir = k => { setSous(k); try{ localStorage.setItem('appels_sous', k); }catch(e){} };
+  return <div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
+      {[['soum','Soumissions'],['ot','Ordres de travail'],['facture','Factures']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
+    </div>
+    {sous==='soum' && <SoumissionsView cfg={cfg} data={data} toast={toast} refreshKey={refreshKey} onNavigate={onNavigate}/>}
+    {sous==='ot' && <AppelServiceView key="ot" cfg={cfg} toast={toast} mode="ot"/>}
+    {sous==='facture' && <AppelServiceView key="facture" cfg={cfg} toast={toast} mode="facture"/>}
+  </div>;
+}
 function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const S = useSoumissions(cfg, refreshKey);
   const [onglet,setOnglet]=useState(()=>navFocus('soumissions') ? 'envoyees' : 'afaire');   // v202 : soumissions d'un client (bouton de sa fiche)
@@ -6965,7 +6979,7 @@ function useDocumentsCrm(cfg){
   return {docs, lire};
 }
 
-function docVide(){ return {numero:'', type:'Soumission', typeProjet:'', origine:'', dossier:'', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
+function docVide(){ return {prixFiges:true, numero:'', type:'Soumission', typeProjet:'', origine:'', dossier:'', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
 
 // Calcul des montants d'un document (prix : ceux de la ligne, sinon mes prix / dernier facturé)
 function docCalcul(d, prixDe){
@@ -7546,11 +7560,18 @@ let DOC_PREFILL = null;
 // mode « soumission » : même éditeur, dans l'onglet Soumissions (type Soumission seulement). onEnvoye(doc) : après le courriel.
 function AppelServiceView({cfg, toast, mode, onEnvoye}){
   const soumMode = mode==='soumission';
+  const typeFixe = mode==='soumission' ? 'Soumission' : mode==='ot' ? 'Ordre de travail' : mode==='facture' ? 'Facture' : null;
+  const nouveauDoc = () => ({...docVide(), ...(typeFixe ? {type:typeFixe} : {})});
+  // v271 : un produit ajouté (à la main, par un modèle ou par le calcul rapide) prend le prix VENDANT du catalogue, figé dans la ligne.
+  // Changer ce prix dans le document ne touche pas au catalogue ; changer le catalogue ne change plus ce document.
   const C = useCatalogue(cfg);
   const D = useDocumentsCrm(cfg);
   const M = useModeles(cfg);
   const [nomModele,setNomModele]=useState(null);
-  const [d,setD]=useState(()=>{ const p = DOC_PREFILL; DOC_PREFILL = null; return p ? {...docVide(), ...p} : docVide(); });
+  const [d,setD]=useState(()=>{ const p = DOC_PREFILL; DOC_PREFILL = null; return p ? {...nouveauDoc(), ...p, ...(typeFixe ? {type:typeFixe} : {})} : nouveauDoc(); });
+  useEffect(()=>{ if(!C.lu || !d.lignes.some(l=>!l.fige)) return;
+    setD(x=>({...x, lignes:x.lignes.map(l=>{ if(l.fige) return l; const v = (l.prix==='' || l.prix==null) ? C.prixDe(l.code, l.unite) : null;
+      return {...l, fige:true, ...(v!=null ? {prix:String(v)} : {})}; })})); },[d.lignes, C.lu]);
   const [q,setQ]=useState('');
   const [cat,setCat]=useState('');
   const [occupe,setOccupe]=useState('');
@@ -7647,16 +7668,20 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
     toast && toast('Modèle « '+m.nom+' » appliqué');
   };
   const modeles = [...M.liste].sort((a,b)=>((b.type && b.type===d.typeProjet)-(a.type && a.type===d.typeProjet)) || a.nom.localeCompare(b.nom));
-  const ouvrir = doc => { try{ setD({...docVide(), ...JSON.parse(doc.donnees||'{}')}); window.scrollTo(0,0); }catch(e){ toast && toast('Impossible d\'ouvrir ce document'); } };
+  const ouvrir = doc => { try{ const brut = JSON.parse(doc.donnees||'{}'), ancien = !brut.prixFiges;
+      // Document fait avant v271 : ses lignes gardent leur comportement d'avant (aucun prix réécrit) ; seuls les produits ajoutés maintenant sont figés.
+      setD({...docVide(), ...brut, prixFiges:true, ancien, stEnregistre: doc.st, lignes:(brut.lignes||[]).map(l=>ancien ? {...l, fige:true} : l)}); window.scrollTo(0,0); }catch(e){ toast && toast('Impossible d\'ouvrir ce document'); } };
 
   const champ = (k, ph, extra) => <input value={d[k]} onChange={e=>maj({[k]:e.target.value})} placeholder={ph} style={{width:'100%',boxSizing:'border-box',...(extra||{})}}/>;
   const choisies = d.lignes.filter(l=>cvNum(l.qte));
+  const ecartAncien = d.ancien && d.stEnregistre!=null && d.lignes.some(l=>l.prix==='' || l.prix==null) && Math.abs(calc.st - d.stEnregistre) > 0.01;
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
-      <h2 className="fh" style={{margin:0,fontSize:soumMode?17:20}}>{soumMode ? 'Soumission' : 'Appel de service'} {d.numero && <span className="muted" style={{fontSize:15}}>{d.numero}</span>}</h2>
-      <button className="btn btn-sm" onClick={()=>{ if(!d.nom && !d.lignes.length || confirm('Commencer un nouveau document ? Ce qui n\'est pas enregistré sera perdu.')) setD(docVide()); }}>+ Nouvelle</button>
+      <h2 className="fh" style={{margin:0,fontSize:typeFixe?17:20}}>{typeFixe || 'Appel de service'} {d.numero && <span className="muted" style={{fontSize:15}}>{d.numero}</span>}</h2>
+      <button className="btn btn-sm" onClick={()=>{ if(!d.nom && !d.lignes.length || confirm('Commencer un nouveau document ? Ce qui n\'est pas enregistré sera perdu.')) setD(nouveauDoc()); }}>+ Nouveau</button>
     </div>
-    {!soumMode && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+    {ecartAncien && <div className="card" style={{marginBottom:10,borderColor:'var(--warning)',fontSize:13}}>⚠️ Document fait avant que les prix soient figés : certaines lignes suivent le prix actuel du catalogue. Total enregistré : <b>{cvMoney(d.stEnregistre)}</b> · recalculé aujourd'hui : <b>{cvMoney(calc.st)}</b> (avant taxes). Rien n'est changé tant que tu n'enregistres pas.</div>}
+    {!typeFixe && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
       {DOC_TYPES.map(([k,l])=><button key={k} className={'btn btn-sm'+(d.type===k?' btn-p':'')} onClick={()=>maj({type:k})}>{l}</button>)}
     </div>}
 
@@ -7771,9 +7796,9 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
 
     {apercu && <ApercuPdf d={d} prixDe={C.prixDe} onImprimer={imprimer} onFermer={()=>setApercu(false)}/>}
 
-    {D.docs.some(x=>!soumMode || x.type==='Soumission') && <div className="card">
-      <div style={{fontWeight:700,marginBottom:6}}>{soumMode ? 'Dernières soumissions faites ici' : 'Derniers documents'}</div>
-      {D.docs.filter(x=>!soumMode || x.type==='Soumission').slice(0,15).map(x=><div key={x.numero} onClick={()=>ouvrir(x)} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
+    {D.docs.some(x=>!typeFixe || x.type===typeFixe) && <div className="card">
+      <div style={{fontWeight:700,marginBottom:6}}>{soumMode ? 'Dernières soumissions faites ici' : typeFixe==='Ordre de travail' ? 'Derniers ordres de travail' : typeFixe==='Facture' ? 'Dernières factures (brouillons)' : 'Derniers documents'}</div>
+      {D.docs.filter(x=>!typeFixe || x.type===typeFixe).slice(0,15).map(x=><div key={x.numero} onClick={()=>ouvrir(x)} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
         <span><b>{x.numero}</b> · {x.type} · {x.client||'—'}{x.titre && <span className="muted"> · {x.titre}</span>}</span>
         <span className="muted">{cvFmtDay(x.date)}{x.total!=null && <> · {cvMoney(x.total)}</>}</span>
       </div>)}
@@ -10150,8 +10175,8 @@ function repIgnores(){ try{ return new Set(JSON.parse(localStorage.getItem('crm_
 function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.setItem('crm_rep_ignores', JSON.stringify([...s])); }catch(e){} }
 
 // v202 : Comptabilité — comptes fournisseurs, factures clients (et paiements reçus), appels de service, à vérifier. Les pages gardent toutes leurs fonctions.
-const CPT_NAV = {factures:'factures', fournisseurs:'fourn', appel:'appel', verif:'verif', paiements:'paiements'};   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
-const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Factures clients'],['paiements','Paiements'],['factures','Facture appel de service'],['appel','Appels de service'],['verif','À vérifier']];   // v240
+const CPT_NAV = {factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'verif', paiements:'paiements'};   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
+const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Factures clients'],['paiements','Paiements'],['factures','Facture appel de service'],['verif','À vérifier']];   // v240
 // v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
 function PaiementsOnglet({cfg, cfgRep, refreshKey, contacts}){
   const [q,setQ]=useState(()=>(navFocus('paiements')||{}).q || '');
@@ -10180,7 +10205,6 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
       <RepertoireView key={'c'+(cles.clients||0)} mode="factures" cfg={cfgRep} refreshKey={refreshKey} toast={toast} isDesktop={isDesktop} contacts={contacts}/></>}
     {onglet==='paiements' && <PaiementsOnglet key={'p'+(cles.paiements||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='factures' && <FacturesView key={'x'+(cles.factures||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
-    {onglet==='appel' && <AppelServiceView key={'a'+(cles.appel||0)} cfg={cfgRep} toast={toast}/>}
     {onglet==='verif' && <>
       <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>À vérifier</h2>
       <div className="muted" style={{fontSize:13,marginBottom:10}}>Passages pas facturés, factures en double, PO et appels à vérifier — par client. Clique un client pour voir le suivi de ses jobs.</div>
@@ -10951,7 +10975,7 @@ function App(){
     {id:'courriels',label:'Courriels'},
     {id:'heures',label:'Employés'},
     {id:'factures',label:'Comptabilité'},
-    {id:'soumissions',label:'Soumissions'},
+    {id:'soumissions',label:'Appels de service'},
     {id:'commandes',label:'Commandes'},
     {id:'produits',label:'Produits'},
     {id:'stock',label:'Stock'},
@@ -10999,7 +11023,7 @@ function App(){
         {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
         {CPT_NAV[nav] && <ComptabiliteView key={'cpt'+navKey} onglet0={CPT_NAV[nav]} cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} toast={show} isDesktop={isDesktop}/>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
-        {nav==='soumissions' && <SoumissionsView key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
+        {nav==='soumissions' && <AppelsServiceSection key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {nav==='commandes' && <CommandesView key={'bc'+navKey} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='produits' && <ProduitsView key={'pr'+navKey} cfg={effectiveCfg} toast={show}/>}
         {nav==='stock' && <StockView data={data}/>}
