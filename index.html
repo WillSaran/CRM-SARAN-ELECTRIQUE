@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v271';
+const APP_VERSION = 'v272';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5381,7 +5381,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts}){
     : r.statutFacture==='annule' ? <span className="muted" style={{fontWeight:700}}>{r.appelService==='-'||r.facture==='-' ? '- ' : '** '}Pas à facturer</span>
     : r.estPasseOuAujourdhui ? <span style={{color:'var(--danger)',fontWeight:700}}>Rien d'inscrit</span> : <span className="muted">À venir</span>;
   return <div>
-    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Facture appel de service</h2>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Bons de travail</h2>
     <div className="muted" style={{fontSize:13,marginBottom:12}}>Tiré du Sheet « SUIVI TRAVAUX SARAN ÉLECTRIQUE ». Tout passage fait qui n'a pas encore de facture est ici, le plus vieux en premier. Un passage qui ne se facture pas (annulé, garantie, visite) : « Pas à facturer » met « ** » dans le Sheet.</div>
     {!id && <div className="card">Configure l'ID du Sheet "SUIVI TRAVAUX" dans Réglages.</div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
@@ -10175,8 +10175,8 @@ function repIgnores(){ try{ return new Set(JSON.parse(localStorage.getItem('crm_
 function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.setItem('crm_rep_ignores', JSON.stringify([...s])); }catch(e){} }
 
 // v202 : Comptabilité — comptes fournisseurs, factures clients (et paiements reçus), appels de service, à vérifier. Les pages gardent toutes leurs fonctions.
-const CPT_NAV = {factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'verif', paiements:'paiements'};   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
-const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Factures clients'],['paiements','Paiements'],['factures','Facture appel de service'],['verif','À vérifier']];   // v240
+const CPT_NAV = {factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
+const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Comptes clients'],['factures','Bons de travail'],['paiements','Paiements']];   // v272   // v240
 // v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
 function PaiementsOnglet({cfg, cfgRep, refreshKey, contacts}){
   const [q,setQ]=useState(()=>(navFocus('paiements')||{}).q || '');
@@ -10190,7 +10190,7 @@ function PaiementsOnglet({cfg, cfgRep, refreshKey, contacts}){
   </div>;
 }
 function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, onglet0}){
-  const [onglet,setOnglet]=useState(onglet0 || 'clients');
+  const [onglet,setOnglet]=useState(onglet0==='verif' ? 'clients' : (onglet0 || 'clients'));
   const [cles,setCles]=useState({});
   const choisir = k => { if(k===onglet) setCles(c=>({...c, [k]:(c[k]||0)+1})); setOnglet(k); NAV_FOCUS = null; window.scrollTo(0,0); };
   return <div>
@@ -10200,7 +10200,7 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
     </div>
     {onglet==='fourn' && <FournisseursView key={'f'+(cles.fourn||0)} cfg={cfgRep} refreshKey={refreshKey} isDesktop={isDesktop}/>}
     {onglet==='clients' && <>
-      <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Factures clients</h2>
+      <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Comptes clients</h2>
       <div className="muted" style={{fontSize:13,marginBottom:10}}>Tous tes clients : contracteurs et particuliers. Clique un client pour voir ses jobs (en cours, terminées), puis une job pour ses factures, achats, PO et dossier.</div>
       <RepertoireView key={'c'+(cles.clients||0)} mode="factures" cfg={cfgRep} refreshKey={refreshKey} toast={toast} isDesktop={isDesktop} contacts={contacts}/></>}
     {onglet==='paiements' && <PaiementsOnglet key={'p'+(cles.paiements||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
