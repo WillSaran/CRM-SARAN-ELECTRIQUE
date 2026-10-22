@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v276';
+const APP_VERSION = 'v277';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8054,15 +8054,44 @@ function useModelesCommande(cfg){
     await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:qSheet('Modèles de commande')+'!E'+m.row, valueInputOption:'RAW', resource:{values:[['non']]}}); await lire(true); };
   return {liste, lu, lire, enregistrer, retirer};
 }
+// v277 : format d'achat d'un article — fil en bobines (longueurs offertes par le fournisseur), tuyau en longueurs de 10 pi
+const BC_TUYAU_PAS = /(COUDE|CONNECT|RACCORD|MANCHON|COUPL|BRIDE|STRAP|ATTACHE|CLIP|SUPPORT|BOITE|BOÎTE|ADAPT|COLLE|CEMENT|EMBOUT|\bLB\b|BOUCHON|CAPUCHON|ANNEAU|COLLIER|SELLE)/i;
+function bcEstTuyau(p){ return cvNorm(p.cat)==='conduit' && !BC_TUYAU_PAS.test(p.desc||'') && (['pi','m'].includes(uniteNorm(p.unite)) || /(TUYAU|CONDUIT|\bEMT\b|\bPVC\b|\bENT\b|TUBE|LIQUID|FLEX)/i.test((p.desc||'')+' '+p.code)); }
+function bcLongueurOffre(o){ const t = (o.codeF||'')+' '+(o.desc||''); const m = t.match(/X\s?(\d{2,3})(?!\d)/i) || t.match(/(\d{2,3})\s?M(?:ETRES?|TR)?\b/i); const n = m ? +m[1] : 0; return n>=15 && n<=1000 ? n : 0; }
+function bcFormats(p, C){
+  if(!p || !p.code) return [];
+  if(estFil(p.code, p.desc, p.cat)){
+    const l = [...new Set((C && C.offresDe ? C.offresDe(p.code) : []).map(bcLongueurOffre).filter(Boolean))].sort((a,b)=>a-b);
+    return [...(l.length ? l : [75,150]).map(n=>({k:'bobine:'+n, l:'Bobine '+n+' m', court:n+' m'})), {k:'metre', l:'Au mètre', court:'m'}];
+  }
+  if(bcEstTuyau(p)) return [{k:'longueur:10', l:'Longueurs de 10 pi', court:'× 10 pi'}, {k:'pied', l:'Au pied', court:'pi'}];
+  return [];
+}
+function bcFormatDefaut(p, C){ const fs = bcFormats(p, C); if(!fs.length) return '';
+  let r = ''; try{ r = (JSON.parse(localStorage.getItem('bc_format_code')||'{}'))[codeNorm(p.code)] || ''; }catch(e){}
+  if(r && fs.some(f=>f.k===r)) return r; return (fs.find(f=>f.k==='bobine:150') || fs[0]).k; }
+function bcRetenirFormat(code, k){ try{ const m = JSON.parse(localStorage.getItem('bc_format_code')||'{}'); m[codeNorm(code)] = k; localStorage.setItem('bc_format_code', JSON.stringify(m)); }catch(e){} }
+// Texte de la quantité pour le courriel : « 2 × bobine 150 m », « 5 × longueurs de 10 pi », « 40 m »
+function bcQteTexte(l){ const f = l.format||'', q = l.qte;
+  if(f.startsWith('bobine:')) return q+' × bobine'+(cvNum(q)>1?'s':'')+' '+f.split(':')[1]+' m';
+  if(f.startsWith('longueur:')) return q+' × longueur'+(cvNum(q)>1?'s':'')+' de '+f.split(':')[1]+' pi';
+  if(f==='metre') return q+' m';
+  if(f==='pied') return q+' pi';
+  return q+' '+(l.unite && l.unite!=='un' ? l.unite+' ' : '')+'×'; }
 // Liste du catalogue (catégories + recherche) — pour le bon et pour les assemblages
 function ChoixArticles({C, qteDe, onAjouter, hauteur}){
-  const [q,setQ]=useState(''), [cat,setCat]=useState('');
-  const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat) && (!q || rechercheOk(texteProduit(p), q)));
+  const [q,setQ]=useState(''), [cat,setCat]=useState(''), [sous,setSous]=useState('');
+  const sousCats = cat ? [...new Set(C.produits.filter(p=>p.cat===cat && p.sous).map(p=>p.sous))].sort() : [];
+  const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat) && (!sous || p.sous===sous) && (!q || rechercheOk(texteProduit(p), q)));
   return <div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
-      <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>setCat('')}>Tous</button>
-      {C.cats.filter(c=>c!=='DIVERS').map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(c)}>{c}</button>)}
+      <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>{ setCat(''); setSous(''); }}>Tous</button>
+      {C.cats.filter(c=>c!=='DIVERS').map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>{ setCat(c); setSous(''); }}>{c}</button>)}
     </div>
+    {sousCats.length>1 && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:6,paddingLeft:8,borderLeft:'3px solid var(--accent)'}}>
+      <button className={'btn btn-sm'+(!sous?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>setSous('')}>Tout {cat}</button>
+      {sousCats.map(x=><button key={x} className={'btn btn-sm'+(sous===x?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>setSous(x)}>{x}</button>)}
+    </div>}
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un article…" style={{width:'100%',boxSizing:'border-box',marginBottom:6}}/>
     <div style={{maxHeight:hauteur||320,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
       {produits.map(p=>{ const n = qteDe(p.code); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:n?'var(--bg3)':undefined}}>
@@ -8253,32 +8282,41 @@ function CommandesView({cfg, toast, refreshKey}){
   const changerQte = (p, delta, valeur)=> setBc(x=>{
     const ex = x.lignes.find(l=>l.code===p.code);
     const qte = valeur!==undefined ? valeur : Math.max(0, (ex ? (cvNum(ex.qte)||0) : 0) + delta);
-    let lignes = ex ? x.lignes.map(l=>l.code===p.code ? {...l, qte} : l) : [...x.lignes, {code:p.code, desc:p.desc, unite:p.unite, qte, f:bcFournCode(p.code)||x.fournisseur}];
+    let lignes = ex ? x.lignes.map(l=>l.code===p.code ? {...l, qte} : l) : [...x.lignes, {code:p.code, desc:p.desc, unite:p.unite, qte, f:bcFournCode(p.code)||x.fournisseur, format:bcFormatDefaut(p, C)}];
     if(valeur===undefined && !qte) lignes = lignes.filter(l=>l.code!==p.code);
     return {...x, lignes};
   });
   // v274 : chaque article a son fournisseur (Dubo par défaut, retenu par article : ex. le chauffage chez Lumen)
   const fDe = l => l.f || bc.fournisseur;
+  const changerFormat = (l, k) => { bcRetenirFormat(l.code, k); setBc(x=>({...x, lignes:x.lignes.map(y=>y.code===l.code ? {...y, format:k} : y)})); };
+  // v277 : article hors catalogue — petite fiche (description + quantité + OK), il va dans le bon comme les autres
+  const [libDesc,setLibDesc]=useState(''), [libQte,setLibQte]=useState('1');
+  const ajouterLibre = () => { const d = libDesc.trim(); if(!d) return;
+    setBc(x=>({...x, lignes:[...x.lignes, {code:'LIB-'+Date.now(), libre:true, desc:d, unite:'', qte:libQte||'1', f:x.fournisseur}]})); setLibDesc(''); setLibQte('1'); };
   const changerF = (l, f) => { bcRetenirFournCode(l.code, f); setBc(x=>({...x, lignes:x.lignes.map(y=>y.code===l.code ? {...y, f} : y)})); };
   // Code du fournisseur (ex. LEV-T5325-W chez Dubo) quand on l'a déjà acheté là
-  const codeFourn = (code, fo) => { const f = fo || bc.fournisseur; const o = C.offresDe(code).find(x=>cvNorm(x.f)===cvNorm(f)); if(o) return o.codeF; const a = C.coutsDe(code).find(c=>c.fournisseur===f); return a ? a.code : ''; };
+  const codeFourn = (code, fo, format) => { const f = fo || bc.fournisseur; if(String(code).startsWith('LIB-')) return '';
+    const lg = String(format||'').startsWith('bobine:') ? +String(format).split(':')[1] : 0;
+    const os = C.offresDe(code).filter(x=>cvNorm(x.f)===cvNorm(f)); const o = (lg && os.find(x=>bcLongueurOffre(x)===lg)) || os[0]; if(o) return o.codeF; const a = C.coutsDe(code).find(c=>c.fournisseur===f); return a ? a.code : ''; };
   const choisies = bc.lignes.filter(l=>cvNum(l.qte));
   // v236 : assemblages — on ajoute ses articles au bon (les quantités s'additionnent), × le nombre choisi
   const [asMult,setAsMult]=useState(1), [asVoir,setAsVoir]=useState(''), [asEdit,setAsEdit]=useState(null), [asNom,setAsNom]=useState(''), [asOcc,setAsOcc]=useState(false);
   const prodDe = code => C.produits.find(p=>codeNorm(p.code)===codeNorm(code) || (p.alias && codeNorm(p.alias)===codeNorm(code)));
-  const asLigne = l => { const p = l.code ? prodDe(l.code) : null; return {code:p?p.code:(l.code||''), desc:(p&&p.desc)||l.desc||'', unite:(p&&p.unite)||l.unite||'', qte:cvNum(l.qte)||0, f:l.f||''}; };
+  const asLigne = l => { const p = l.code ? prodDe(l.code) : null; return {code:p?p.code:(l.code||''), desc:(p&&p.desc)||l.desc||'', unite:(p&&p.unite)||l.unite||'', qte:cvNum(l.qte)||0, f:l.f||'', format:l.format||''}; };
   const ajouterAssemblage = (a, mult, silence) => { const m = mult || cvNum(asMult) || 1;
     setBc(x=>{ let lignes = [...x.lignes], libre = x.libre;
-      a.lignes.forEach(l0=>{ const l = asLigne(l0);
-        if(!l.code){ if(l.desc) libre = (libre ? libre.replace(/\s+$/,'')+'\n' : '')+(l.qte?(l.qte*m)+' × ':'')+l.desc; return; }
+      a.lignes.forEach((l0,i)=>{ const l = asLigne(l0);
+        if(!l.code){ if(l.desc){ const ex = lignes.find(y=>y.libre && cvNorm(y.desc)===cvNorm(l.desc));
+            lignes = ex ? lignes.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+(l.qte||1)*m} : y) : [...lignes, {code:'LIB-'+Date.now()+'-'+i, libre:true, desc:l.desc, unite:'', qte:(l.qte||1)*m, f:l.f || x.fournisseur}]; } return; }
         const ex = lignes.find(y=>codeNorm(y.code)===codeNorm(l.code));
-        lignes = ex ? lignes.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+l.qte*m} : y) : [...lignes, {...l, qte:l.qte*m, f:l.f || bcFournCode(l.code) || x.fournisseur}]; });
+        const p = prodDe(l.code);
+        lignes = ex ? lignes.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+l.qte*m} : y) : [...lignes, {...l, qte:l.qte*m, f:l.f || bcFournCode(l.code) || x.fournisseur, format:l0.format || (p ? bcFormatDefaut(p, C) : '')}]; });
       return {...x, lignes, libre}; });
     if(!silence) toast && toast('« '+a.nom+' »'+(m>1?' × '+m:'')+' ajouté au bon'); };
   const ajouterModele = (mo, mult) => { const m = mult || cvNum(asMult) || 1; let n = 0, manque = [];
     mo.as.forEach(x=>{ const a = AS.liste.find(y=>cvNorm(y.nom)===cvNorm(x.nom)); if(a){ ajouterAssemblage(a, (cvNum(x.mult)||1)*m, true); n++; } else manque.push(x.nom); });
     toast && toast('« '+mo.nom+' »'+(m>1?' × '+m:'')+' ajouté au bon ('+n+' assemblage'+(n>1?'s':'')+')'+(manque.length ? ' — introuvable : '+manque.join(', ') : '')); };
-  const lignesDuBon = () => [...choisies.map(l=>({code:l.code, desc:l.desc, qte:cvNum(l.qte), unite:l.unite||'', f:fDe(l)})),
+  const lignesDuBon = () => [...choisies.map(l=>l.libre ? {code:'', desc:l.desc, qte:cvNum(l.qte), unite:'', f:fDe(l)} : {code:l.code, desc:l.desc, qte:cvNum(l.qte), unite:l.unite||'', f:fDe(l), format:l.format||''}),
     ...bc.libre.split('\n').map(t=>t.trim()).filter(Boolean).map(t=>{ const m = t.match(/^(\d+(?:[.,]\d+)?)\s*[×x]\s*(.+)$/i); return m ? {code:'', desc:m[2], qte:cvNum(m[1]), unite:''} : {code:'', desc:t, qte:0, unite:''}; })];
   const sauverAssemblage = async (a, nom) => { const lignes = lignesDuBon();
     if(!lignes.length){ toast && toast('Le bon est vide — ajoute les articles de l\'assemblage d\'abord'); return; }
@@ -8295,7 +8333,7 @@ function CommandesView({cfg, toast, refreshKey}){
   const libresF = f => f===bc.fournisseur ? bc.libre.split('\n').map(s=>s.trim()).filter(Boolean) : [];
   const fournsBon = BC_FOURNS.filter(f=>lignesF(f).length || libresF(f).length);
   const courrielF = f => f===bc.fournisseur ? bc.courriel : courrielDe(f);
-  const texteArticles = f => [...lignesF(f).map(l=>{ const cf = codeFourn(l.code, f); return '- '+l.qte+' '+(l.unite&&l.unite!=='un'?l.unite+' ':'')+'× '+l.code+(cf && codeNorm(cf)!==codeNorm(l.code)?' ('+cf+')':'')+' — '+l.desc; }),
+  const texteArticles = f => [...lignesF(f).map(l=>{ if(l.libre) return '- '+l.qte+' × '+l.desc; const cf = codeFourn(l.code, f, l.format); return '- '+bcQteTexte(l)+' '+l.code+(cf && codeNorm(cf)!==codeNorm(l.code)?' ('+cf+')':'')+' — '+l.desc; }),
     ...libresF(f).map(s=>'- '+s)].join('\n');
   // v274 : un bon (un courriel) par fournisseur ; ce qui est envoyé sort du bon, le reste attend son envoi
   const envoyer = async (f)=>{
@@ -8314,7 +8352,7 @@ function CommandesView({cfg, toast, refreshKey}){
       window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com&view=cm&fs=1&to='+encodeURIComponent(courriel)+'&su='+encodeURIComponent(sujet)+'&body='+encodeURIComponent(corps), '_blank');
       const x = bc.passage;
       await B.ajouter([numero, cvDay(new Date().toISOString()), f, courriel, bc.ref, bc.job, x ? x.e.day+' '+(x.e.phase||'') : '', bc.employe, bc.mode, bc.pour,
-        JSON.stringify(lignesF(f).map(l=>({code:l.code, fournisseur:codeFourn(l.code, f), desc:l.desc, qte:cvNum(l.qte), unite:l.unite})).concat(libresF(f).map(s=>({desc:s})))), bc.note, 'Envoyée', x && x.e.lien || '']);
+        JSON.stringify(lignesF(f).map(l=>l.libre ? {desc:l.desc, qte:cvNum(l.qte)} : {code:l.code, fournisseur:codeFourn(l.code, f, l.format), desc:l.desc, qte:cvNum(l.qte), unite:l.unite, format:l.format||''}).concat(libresF(f).map(s=>({desc:s})))), bc.note, 'Envoyée', x && x.e.lien || '']);
       const envoyes = [...(bc.envoyes||[]), {numero, f, texte:numero+' — '+f+(bc.employe?' (va chercher : '+bc.employe+')':'')+'\n'+articles.replace(/^- /gm,'')}];
       // Le passage : commande ✅ Placée (+ les listes dans l'événement, juste avant les infos du client)
       if(x) await enregistrerCommande(x.cmd.cle, {day:x.e.day, job:bc.job+(x.e.phase?' '+x.e.phase:''), ot:'', eventId:x.e.id, calId:x.e.calId, ...cvClientInfo(x.j)}, 'Placée',
@@ -8414,14 +8452,21 @@ function CommandesView({cfg, toast, refreshKey}){
       </div>}
       {!choisies.length && !bc.libre.trim() && <div className="muted" style={{fontSize:13,marginBottom:6}}>Vide pour l'instant : ajoute un assemblage, un modèle, ou des articles du catalogue plus bas.</div>}
       {choisies.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
-        {choisies.map(l=><div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
-          <b style={{minWidth:90}}>{l.code}</b>{codeFourn(l.code, fDe(l)) && codeNorm(codeFourn(l.code, fDe(l)))!==codeNorm(l.code) && <span className="muted" style={{fontSize:11}}>{fDe(l)} : {codeFourn(l.code, fDe(l))}</span>}<span style={{flex:'1 1 140px'}}>{l.desc}</span>
+        {choisies.map(l=>{ const p = l.libre ? null : prodDe(l.code), fs = p ? bcFormats(p, C) : [], cf = l.libre ? '' : codeFourn(l.code, fDe(l), l.format);
+          return <div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
+          {l.libre ? <span className="muted" style={{minWidth:90,fontSize:11.5}}>hors catalogue</span> : <b style={{minWidth:90}}>{l.code}</b>}{cf && codeNorm(cf)!==codeNorm(l.code) && <span className="muted" style={{fontSize:11}}>{fDe(l)} : {cf}</span>}<span style={{flex:'1 1 140px'}}>{l.desc}</span>
           <FournLigne f={fDe(l)} onChange={f=>changerF(l, f)}/>
-          <input value={l.qte} inputMode="decimal" onChange={e=>changerQte(l, 0, e.target.value)} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{l.unite}</span>
+          {fs.length>0 && <select value={l.format && fs.some(x=>x.k===l.format) ? l.format : fs[0].k} onChange={e=>changerFormat(l, e.target.value)} title="Format d'achat" style={{width:'auto',padding:'3px 6px',fontSize:12}}>{fs.map(x=><option key={x.k} value={x.k}>{x.l}</option>)}</select>}
+          <input value={l.qte} inputMode="decimal" onChange={e=>changerQte(l, 0, e.target.value)} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{fs.length ? (String(l.format||fs[0].k).startsWith('bobine') ? 'bobine'+(cvNum(l.qte)>1?'s':'') : String(l.format||fs[0].k).startsWith('longueur') ? 'long.' : (fs.find(x=>x.k===l.format)||{}).court) : l.unite}</span>
           <button className="btn btn-sm" onClick={()=>setBc(x=>({...x, lignes:x.lignes.filter(y=>y.code!==l.code)}))}>✕</button>
-        </div>)}
+        </div>; })}
       </div>}
-      <textarea value={bc.libre} onChange={e=>maj({libre:e.target.value})} rows={2} placeholder={"Autres articles (chez "+bc.fournisseur+"), une ligne chacun (ex. 2 × boîte 4x4 profonde)"} style={{width:'100%',boxSizing:'border-box',fontFamily:'inherit'}}/>
+      {bc.libre.trim() && <textarea value={bc.libre} onChange={e=>maj({libre:e.target.value})} rows={2} style={{width:'100%',boxSizing:'border-box',fontFamily:'inherit',marginBottom:6}}/>}
+      <div style={{display:'flex',gap:6,alignItems:'center'}}>
+        <input value={libDesc} onChange={e=>setLibDesc(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouterLibre(); }} placeholder="Article hors catalogue (ex. boîte 4x4 profonde)" style={{flex:1,minWidth:0}}/>
+        <input value={libQte} onChange={e=>setLibQte(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouterLibre(); }} inputMode="decimal" title="Quantité" style={{width:60,textAlign:'right'}}/>
+        <button className="btn btn-sm btn-p" disabled={!libDesc.trim()} onClick={ajouterLibre}>OK</button>
+      </div>
       <input value={bc.note} onChange={e=>maj({note:e.target.value})} placeholder="Note au comptoir (optionnel)" style={{width:'100%',boxSizing:'border-box',marginTop:6}}/>
       <div style={{display:'flex',justifyContent:'space-between',gap:6,marginTop:8,flexWrap:'wrap',alignItems:'center'}}>
         <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
