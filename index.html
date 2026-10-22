@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v267';
+const APP_VERSION = 'v268';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -356,6 +356,37 @@ function heuresParEmployeSemaine(pointages, weekLabel){
   return map;
 }
 
+// v268 : libellés de couleur de Google Agenda (« Phil » en Raisin, « Brandon » en Myrtille…). Un libellé n'est PAS un colorId :
+// il est dans eventLabelId (lu seulement avec eventLabelVersion=1) et sa couleur est définie sur l'agenda (labelProperties).
+const LIBELLES_AGENDA = {};
+function crewDeLibelle(l){
+  const mots = String(l.name||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').split(/[^a-z]+/).filter(Boolean);
+  for(const k of Object.keys(CREW_COLORS)){ const n = CREW_COLORS[k], prenom = n.split(' ')[0].toLowerCase(), sur = (EQUIPE_SURNOM[n]||'').toLowerCase();
+    if(mots.includes(prenom) || (sur && mots.includes(sur))) return k; }
+  return '';
+}
+function libellesAgenda(calId){
+  if(!LIBELLES_AGENDA[calId]) LIBELLES_AGENDA[calId] = window.gapi.client.request({path:'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId), params:{eventLabelVersion:1}})
+    .then(r=>((r.result.labelProperties||{}).eventLabels||[]).map(l=>({id:l.id, name:l.name||'', couleur:l.backgroundColor||'', crew:crewDeLibelle(l), colorId: crewDeLibelle(l) || couleurIdDe(l.backgroundColor)})))
+    .catch(()=>[]);
+  return LIBELLES_AGENDA[calId];
+}
+async function libellesEvenements(calId, timeMinISO, timeMaxISO){
+  const map = {}; let pageToken;
+  do{ const r = await window.gapi.client.request({path:'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/events',
+      params:{eventLabelVersion:1, timeMin:timeMinISO, timeMax:timeMaxISO, singleEvents:true, maxResults:2500, pageToken, fields:'nextPageToken,items(id,eventLabelId)'}});
+    (r.result.items||[]).forEach(e=>{ if(e.eventLabelId) map[e.id] = e.eventLabelId; }); pageToken = r.result.nextPageToken; }while(pageToken);
+  return map;
+}
+// Attitrer une job à une équipe : si l'agenda a un libellé pour ce gars, on met le libellé (comme dans Google) ;
+// sinon la couleur (colorId), en retirant d'abord un libellé qui l'emporterait.
+async function attitrerCouleur(calId, eventId, k, labelActuel){
+  const eventUrl = 'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/events/'+encodeURIComponent(eventId);
+  const libs = await libellesAgenda(calId), lib = libs.find(l=>l.crew===k) || (CREW_COLORS[k] ? null : libs.find(l=>l.colorId===k));
+  if(lib){ await window.gapi.client.request({path:eventUrl, method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:lib.id}}); return; }
+  if(labelActuel) await window.gapi.client.request({path:eventUrl, method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:''}});
+  await window.gapi.client.calendar.events.patch({calendarId:calId, eventId, resource:{colorId:k}});
+}
 // ── Lecture SEULE du Calendar PunchPro (jobs) ─────────────────────────────
 async function listCalendarEventsRange(calendarIds, timeMinISO, timeMaxISO){
   const all=[];
@@ -381,6 +412,13 @@ async function listCalendarEventsRange(calendarIds, timeMinISO, timeMaxISO){
         });
         pageToken = resp.result.nextPageToken;
       }while(pageToken);
+      // v268 : libellé de couleur → l'équipe (le libellé l'emporte, comme dans Google Agenda)
+      const id = calId.trim();
+      if(id===CREW_CAL || id===EN_ATTENTE_CAL){
+        const libs = await libellesAgenda(id);
+        if(libs.length){ const parEv = await libellesEvenements(id, timeMinISO, timeMaxISO).catch(()=>({}));
+          all.forEach(e=>{ if(e.calendarId!==id || !parEv[e.id]) return; const l = libs.find(x=>x.id===parEv[e.id]); e.labelId = parEv[e.id]; if(l && l.colorId) e.colorId = l.colorId; }); }
+      }
     }catch(err){ /* calendrier inaccessible, on ignore et continue */ }
   }));
   return all.sort((a,b)=>String(a.start).localeCompare(String(b.start)));
@@ -473,6 +511,7 @@ function agendaStyle(e){
   if(g==='autre' && !e.colorId) return {background:'var(--bg4)', color:'var(--text)', border:'1px dashed var(--muted)'};
   return {background:c, color:texteSur(c)};
 }
+function texteDescription(d){ return String(d||'').replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|li)>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&#39;/g,"'").replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/\n{3,}/g,'\n\n').trim(); }
 // Jours à afficher dans l'Agenda selon le mode (jour/semaine/mois).
 function getRangeDays(viewMode, anchor){
   if(viewMode==='jour'){ const d=new Date(anchor); d.setHours(0,0,0,0); return [d]; }
@@ -3223,7 +3262,7 @@ function AttitrerEquipe({ev, toast, onFait}){
   const [enCours,setEnCours]=useState('');
   if(!ev || !ev.id || !ev.calId) return null;
   const choisir = async (k, clic) => { clic.stopPropagation(); if(enCours) return; setEnCours(k);
-    try{ await patchEventFull(ev.calId, ev.id, {colorId:k}); ev.colorId = k; ev.couleurId = k; toast && toast('✅ Attitrée à '+equipeNom(k)+' (couleur mise dans l\'agenda)'); onFait && onFait(); }
+    try{ await attitrerCouleur(ev.calId, ev.id, k, ev.labelId); ev.colorId = k; ev.couleurId = k; toast && toast('✅ Attitrée à '+equipeNom(k)+' (couleur mise dans l\'agenda)'); onFait && onFait(); }
     catch(e){ toast && toast('Erreur : '+((e && e.result && e.result.error && e.result.error.message) || e.message || e)); }
     setEnCours(''); };
   return <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:3}} onClick={c=>c.stopPropagation()}>
@@ -3731,8 +3770,9 @@ function EditEventModal({event, onClose, onSaved, toast}){
   async function handleSave(){
     setBusy(true);
     try{
-      const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(pj), ...buildTimeFields(), ...(couleur && couleur!==(event.colorId||'') ? {colorId:couleur} : {}) };
+      const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(pj), ...buildTimeFields() };
       await patchEventFull(event.calendarId, event.id, fields);
+      if(couleur && couleur!==(event.colorId||'')) await attitrerCouleur(event.calendarId, event.id, couleur, event.labelId);
       if(deplacable && agenda!==event.calendarId) await window.gapi.client.calendar.events.move({calendarId:event.calendarId, eventId:event.id, destination:agenda});
       toast(deplacable && agenda!==event.calendarId ? (agenda===CREW_CAL ? 'Enregistré et cédulé dans The Crew.' : 'Enregistré et mis En attente.') : 'Événement mis à jour.','ok');
       onSaved(); onClose();
@@ -3846,6 +3886,16 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   const [attListe,setAttListe]=useState(null);
   const [cedule,setCedule]=useState(null);
   const [voirPanneau,setVoirPanneau]=useState(true);
+  // v268 : fin de semaine repliée, vue par équipe (1/3 – 1/3 – 1/3), panneau En attente grand, recherche
+  const memo = (cle, v) => { try{ localStorage.setItem(cle, JSON.stringify(v)); }catch(e){} };
+  const lu = (cle, def) => { try{ const v = localStorage.getItem(cle); return v==null ? def : JSON.parse(v); }catch(e){ return def; } };
+  const [repli,setRepli]=useState(()=>lu('agenda_finsem_repliee', true));
+  const basculerRepli = ()=>setRepli(v=>{ memo('agenda_finsem_repliee', !v); return !v; });
+  const [parEquipe,setParEquipe]=useState(()=>lu('agenda_par_equipe', false));
+  const basculerParEquipe = ()=>setParEquipe(v=>{ memo('agenda_par_equipe', !v); return !v; });
+  const [grandPanneau,setGrandPanneau]=useState(()=>lu('agenda_grand_panneau', true));
+  const basculerGrand = ()=>setGrandPanneau(v=>{ memo('agenda_grand_panneau', !v); return !v; });
+  const [chercheAtt,setChercheAtt]=useState('');
   const panneauDragRef = useRef(null);
   const [maintenant,setMaintenant]=useState(()=>new Date());
   useEffect(()=>{ const t = setInterval(()=>setMaintenant(new Date()), 60000); return ()=>clearInterval(t); },[]);
@@ -3896,9 +3946,20 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   // de largeur par colonne en vue semaine pour rester lisible (scroll horizontal
   // naturel au doigt), géré par le overflowX:auto du conteneur .card.
   const DAY_COL_MIN = (!isDesktop && days.length>1) ? '92px' : '0';
-  const gridCols = 'repeat('+days.length+',minmax('+DAY_COL_MIN+',1fr))';
+  const estFS = d => d.getDay()===0 || d.getDay()===6;
+  const ferme = d => repli && days.length>1 && estFS(d);
+  const gridCols = days.map(d=>ferme(d) ? '34px' : 'minmax('+DAY_COL_MIN+',1fr)').join(' ');
 
   const evVisibles = events.filter(e=>!cachees.includes(agendaGroupe(e)));
+  // Vue par équipe : chaque jour divisé en couloirs (Dan | Brandon | Phil …), « Autres » au bout s'il y en a
+  const couloirDe = e => { const g = agendaGroupe(e); return EQUIPES_ORDRE.includes(g) ? g : 'autres'; };
+  const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>couloirDe(e)===k)); if(t.some(e=>couloirDe(e)==='autres')) l.push('autres'); return l; })();
+  const enCouloirs = parEquipe && viewMode!=='mois' && couloirs.length>1;
+  function placer(dayEvents){
+    if(!enCouloirs) return layoutDayEvents(dayEvents).map(p=>({event:p.event, widthPct:100/p.totalCols, leftPct:p.col*100/p.totalCols}));
+    const w = 100/couloirs.length;
+    return couloirs.flatMap((k,li)=>layoutDayEvents(dayEvents.filter(e=>couloirDe(e)===k)).map(p=>({event:p.event, widthPct:w/p.totalCols, leftPct:li*w + p.col*w/p.totalCols})));
+  }
   const groupesPresents = AGENDA_GROUPES_ORDRE.filter(k=>events.some(e=>agendaGroupe(e)===k));
   // Un événement « toute la journée » sur plusieurs jours apparaît chaque jour (la date de fin est exclusive).
   function couvre(e, dStr){ const d0 = String(e.start).slice(0,10); if(!e.allDay || !e.end) return d0===dStr; return d0<=dStr && dStr<String(e.end).slice(0,10); }
@@ -4042,7 +4103,10 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       <div style={{fontWeight:700,textTransform:'capitalize',minWidth:160}}>{rangeLabel()}</div>
       <button className="btn btn-sm" onClick={goNext}>→</button>
       <button className="btn btn-sm" onClick={goToday}>Aujourd'hui</button>
-      <div style={{display:'flex',gap:4,marginLeft:'auto'}}>
+      <div style={{display:'flex',gap:4,marginLeft:'auto',flexWrap:'wrap'}}>
+        {ongletAg==='agenda' && viewMode!=='mois' && <button className={'btn btn-sm'+(parEquipe?' btn-p':'')} onClick={basculerParEquipe} title="Diviser chaque jour en colonnes par équipe">Par équipe</button>}
+        {ongletAg==='agenda' && viewMode!=='jour' && <button className="btn btn-sm" onClick={basculerRepli} title="Replier ou afficher samedi et dimanche">{repli ? 'Sam.–dim. ▸' : '◂ Sam.–dim.'}</button>}
+        <span style={{width:8}}></span>
         {[['jour','Jour'],['semaine','Semaine'],['mois','Mois']].map(([id,label])=>
           <button key={id} className="btn btn-sm" onClick={()=>setViewMode(id)} style={viewMode===id?{background:'var(--accent)',color:'#fff',border:'none'}:null}>{label}</button>
         )}
@@ -4059,25 +4123,25 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       {cachees.length>0 && <span style={{color:'var(--accent)',fontSize:12,cursor:'pointer'}} onClick={()=>{ setCachees([]); try{ localStorage.setItem('agenda_groupes_caches','[]'); }catch(e){} }}>Tout montrer</span>}
     </div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
-    {ongletAg==='agenda' && <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1fr) 250px':'minmax(0,1fr)',gap:12,alignItems:'start'}}><div style={{minWidth:0}}>
+    {ongletAg==='agenda' && <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1fr) '+(grandPanneau?'420px':'280px'):'minmax(0,1fr)',gap:12,alignItems:'start'}}><div style={{minWidth:0}}>
     {loading ? <div className="muted">Chargement...</div> :
 
     viewMode==='mois' ?
     <div className="card" style={{padding:8}}>
       {/* Une seule grille (7 colonnes x 7 rangées: en-têtes + 6 semaines) pour que
           les jours de la semaine et les cases du mois restent alignés. */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gridTemplateRows:'auto repeat(6,1fr)',gap:isDesktop?8:4}}>
-        {['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map((j,i)=><div key={j} style={{gridColumn:i+1,gridRow:1}} className="muted"><div style={{textAlign:'center',fontSize:isDesktop?13:11,fontWeight:700}}>{j}</div></div>)}
+      <div style={{display:'grid',gridTemplateColumns:[0,1,2,3,4,5,6].map(i=>i>=5 && repli ? '44px' : 'minmax(0,1fr)').join(' '),gridTemplateRows:'auto',gridAutoRows:'auto',gap:isDesktop?8:4}}>
+        {['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map((j,i)=><div key={j} style={{gridColumn:i+1,gridRow:1,cursor:i>=5?'pointer':undefined}} className="muted" onClick={i>=5 ? basculerRepli : undefined} title={i>=5 ? (repli?'Afficher':'Replier')+' la fin de semaine' : undefined}><div style={{textAlign:'center',fontSize:isDesktop?13:11,fontWeight:700}}>{i>=5 && repli ? j.charAt(0) : j}</div></div>)}
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const inMonth = d.getMonth()===anchor.getMonth();
           const dayEvents = [...allDayForDay(dStr), ...eventsForDay(dStr)];
-          const maxShow = isDesktop?6:3;
-          return <div key={i} onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }} onDragOver={sur} onDrop={ev=>dropMois(ev, d)}
-            style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+2, minWidth:0, minHeight:isDesktop?150:80,border:'1px solid var(--border)',borderRadius:6,padding:isDesktop?8:4,cursor:'pointer',opacity:inMonth?1:.4,background:dStr===todayStr?'rgba(47,128,237,.08)':'transparent',overflow:'hidden'}}>
-            <div style={{fontSize:isDesktop?15:11,fontWeight:700,marginBottom:5}}>{d.getDate()}</div>
-            {dayEvents.slice(0,maxShow).map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',...agendaStyle(e),fontSize:isDesktop?11.5:9.5,padding:isDesktop?'3px 6px':'1px 4px',borderRadius:3,marginBottom:3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>)}
-            {dayEvents.length>maxShow && <div className="muted" style={{fontSize:isDesktop?11:9.5}}>+{dayEvents.length-maxShow} de plus</div>}
+          const replie = repli && estFS(d);
+          return <div key={i} onDragOver={sur} onDrop={ev=>dropMois(ev, d)} onClick={replie ? basculerRepli : undefined}
+            style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+2, minWidth:0, minHeight:isDesktop?170:90,border:'1px solid var(--border)',borderRadius:6,padding:replie?3:(isDesktop?8:4),opacity:inMonth?1:.45,background:dStr===todayStr?'rgba(47,128,237,.08)':'transparent',cursor:replie?'pointer':undefined}}>
+            <div onClick={ev=>{ if(replie) return; ev.stopPropagation(); setViewMode('jour'); setAnchor(new Date(d)); }} title={replie?'':'Voir la journée'} style={{fontSize:isDesktop?15:11,fontWeight:700,marginBottom:5,cursor:'pointer',display:'inline-block'}}>{d.getDate()}</div>
+            {replie ? (dayEvents.length>0 && <div title={dayEvents.map(e=>e.title).join('\n')} style={{fontSize:11,fontWeight:700,textAlign:'center',background:'var(--bg3)',borderRadius:4,padding:'2px 0'}}>{dayEvents.length}</div>)
+              : dayEvents.map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',...agendaStyle(e),fontSize:isDesktop?12.5:10,lineHeight:1.25,padding:isDesktop?'4px 7px':'2px 4px',borderRadius:4,marginBottom:4,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',wordBreak:'break-word'}}>{agendaGroupe(e)==='attente'?'⏳ ':''}{!e.allDay && <b style={{fontWeight:600,opacity:.85}}>{new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'}).replace(' h ','h')} </b>}{e.title}</div>)}
           </div>;
         })}
       </div>
@@ -4089,15 +4153,21 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
           calculent chacune leurs largeurs indépendamment et ça ne s'aligne plus). */}
       <div style={{display:'grid',gridTemplateColumns:'50px '+gridCols,gridTemplateRows:'auto auto '+(PX_H*hours.length)+'px',width:'100%'}}>
         <div style={{gridColumn:1,gridRow:1}}></div>
-        {days.map((d,i)=><div key={'h'+i} style={{gridColumn:i+2,gridRow:1,minWidth:0,padding:'8px 6px',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:12,background:localDateStr(d)===todayStr?'rgba(47,128,237,.10)':'transparent'}}>
+        {days.map((d,i)=>ferme(d)
+          ? <div key={'h'+i} onClick={basculerRepli} title="Afficher la fin de semaine" style={{gridColumn:i+2,gridRow:1,minWidth:0,padding:'8px 0',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:11,cursor:'pointer',background:'var(--bg3)'}}>
+              <div>{d.getDay()===6?'S':'D'}</div><div className="muted" style={{fontWeight:500}}>{d.getDate()}</div></div>
+          : <div key={'h'+i} style={{gridColumn:i+2,gridRow:1,minWidth:0,padding:'8px 6px 4px',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:12,background:localDateStr(d)===todayStr?'rgba(47,128,237,.10)':'transparent'}}>
           <div style={{textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'short'})}</div>
           <div className="muted" style={{fontWeight:500}}>{d.getDate()}</div>
+          {enCouloirs && <div style={{display:'flex',marginTop:4}}>{couloirs.map(k=><div key={k} title={k==='autres'?'Autres':equipeNom(k)} style={{flex:1,minWidth:0,fontSize:9.5,fontWeight:700,padding:'1px 0',borderRadius:3,margin:'0 1px',overflow:'hidden',whiteSpace:'nowrap',
+            background:k==='autres'?'var(--bg4)':GCAL_COLOR_MAP[k],color:k==='autres'?'var(--muted)':texteSur(GCAL_COLOR_MAP[k])}}>{k==='autres'?'Autres':equipeNom(k)}</div>)}</div>}
         </div>)}
 
         <div style={{gridColumn:1,gridRow:2}}></div>
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const adEvents = allDayForDay(dStr);
+          if(ferme(d)) return <div key={'a'+i} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, true)} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',background:'var(--bg3)',minHeight:22}}></div>;
           return <div key={'a'+i} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, true)} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
             {adEvents.map(e=><div key={e.id} title={e.title} onClick={()=>setEditEvent(e)} style={{cursor:'pointer',...agendaStyle(e),fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>)}
           </div>;
@@ -4109,21 +4179,24 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const dayEvents = eventsForDay(dStr);
-          const placed = layoutDayEvents(dayEvents);
+          const placed = ferme(d) ? [] : placer(dayEvents);
+          const nbFerme = ferme(d) ? dayEvents.length + allDayForDay(dStr).length : 0;
           const hNow = maintenant.getHours()+maintenant.getMinutes()/60;
           return <div key={'d'+i} ref={el=>dayColRefs.current[i]=el} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, false)} style={{gridColumn:i+2,gridRow:3,minWidth:0,position:'relative',borderLeft:'1px solid var(--border)',overflow:'hidden'}}>
+            {ferme(d) && <div onClick={basculerRepli} title="Afficher la fin de semaine" style={{position:'absolute',inset:0,background:'var(--bg3)',zIndex:2,cursor:'pointer',display:'flex',justifyContent:'center',paddingTop:8}}>
+              {nbFerme>0 && <span style={{fontSize:11,fontWeight:700,background:'var(--bg4)',borderRadius:8,padding:'1px 6px',height:'fit-content'}}>{nbFerme}</span>}</div>}
+            {enCouloirs && !ferme(d) && couloirs.slice(1).map((k,li)=><div key={'s'+k} style={{position:'absolute',top:0,bottom:0,left:((li+1)*100/couloirs.length)+'%',borderLeft:'1px dashed var(--border2)',pointerEvents:'none',zIndex:1}}></div>)}
             {dStr===todayStr && hNow>=HOUR_START && hNow<=HOUR_END+1 && <div style={{position:'absolute',left:0,right:0,top:(hNow-HOUR_START)*PX_H,height:2,background:'var(--danger)',zIndex:6,pointerEvents:'none'}}><div style={{position:'absolute',left:-4,top:-4,width:10,height:10,borderRadius:'50%',background:'var(--danger)'}}></div></div>}
             {hours.map(h=><div key={h} onClick={()=>{ if(data) openNewJob(dStr, String(h).padStart(2,'0')+':00'); }}
               style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box',cursor:data?'copy':'default'}}
               title={data?'Cliquer pour créer une job à '+h+'h':''}></div>)}
-            {placed.map(({event:e,col,totalCols})=>{
+            {placed.map(({event:e,leftPct,widthPct})=>{
               const start=new Date(e.start), end=e.end?new Date(e.end):new Date(start.getTime()+3600000);
               const startH=Math.max(HOUR_START, start.getHours()+start.getMinutes()/60);
               const endHraw=end.getHours()+end.getMinutes()/60;
               const endH=Math.min(HOUR_END+1, endHraw>startH?endHraw:startH+1);
               const top=(startH-HOUR_START)*PX_H;
               const height=Math.max(18,(endH-startH)*PX_H-2);
-              const widthPct=100/totalCols, leftPct=col*widthPct;
               return <div key={e.id} title={'Glisser pour déplacer, cliquer pour modifier — '+e.title}
                 onPointerDown={ev=>handleEventPointerDown(ev,e)}
                 onPointerMove={handleEventPointerMove}
@@ -4148,18 +4221,22 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
     <div className="card" style={{padding:10,position:isDesktop?'sticky':undefined,top:isDesktop?70:undefined,maxHeight:isDesktop?'calc(100vh - 90px)':undefined,overflowY:'auto'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,marginBottom:4}}>
         <div className="fh" style={{fontSize:14}}>⏳ En attente {attListe && attListe.length>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{attListe.length}</span>}</div>
-        {!isDesktop && <button className="btn btn-sm" onClick={()=>setVoirPanneau(v=>!v)}>{voirPanneau?'Cacher':'Voir'}</button>}
+        {!isDesktop ? <button className="btn btn-sm" onClick={()=>setVoirPanneau(v=>!v)}>{voirPanneau?'Cacher':'Voir'}</button>
+          : <button className="btn btn-sm" onClick={basculerGrand} title={grandPanneau?'Réduire le panneau':'Agrandir le panneau'}>{grandPanneau?'⇥ Réduire':'⇤ Agrandir'}</button>}
       </div>
+      {voirPanneau && attListe && attListe.length>4 && <input value={chercheAtt} onChange={e=>setChercheAtt(e.target.value)} placeholder="Chercher (client, adresse, mot)…" style={{padding:'6px 10px',fontSize:13,marginBottom:8}}/>}
       {voirPanneau && <>
         <div className="muted" style={{fontSize:11.5,marginBottom:8}}>{isDesktop ? 'Glisse une job sur un jour pour la céduler. Clique pour la modifier.' : 'Touche une job pour la modifier ou changer sa date.'}</div>
         {attListe===null ? <div className="muted" style={{fontSize:12.5}}>Lecture…</div>
           : !attListe.length ? <div className="muted" style={{fontSize:12.5}}>Rien en attente.</div>
-          : attListe.map(e=>{ const d0 = String(e.start).slice(0,10), passe = d0 && d0 < todayStr;
+          : attListe.filter(e=>{ const q = chercheAtt.trim().toLowerCase(); return !q || (e.title+' '+(e.location||'')+' '+texteDescription(e.description)).toLowerCase().includes(q); }).map(e=>{ const d0 = String(e.start).slice(0,10), passe = d0 && d0 < todayStr, txt = texteDescription(e.description);
             return <div key={e.id} draggable={isDesktop} onDragStart={ev=>{ panneauDragRef.current = e; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }}
               onDragEnd={()=>{ panneauDragRef.current = null; }} onClick={()=>setEditEvent(e)}
-              style={{padding:'6px 8px',marginBottom:6,borderRadius:6,border:'1px dashed var(--border2)',borderLeft:'4px solid '+(e.colorId && GCAL_COLOR_MAP[e.colorId] || 'var(--muted)'),cursor:isDesktop?'grab':'pointer',fontSize:12.5,background:'var(--bg3)',userSelect:'none'}}>
-              <div style={{fontWeight:600,overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
-              <div style={{fontSize:11,color:passe?'var(--warning)':'var(--muted)'}}>{e.allDay ? cvFmtDay(d0) : new Date(e.start).toLocaleString('fr-CA',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}{passe?' · date passée':''}{e.location ? ' · '+e.location : ''}</div>
+              style={{padding:'8px 10px',marginBottom:8,borderRadius:8,border:'1px dashed var(--border2)',borderLeft:'5px solid '+(e.colorId && GCAL_COLOR_MAP[e.colorId] || 'var(--muted)'),cursor:isDesktop?'grab':'pointer',fontSize:13,background:'var(--bg3)',userSelect:'none'}}>
+              <div style={{fontWeight:700,fontSize:13.5,overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
+              <div style={{fontSize:11.5,color:passe?'var(--warning)':'var(--muted)',marginTop:1}}>{e.allDay ? cvFmtDay(d0) : new Date(e.start).toLocaleString('fr-CA',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}{passe?' · date passée':''}{e.location ? ' · 📍 '+e.location : ''}</div>
+              {txt && <div style={{fontSize:12,color:'var(--text)',opacity:.85,marginTop:4,whiteSpace:'pre-line',overflow:'hidden',display:'-webkit-box',WebkitLineClamp:grandPanneau?7:3,WebkitBoxOrient:'vertical'}}>{txt}</div>}
+              {e.attachments && e.attachments.length>0 && <div className="muted" style={{fontSize:11,marginTop:3}}>📎 {e.attachments.length} pièce{e.attachments.length>1?'s':''} jointe{e.attachments.length>1?'s':''}</div>}
             </div>; })}
       </>}
     </div>
@@ -8251,7 +8328,7 @@ function cvParseEvent(e){
     code, phase: phase || (code?'SERV':''), servType, po, name, key: cvNorm(name), crew:[...crew],
     as: cvSuivi(e.description,'Appel de service'), ot: cvSuivi(e.description,'Ordre de travail'), fac: cvSuivi(e.description,'Facture'),
     client: (e.calendarId===CREW_CAL || e.calendarId===EN_ATTENTE_CAL) ? cvClientDescription(e.description, title) : null,   // v206 ; v248 : En Attente aussi
-    attente: e.calendarId===EN_ATTENTE_CAL, id: e.id||'', calId: e.calendarId||'', day: cvDay(e.start), start: e.start||'', end: e.end||'', allDay: !!e.allDay, location: e.location||'', title, attachments: e.attachments||[], desc: e.description||'', lien: e.htmlLink||'', colorId: e.colorId||'', calColor: e.calColor||'', couleurId: couleurIdEvenement(e)
+    attente: e.calendarId===EN_ATTENTE_CAL, labelId: e.labelId||'', id: e.id||'', calId: e.calendarId||'', day: cvDay(e.start), start: e.start||'', end: e.end||'', allDay: !!e.allDay, location: e.location||'', title, attachments: e.attachments||[], desc: e.description||'', lien: e.htmlLink||'', colorId: e.colorId||'', calColor: e.calColor||'', couleurId: couleurIdEvenement(e)
   };
 }
 
