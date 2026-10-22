@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v274';
+const APP_VERSION = 'v275';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6576,7 +6576,7 @@ function ProduitsView({cfg, toast}){
     </div>; };
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
-      <h2 className="fh" style={{margin:0,fontSize:20}}>Produits</h2>
+      <h2 className="fh" style={{margin:0,fontSize:20}}>Catalogue</h2>
       <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
         <label className="muted" style={{fontSize:12}}>Profit :</label>
         <select value={C.profil} onChange={async e=>{ try{ await C.majProfil(e.target.value); toast&&toast('Politique : '+e.target.value); }catch(er){ err(er); } }} style={{padding:'4px 6px'}}>
@@ -8427,6 +8427,17 @@ function CommandesView({cfg, toast, refreshKey}){
 // commandes) sera ajoutée plus tard. En attendant: vue rapide du statut de
 // stock déjà suivi par projet (champ stockStatut, réglé depuis le Tableau de
 // bord ou la fiche projet), pour préparer les commandes selon les besoins.
+// v275 : section Inventaire — Catalogue (ex-Produits) et Inventaire (ex-Stock)
+function InventaireSection({initial, cfg, toast, data}){
+  const [sous,setSous]=useState(()=>{ if(initial) return initial; try{ return localStorage.getItem('inv_sous')||'catalogue'; }catch(e){ return 'catalogue'; } });
+  const choisir = k => { setSous(k); try{ localStorage.setItem('inv_sous', k); }catch(e){} };
+  return <div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
+      {[['catalogue','Catalogue'],['inventaire','Inventaire']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
+    </div>
+    {sous==='catalogue' ? <ProduitsView cfg={cfg} toast={toast}/> : <StockView data={data}/>}
+  </div>;
+}
 function StockView({data}){
   const projets = (data.projets||[]).filter(p=>p.stockStatut);
   const aCommander = projets.filter(p=>p.stockStatut==='À commander').sort((a,b)=>(a.adresse||'').localeCompare(b.adresse||''));
@@ -8450,7 +8461,7 @@ function StockView({data}){
   }
 
   return <div>
-    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Stock</h2>
+    <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Inventaire</h2>
     <div className="muted" style={{fontSize:11.5,marginBottom:16}}>Section en construction — la gestion complète du stock (inventaire, commandes) sera ajoutée ici bientôt. En attendant, voici le statut de stock déjà réglé par projet (depuis le Tableau de bord ou la fiche projet), pour préparer tes commandes.</div>
     <h3 style={{margin:'0 0 8px',fontSize:14,fontWeight:800,color:'#d29922'}}>À commander ({aCommander.length})</h3>
     {renderList(aCommander, 'Rien à commander pour l\'instant.')}
@@ -11195,16 +11206,15 @@ function App(){
   const allerFiltre = (cible, f) => { NAV_FOCUS = {...f, cible, t:Date.now()}; setNavKey(k=>k+1); setNav(cible); setMenuMobile(false); window.scrollTo(0,0); };
   const navItems = [
     {id:'dashboard',label:'Tableau de bord'},
+    {id:'agenda',label:'Agenda'},
     {id:'repertoire',label:'Répertoire'},
     {id:'projets',label:'Projets'},
-    {id:'agenda',label:'Agenda'},
+    {id:'factures',label:'Comptabilité'},
+    {id:'commandes',label:'Commandes'},
+    {id:'soumissions',label:'Appels de service'},
     {id:'courriels',label:'Courriels'},
     {id:'heures',label:'Employés'},
-    {id:'factures',label:'Comptabilité'},
-    {id:'soumissions',label:'Appels de service'},
-    {id:'commandes',label:'Commandes'},
-    {id:'produits',label:'Produits'},
-    {id:'stock',label:'Stock'},
+    {id:'produits',label:'Inventaire'},   // v275 : Inventaire = Catalogue (ex-Produits) + Inventaire (ex-Stock)
     {id:'reglages',label:'Réglages'}
   ];
 
@@ -11235,7 +11245,7 @@ function App(){
       {!isDesktop && menuMobile && <div className="nav-fond" onClick={()=>setMenuMobile(false)}/>}
       <div className={'nav'+(!isDesktop && menuMobile ? ' ouvert' : '')} style={(isDesktop && navCollapsed) ? {width:0,minWidth:0,padding:0,overflow:'hidden',border:'none'} : null}>
         {!isDesktop && <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'2px 4px 10px'}}><b className="fh" style={{fontSize:15}}>Menu</b><button className="btn btn-sm" onClick={()=>setMenuMobile(false)} aria-label="Fermer">✕</button></div>}
-        {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id || (n.id==='factures' && CPT_NAV[nav])?' active':'')} onClick={()=>{ NAV_FOCUS = null; if(nav===n.id) setNavKey(k=>k+1); setNav(n.id); setMenuMobile(false); window.scrollTo(0,0); }}>{n.label}</div>)}
+        {navItems.map(n=><div key={n.id} className={"nav-item"+(nav===n.id || (n.id==='factures' && CPT_NAV[nav]) || (n.id==='produits' && nav==='stock')?' active':'')} onClick={()=>{ NAV_FOCUS = null; if(nav===n.id) setNavKey(k=>k+1); setNav(n.id); setMenuMobile(false); window.scrollTo(0,0); }}>{n.label}</div>)}
       </div>
       <div className="main" style={(nav==='agenda' && isDesktop) ? {maxWidth:'none',width:'100%'} : null}>
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
@@ -11255,8 +11265,7 @@ function App(){
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='soumissions' && <AppelsServiceSection key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {nav==='commandes' && <CommandesView key={'bc'+navKey} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
-        {nav==='produits' && <ProduitsView key={'pr'+navKey} cfg={effectiveCfg} toast={show}/>}
-        {nav==='stock' && <StockView data={data}/>}
+        {(nav==='produits' || nav==='stock') && <InventaireSection key={'inv'+navKey} initial={nav==='stock' ? 'inventaire' : ''} cfg={effectiveCfg} toast={show} data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
       </div>
     </div>
