@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v266';
+const APP_VERSION = 'v267';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -458,6 +458,20 @@ function layoutDayEvents(dayEvents){
     p.totalCols = maxCol+1;
   });
   return placed;
+}
+// v267 : groupe d'un événement dans l'Agenda — l'équipe (couleur choisie), « À attitrer » (The Crew sans couleur d'équipe),
+// « En attente » (agenda En Attente) ou « Suivi » (autres agendas).
+function agendaGroupe(e){ if(e.calendarId===EN_ATTENTE_CAL) return 'attente'; if(e.calendarId && e.calendarId!==CREW_CAL) return 'suivi'; return equipeDe(e); }
+function agendaGroupeNom(k){ return k==='attente' ? 'En attente' : k==='suivi' ? 'Suivi' : equipeNom(k); }
+function agendaGroupeCouleur(k){ return k==='attente' ? 'var(--muted)' : k==='suivi' ? '#039be5' : equipeCouleur(k); }
+const AGENDA_GROUPES_ORDRE = [...EQUIPES_ORDRE_AG(), 'autre', 'attente', 'suivi'];
+function EQUIPES_ORDRE_AG(){ return ['4','9','3','5']; }
+// Style d'un bloc : couleur pleine pour une équipe ; hachuré pour En attente ; gris pointillé pour une job pas attitrée.
+function agendaStyle(e){
+  const g = agendaGroupe(e), c = eventColor(e);
+  if(g==='attente') return {background:'repeating-linear-gradient(135deg, var(--bg3), var(--bg3) 6px, var(--bg4) 6px, var(--bg4) 12px)', color:'var(--text)', border:'1px dashed '+(e.colorId && GCAL_COLOR_MAP[e.colorId] || 'var(--muted)')};
+  if(g==='autre' && !e.colorId) return {background:'var(--bg4)', color:'var(--text)', border:'1px dashed var(--muted)'};
+  return {background:c, color:texteSur(c)};
 }
 // Jours à afficher dans l'Agenda selon le mode (jour/semaine/mois).
 function getRangeDays(viewMode, anchor){
@@ -3660,6 +3674,27 @@ function EditEventModal({event, onClose, onSaved, toast}){
   const [heureDebut,setHeureDebut]=useState(String(startDt.getHours()).padStart(2,'0')+':'+String(startDt.getMinutes()).padStart(2,'0'));
   const [heureFin,setHeureFin]=useState(String(endDt.getHours()).padStart(2,'0')+':'+String(endDt.getMinutes()).padStart(2,'0'));
   const [attachments,setAttachments]=useState(event.attachments||[]);
+  const [couleur,setCouleur]=useState(event.colorId||'');          // v267 : équipe = couleur de l'événement
+  const [agenda,setAgenda]=useState(event.calendarId);              // v267 : The Crew ↔ En attente
+  const [televerse,setTeleverse]=useState('');
+  const [driveOk,setDriveOk]=useState(()=>peutDeposer());
+  const fichierRef = useRef(null);
+  const deplacable = event.calendarId===CREW_CAL || event.calendarId===EN_ATTENTE_CAL;
+  async function televerser(files){
+    if(!files.length) return;
+    try{
+      setTeleverse('Dossier…');
+      const dossier = await driveDossier('Saran CRM — Pièces jointes agenda');
+      const ajout = [];
+      for(let i=0;i<files.length;i++){ setTeleverse('Fichier '+(i+1)+'/'+files.length+'…');
+        const r = await driveDeposer(files[i], dossier);
+        ajout.push({fileUrl:'https://drive.google.com/file/d/'+r.id+'/view', title:files[i].name, fileId:r.id}); }
+      setAttachments(a=>[...a, ...ajout]);
+      toast(ajout.length+' fichier'+(ajout.length>1?'s':'')+' ajouté'+(ajout.length>1?'s':'')+' — clique Enregistrer.','ok');
+    }catch(e){ toast('Erreur fichiers : '+e.message,'err'); }
+    setTeleverse('');
+  }
+  const pj = a => ({fileUrl:a.fileUrl, title:a.title, ...(a.fileId?{fileId:a.fileId}:{}), ...(a.mimeType?{mimeType:a.mimeType}:{})});
   const [newFileUrl,setNewFileUrl]=useState('');
   const [newFileTitre,setNewFileTitre]=useState('');
   const [busy,setBusy]=useState(false);
@@ -3696,9 +3731,10 @@ function EditEventModal({event, onClose, onSaved, toast}){
   async function handleSave(){
     setBusy(true);
     try{
-      const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(a=>({fileUrl:a.fileUrl, title:a.title})), ...buildTimeFields() };
+      const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(pj), ...buildTimeFields(), ...(couleur && couleur!==(event.colorId||'') ? {colorId:couleur} : {}) };
       await patchEventFull(event.calendarId, event.id, fields);
-      toast('Événement mis à jour.','ok');
+      if(deplacable && agenda!==event.calendarId) await window.gapi.client.calendar.events.move({calendarId:event.calendarId, eventId:event.id, destination:agenda});
+      toast(deplacable && agenda!==event.calendarId ? (agenda===CREW_CAL ? 'Enregistré et cédulé dans The Crew.' : 'Enregistré et mis En attente.') : 'Événement mis à jour.','ok');
       onSaved(); onClose();
     }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
     setBusy(false);
@@ -3706,8 +3742,8 @@ function EditEventModal({event, onClose, onSaved, toast}){
   async function handleDuplicate(){
     setBusy(true);
     try{
-      const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(a=>({fileUrl:a.fileUrl, title:a.title})), ...buildTimeFields() };
-      await insertCalendarEvent(event.calendarId, fields);
+      const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(pj), ...buildTimeFields(), ...(couleur ? {colorId:couleur} : {}) };
+      await insertCalendarEvent(deplacable ? agenda : event.calendarId, fields);
       toast('Événement dupliqué.','ok');
       onSaved(); onClose();
     }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
@@ -3725,6 +3761,20 @@ function EditEventModal({event, onClose, onSaved, toast}){
 
   return <Modal title="Modifier l'événement" onClose={onClose} wide>
     <div className="field"><label>Titre</label><input value={titre} onChange={e=>setTitre(e.target.value)}/></div>
+    <div className="field"><label>Équipe (couleur dans l'agenda)</label>
+      <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
+        {EQUIPES_ORDRE.filter(k=>CREW_COLORS[k]).map(k=><button key={k} type="button" className="btn btn-sm" onClick={()=>setCouleur(k)}
+          style={{background:GCAL_COLOR_MAP[k],color:texteSur(GCAL_COLOR_MAP[k]),border:'none',outline:couleur===k?'3px solid var(--text)':'none',outlineOffset:1,fontWeight:couleur===k?800:600}}>{couleur===k?'✓ ':''}{equipeNom(k)}</button>)}
+        <span className="muted" style={{fontSize:11.5,marginLeft:6}}>Autres :</span>
+        {Object.keys(GCAL_COLOR_MAP).filter(k=>!CREW_COLORS[k]).map(k=><span key={k} onClick={()=>setCouleur(k)} title={'Couleur '+k}
+          style={{width:18,height:18,borderRadius:'50%',background:GCAL_COLOR_MAP[k],cursor:'pointer',display:'inline-block',outline:couleur===k?'3px solid var(--text)':'none',outlineOffset:1}}></span>)}
+      </div>
+      {!couleur && <div style={{fontSize:12,color:'var(--warning)',marginTop:4}}>Pas de couleur : la job est « À attitrer ».</div>}
+    </div>
+    {deplacable && <div className="field"><label>Agenda</label>
+      <div style={{display:'flex',gap:6}}>
+        {[[CREW_CAL,'The Crew (cédulée)'],[EN_ATTENTE_CAL,'⏳ En attente']].map(([k,l])=><button key={k} type="button" className={'btn btn-sm'+(agenda===k?' btn-p':'')} onClick={()=>setAgenda(k)}>{l}</button>)}
+      </div></div>}
     <div className="field"><label>Adresse / lieu</label><input value={lieu} onChange={e=>setLieu(e.target.value)}/></div>
     <div className="field"><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
     {!event.allDay ? <div className="row2">
@@ -3735,6 +3785,12 @@ function EditEventModal({event, onClose, onSaved, toast}){
 
     <div className="field">
       <label>Pièces jointes (Google Drive)</label>
+      <div style={{marginBottom:8}}>
+        <input ref={fichierRef} type="file" multiple accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" style={{display:'none'}} onChange={e=>{ const f=[...e.target.files]; e.target.value=''; televerser(f); }}/>
+        {driveOk ? <button type="button" className="btn btn-sm btn-p" disabled={!!televerse} onClick={()=>fichierRef.current && fichierRef.current.click()}>{televerse || '📎 Ajouter un fichier ou une photo'}</button>
+          : <button type="button" className="btn btn-sm" onClick={async()=>{ try{ await requestToken('consent'); setDriveOk(peutDeposer()); }catch(e){ toast('Connexion annulée','err'); } }}>🔓 Autoriser l'ajout de fichiers (une seule fois)</button>}
+        <span className="muted" style={{fontSize:11.5,marginLeft:8}}>Va dans Drive › « Saran CRM — Pièces jointes agenda ».</span>
+      </div>
       {attachments.length>0 && <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:8}}>
         {attachments.map((a,i)=>
           <div key={i} style={{display:'flex',alignItems:'center',gap:8,background:'var(--bg3)',borderRadius:8,padding:'6px 10px'}}>
@@ -3744,7 +3800,7 @@ function EditEventModal({event, onClose, onSaved, toast}){
         )}
       </div>}
       <div className="row2" style={{gridTemplateColumns:'2fr 1fr'}}>
-        <input placeholder="Lien Google Drive (copier le lien de partage)" value={newFileUrl} onChange={e=>setNewFileUrl(e.target.value)}/>
+        <input placeholder="… ou coller un lien Google Drive" value={newFileUrl} onChange={e=>setNewFileUrl(e.target.value)}/>
         <input placeholder="Nom du fichier (optionnel)" value={newFileTitre} onChange={e=>setNewFileTitre(e.target.value)}/>
       </div>
       <button className="btn btn-sm" style={{marginTop:6}} onClick={addAttachment}>+ Ajouter le fichier</button>
@@ -3782,6 +3838,17 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   const [jobHeure,setJobHeure]=useState(null);
   const [editEvent,setEditEvent]=useState(null);
   const [reloadKey,setReloadKey]=useState(0);
+  // v267 : onglets Agenda | Commandes de la semaine ; équipes cachées ; panneau En attente ; cédule par glisser
+  const [ongletAg,setOngletAg]=useState(()=>{ try{ return localStorage.getItem('agenda_onglet')||'agenda'; }catch(e){ return 'agenda'; } });
+  const choisirOnglet = k => { setOngletAg(k); try{ localStorage.setItem('agenda_onglet', k); }catch(e){} };
+  const [cachees,setCachees]=useState(()=>{ try{ return JSON.parse(localStorage.getItem('agenda_groupes_caches')||'[]'); }catch(e){ return []; } });
+  const basculerGroupe = k => setCachees(l=>{ const n = l.includes(k) ? l.filter(x=>x!==k) : [...l, k]; try{ localStorage.setItem('agenda_groupes_caches', JSON.stringify(n)); }catch(e){} return n; });
+  const [attListe,setAttListe]=useState(null);
+  const [cedule,setCedule]=useState(null);
+  const [voirPanneau,setVoirPanneau]=useState(true);
+  const panneauDragRef = useRef(null);
+  const [maintenant,setMaintenant]=useState(()=>new Date());
+  useEffect(()=>{ const t = setInterval(()=>setMaintenant(new Date()), 60000); return ()=>clearInterval(t); },[]);
   const dayColRefs = useRef([]);
   const dragInfoRef = useRef(null);
   const draggedElRef = useRef(null);
@@ -3794,7 +3861,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
     setLoading(true); setErr('');
     const timeMin = new Date(days[0]); timeMin.setHours(0,0,0,0);
     const timeMax = new Date(days[days.length-1]); timeMax.setHours(23,59,59,999);
-    const calIds = (cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const calIds = [...new Set([...(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean), EN_ATTENTE_CAL])];   // v267 : En attente aussi (hachuré)
     listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
       .then(evs=>{ if(!cancelled) setEvents(evs); })
       .catch(e=>{ if(!cancelled) setErr(apiErrMsg(e)||'Erreur de chargement du calendrier.'); })
@@ -3802,6 +3869,10 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
     return ()=>{ cancelled=true; };
   },[viewMode, anchor.getTime(), cfg.calendarIds, reloadKey, refreshKey]);
 
+  // v267 : panneau En attente — toutes les jobs de l'agenda En Attente (60 jours passés → 1 an)
+  useEffect(()=>{ let ok = true; const a = new Date(); a.setDate(a.getDate()-60); const b = new Date(); b.setDate(b.getDate()+365);
+    listCalendarEventsRange([EN_ATTENTE_CAL], a.toISOString(), b.toISOString()).then(l=>{ if(ok) setAttListe(l); }).catch(()=>{ if(ok) setAttListe([]); });
+    return ()=>{ ok = false; }; },[reloadKey, refreshKey]);
   function goPrev(){ const d=new Date(anchor); if(viewMode==='jour') d.setDate(d.getDate()-1); else if(viewMode==='mois') d.setMonth(d.getMonth()-1); else d.setDate(d.getDate()-7); setAnchor(d); }
   function goNext(){ const d=new Date(anchor); if(viewMode==='jour') d.setDate(d.getDate()+1); else if(viewMode==='mois') d.setMonth(d.getMonth()+1); else d.setDate(d.getDate()+7); setAnchor(d); }
   function goToday(){ setAnchor(new Date()); }
@@ -3827,8 +3898,44 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   const DAY_COL_MIN = (!isDesktop && days.length>1) ? '92px' : '0';
   const gridCols = 'repeat('+days.length+',minmax('+DAY_COL_MIN+',1fr))';
 
-  function eventsForDay(dStr){ return events.filter(e=>String(e.start).slice(0,10)===dStr && !e.allDay); }
-  function allDayForDay(dStr){ return events.filter(e=>String(e.start).slice(0,10)===dStr && e.allDay); }
+  const evVisibles = events.filter(e=>!cachees.includes(agendaGroupe(e)));
+  const groupesPresents = AGENDA_GROUPES_ORDRE.filter(k=>events.some(e=>agendaGroupe(e)===k));
+  // Un événement « toute la journée » sur plusieurs jours apparaît chaque jour (la date de fin est exclusive).
+  function couvre(e, dStr){ const d0 = String(e.start).slice(0,10); if(!e.allDay || !e.end) return d0===dStr; return d0<=dStr && dStr<String(e.end).slice(0,10); }
+  function eventsForDay(dStr){ return evVisibles.filter(e=>String(e.start).slice(0,10)===dStr && !e.allDay); }
+  function allDayForDay(dStr){ return evVisibles.filter(e=>e.allDay && couvre(e, dStr)); }
+  // Glisser une job du panneau En attente sur la grille → fenêtre « Céduler » (rien n'est changé avant ta confirmation)
+  function dureeDe(src){ return (!src.allDay && src.end) ? Math.max(15*60000, new Date(src.end)-new Date(src.start)) : 3600000; }
+  function dropPanneau(ev, dayIdx, journee){
+    const src = panneauDragRef.current; if(!src) return; ev.preventDefault(); panneauDragRef.current = null;
+    const d = new Date(days[dayIdx]); d.setHours(0,0,0,0);
+    if(journee){ setCedule({ev:src, allDay:true, date:localDateStr(d)}); return; }
+    const rect = dayColRefs.current[dayIdx].getBoundingClientRect();
+    let h = HOUR_START + (ev.clientY-rect.top)/PX_H; h = Math.max(0, Math.min(23.75, Math.round(h*4)/4));
+    const debut = new Date(d); debut.setMinutes(Math.round(h*60));
+    setCedule({ev:src, allDay:false, debut, fin:new Date(debut.getTime()+dureeDe(src))});
+  }
+  function dropMois(ev, d){
+    const src = panneauDragRef.current; if(!src) return; ev.preventDefault(); ev.stopPropagation(); panneauDragRef.current = null;
+    if(src.allDay){ setCedule({ev:src, allDay:true, date:localDateStr(d)}); return; }
+    const o = new Date(src.start), debut = new Date(d); debut.setHours(o.getHours(), o.getMinutes(), 0, 0);
+    setCedule({ev:src, allDay:false, debut, fin:new Date(debut.getTime()+dureeDe(src))});
+  }
+  async function faireCedule(versCrew){
+    const c = cedule; setCedule(null); if(!c) return;
+    try{
+      let res;
+      if(c.allDay){
+        const span = c.ev.allDay && c.ev.end ? Math.max(1, Math.round((new Date(String(c.ev.end).slice(0,10)+'T00:00:00') - new Date(String(c.ev.start).slice(0,10)+'T00:00:00'))/864e5)) : 1;
+        const fin = new Date(c.date+'T00:00:00'); fin.setDate(fin.getDate()+span);
+        res = {start:{date:c.date, dateTime:null, timeZone:null}, end:{date:localDateStr(fin), dateTime:null, timeZone:null}};
+      } else res = {start:{dateTime:c.debut.toISOString(), timeZone:'America/Toronto', date:null}, end:{dateTime:c.fin.toISOString(), timeZone:'America/Toronto', date:null}};
+      await window.gapi.client.calendar.events.patch({calendarId:c.ev.calendarId, eventId:c.ev.id, resource:res});
+      if(versCrew) await window.gapi.client.calendar.events.move({calendarId:c.ev.calendarId, eventId:c.ev.id, destination:CREW_CAL});
+      toast(versCrew ? 'Cédulée dans The Crew.' : 'Nouvelle date — reste En attente.', 'ok'); setReloadKey(k=>k+1);
+    }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
+  }
+  const sur = ev => { if(panneauDragRef.current){ ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; } };
 
   // ── Glisser un événement pour changer son heure/jour directement dans la grille ──
   function handleEventPointerDown(e, ev){
@@ -3923,8 +4030,10 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:10}}>
       <div>
-        <h2 className="fh" style={{margin:'0 0 6px',fontSize:20}}>Agenda</h2>
-        <div className="muted" style={{fontSize:11.5,marginBottom:14}}>Calendrier Google utilisé par PunchPro. Les couleurs sont celles réellement assignées dans Google Calendar.</div>
+        <h2 className="fh" style={{margin:'0 0 8px',fontSize:20}}>Agenda</h2>
+        <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>
+          {[['agenda','Agenda'],['commandes','Commandes de la semaine']].map(([k,l])=><button key={k} className={'btn btn-sm'+(ongletAg===k?' btn-p':'')} onClick={()=>choisirOnglet(k)}>{l}</button>)}
+        </div>
       </div>
       {data && <button className="btn btn-p" onClick={()=>openNewJob(todayISO())}>+ Nouvelle job</button>}
     </div>
@@ -3939,9 +4048,18 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         )}
       </div>
     </div>
-    {cd.loading ? <div className="card muted" style={{marginBottom:16,fontSize:13}}>Lecture des jobs et des commandes…</div>
-      : <CvSemaine clients={cdClients} appels={cd.appels||{parNumero:{},parFacture:{},liste:[]}} ancre={anchor} commandes={commandes} onCommande={basculerCommande} manuels={manuelsAg} isDesktop={isDesktop}/>}
+    {ongletAg==='commandes' && (cd.loading ? <div className="card muted" style={{marginBottom:16,fontSize:13}}>Lecture des jobs et des commandes…</div>
+      : <CvSemaine clients={cdClients} appels={cd.appels||{parNumero:{},parFacture:{},liste:[]}} ancre={anchor} commandes={commandes} onCommande={basculerCommande} manuels={manuelsAg} isDesktop={isDesktop}/>)}
+    {ongletAg==='agenda' && groupesPresents.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+      {groupesPresents.map(k=>{ const on = !cachees.includes(k), n = events.filter(e=>agendaGroupe(e)===k).length;
+        return <button key={k} className="btn btn-sm" onClick={()=>basculerGroupe(k)} title={on?'Cacher':'Montrer'}
+          style={{display:'inline-flex',alignItems:'center',gap:5,opacity:on?1:.45,borderColor:on?agendaGroupeCouleur(k):undefined}}>
+          <span style={{width:10,height:10,borderRadius:'50%',background:on && k!=='autre' && k!=='attente'?agendaGroupeCouleur(k):'transparent',border:'2px '+(k==='autre'||k==='attente'?'dashed ':'solid ')+agendaGroupeCouleur(k),display:'inline-block',boxSizing:'border-box'}}></span>
+          {agendaGroupeNom(k)} <span className="muted">{n}</span></button>; })}
+      {cachees.length>0 && <span style={{color:'var(--accent)',fontSize:12,cursor:'pointer'}} onClick={()=>{ setCachees([]); try{ localStorage.setItem('agenda_groupes_caches','[]'); }catch(e){} }}>Tout montrer</span>}
+    </div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
+    {ongletAg==='agenda' && <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1fr) 250px':'minmax(0,1fr)',gap:12,alignItems:'start'}}><div style={{minWidth:0}}>
     {loading ? <div className="muted">Chargement...</div> :
 
     viewMode==='mois' ?
@@ -3953,12 +4071,12 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const inMonth = d.getMonth()===anchor.getMonth();
-          const dayEvents = [...eventsForDay(dStr), ...allDayForDay(dStr)].sort((a,b)=>String(a.start).localeCompare(String(b.start)));
+          const dayEvents = [...allDayForDay(dStr), ...eventsForDay(dStr)];
           const maxShow = isDesktop?6:3;
-          return <div key={i} onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }}
+          return <div key={i} onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }} onDragOver={sur} onDrop={ev=>dropMois(ev, d)}
             style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+2, minWidth:0, minHeight:isDesktop?150:80,border:'1px solid var(--border)',borderRadius:6,padding:isDesktop?8:4,cursor:'pointer',opacity:inMonth?1:.4,background:dStr===todayStr?'rgba(47,128,237,.08)':'transparent',overflow:'hidden'}}>
             <div style={{fontSize:isDesktop?15:11,fontWeight:700,marginBottom:5}}>{d.getDate()}</div>
-            {dayEvents.slice(0,maxShow).map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',background:eventColor(e),color:texteSur(eventColor(e)),fontSize:isDesktop?11.5:9.5,padding:isDesktop?'3px 6px':'1px 4px',borderRadius:3,marginBottom:3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
+            {dayEvents.slice(0,maxShow).map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',...agendaStyle(e),fontSize:isDesktop?11.5:9.5,padding:isDesktop?'3px 6px':'1px 4px',borderRadius:3,marginBottom:3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>)}
             {dayEvents.length>maxShow && <div className="muted" style={{fontSize:isDesktop?11:9.5}}>+{dayEvents.length-maxShow} de plus</div>}
           </div>;
         })}
@@ -3980,8 +4098,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const adEvents = allDayForDay(dStr);
-          return <div key={'a'+i} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
-            {adEvents.map(e=><div key={e.id} title={e.title} onClick={()=>setEditEvent(e)} style={{cursor:'pointer',background:eventColor(e),color:texteSur(eventColor(e)),fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
+          return <div key={'a'+i} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, true)} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
+            {adEvents.map(e=><div key={e.id} title={e.title} onClick={()=>setEditEvent(e)} style={{cursor:'pointer',...agendaStyle(e),fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>)}
           </div>;
         })}
 
@@ -3992,7 +4110,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
           const dStr = localDateStr(d);
           const dayEvents = eventsForDay(dStr);
           const placed = layoutDayEvents(dayEvents);
-          return <div key={'d'+i} ref={el=>dayColRefs.current[i]=el} style={{gridColumn:i+2,gridRow:3,minWidth:0,position:'relative',borderLeft:'1px solid var(--border)',overflow:'hidden'}}>
+          const hNow = maintenant.getHours()+maintenant.getMinutes()/60;
+          return <div key={'d'+i} ref={el=>dayColRefs.current[i]=el} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, false)} style={{gridColumn:i+2,gridRow:3,minWidth:0,position:'relative',borderLeft:'1px solid var(--border)',overflow:'hidden'}}>
+            {dStr===todayStr && hNow>=HOUR_START && hNow<=HOUR_END+1 && <div style={{position:'absolute',left:0,right:0,top:(hNow-HOUR_START)*PX_H,height:2,background:'var(--danger)',zIndex:6,pointerEvents:'none'}}><div style={{position:'absolute',left:-4,top:-4,width:10,height:10,borderRadius:'50%',background:'var(--danger)'}}></div></div>}
             {hours.map(h=><div key={h} onClick={()=>{ if(data) openNewJob(dStr, String(h).padStart(2,'0')+':00'); }}
               style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box',cursor:data?'copy':'default'}}
               title={data?'Cliquer pour créer une job à '+h+'h':''}></div>)}
@@ -4008,9 +4128,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
                 onPointerDown={ev=>handleEventPointerDown(ev,e)}
                 onPointerMove={handleEventPointerMove}
                 onPointerUp={handleEventPointerUp}
-                style={{position:'absolute',top,height,left:'calc('+leftPct+'% + 2px)',width:'calc('+widthPct+'% - 4px)',background:eventColor(e),color:texteSur(eventColor(e)),fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'visible',boxShadow:'0 1px 3px rgba(0,0,0,.25)',cursor:'grab',touchAction:'none',userSelect:'none'}}>
+                style={{position:'absolute',top,height,left:'calc('+leftPct+'% + 2px)',width:'calc('+widthPct+'% - 4px)',...agendaStyle(e),fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'visible',boxShadow:'0 1px 3px rgba(0,0,0,.25)',cursor:'grab',touchAction:'none',userSelect:'none'}}>
                 <div style={{overflow:'hidden',height:'100%'}}>
-                  <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
+                  <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>
                   <div style={{opacity:.85}}>{start.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}–{end.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}</div>
                 </div>
                 <div onPointerDown={ev2=>handleResizePointerDown(ev2,e)} onPointerMove={handleResizePointerMove} onPointerUp={handleResizePointerUp}
@@ -4024,6 +4144,38 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         })}
       </div>
     </div>}
+    </div>
+    <div className="card" style={{padding:10,position:isDesktop?'sticky':undefined,top:isDesktop?70:undefined,maxHeight:isDesktop?'calc(100vh - 90px)':undefined,overflowY:'auto'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,marginBottom:4}}>
+        <div className="fh" style={{fontSize:14}}>⏳ En attente {attListe && attListe.length>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{attListe.length}</span>}</div>
+        {!isDesktop && <button className="btn btn-sm" onClick={()=>setVoirPanneau(v=>!v)}>{voirPanneau?'Cacher':'Voir'}</button>}
+      </div>
+      {voirPanneau && <>
+        <div className="muted" style={{fontSize:11.5,marginBottom:8}}>{isDesktop ? 'Glisse une job sur un jour pour la céduler. Clique pour la modifier.' : 'Touche une job pour la modifier ou changer sa date.'}</div>
+        {attListe===null ? <div className="muted" style={{fontSize:12.5}}>Lecture…</div>
+          : !attListe.length ? <div className="muted" style={{fontSize:12.5}}>Rien en attente.</div>
+          : attListe.map(e=>{ const d0 = String(e.start).slice(0,10), passe = d0 && d0 < todayStr;
+            return <div key={e.id} draggable={isDesktop} onDragStart={ev=>{ panneauDragRef.current = e; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }}
+              onDragEnd={()=>{ panneauDragRef.current = null; }} onClick={()=>setEditEvent(e)}
+              style={{padding:'6px 8px',marginBottom:6,borderRadius:6,border:'1px dashed var(--border2)',borderLeft:'4px solid '+(e.colorId && GCAL_COLOR_MAP[e.colorId] || 'var(--muted)'),cursor:isDesktop?'grab':'pointer',fontSize:12.5,background:'var(--bg3)',userSelect:'none'}}>
+              <div style={{fontWeight:600,overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
+              <div style={{fontSize:11,color:passe?'var(--warning)':'var(--muted)'}}>{e.allDay ? cvFmtDay(d0) : new Date(e.start).toLocaleString('fr-CA',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}{passe?' · date passée':''}{e.location ? ' · '+e.location : ''}</div>
+            </div>; })}
+      </>}
+    </div>
+    </div>}
+    {cedule && <Modal title="Céduler" onClose={()=>setCedule(null)}>
+      <div style={{fontWeight:700,marginBottom:4}}>{cedule.ev.title}</div>
+      <div style={{marginBottom:14}}>{(t=>t.charAt(0).toUpperCase()+t.slice(1))(cedule.allDay
+        ? new Date(cedule.date+'T12:00:00').toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})+' — toute la journée'
+        : cedule.debut.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})+' — '+cedule.debut.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})+' à '+cedule.fin.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'}))}</div>
+      <div className="muted" style={{fontSize:12,marginBottom:12}}>La description, l'adresse et les pièces jointes restent telles quelles.</div>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'flex-end'}}>
+        <button className="btn btn-s" onClick={()=>setCedule(null)}>Annuler</button>
+        <button className="btn btn-s" onClick={()=>faireCedule(false)}>Garder en attente à cette date</button>
+        <button className="btn btn-p" onClick={()=>faireCedule(true)}>Confirmer dans The Crew</button>
+      </div>
+    </Modal>}
     {showJobModal && data && <QuickJobModal cfg={cfg} addProjet={data.addProjet} toast={toast} initialDate={jobDate} initialHeure={jobHeure}
       onClose={()=>setShowJobModal(false)} onDone={()=>setReloadKey(k=>k+1)}/>}
     {editEvent && <EditEventModal event={editEvent} toast={toast} onClose={()=>setEditEvent(null)} onSaved={()=>setReloadKey(k=>k+1)}/>}
