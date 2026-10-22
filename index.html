@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v272';
+const APP_VERSION = 'v273';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10211,7 +10211,7 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
       <RepertoireView key={'v'+(cles.verif||0)} mode="verif" cfg={cfgRep} refreshKey={refreshKey} toast={toast} isDesktop={isDesktop} contacts={contacts}/></>}
   </div>;
 }
-function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAller}){
+function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAller, rendreSection}){
   const [tick,setTick]=useState(0);
   const d = useClientsData(cfg, refreshKey+'|r'+tick);
   const [reglees] = useVerifsReglees(cfg);
@@ -10337,7 +10337,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
   if(choisi) return <div>{entete}
     <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>setSel(null)}>← Retour</button>
     {sel && sel.startsWith('F:') ? <RepFicheFournisseur f={choisi} K={K} toast={toast} onAller={onAller}/>
-      : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onAller={onAller} onLie={nom=>setSel('', nom)} onContr={code=>setSel('C:'+code)} onOuvrir={(id, nom)=>setSel(id, nom)}
+      : <RepFicheClient key={choisi.id} c={choisi} busy={busy} ecrire={ecrire} R={R} onAller={onAller} rendreSection={rendreSection} onLie={nom=>setSel('', nom)} onContr={code=>setSel('C:'+code)} onOuvrir={(id, nom)=>setSel(id, nom)}
           nbAV={aVerif[choisi.type==='contr' ? 'C:'+choisi.code : choisi.id]||0} onSuivi={(choisi.type==='contr' ? clients[choisi.code] : choisi.srcJobs.length) ? ()=>setSuivi(choisi.type==='contr' ? choisi.code : choisi.id) : null}/>}
   </div>;
 
@@ -10703,7 +10703,8 @@ function RepContacts({c, busy, ecrire, onAller, filtre}){
   </div>;
 }
 const REP_NUM_ENT = /^\s*\d{4}[\s-]?\d{4}\s+qu[ée]?u?[ée]bec/i;   // « 9272-0473 Québec inc. »
-function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOuvrir, onAller}){
+function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOuvrir, onAller, rendreSection}){
+  const [section,setSection]=useState(null);   // v273 : Factures / Paiements / Projets / Soumissions affichés sous la fiche, sans changer de page
   const numsEnt = c.type==='pers' ? [...new Set([...(c.noms||[]), ...((c.fiche&&c.fiche.alias)||[])].filter(n=>REP_NUM_ENT.test(n)).map(n=>n.trim()))] : [];
   const autresNoms = c.type==='pers' ? [...new Set((c.noms||[]).filter(n=>persNomPropre(n)!==c.nom && n!==c.nom && !REP_NUM_ENT.test(n) && !/@/.test(n)))] : [];
   // v181 : liens entre fiches (particulier ↔ commerce), choisis à la main — colonne Client de la fiche (privée)
@@ -10819,13 +10820,21 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
               </span>)}
         </div>
       </div>
-      {onAller && (()=>{ const aller = (cible, f) => onAller(cible, {...f, nom:c.nom}), q = pers ? c.nom : c.code;   // v202 : sections de ce client, déjà filtrées
-        return <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
-          <button className="btn btn-sm" onClick={()=>aller('factures', pers ? {vue:'toutes', q:c.nom} : {vue:'toutes', code:c.code})}>Factures</button>
-          <button className="btn btn-sm" onClick={()=>aller('paiements', {q})}>Paiements</button>
-          <button className="btn btn-sm" onClick={()=>aller('projets', pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code})}>Projets</button>
-          <button className="btn btn-sm" onClick={()=>aller('soumissions', {q:c.nom})}>Soumissions</button>
-        </div>; })()}
+      {onAller && (()=>{ const q = pers ? c.nom : c.code;   // v202 : sections de ce client, déjà filtrées ; v273 : affichées ici, sous la fiche
+        const filtres = {factures: pers ? {vue:'toutes', q:c.nom} : {vue:'toutes', code:c.code}, paiements:{q}, projets: pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code}, soumissions:{q:c.nom}};
+        const montrer = cible => { if(!rendreSection){ onAller(cible, {...filtres[cible], nom:c.nom}); return; }
+          if(section && section.cible===cible){ setSection(null); return; }
+          NAV_FOCUS = {...filtres[cible], nom:c.nom, cible, t:Date.now()}; setSection({cible, k:Date.now()}); };
+        return <>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
+            {[['factures','Factures'],['paiements','Paiements'],['projets','Projets'],['soumissions','Soumissions']].map(([k,l])=>
+              <button key={k} className={'btn btn-sm'+(section && section.cible===k ? ' btn-p' : '')} onClick={()=>montrer(k)}>{l}</button>)}
+            {section && <span style={{marginLeft:'auto',display:'flex',gap:10,alignItems:'center',fontSize:12.5}}>
+              <span style={{color:'var(--accent)',cursor:'pointer'}} onClick={()=>onAller(section.cible, {...filtres[section.cible], nom:c.nom})}>Ouvrir en grand ›</span>
+              <span className="muted" style={{cursor:'pointer'}} onClick={()=>setSection(null)}>✕ Fermer</span></span>}
+          </div>
+          {section && rendreSection && <div key={section.k} style={{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border)'}}>{rendreSection(section.cible)}</div>}
+        </>; })()}
       {lien!==null && pers && (()=>{ const nq = cvNorm(lien);
         const cands = nq.length<2 ? [] : R.pers.filter(p=>p.id!==c.id && !(c.lies||[]).includes(p) && cvNorm([p.nom, ...p.noms, ...p.courriels].join(' ')).includes(nq))
           .sort((a,b)=>(a.commerce===c.commerce)-(b.commerce===c.commerce) || a.nom.localeCompare(b.nom,'fr')).slice(0,12);
@@ -11015,7 +11024,11 @@ function App(){
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
-        {(nav==='repertoire' || nav==='clients') && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts} onAller={allerFiltre}/>}
+        {(nav==='repertoire' || nav==='clients') && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts} onAller={allerFiltre}
+          rendreSection={cible => cible==='projets' ? <ProjetsView data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>
+            : cible==='factures' ? <FacturesView cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/>
+            : cible==='paiements' ? <PaiementsOnglet cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/>
+            : cible==='soumissions' ? <SoumissionsView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/> : null}/>}
         {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey}/>}
         {nav==='contacts' && <RepertoireView key={'rc'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts}/>}
         {nav==='projets' && <ProjetsView key={'p'+navKey} data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
