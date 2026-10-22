@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v268';
+const APP_VERSION = 'v269';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4103,13 +4103,14 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       <div style={{fontWeight:700,textTransform:'capitalize',minWidth:160}}>{rangeLabel()}</div>
       <button className="btn btn-sm" onClick={goNext}>→</button>
       <button className="btn btn-sm" onClick={goToday}>Aujourd'hui</button>
+      <div style={{display:'inline-flex',border:'1px solid var(--border2)',borderRadius:10,overflow:'hidden',background:'var(--bg3)'}}>
+        {[['jour','Jour'],['semaine','Semaine'],['mois','Mois']].map(([id,label],i)=>
+          <button key={id} onClick={()=>setViewMode(id)} style={{border:'none',borderLeft:i?'1px solid var(--border2)':'none',padding:'7px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',
+            background:viewMode===id?'var(--accent)':'transparent',color:viewMode===id?'#fff':'var(--text)'}}>{label}</button>)}
+      </div>
       <div style={{display:'flex',gap:4,marginLeft:'auto',flexWrap:'wrap'}}>
         {ongletAg==='agenda' && viewMode!=='mois' && <button className={'btn btn-sm'+(parEquipe?' btn-p':'')} onClick={basculerParEquipe} title="Diviser chaque jour en colonnes par équipe">Par équipe</button>}
         {ongletAg==='agenda' && viewMode!=='jour' && <button className="btn btn-sm" onClick={basculerRepli} title="Replier ou afficher samedi et dimanche">{repli ? 'Sam.–dim. ▸' : '◂ Sam.–dim.'}</button>}
-        <span style={{width:8}}></span>
-        {[['jour','Jour'],['semaine','Semaine'],['mois','Mois']].map(([id,label])=>
-          <button key={id} className="btn btn-sm" onClick={()=>setViewMode(id)} style={viewMode===id?{background:'var(--accent)',color:'#fff',border:'none'}:null}>{label}</button>
-        )}
       </div>
     </div>
     {ongletAg==='commandes' && (cd.loading ? <div className="card muted" style={{marginBottom:16,fontSize:13}}>Lecture des jobs et des commandes…</div>
@@ -4135,7 +4136,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const inMonth = d.getMonth()===anchor.getMonth();
-          const dayEvents = [...allDayForDay(dStr), ...eventsForDay(dStr)];
+          const rang = e => { const r = AGENDA_GROUPES_ORDRE.indexOf(agendaGroupe(e)); return r<0 ? 99 : r; };
+          const dayEvents = [...allDayForDay(dStr), ...eventsForDay(dStr)].sort((a,b)=>rang(a)-rang(b) || (b.allDay?1:0)-(a.allDay?1:0) || String(a.start).localeCompare(String(b.start)));
           const replie = repli && estFS(d);
           return <div key={i} onDragOver={sur} onDrop={ev=>dropMois(ev, d)} onClick={replie ? basculerRepli : undefined}
             style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+2, minWidth:0, minHeight:isDesktop?170:90,border:'1px solid var(--border)',borderRadius:6,padding:replie?3:(isDesktop?8:4),opacity:inMonth?1:.45,background:dStr===todayStr?'rgba(47,128,237,.08)':'transparent',cursor:replie?'pointer':undefined}}>
