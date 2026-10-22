@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v273';
+const APP_VERSION = 'v274';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7976,24 +7976,32 @@ function useBonsCommande(cfg){
 
 // v236 : Assemblages — listes d'articles préfaites (La mémoire — Jobs › « Assemblages », sans prix).
 // Lignes = JSON [{code, desc, qte, unite}] ; une ligne sans code = article libre. Actif « non » = retiré (jamais effacé).
-const AS_ENTETE = ['Nom','Description','Lignes','Mis à jour','Actif'];
+const AS_ENTETE = ['Nom','Description','Lignes','Mis à jour','Actif','Catégorie','Phase'];   // v274 : + Catégorie, Phase
+const AS_CATS = ['Cuisine','Salle de bain','Salle de lavage','Panneau / entrée','Borne','Chauffage','Extérieur','Camion / stock','Autre'];
+const AS_PHASES = ['Rough','Finition','Service','Entrée électrique','Stock'];
+const BC_FOURNS = ['Dubo','Lumen'];
+// Fournisseur retenu pour un article (ex. le chauffage chez Lumen) — sur cet appareil
+function bcFournCode(code){ try{ return (JSON.parse(localStorage.getItem('bc_fourn_code')||'{}'))[codeNorm(code)] || ''; }catch(e){ return ''; } }
+function bcRetenirFournCode(code, f){ try{ const m = JSON.parse(localStorage.getItem('bc_fourn_code')||'{}'); m[codeNorm(code)] = f; localStorage.setItem('bc_fourn_code', JSON.stringify(m)); }catch(e){} }
 function useAssemblages(cfg){
   const [liste,setListe]=useState([]); const [lu,setLu]=useState(false); const [existe,setExiste]=useState(false);
   const id = cfg.memoireJobsSpreadsheetId;
   const lire = useCallback(async(force)=>{
     if(!id){ setLu(true); return; }
-    try{ const r = await lireCache(id, qSheet('Assemblages')+'!A1:E', force); setExiste(true);
+    try{ const r = await lireCache(id, qSheet('Assemblages')+'!A1:G', force); setExiste(true);
       setListe((r.result.values||[]).slice(1).map((x,i)=>{ let lignes=[]; try{ lignes = JSON.parse(x[2]||'[]'); }catch(e){}
-        return {row:i+2, nom:String(x[0]||'').trim(), desc:String(x[1]||''), lignes:Array.isArray(lignes)?lignes:[], maj:x[3]||'', actif:!/^non$/i.test(String(x[4]||'').trim())}; })
+        return {row:i+2, nom:String(x[0]||'').trim(), desc:String(x[1]||''), lignes:Array.isArray(lignes)?lignes:[], maj:x[3]||'', actif:!/^non$/i.test(String(x[4]||'').trim()), cat:String(x[5]||''), phase:String(x[6]||'')}; })
         .filter(a=>a.nom && a.actif)); }
     catch(e){ setListe([]); }
     setLu(true);
   },[id]);
   useEffect(()=>{ lire(); },[lire]);
   const enregistrer = async a => {
-    const ligne = [a.nom, a.desc||'', JSON.stringify(a.lignes||[]), cvDay(new Date().toISOString()), 'oui'];
+    const ligne = [a.nom, a.desc||'', JSON.stringify(a.lignes||[]), cvDay(new Date().toISOString()), 'oui', a.cat||'', a.phase||''];
+    if(!existe) await ensureSheetsExist(id, [{name:'Assemblages', headers:AS_ENTETE}]);
+    else await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:qSheet('Assemblages')+'!A1:G1', valueInputOption:'RAW', resource:{values:[AS_ENTETE]}});
     if(a.row) await sheetsUpdateRow(id, qSheet('Assemblages'), a.row, ligne);
-    else { if(!existe) await ensureSheetsExist(id, [{name:'Assemblages', headers:AS_ENTETE}]); await sheetsAppendRow(id, qSheet('Assemblages'), ligne); }
+    else await sheetsAppendRow(id, qSheet('Assemblages'), ligne);
     await lire(true);
   };
   const retirer = async a => { setListe(l=>l.filter(x=>x.row!==a.row));
@@ -8001,7 +8009,188 @@ function useAssemblages(cfg){
   return {liste, lu, lire, enregistrer, retirer};
 }
 
-function bcVide(){ return {fournisseur:'Dubo', courriel:bcCourriel('Dubo'), ref:'', job:'', passage:null, employe:'', mode:'À aller chercher', pour:cvDay(new Date(Date.now()+864e5).toISOString()), lignes:[], libre:'', note:''}; }
+// v274 : Modèles de commande — un regroupement d'assemblages (La mémoire — Jobs › « Modèles de commande », sans prix).
+const MO_ENTETE = ['Nom','Description','Assemblages','Mis à jour','Actif','Catégorie'];
+function useModelesCommande(cfg){
+  const [liste,setListe]=useState([]); const [lu,setLu]=useState(false); const [existe,setExiste]=useState(false);
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async(force)=>{
+    if(!id){ setLu(true); return; }
+    try{ const r = await lireCache(id, qSheet('Modèles de commande')+'!A1:F', force); setExiste(true);
+      setListe((r.result.values||[]).slice(1).map((x,i)=>{ let as=[]; try{ as = JSON.parse(x[2]||'[]'); }catch(e){}
+        return {row:i+2, nom:String(x[0]||'').trim(), desc:String(x[1]||''), as:Array.isArray(as)?as:[], maj:x[3]||'', actif:!/^non$/i.test(String(x[4]||'').trim()), cat:String(x[5]||'')}; })
+        .filter(m=>m.nom && m.actif)); }
+    catch(e){ setListe([]); }
+    setLu(true);
+  },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const enregistrer = async m => {
+    const ligne = [m.nom, m.desc||'', JSON.stringify(m.as||[]), cvDay(new Date().toISOString()), 'oui', m.cat||''];
+    if(!existe) await ensureSheetsExist(id, [{name:'Modèles de commande', headers:MO_ENTETE}]);
+    if(m.row) await sheetsUpdateRow(id, qSheet('Modèles de commande'), m.row, ligne); else await sheetsAppendRow(id, qSheet('Modèles de commande'), ligne);
+    await lire(true); };
+  const retirer = async m => { setListe(l=>l.filter(x=>x.row!==m.row));
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:qSheet('Modèles de commande')+'!E'+m.row, valueInputOption:'RAW', resource:{values:[['non']]}}); await lire(true); };
+  return {liste, lu, lire, enregistrer, retirer};
+}
+// Liste du catalogue (catégories + recherche) — pour le bon et pour les assemblages
+function ChoixArticles({C, qteDe, onAjouter, hauteur}){
+  const [q,setQ]=useState(''), [cat,setCat]=useState('');
+  const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat) && (!q || rechercheOk(texteProduit(p), q)));
+  return <div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
+      <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>setCat('')}>Tous</button>
+      {C.cats.filter(c=>c!=='DIVERS').map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(c)}>{c}</button>)}
+    </div>
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un article…" style={{width:'100%',boxSizing:'border-box',marginBottom:6}}/>
+    <div style={{maxHeight:hauteur||320,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
+      {produits.map(p=>{ const n = qteDe(p.code); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:n?'var(--bg3)':undefined}}>
+        <b style={{minWidth:100}}>{p.code}</b><span style={{flex:1}} className={n?'':'muted'}>{p.desc}</span>
+        <button className="btn btn-sm" onClick={()=>onAjouter(p,-1)} disabled={!n} style={{width:32}}>−</button>
+        <span style={{width:28,textAlign:'center',fontWeight:700}}>{n||''}</span>
+        <button className="btn btn-sm" onClick={()=>onAjouter(p,1)} style={{width:32}}>+</button>
+      </div>; })}
+      {!C.lu && <div className="muted" style={{padding:10}}>Chargement…</div>}
+    </div>
+  </div>;
+}
+// Petit sélecteur Dubo / Lumen d'une ligne
+function FournLigne({f, onChange}){
+  return <span style={{display:'inline-flex',border:'1px solid var(--border2)',borderRadius:6,overflow:'hidden',flexShrink:0}}>
+    {BC_FOURNS.map(x=><button key={x} onClick={()=>onChange(x)} title={'Commander chez '+x} style={{border:'none',padding:'2px 7px',fontSize:11,fontWeight:700,cursor:'pointer',background:f===x?'var(--accent)':'transparent',color:f===x?'#fff':'var(--muted)'}}>{x}</button>)}
+  </span>;
+}
+// Filtres communs (recherche, catégorie, phase)
+function filtrerAs(l, q, cat, phase){ return l.filter(a=>(!cat || a.cat===cat) && (!phase || a.phase===phase) && (!q || rechercheOk([a.nom, a.desc, a.cat, a.phase, ...(a.lignes||a.as||[]).map(x=>(x.code||'')+' '+(x.desc||'')+' '+(x.nom||''))].join(' '), q))); }
+function FiltresAs({q, setQ, cat, setCat, phase, setPhase, avecPhase=true}){
+  return <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
+    <select value={cat} onChange={e=>setCat(e.target.value)} style={{width:'auto'}}><option value="">Toutes les catégories</option>{AS_CATS.map(c=><option key={c}>{c}</option>)}</select>
+    {avecPhase && <select value={phase} onChange={e=>setPhase(e.target.value)} style={{width:'auto'}}><option value="">Toutes les phases</option>{AS_PHASES.map(c=><option key={c}>{c}</option>)}</select>}
+  </div>;
+}
+// Onglet Assemblages : créer, modifier, filtrer
+function AssemblagesOnglet({C, AS, toast}){
+  const [q,setQ]=useState(''), [cat,setCat]=useState(''), [phase,setPhase]=useState('');
+  const [ed,setEd]=useState(null), [occ,setOcc]=useState(false), [voir,setVoir]=useState('');
+  const prodDe = code => C.produits.find(p=>codeNorm(p.code)===codeNorm(code) || (p.alias && codeNorm(p.alias)===codeNorm(code)));
+  const nouveau = () => setEd({nom:'', desc:'', cat:'', phase:'', lignes:[], libre:''});
+  const ouvrir = a => setEd({...a, lignes:a.lignes.filter(l=>l.code).map(l=>{ const p = prodDe(l.code); return {...l, desc:l.desc||(p&&p.desc)||'', unite:l.unite||(p&&p.unite)||''}; }), libre:a.lignes.filter(l=>!l.code).map(l=>(l.qte?l.qte+' × ':'')+l.desc).join('\n')});
+  const qteDe = code => { const l = ed && ed.lignes.find(x=>codeNorm(x.code)===codeNorm(code)); return l ? (cvNum(l.qte)||0) : 0; };
+  const ajouter = (p, delta) => setEd(x=>{ const ex = x.lignes.find(l=>codeNorm(l.code)===codeNorm(p.code)); const n = Math.max(0, (ex ? cvNum(ex.qte)||0 : 0) + delta);
+    let lignes = ex ? x.lignes.map(l=>l===ex ? {...l, qte:n} : l) : [...x.lignes, {code:p.code, desc:p.desc, unite:p.unite, qte:n, f:bcFournCode(p.code)||'Dubo'}];
+    return {...x, lignes:lignes.filter(l=>cvNum(l.qte))}; });
+  const sauver = async () => {
+    const n = ed.nom.trim(); if(!n){ toast && toast('Donne un nom à l\'assemblage'); return; }
+    if(!ed.row && AS.liste.some(x=>cvNorm(x.nom)===cvNorm(n))){ toast && toast('Un assemblage porte déjà ce nom'); return; }
+    const libres = ed.libre.split('\n').map(t=>t.trim()).filter(Boolean).map(t=>{ const m = t.match(/^(\d+(?:[.,]\d+)?)\s*[×x]\s*(.+)$/i); return m ? {code:'', desc:m[2], qte:cvNum(m[1]), unite:''} : {code:'', desc:t, qte:0, unite:''}; });
+    const lignes = [...ed.lignes.filter(l=>cvNum(l.qte)).map(l=>({code:l.code, desc:l.desc, qte:cvNum(l.qte), unite:l.unite||'', f:l.f||'Dubo'})), ...libres];
+    if(!lignes.length){ toast && toast('Ajoute au moins un article'); return; }
+    setOcc(true);
+    try{ await AS.enregistrer({row:ed.row, nom:n, desc:ed.desc, cat:ed.cat, phase:ed.phase, lignes}); toast && toast('« '+n+' » enregistré'); setEd(null); }
+    catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
+    setOcc(false); };
+  if(ed) return <div className="card">
+    <div className="fh" style={{fontSize:16,marginBottom:8}}>{ed.row ? 'Modifier « '+ed.nom+' »' : 'Nouvel assemblage'}</div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:8,marginBottom:8}}>
+      <label style={{fontSize:12}}>Nom<input value={ed.nom} onChange={e=>setEd({...ed, nom:e.target.value})} placeholder="ex. Finition salle de bain"/></label>
+      <label style={{fontSize:12}}>Catégorie / type de job<select value={ed.cat} onChange={e=>setEd({...ed, cat:e.target.value})}><option value="">—</option>{AS_CATS.map(c=><option key={c}>{c}</option>)}</select></label>
+      <label style={{fontSize:12}}>Phase<select value={ed.phase} onChange={e=>setEd({...ed, phase:e.target.value})}><option value="">—</option>{AS_PHASES.map(c=><option key={c}>{c}</option>)}</select></label>
+    </div>
+    <input value={ed.desc} onChange={e=>setEd({...ed, desc:e.target.value})} placeholder="Description / notes (quand l'utiliser, variantes…)" style={{marginBottom:8}}/>
+    <div style={{fontWeight:700,marginBottom:4}}>Articles {ed.lignes.length>0 && <span className="muted" style={{fontWeight:400}}>· {ed.lignes.length}</span>}</div>
+    {ed.lignes.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
+      {ed.lignes.map((l,i)=><div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
+        <b style={{minWidth:90}}>{l.code}</b><span style={{flex:'1 1 140px'}}>{l.desc}</span>
+        <FournLigne f={l.f||'Dubo'} onChange={f=>{ bcRetenirFournCode(l.code, f); setEd(x=>({...x, lignes:x.lignes.map((y,k)=>k===i?{...y,f}:y)})); }}/>
+        <input value={l.qte} inputMode="decimal" onChange={e=>setEd(x=>({...x, lignes:x.lignes.map((y,k)=>k===i?{...y,qte:e.target.value}:y)}))} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{l.unite}</span>
+        <button className="btn btn-sm" onClick={()=>setEd(x=>({...x, lignes:x.lignes.filter((y,k)=>k!==i)}))}>✕</button>
+      </div>)}
+    </div>}
+    <ChoixArticles C={C} qteDe={qteDe} onAjouter={ajouter} hauteur={260}/>
+    <textarea value={ed.libre} onChange={e=>setEd({...ed, libre:e.target.value})} rows={2} placeholder={"Autres articles, une ligne chacun (ex. 2 × boîte 4x4 profonde)"} style={{width:'100%',boxSizing:'border-box',marginTop:6,fontFamily:'inherit'}}/>
+    <div style={{display:'flex',gap:6,justifyContent:'space-between',flexWrap:'wrap',marginTop:8}}>
+      {ed.row ? <button className="btn btn-sm" disabled={occ} onClick={async()=>{ if(!window.confirm('Retirer l\'assemblage « '+ed.nom+' » ? (la ligne reste dans La mémoire, marquée Actif = non)')) return; setOcc(true); try{ await AS.retirer(ed); setEd(null); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOcc(false); }}>🗑 Retirer</button> : <span></span>}
+      <span style={{display:'flex',gap:6}}><button className="btn btn-sm" onClick={()=>setEd(null)}>Annuler</button><button className="btn btn-sm btn-p" disabled={occ} onClick={sauver}>{occ?'…':'Enregistrer'}</button></span>
+    </div>
+  </div>;
+  const l = filtrerAs(AS.liste, q, cat, phase).sort((a,b)=>(a.cat||'~').localeCompare(b.cat||'~') || a.nom.localeCompare(b.nom,'fr'));
+  return <div className="card">
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:8}}>
+      <div className="fh" style={{fontSize:16}}>Assemblages <span className="muted" style={{fontSize:13,fontWeight:500}}>· {AS.liste.length}</span></div>
+      <button className="btn btn-sm btn-p" onClick={nouveau}>+ Nouvel assemblage</button>
+    </div>
+    <FiltresAs q={q} setQ={setQ} cat={cat} setCat={setCat} phase={phase} setPhase={setPhase}/>
+    {!AS.lu && <div className="muted">Chargement…</div>}
+    {AS.lu && !l.length && <div className="muted" style={{fontSize:13}}>{AS.liste.length ? 'Aucun assemblage pour ces filtres.' : 'Aucun assemblage pour l\'instant.'}</div>}
+    {l.map(a=><div key={a.row} style={{borderBottom:'1px solid var(--border)',padding:'7px 0'}}>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+        <span style={{fontWeight:700,flex:'1 1 180px',cursor:'pointer'}} onClick={()=>setVoir(v=>v===a.nom?'':a.nom)}>{voir===a.nom?'▾ ':'▸ '}{a.nom} <span className="muted" style={{fontWeight:400,fontSize:12}}>· {a.lignes.length} article{a.lignes.length>1?'s':''}</span></span>
+        {a.cat && <span className="badge" style={{background:'var(--bg3)',color:'var(--text)'}}>{a.cat}</span>}
+        {a.phase && <span className="badge" style={{background:'var(--bg4)',color:'var(--accent)'}}>{a.phase}</span>}
+        <button className="btn btn-sm" onClick={()=>ouvrir(a)}>Modifier</button>
+      </div>
+      {a.desc && <div className="muted" style={{fontSize:12}}>{a.desc}</div>}
+      {voir===a.nom && <div style={{fontSize:12.5,marginTop:4}}>{a.lignes.map((x,i)=><div key={i} style={{display:'flex',gap:6,padding:'2px 0'}}>
+        <span style={{width:52,textAlign:'right',fontWeight:700}}>{x.qte||''}{x.unite && x.unite!=='un' ? ' '+x.unite : ''}</span><b style={{minWidth:90}}>{x.code}</b><span className="muted" style={{flex:1}}>{x.desc || ((prodDe(x.code||'')||{}).desc) || ''}</span>{x.code && <span className="muted" style={{fontSize:11}}>{x.f||'Dubo'}</span>}</div>)}</div>}
+    </div>)}
+  </div>;
+}
+// Onglet Modèles : regroupements d'assemblages
+function ModelesOnglet({AS, MO, toast}){
+  const [q,setQ]=useState(''), [cat,setCat]=useState(''), [ed,setEd]=useState(null), [occ,setOcc]=useState(false), [voir,setVoir]=useState('');
+  const [fq,setFq]=useState(''), [fcat,setFcat]=useState(''), [fph,setFph]=useState('');
+  const asDe = nom => AS.liste.find(a=>cvNorm(a.nom)===cvNorm(nom));
+  const sauver = async () => { const n = ed.nom.trim(); if(!n){ toast && toast('Donne un nom au modèle'); return; }
+    if(!ed.as.length){ toast && toast('Ajoute au moins un assemblage'); return; }
+    if(!ed.row && MO.liste.some(x=>cvNorm(x.nom)===cvNorm(n))){ toast && toast('Un modèle porte déjà ce nom'); return; }
+    setOcc(true); try{ await MO.enregistrer({...ed, nom:n}); toast && toast('« '+n+' » enregistré'); setEd(null); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOcc(false); };
+  if(ed) return <div className="card">
+    <div className="fh" style={{fontSize:16,marginBottom:8}}>{ed.row ? 'Modifier « '+ed.nom+' »' : 'Nouveau modèle'}</div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:8,marginBottom:8}}>
+      <label style={{fontSize:12}}>Nom<input value={ed.nom} onChange={e=>setEd({...ed, nom:e.target.value})} placeholder="ex. Cuisine complète"/></label>
+      <label style={{fontSize:12}}>Catégorie / type de job<select value={ed.cat} onChange={e=>setEd({...ed, cat:e.target.value})}><option value="">—</option>{AS_CATS.map(c=><option key={c}>{c}</option>)}</select></label>
+    </div>
+    <input value={ed.desc} onChange={e=>setEd({...ed, desc:e.target.value})} placeholder="Description / notes" style={{marginBottom:8}}/>
+    <div style={{fontWeight:700,marginBottom:4}}>Assemblages du modèle</div>
+    {!ed.as.length && <div className="muted" style={{fontSize:13,marginBottom:6}}>Ajoute des assemblages avec + dans la liste plus bas.</div>}
+    {ed.as.map((x,i)=><div key={i} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+      <b style={{flex:1}}>{x.nom}</b>{!asDe(x.nom) && <span style={{color:'var(--warning)',fontSize:12}}>introuvable</span>}
+      <span className="muted">×</span><input value={x.mult} inputMode="numeric" onChange={e=>setEd(o=>({...o, as:o.as.map((y,k)=>k===i?{...y, mult:e.target.value}:y)}))} style={{width:50,textAlign:'right'}}/>
+      <button className="btn btn-sm" onClick={()=>setEd(o=>({...o, as:o.as.filter((y,k)=>k!==i)}))}>✕</button></div>)}
+    <div style={{marginTop:10}}><FiltresAs q={fq} setQ={setFq} cat={fcat} setCat={setFcat} phase={fph} setPhase={setFph}/></div>
+    <div style={{maxHeight:260,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
+      {filtrerAs(AS.liste, fq, fcat, fph).map(a=><div key={a.row} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13}}>
+        <span style={{flex:1}}><b>{a.nom}</b> <span className="muted" style={{fontSize:11.5}}>{[a.cat, a.phase].filter(Boolean).join(' · ')}</span></span>
+        <button className="btn btn-sm" onClick={()=>setEd(o=>{ const ex = o.as.find(y=>cvNorm(y.nom)===cvNorm(a.nom)); return {...o, as: ex ? o.as.map(y=>y===ex?{...y, mult:(cvNum(y.mult)||1)+1}:y) : [...o.as, {nom:a.nom, mult:1}]}; })} style={{width:32}}>+</button></div>)}
+    </div>
+    <div style={{display:'flex',gap:6,justifyContent:'space-between',flexWrap:'wrap',marginTop:8}}>
+      {ed.row ? <button className="btn btn-sm" disabled={occ} onClick={async()=>{ if(!window.confirm('Retirer le modèle « '+ed.nom+' » ?')) return; setOcc(true); try{ await MO.retirer(ed); setEd(null); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOcc(false); }}>🗑 Retirer</button> : <span></span>}
+      <span style={{display:'flex',gap:6}}><button className="btn btn-sm" onClick={()=>setEd(null)}>Annuler</button><button className="btn btn-sm btn-p" disabled={occ} onClick={sauver}>{occ?'…':'Enregistrer'}</button></span>
+    </div>
+  </div>;
+  const l = filtrerAs(MO.liste, q, cat, '').sort((a,b)=>a.nom.localeCompare(b.nom,'fr'));
+  return <div className="card">
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:4}}>
+      <div className="fh" style={{fontSize:16}}>Modèles <span className="muted" style={{fontSize:13,fontWeight:500}}>· {MO.liste.length}</span></div>
+      <button className="btn btn-sm btn-p" onClick={()=>setEd({nom:'', desc:'', cat:'', as:[]})}>+ Nouveau modèle</button>
+    </div>
+    <div className="muted" style={{fontSize:12,marginBottom:8}}>Un modèle regroupe des assemblages (ex. Cuisine complète = Rough cuisine + Îlot + Hotte). Dans le bon, « + Modèle » ajoute tous ses articles d'un coup.</div>
+    <FiltresAs q={q} setQ={setQ} cat={cat} setCat={setCat} phase="" setPhase={()=>{}} avecPhase={false}/>
+    {!MO.lu && <div className="muted">Chargement…</div>}
+    {MO.lu && !l.length && <div className="muted" style={{fontSize:13}}>{MO.liste.length ? 'Aucun modèle pour ces filtres.' : 'Aucun modèle pour l\'instant.'}</div>}
+    {l.map(m=><div key={m.row} style={{borderBottom:'1px solid var(--border)',padding:'7px 0'}}>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+        <span style={{fontWeight:700,flex:'1 1 180px',cursor:'pointer'}} onClick={()=>setVoir(v=>v===m.nom?'':m.nom)}>{voir===m.nom?'▾ ':'▸ '}{m.nom} <span className="muted" style={{fontWeight:400,fontSize:12}}>· {m.as.length} assemblage{m.as.length>1?'s':''}</span></span>
+        {m.cat && <span className="badge" style={{background:'var(--bg3)',color:'var(--text)'}}>{m.cat}</span>}
+        <button className="btn btn-sm" onClick={()=>setEd({...m, as:m.as.map(x=>({...x}))})}>Modifier</button>
+      </div>
+      {m.desc && <div className="muted" style={{fontSize:12}}>{m.desc}</div>}
+      {voir===m.nom && <div style={{fontSize:12.5,marginTop:4}}>{m.as.map((x,i)=><div key={i}>{(cvNum(x.mult)||1)} × <b>{x.nom}</b>{!asDe(x.nom) && <span style={{color:'var(--warning)'}}> (introuvable)</span>}</div>)}</div>}
+    </div>)}
+  </div>;
+}
+function bcVide(){ return {fournisseur:'Dubo', courriel:bcCourriel('Dubo'), ref:'', job:'', passage:null, employe:'', mode:'À aller chercher', pour:cvDay(new Date(Date.now()+864e5).toISOString()), lignes:[], libre:'', note:'', envoyes:[]}; }
 
 function CommandesView({cfg, toast, refreshKey}){
   const {loading, events, registry, factures} = useClientsData(cfg, refreshKey+'|k');
@@ -8009,7 +8198,13 @@ function CommandesView({cfg, toast, refreshKey}){
   const C = useCatalogue(cfg);
   const B = useBonsCommande(cfg);
   const AS = useAssemblages(cfg);
+  const MO = useModelesCommande(cfg);
   const K = useContactsFournisseurs(cfg);
+  // v274 : onglets Bon de commande | Assemblages | Modèles | À commander
+  const [ongletC,setOngletC]=useState(()=>{ if(BC_PREFILL) return 'bon'; try{ return localStorage.getItem('cmd_onglet')||'bon'; }catch(e){ return 'bon'; } });
+  const choisirOngletC = k => { setOngletC(k); try{ localStorage.setItem('cmd_onglet', k); }catch(e){} };
+  const [pick,setPick]=useState('');   // '' | 'as' | 'mo' : sélecteur ouvert dans le bon
+  const [pq,setPq]=useState(''), [pcat,setPcat]=useState(''), [pph,setPph]=useState('');
   const [bc,setBc]=useState(bcVide());
   const courrielDe = f => (K.map[f] && K.map[f].courriel) || bcCourriel(f);
   useEffect(()=>{ if(K.lu && K.map[bc.fournisseur] && K.map[bc.fournisseur].courriel && bc.courriel===bcCourriel(bc.fournisseur)) setBc(x=>({...x, courriel:K.map[x.fournisseur].courriel})); },[K.lu, K.map]);
@@ -8024,7 +8219,7 @@ function CommandesView({cfg, toast, refreshKey}){
     .filter((x,i,L)=>!L.slice(0,i).some(y=>y.j===x.j && (y.e.phase||'')===(x.e.phase||'') && Math.abs(new Date(y.e.day)-new Date(x.e.day))<=3*864e5))
     .sort((a,b)=>a.e.day.localeCompare(b.e.day)),[clients, commandes, today, fin]);
   const refDe = x => bcRefTitre(x.e) || [x.c.code!=='PART'?x.c.code:'', x.e.phase||'', x.j.name, x.j.po||''].filter(Boolean).join(' ').toUpperCase();
-  const choisirPassage = x => { setBc(b=>({...b, ref:refDe(x), job:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name, passage:x, employe:(x.e.crew||[])[0]||b.employe, pour:x.e.day>today ? cvDay(new Date(new Date(x.e.day+'T12:00:00').getTime()-864e5).toISOString()) : today })); window.scrollTo(0,0); };
+  const choisirPassage = x => { choisirOngletC('bon'); setBc(b=>({...b, ref:refDe(x), job:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name, passage:x, employe:(x.e.crew||[])[0]||b.employe, pour:x.e.day>today ? cvDay(new Date(new Date(x.e.day+'T12:00:00').getTime()-864e5).toISOString()) : today })); window.scrollTo(0,0); };
   const choisirDest = d => setBc(b=>({...b, ref:CV_DEST_REF[d]||d.toUpperCase(), job:d, passage:null}));
   // Arrivé du Tableau de bord avec un passage : on le retrouve dans l'agenda et on remplit le bon.
   useEffect(()=>{ const p = BC_PREFILL; if(!p || !Object.keys(clients).length) return;
@@ -8037,149 +8232,92 @@ function CommandesView({cfg, toast, refreshKey}){
   const changerQte = (p, delta, valeur)=> setBc(x=>{
     const ex = x.lignes.find(l=>l.code===p.code);
     const qte = valeur!==undefined ? valeur : Math.max(0, (ex ? (cvNum(ex.qte)||0) : 0) + delta);
-    let lignes = ex ? x.lignes.map(l=>l.code===p.code ? {...l, qte} : l) : [...x.lignes, {code:p.code, desc:p.desc, unite:p.unite, qte}];
+    let lignes = ex ? x.lignes.map(l=>l.code===p.code ? {...l, qte} : l) : [...x.lignes, {code:p.code, desc:p.desc, unite:p.unite, qte, f:bcFournCode(p.code)||x.fournisseur}];
     if(valeur===undefined && !qte) lignes = lignes.filter(l=>l.code!==p.code);
     return {...x, lignes};
   });
-  // Code du fournisseur choisi (ex. LEV-T5325-W chez Dubo) quand on l'a déjà acheté là
-  const codeFourn = code => { const o = C.offresDe(code).find(x=>cvNorm(x.f)===cvNorm(bc.fournisseur)); if(o) return o.codeF; const a = C.coutsDe(code).find(c=>c.fournisseur===bc.fournisseur); return a ? a.code : ''; };
+  // v274 : chaque article a son fournisseur (Dubo par défaut, retenu par article : ex. le chauffage chez Lumen)
+  const fDe = l => l.f || bc.fournisseur;
+  const changerF = (l, f) => { bcRetenirFournCode(l.code, f); setBc(x=>({...x, lignes:x.lignes.map(y=>y.code===l.code ? {...y, f} : y)})); };
+  // Code du fournisseur (ex. LEV-T5325-W chez Dubo) quand on l'a déjà acheté là
+  const codeFourn = (code, fo) => { const f = fo || bc.fournisseur; const o = C.offresDe(code).find(x=>cvNorm(x.f)===cvNorm(f)); if(o) return o.codeF; const a = C.coutsDe(code).find(c=>c.fournisseur===f); return a ? a.code : ''; };
   const choisies = bc.lignes.filter(l=>cvNum(l.qte));
   // v236 : assemblages — on ajoute ses articles au bon (les quantités s'additionnent), × le nombre choisi
   const [asMult,setAsMult]=useState(1), [asVoir,setAsVoir]=useState(''), [asEdit,setAsEdit]=useState(null), [asNom,setAsNom]=useState(''), [asOcc,setAsOcc]=useState(false);
   const prodDe = code => C.produits.find(p=>codeNorm(p.code)===codeNorm(code) || (p.alias && codeNorm(p.alias)===codeNorm(code)));
-  const asLigne = l => { const p = l.code ? prodDe(l.code) : null; return {code:p?p.code:(l.code||''), desc:(p&&p.desc)||l.desc||'', unite:(p&&p.unite)||l.unite||'', qte:cvNum(l.qte)||0}; };
-  const ajouterAssemblage = (a, mult) => { const m = mult || cvNum(asMult) || 1;
+  const asLigne = l => { const p = l.code ? prodDe(l.code) : null; return {code:p?p.code:(l.code||''), desc:(p&&p.desc)||l.desc||'', unite:(p&&p.unite)||l.unite||'', qte:cvNum(l.qte)||0, f:l.f||''}; };
+  const ajouterAssemblage = (a, mult, silence) => { const m = mult || cvNum(asMult) || 1;
     setBc(x=>{ let lignes = [...x.lignes], libre = x.libre;
       a.lignes.forEach(l0=>{ const l = asLigne(l0);
         if(!l.code){ if(l.desc) libre = (libre ? libre.replace(/\s+$/,'')+'\n' : '')+(l.qte?(l.qte*m)+' × ':'')+l.desc; return; }
         const ex = lignes.find(y=>codeNorm(y.code)===codeNorm(l.code));
-        lignes = ex ? lignes.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+l.qte*m} : y) : [...lignes, {...l, qte:l.qte*m}]; });
+        lignes = ex ? lignes.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+l.qte*m} : y) : [...lignes, {...l, qte:l.qte*m, f:l.f || bcFournCode(l.code) || x.fournisseur}]; });
       return {...x, lignes, libre}; });
-    toast && toast('« '+a.nom+' »'+(m>1?' × '+m:'')+' ajouté au bon'); };
-  const lignesDuBon = () => [...choisies.map(l=>({code:l.code, desc:l.desc, qte:cvNum(l.qte), unite:l.unite||''})),
+    if(!silence) toast && toast('« '+a.nom+' »'+(m>1?' × '+m:'')+' ajouté au bon'); };
+  const ajouterModele = (mo, mult) => { const m = mult || cvNum(asMult) || 1; let n = 0, manque = [];
+    mo.as.forEach(x=>{ const a = AS.liste.find(y=>cvNorm(y.nom)===cvNorm(x.nom)); if(a){ ajouterAssemblage(a, (cvNum(x.mult)||1)*m, true); n++; } else manque.push(x.nom); });
+    toast && toast('« '+mo.nom+' »'+(m>1?' × '+m:'')+' ajouté au bon ('+n+' assemblage'+(n>1?'s':'')+')'+(manque.length ? ' — introuvable : '+manque.join(', ') : '')); };
+  const lignesDuBon = () => [...choisies.map(l=>({code:l.code, desc:l.desc, qte:cvNum(l.qte), unite:l.unite||'', f:fDe(l)})),
     ...bc.libre.split('\n').map(t=>t.trim()).filter(Boolean).map(t=>{ const m = t.match(/^(\d+(?:[.,]\d+)?)\s*[×x]\s*(.+)$/i); return m ? {code:'', desc:m[2], qte:cvNum(m[1]), unite:''} : {code:'', desc:t, qte:0, unite:''}; })];
   const sauverAssemblage = async (a, nom) => { const lignes = lignesDuBon();
     if(!lignes.length){ toast && toast('Le bon est vide — ajoute les articles de l\'assemblage d\'abord'); return; }
     const n = (nom||'').trim(); if(!a && !n){ toast && toast('Donne un nom à l\'assemblage'); return; }
     if(!a && AS.liste.some(x=>cvNorm(x.nom)===cvNorm(n))){ toast && toast('Un assemblage porte déjà ce nom'); return; }
     setAsOcc(true);
-    try{ await AS.enregistrer(a ? {...a, lignes} : {nom:n, desc:'', lignes}); toast && toast(a ? '« '+a.nom+' » mis à jour' : '« '+n+' » enregistré'); setAsEdit(null); setAsNom(''); }
+    try{ await AS.enregistrer(a ? {...a, lignes} : {nom:n, desc:'', cat:'', phase:'', lignes}); toast && toast(a ? '« '+a.nom+' » mis à jour' : '« '+n+' » enregistré'); setAsEdit(null); setAsNom(''); }
     catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
     setAsOcc(false); };
   const modifierAssemblage = a => { if((choisies.length || bc.libre.trim()) && !window.confirm('Le bon en cours sera remplacé par les articles de « '+a.nom+' ». Continuer ?')) return;
     setAsEdit(a); setBc(x=>({...x, lignes:[], libre:''})); ajouterAssemblage(a, 1); };
   const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat) && (!q || rechercheOk(texteProduit(p), q)));
-  const texteArticles = () => [...choisies.map(l=>{ const cf = codeFourn(l.code); return '- '+l.qte+' '+(l.unite&&l.unite!=='un'?l.unite+' ':'')+'× '+l.code+(cf && codeNorm(cf)!==codeNorm(l.code)?' ('+cf+')':'')+' — '+l.desc; }),
-    ...bc.libre.split('\n').map(s=>s.trim()).filter(Boolean).map(s=>'- '+s)].join('\n');
-  const envoyer = async ()=>{
-    const articles = texteArticles();
-    if(!articles){ toast && toast('Ajoute au moins un article'); return; }
-    if(!bc.courriel){ toast && toast('Entre le courriel du fournisseur'); return; }
+  const lignesF = f => choisies.filter(l=>fDe(l)===f);
+  const libresF = f => f===bc.fournisseur ? bc.libre.split('\n').map(s=>s.trim()).filter(Boolean) : [];
+  const fournsBon = BC_FOURNS.filter(f=>lignesF(f).length || libresF(f).length);
+  const courrielF = f => f===bc.fournisseur ? bc.courriel : courrielDe(f);
+  const texteArticles = f => [...lignesF(f).map(l=>{ const cf = codeFourn(l.code, f); return '- '+l.qte+' '+(l.unite&&l.unite!=='un'?l.unite+' ':'')+'× '+l.code+(cf && codeNorm(cf)!==codeNorm(l.code)?' ('+cf+')':'')+' — '+l.desc; }),
+    ...libresF(f).map(s=>'- '+s)].join('\n');
+  // v274 : un bon (un courriel) par fournisseur ; ce qui est envoyé sort du bon, le reste attend son envoi
+  const envoyer = async (f)=>{
+    const articles = texteArticles(f), courriel = courrielF(f);
+    if(!articles){ toast && toast('Rien à commander chez '+f); return; }
+    if(!courriel){ toast && toast('Entre le courriel de '+f); return; }
     setOccupe(true);
     try{
-      bcRetenirCourriel(bc.fournisseur, bc.courriel);
-      const numero = 'BC-'+String((B.bons.length||0)+1).padStart(4,'0');
+      bcRetenirCourriel(f, courriel);
+      const numero = 'BC-'+String((B.bons.length||0)+1+(bc.envoyes||[]).filter(e=>!B.bons.some(b=>b.numero===e.numero)).length).padStart(4,'0');
       const pourTxt = new Date(bc.pour+'T12:00:00').toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'});
       const sujet = 'Commande '+numero+' — '+bc.ref+' — Saran Électrique';
       const corps = 'Bonjour,\n\nVoici une commande pour Saran Électrique inc.\n\nRéférence : '+bc.ref+'\n'+
         (bc.mode==='À aller chercher' ? 'À aller chercher le '+pourTxt+(bc.employe?' par '+bc.employe:'') : 'Livraison souhaitée le '+pourTxt)+'\n\n'+articles+
         (bc.note ? '\n\nNote : '+bc.note : '')+'\n\nMerci de nous confirmer.\n\nWilliam Saran, Président\nSaran Électrique inc.\n(438) 490-3412\ninfo@saranelectrique.com';
-      window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com&view=cm&fs=1&to='+encodeURIComponent(bc.courriel)+'&su='+encodeURIComponent(sujet)+'&body='+encodeURIComponent(corps), '_blank');
+      window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com&view=cm&fs=1&to='+encodeURIComponent(courriel)+'&su='+encodeURIComponent(sujet)+'&body='+encodeURIComponent(corps), '_blank');
       const x = bc.passage;
-      await B.ajouter([numero, cvDay(new Date().toISOString()), bc.fournisseur, bc.courriel, bc.ref, bc.job, x ? x.e.day+' '+(x.e.phase||'') : '', bc.employe, bc.mode, bc.pour,
-        JSON.stringify(choisies.map(l=>({code:l.code, fournisseur:codeFourn(l.code), desc:l.desc, qte:cvNum(l.qte), unite:l.unite})).concat(bc.libre.split('\n').map(s=>s.trim()).filter(Boolean).map(s=>({desc:s})))), bc.note, 'Envoyée', x && x.e.lien || '']);
-      // Le passage : commande ✅ Placée (+ la liste dans l'événement, juste avant les infos du client)
+      await B.ajouter([numero, cvDay(new Date().toISOString()), f, courriel, bc.ref, bc.job, x ? x.e.day+' '+(x.e.phase||'') : '', bc.employe, bc.mode, bc.pour,
+        JSON.stringify(lignesF(f).map(l=>({code:l.code, fournisseur:codeFourn(l.code, f), desc:l.desc, qte:cvNum(l.qte), unite:l.unite})).concat(libresF(f).map(s=>({desc:s})))), bc.note, 'Envoyée', x && x.e.lien || '']);
+      const envoyes = [...(bc.envoyes||[]), {numero, f, texte:numero+' — '+f+(bc.employe?' (va chercher : '+bc.employe+')':'')+'\n'+articles.replace(/^- /gm,'')}];
+      // Le passage : commande ✅ Placée (+ les listes dans l'événement, juste avant les infos du client)
       if(x) await enregistrerCommande(x.cmd.cle, {day:x.e.day, job:bc.job+(x.e.phase?' '+x.e.phase:''), ot:'', eventId:x.e.id, calId:x.e.calId, ...cvClientInfo(x.j)}, 'Placée',
-        numero+' — '+bc.fournisseur+(bc.employe?' (va chercher : '+bc.employe+')':'')+'\n'+articles.replace(/^- /gm,''), {fournisseur:bc.fournisseur, mode:bc.mode});
-      toast && toast(numero+' prêt dans Gmail'+(x?' · passage marqué ✅ Placée':''));
-      setBc({...bcVide(), fournisseur:bc.fournisseur, courriel:bc.courriel});
+        envoyes.map(e=>e.texte).join('\n\n'), {fournisseur:[...new Set(envoyes.map(e=>e.f))].join(' + '), mode:bc.mode});
+      const restent = fournsBon.filter(y=>y!==f);
+      toast && toast(numero+' prêt dans Gmail'+(x?' · passage marqué ✅ Placée':'')+(restent.length ? ' — reste à envoyer chez '+restent.join(', ') : ''));
+      if(restent.length) setBc(b=>({...b, lignes:b.lignes.filter(l=>(l.f||b.fournisseur)!==f), libre: f===b.fournisseur ? '' : b.libre, envoyes}));
+      else setBc({...bcVide(), fournisseur:bc.fournisseur, courriel:bc.courriel});
     }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
     setOccupe(false);
   };
   const employes = [...new Set([...Object.values(CREW_INITIALS).filter(n=>!/ancien/i.test(n)), ...aVenir.flatMap(x=>x.e.crew||[])])];
+  const asFiltres = filtrerAs(AS.liste, pq, pcat, pph).sort((a,b)=>(a.cat||'~').localeCompare(b.cat||'~') || a.nom.localeCompare(b.nom,'fr'));
+  const moFiltres = filtrerAs(MO.liste, pq, pcat, '').sort((a,b)=>a.nom.localeCompare(b.nom,'fr'));
+  const nbAFaire = aVenir.filter(x=>!x.cmd.fait).length;
   return <div>
-    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Commandes</h2>
-    <div className="muted" style={{fontSize:12,marginBottom:10}}>Prépare une commande pour un passage qui s'en vient, ou pour la shop / un camion. Gmail s'ouvre avec la commande prête ; le passage passe à ✅ Placée dans l'agenda. Aucun prix n'est envoyé ni gardé ici.</div>
-
-    <div className="card" style={{marginBottom:10}}>
-      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
-        <b style={{fontSize:13}}>Fournisseur :</b>
-        {['Dubo','Lumen'].map(f=><button key={f} className={'btn btn-sm'+(bc.fournisseur===f?' btn-p':'')} onClick={()=>maj({fournisseur:f, courriel:courrielDe(f)})}>{f}</button>)}
-        <input value={bc.courriel} onChange={e=>maj({courriel:e.target.value})} placeholder="courriel du comptoir" style={{flex:'1 1 200px'}}/>
-      </div>
-      <ContactFournisseur f={bc.fournisseur} K={K} toast={toast} onCourriel={c=>maj({courriel:c})}/>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:6}}>
-        <label style={{fontSize:12}}>Référence (revient sur la facture)<input value={bc.ref} onChange={e=>maj({ref:e.target.value.toUpperCase()})} placeholder="ex. CRS FINITION CURPAS P03056" style={{width:'100%',boxSizing:'border-box'}}/></label>
-        <label style={{fontSize:12}}>Qui va chercher<select value={bc.employe} onChange={e=>maj({employe:e.target.value})} style={{width:'100%'}}><option value="">—</option>{employes.map(n=><option key={n}>{n}</option>)}</select></label>
-        <label style={{fontSize:12}}>{bc.mode==='À aller chercher'?'Pour le':'Livraison le'}<input type="date" value={bc.pour} onChange={e=>maj({pour:e.target.value})} style={{width:'100%',boxSizing:'border-box'}}/></label>
-        <label style={{fontSize:12}}>Mode<select value={bc.mode} onChange={e=>maj({mode:e.target.value})} style={{width:'100%'}}><option>À aller chercher</option><option>Livraison</option></select></label>
-      </div>
-      {bc.passage ? <div style={{fontSize:12.5,marginTop:6,color:'var(--accent)'}}>📅 Pour le passage {cvFmtDay(bc.passage.e.day)} {bc.passage.e.phase} · {bc.job} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>maj({passage:null})}>✕</button></div>
-        : <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:6,alignItems:'center'}}><span className="muted" style={{fontSize:12}}>Ou pour :</span>{CV_DESTS.map(d=><button key={d} className={'btn btn-sm'+(bc.job===d?' btn-p':'')} onClick={()=>choisirDest(d)}>{d}</button>)}</div>}
+    <h2 className="fh" style={{margin:'0 0 8px',fontSize:20}}>Commandes</h2>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
+      {[['bon','Bon de commande'],['assemblages','Assemblages'],['modeles','Modèles'],['acommander','À commander'+(nbAFaire?' · '+nbAFaire:'')]].map(([k,l])=><button key={k} className={'btn'+(ongletC===k?' btn-p':'')} onClick={()=>choisirOngletC(k)}>{l}</button>)}
     </div>
 
-    <div className="card" style={{marginBottom:10}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:6}}>
-        <b>Assemblages</b>
-        <label className="muted" style={{fontSize:12,display:'flex',alignItems:'center',gap:4}}>Quantité
-          <select value={asMult} onChange={e=>setAsMult(+e.target.value)}>{[1,2,3,4,5].map(n=><option key={n} value={n}>× {n}</option>)}</select></label>
-      </div>
-      <div className="muted" style={{fontSize:12,marginBottom:8}}>Listes préfaites pour une job ou pour remonter le stock du camion. « Ajouter » met les articles dans le bon ci-dessous ; tu ajustes ensuite les quantités.</div>
-      {!AS.lu && <div className="muted" style={{fontSize:13}}>Chargement…</div>}
-      {AS.lu && !AS.liste.length && <div className="muted" style={{fontSize:13}}>Aucun assemblage pour l'instant. Remplis le bon avec les articles, puis enregistre-le comme assemblage ci-dessous.</div>}
-      {AS.liste.map(a=><div key={a.row} style={{borderBottom:'1px solid var(--border)',padding:'6px 0'}}>
-        <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-          <button className="btn btn-sm" style={{background:'none',border:'none',padding:0,fontWeight:700,textAlign:'left',flex:'1 1 160px',cursor:'pointer'}} onClick={()=>setAsVoir(v=>v===a.nom?'':a.nom)}>{asVoir===a.nom?'▾ ':'▸ '}{a.nom} <span className="muted" style={{fontWeight:400,fontSize:12}}>· {a.lignes.length} articles</span></button>
-          <button className="btn btn-sm btn-p" onClick={()=>ajouterAssemblage(a)}>Ajouter{asMult>1?' × '+asMult:''}</button>
-          <button className="btn btn-sm" onClick={()=>modifierAssemblage(a)}>Modifier</button>
-        </div>
-        {a.desc && <div className="muted" style={{fontSize:12}}>{a.desc}</div>}
-        {asVoir===a.nom && <div style={{fontSize:12.5,marginTop:4}}>{a.lignes.map((l0,i)=>{ const l = asLigne(l0); return <div key={i} style={{display:'flex',gap:6,padding:'2px 0'}}>
-          <span style={{width:52,textAlign:'right',fontWeight:700}}>{l.qte||''}{l.unite && l.unite!=='un' ? ' '+l.unite : ''}</span><b style={{minWidth:90}}>{l.code}</b><span className="muted">{l.desc}</span></div>; })}</div>}
-      </div>)}
-      {asEdit ? <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginTop:8,padding:8,border:'1px solid var(--accent)',borderRadius:8}}>
-          <span style={{fontSize:12.5,flex:'1 1 200px'}}>Modification de <b>{asEdit.nom}</b> : ajuste le bon ci-dessous, puis enregistre.</span>
-          <button className="btn btn-sm btn-p" disabled={asOcc} onClick={()=>sauverAssemblage(asEdit)}>{asOcc?'…':'Enregistrer l\'assemblage'}</button>
-          <button className="btn btn-sm" disabled={asOcc} onClick={async()=>{ if(!window.confirm('Retirer l\'assemblage « '+asEdit.nom+' » ? (la ligne reste dans La mémoire, marquée Actif = non)')) return; setAsOcc(true); try{ await AS.retirer(asEdit); toast && toast('« '+asEdit.nom+' » retiré'); setAsEdit(null); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setAsOcc(false); }}>Retirer</button>
-          <button className="btn btn-sm" onClick={()=>setAsEdit(null)}>Annuler</button>
-        </div>
-        : (choisies.length>0 || bc.libre.trim()) && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginTop:8}}>
-          <input value={asNom} onChange={e=>setAsNom(e.target.value)} placeholder="Nom (ex. Finition salle de bain)" style={{flex:'1 1 200px'}}/>
-          <button className="btn btn-sm" disabled={asOcc || !asNom.trim()} onClick={()=>sauverAssemblage(null, asNom)}>{asOcc?'…':'Enregistrer le bon comme assemblage'}</button>
-        </div>}
-    </div>
-
-    <div className="card" style={{marginBottom:10}}>
-      <div style={{fontWeight:700,marginBottom:6}}>Articles {choisies.length>0 && <span className="muted" style={{fontWeight:400}}>· {choisies.length}</span>}</div>
-      {choisies.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
-        {choisies.map(l=><div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
-          <b style={{minWidth:90}}>{l.code}</b>{codeFourn(l.code) && codeNorm(codeFourn(l.code))!==codeNorm(l.code) && <span className="muted" style={{fontSize:11}}>{bc.fournisseur} : {codeFourn(l.code)}</span>}<span style={{flex:'1 1 140px'}}>{l.desc}</span>
-          <input value={l.qte} inputMode="decimal" onChange={e=>changerQte(l, 0, e.target.value)} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{l.unite}</span>
-          <button className="btn btn-sm" onClick={()=>setBc(x=>({...x, lignes:x.lignes.filter(y=>y.code!==l.code)}))}>✕</button>
-        </div>)}
-      </div>}
-      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
-        <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>setCat('')}>Tous</button>
-        {C.cats.filter(c=>c!=='DIVERS').map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(c)}>{c}</button>)}
-      </div>
-      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un article…" style={{width:'100%',boxSizing:'border-box',marginBottom:6}}/>
-      <div style={{maxHeight:320,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
-        {produits.map(p=>{ const n=qteDe(p.code); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:n?'var(--bg3)':undefined}}>
-          <b style={{minWidth:100}}>{p.code}</b><span style={{flex:1}} className={n?'':'muted'}>{p.desc}</span>
-          <button className="btn btn-sm" onClick={()=>changerQte(p,-1)} disabled={!n} style={{width:32}}>−</button>
-          <span style={{width:28,textAlign:'center',fontWeight:700}}>{n||''}</span>
-          <button className="btn btn-sm" onClick={()=>changerQte(p,1)} style={{width:32}}>+</button>
-        </div>; })}
-        {!C.lu && <div className="muted" style={{padding:10}}>Chargement…</div>}
-      </div>
-      <textarea value={bc.libre} onChange={e=>maj({libre:e.target.value})} rows={2} placeholder={"Autres articles, une ligne chacun (ex. 2 × boîte 4x4 profonde)"} style={{width:'100%',boxSizing:'border-box',marginTop:6,fontFamily:'inherit'}}/>
-      <input value={bc.note} onChange={e=>maj({note:e.target.value})} placeholder="Note au comptoir (optionnel)" style={{width:'100%',boxSizing:'border-box',marginTop:6}}/>
-      <div style={{display:'flex',justifyContent:'flex-end',gap:6,marginTop:8}}>
-        <button className="btn btn-sm" onClick={()=>setBc({...bcVide(), fournisseur:bc.fournisseur, courriel:bc.courriel})}>Effacer</button>
-        <button className="btn btn-sm btn-p" disabled={occupe || !bc.ref} onClick={envoyer}>{occupe?'…':'📧 Envoyer à '+bc.fournisseur+' (Gmail)'}</button>
-      </div>
-    </div>
-
+    {ongletC==='assemblages' && <AssemblagesOnglet C={C} AS={AS} toast={toast}/>}
+    {ongletC==='modeles' && <ModelesOnglet AS={AS} MO={MO} toast={toast}/>}
+    {ongletC==='acommander' && <>
     <div className="card" style={{marginBottom:10}}>
       <div style={{fontWeight:700,marginBottom:6}}>📅 Passages à commander (jusqu'au {cvFmtDay(fin)})</div>
       {loading && <div className="muted" style={{fontSize:13}}>Lecture de l'agenda…</div>}
@@ -8203,6 +8341,85 @@ function CommandesView({cfg, toast, refreshKey}){
             : <button className="btn btn-sm" onClick={()=>B.statut(b,'Ramassée').catch(e=>toast&&toast('Erreur : '+apiErrMsg(e)))}>✓ Ramassée</button>}</span>
         </div>; })}
     </div>}
+    </>}
+
+    {ongletC==='bon' && <>
+    <div className="muted" style={{fontSize:12,marginBottom:10}}>Prépare une commande pour un passage qui s'en vient, ou pour l'entrepôt / un camion. Gmail s'ouvre avec la commande prête (un courriel par fournisseur) ; le passage passe à ✅ Placée dans l'agenda. Aucun prix n'est envoyé.</div>
+    <div className="card" style={{marginBottom:10}}>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
+        <b style={{fontSize:13}}>Fournisseur par défaut :</b>
+        {BC_FOURNS.map(f=><button key={f} className={'btn btn-sm'+(bc.fournisseur===f?' btn-p':'')} onClick={()=>maj({fournisseur:f, courriel:courrielDe(f)})}>{f}</button>)}
+        <input value={bc.courriel} onChange={e=>maj({courriel:e.target.value})} placeholder="courriel du comptoir" style={{flex:'1 1 200px'}}/>
+      </div>
+      <ContactFournisseur f={bc.fournisseur} K={K} toast={toast} onCourriel={c=>maj({courriel:c})}/>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:6}}>
+        <label style={{fontSize:12}}>Référence (revient sur la facture)
+          <select value="" onChange={e=>{ const v = e.target.value; if(!v) return; if(v.startsWith('D:')) choisirDest(v.slice(2)); else choisirPassage(aVenir[+v]); }} style={{width:'100%',marginBottom:4}}>
+            <option value="">📅 Choisir dans l'agenda…</option>
+            {aVenir.map((x,i)=><option key={i} value={i}>{cvFmtDay(x.e.day)} · {x.e.phase||''} {x.c.code!=='PART'?x.c.code+' ':''}{x.j.name}{x.j.po?' · '+x.j.po:''}{x.cmd.fait?' (déjà commandé)':''}</option>)}
+            {CV_DESTS.map(d=><option key={'d'+d} value={'D:'+d}>{d}</option>)}
+          </select>
+          <input value={bc.ref} onChange={e=>maj({ref:e.target.value.toUpperCase()})} placeholder="ex. CRS FINITION CURPAS P03056" style={{width:'100%',boxSizing:'border-box'}}/></label>
+        <label style={{fontSize:12}}>Qui va chercher<select value={bc.employe} onChange={e=>maj({employe:e.target.value})} style={{width:'100%'}}><option value="">—</option>{employes.map(n=><option key={n}>{n}</option>)}</select></label>
+        <label style={{fontSize:12}}>{bc.mode==='À aller chercher'?'Pour le':'Livraison le'}<input type="date" value={bc.pour} onChange={e=>maj({pour:e.target.value})} style={{width:'100%',boxSizing:'border-box'}}/></label>
+        <label style={{fontSize:12}}>Mode<select value={bc.mode} onChange={e=>maj({mode:e.target.value})} style={{width:'100%'}}><option>À aller chercher</option><option>Livraison</option></select></label>
+      </div>
+      {bc.passage ? <div style={{fontSize:12.5,marginTop:6,color:'var(--accent)'}}>📅 Pour le passage {cvFmtDay(bc.passage.e.day)} {bc.passage.e.phase} · {bc.job} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>maj({passage:null})}>✕</button></div>
+        : <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:6,alignItems:'center'}}><span className="muted" style={{fontSize:12}}>Ou pour :</span>{CV_DESTS.map(d=><button key={d} className={'btn btn-sm'+(bc.job===d?' btn-p':'')} onClick={()=>choisirDest(d)}>{d}</button>)}</div>}
+    </div>
+
+    <div className="card" style={{marginBottom:10,borderColor:choisies.length||bc.libre.trim()?'var(--accent)':undefined}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:6}}>
+        <div style={{fontWeight:700}}>Le bon {choisies.length>0 && <span className="muted" style={{fontWeight:400}}>· {choisies.length} article{choisies.length>1?'s':''}</span>}
+          {(bc.envoyes||[]).length>0 && <span style={{color:'var(--success)',fontWeight:600,fontSize:12.5}}> · déjà envoyé : {bc.envoyes.map(e=>e.numero+' ('+e.f+')').join(', ')}</span>}</div>
+        <span style={{display:'flex',gap:6,alignItems:'center'}}>
+          <select value={asMult} onChange={e=>setAsMult(+e.target.value)} title="Combien de fois" style={{width:'auto'}}>{[1,2,3,4,5,6,8,10].map(n=><option key={n} value={n}>× {n}</option>)}</select>
+          <button className={'btn btn-sm'+(pick==='as'?' btn-p':'')} onClick={()=>setPick(p=>p==='as'?'':'as')}>+ Assemblage</button>
+          <button className={'btn btn-sm'+(pick==='mo'?' btn-p':'')} onClick={()=>setPick(p=>p==='mo'?'':'mo')}>+ Modèle</button>
+        </span>
+      </div>
+      {pick && <div style={{border:'1px solid var(--border2)',borderRadius:8,padding:8,marginBottom:8,background:'var(--bg3)'}}>
+        <FiltresAs q={pq} setQ={setPq} cat={pcat} setCat={setPcat} phase={pph} setPhase={setPph} avecPhase={pick==='as'}/>
+        <div style={{maxHeight:240,overflowY:'auto'}}>
+          {pick==='as' && (asFiltres.length ? asFiltres.map(a=><div key={a.row} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+              <span style={{flex:1}}><b>{a.nom}</b> <span className="muted" style={{fontSize:11.5}}>{[a.cat, a.phase, a.lignes.length+' article'+(a.lignes.length>1?'s':'')].filter(Boolean).join(' · ')}</span></span>
+              <button className="btn btn-sm btn-p" onClick={()=>ajouterAssemblage(a)}>+ Ajouter{asMult>1?' × '+asMult:''}</button></div>)
+            : <div className="muted" style={{fontSize:12.5}}>{AS.liste.length ? 'Aucun assemblage pour ces filtres.' : 'Aucun assemblage — crée-les dans l\'onglet Assemblages.'}</div>)}
+          {pick==='mo' && (moFiltres.length ? moFiltres.map(m=><div key={m.row} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+              <span style={{flex:1}}><b>{m.nom}</b> <span className="muted" style={{fontSize:11.5}}>{[m.cat, m.as.map(x=>(cvNum(x.mult)>1?cvNum(x.mult)+'×':'')+x.nom).join(', ')].filter(Boolean).join(' · ')}</span></span>
+              <button className="btn btn-sm btn-p" onClick={()=>ajouterModele(m)}>+ Ajouter{asMult>1?' × '+asMult:''}</button></div>)
+            : <div className="muted" style={{fontSize:12.5}}>{MO.liste.length ? 'Aucun modèle pour ces filtres.' : 'Aucun modèle — crée-les dans l\'onglet Modèles.'}</div>)}
+        </div>
+      </div>}
+      {!choisies.length && !bc.libre.trim() && <div className="muted" style={{fontSize:13,marginBottom:6}}>Vide pour l'instant : ajoute un assemblage, un modèle, ou des articles du catalogue plus bas.</div>}
+      {choisies.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
+        {choisies.map(l=><div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
+          <b style={{minWidth:90}}>{l.code}</b>{codeFourn(l.code, fDe(l)) && codeNorm(codeFourn(l.code, fDe(l)))!==codeNorm(l.code) && <span className="muted" style={{fontSize:11}}>{fDe(l)} : {codeFourn(l.code, fDe(l))}</span>}<span style={{flex:'1 1 140px'}}>{l.desc}</span>
+          <FournLigne f={fDe(l)} onChange={f=>changerF(l, f)}/>
+          <input value={l.qte} inputMode="decimal" onChange={e=>changerQte(l, 0, e.target.value)} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{l.unite}</span>
+          <button className="btn btn-sm" onClick={()=>setBc(x=>({...x, lignes:x.lignes.filter(y=>y.code!==l.code)}))}>✕</button>
+        </div>)}
+      </div>}
+      <textarea value={bc.libre} onChange={e=>maj({libre:e.target.value})} rows={2} placeholder={"Autres articles (chez "+bc.fournisseur+"), une ligne chacun (ex. 2 × boîte 4x4 profonde)"} style={{width:'100%',boxSizing:'border-box',fontFamily:'inherit'}}/>
+      <input value={bc.note} onChange={e=>maj({note:e.target.value})} placeholder="Note au comptoir (optionnel)" style={{width:'100%',boxSizing:'border-box',marginTop:6}}/>
+      <div style={{display:'flex',justifyContent:'space-between',gap:6,marginTop:8,flexWrap:'wrap',alignItems:'center'}}>
+        <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+          {(choisies.length>0 || bc.libre.trim()) && <><input value={asNom} onChange={e=>setAsNom(e.target.value)} placeholder="Garder ce bon comme assemblage…" style={{width:220,padding:'5px 9px'}}/>
+            <button className="btn btn-sm" disabled={asOcc || !asNom.trim()} onClick={()=>sauverAssemblage(null, asNom)}>{asOcc?'…':'💾'}</button></>}
+        </span>
+        <span style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          <button className="btn btn-sm" onClick={()=>setBc({...bcVide(), fournisseur:bc.fournisseur, courriel:bc.courriel})}>Effacer</button>
+          {(fournsBon.length ? fournsBon : [bc.fournisseur]).map(f=><button key={f} className="btn btn-sm btn-p" disabled={occupe || !bc.ref || !fournsBon.includes(f)} onClick={()=>envoyer(f)}>{occupe?'…':'📧 Envoyer à '+f+(fournsBon.length>1 ? ' ('+(lignesF(f).length+libresF(f).length)+')' : '')}</button>)}
+        </span>
+      </div>
+      {fournsBon.length>1 && <div className="muted" style={{fontSize:11.5,marginTop:4,textAlign:'right'}}>Deux fournisseurs : un courriel chacun. Ce qui est envoyé sort du bon.</div>}
+    </div>
+
+    <div className="card" style={{marginBottom:10}}>
+      <div style={{fontWeight:700,marginBottom:6}}>Catalogue <span className="muted" style={{fontWeight:400,fontSize:12}}>— chaque article ajouté va dans le bon ci-dessus</span></div>
+      <ChoixArticles C={C} qteDe={qteDe} onAjouter={(p,d)=>changerQte(p,d)}/>
+    </div>
+    </>}
   </div>;
 }
 
