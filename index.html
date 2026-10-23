@@ -155,7 +155,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v282';
+const APP_VERSION = 'v283';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7482,27 +7482,94 @@ function infosEvenement(ev){
   const travaux = desc.split('\n').filter(l=>!/^\s*(client|nom|t[ée]l(?:[ée]phone)?|courriel|e-?mail|email|adresse)\s*:/i.test(l)).join('\n').replace(/\n{3,}/g,'\n\n').trim();
   return {nom, tel, courriel, adresse:ev.location||'', titre, travaux};
 }
-function ChoixEvenementSoumission({onChoix, toast}){
-  const [ouvert,setOuvert]=useState(false);
-  const [etat,setEtat]=useState(null);
+// v283 : choisir le client d'une soumission dans un agenda, par date — Suivi Saran Électrique par défaut, Soumission ou The Crew au choix.
+const SOUM_AGENDAS = [['info@saranelectrique.com','Suivi Saran Électrique'],['soum','Soumission'],['saranelectrique@gmail.com','The Crew']];
+function ChoixEvenementSoumission({onChoix, toast, ouvertDefaut}){
+  const [ouvert,setOuvert]=useState(!!ouvertDefaut);
+  const [agenda,setAgendaS]=useState(()=>{ try{ return localStorage.getItem('soum_agenda')||'info@saranelectrique.com'; }catch(e){ return 'info@saranelectrique.com'; } });
+  const setAgenda = a => { setAgendaS(a); try{ localStorage.setItem('soum_agenda', a); }catch(e){} };
+  const [jour,setJour]=useState(()=>localDateStr(new Date()));
   const [q,setQ]=useState('');
-  const ouvrir = async ()=>{ setOuvert(!ouvert); if(etat) return; try{ setEtat(await soumEvenements()); }catch(e){ setEtat({id:null, liste:[], err:apiErrMsg(e)}); } };
-  const liste = etat ? etat.liste.filter(e=>!q || cvNorm([e.summary,e.location,e.description].join(' ')).includes(cvNorm(q))) : [];
+  const [etat,setEtat]=useState(null);   // {calId, liste, err}
+  useEffect(()=>{ if(!ouvert) return; let ok = true; setEtat(null);
+    (async()=>{ try{
+      const calId = agenda==='soum' ? await soumCalId() : agenda;
+      if(!calId){ if(ok) setEtat({calId:null, liste:[], err:'Pas d\'agenda « Soumission » dans Google Agenda.'}); return; }
+      const cherche = q.trim().length>=2;
+      const min = new Date(jour+'T00:00:00'), max = new Date(jour+'T23:59:59');
+      if(cherche){ min.setDate(min.getDate()-60); max.setDate(max.getDate()+60); }
+      const r = await window.gapi.client.calendar.events.list({calendarId:calId, timeMin:min.toISOString(), timeMax:max.toISOString(), singleEvents:true, orderBy:'startTime', maxResults:250, ...(cherche ? {q:q.trim()} : {})});
+      if(ok) setEtat({calId, liste:(r.result.items||[]).filter(e=>e.status!=='cancelled')});
+    }catch(e){ if(ok) setEtat({calId:null, liste:[], err:apiErrMsg(e)}); } })();
+    return ()=>{ ok = false; }; },[ouvert, agenda, jour, q]);
+  const bouger = n => { const d = new Date(jour+'T12:00:00'); d.setDate(d.getDate()+n); setJour(localDateStr(d)); };
+  const heure = e => e.start && e.start.dateTime ? new Date(e.start.dateTime).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'}) : 'Journée';
   return <div style={{marginTop:2}}>
-    <button className="btn btn-sm" onClick={ouvrir}>📅 Prendre le client dans l'agenda « Soumission »</button>
-    {ouvert && <div style={{marginTop:6,border:'1px solid var(--border2)',borderRadius:8,padding:6}}>
-      {!etat && <div className="muted" style={{fontSize:12.5}}>Lecture de l'agenda…</div>}
-      {etat && !etat.id && <div style={{fontSize:12.5}}>{etat.err ? 'Erreur : '+etat.err : 'Pas d\'agenda « Soumission » dans Google Agenda. Crée-le (Autres agendas › + › Créer un agenda, nom : Soumission), puis rouvre.'}</div>}
-      {etat && etat.id && <>
-        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (nom, adresse…)" style={{width:'100%',boxSizing:'border-box',marginBottom:4}}/>
-        <div style={{maxHeight:240,overflowY:'auto'}}>
-          {liste.map(e=><div key={e.id} onClick={()=>{ onChoix(e, etat.id); setOuvert(false); }} style={{padding:'5px 4px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}>
-            <b>{e.summary||'(sans titre)'}</b> <span className="muted" style={{fontSize:12}}>· {cvFmtDay(cvDay((e.start&&(e.start.dateTime||e.start.date))||''))}{e.location?' · 📍 '+e.location:''}</span>
-          </div>)}
-          {!liste.length && <div className="muted" style={{fontSize:12.5,padding:4}}>Aucun événement dans l'agenda « Soumission ».</div>}
-        </div></>}
+    <button className={'btn btn-sm'+(ouvert?' btn-p':'')} onClick={()=>setOuvert(!ouvert)}>📅 Prendre le client dans l'agenda</button>
+    {ouvert && <div style={{marginTop:6,border:'1px solid var(--border2)',borderRadius:8,padding:8}}>
+      <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:6}}>
+        {SOUM_AGENDAS.map(([k,l])=><button key={k} className={'btn btn-sm'+(agenda===k?' btn-p':'')} onClick={()=>setAgenda(k)}>{l}</button>)}
+      </div>
+      <div style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap',marginBottom:6}}>
+        <button className="btn btn-sm" onClick={()=>bouger(-1)}>←</button>
+        <input type="date" value={jour} onChange={e=>e.target.value && setJour(e.target.value)} style={{width:'auto',padding:'4px 8px'}}/>
+        <button className="btn btn-sm" onClick={()=>bouger(1)}>→</button>
+        {jour!==localDateStr(new Date()) && <button className="btn btn-sm" onClick={()=>setJour(localDateStr(new Date()))}>Aujourd'hui</button>}
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ou chercher un nom (±60 jours)…" style={{flex:'1 1 150px',minWidth:0,padding:'4px 8px'}}/>
+      </div>
+      <div style={{maxHeight:260,overflowY:'auto'}}>
+        {!etat && <div className="muted" style={{fontSize:12.5}}>Lecture de l'agenda…</div>}
+        {etat && etat.err && <div style={{fontSize:12.5,color:'var(--danger)'}}>{etat.err}</div>}
+        {etat && !etat.err && etat.liste.map(e=><div key={e.id} onClick={()=>{ onChoix(e, etat.calId); setOuvert(false); }} style={{padding:'6px 4px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}>
+          <b>{e.summary||'(sans titre)'}</b> <span className="muted" style={{fontSize:12}}>· {q.trim().length>=2 ? cvFmtDay(cvDay((e.start&&(e.start.dateTime||e.start.date))||''))+' · ' : ''}{heure(e)}{e.location?' · 📍 '+e.location:''}</span>
+        </div>)}
+        {etat && !etat.err && !etat.liste.length && <div className="muted" style={{fontSize:12.5,padding:4}}>{q.trim().length>=2 ? 'Rien trouvé.' : 'Rien à cette date dans cet agenda.'}</div>}
+      </div>
     </div>}
   </div>;
+}
+// v283 : importer le courriel que tu t'envoies sur place (notes + photos) dans la soumission
+function ImporterCourrielVisite({d, setD, toast}){
+  const [ouvert,setOuvert]=useState(false), [ok,setOk]=useState(()=>peutLireCourriels());
+  const [q,setQ]=useState('from:me newer_than:30d'), [liste,setListe]=useState(null), [occ,setOcc]=useState('');
+  useEffect(()=>{ if(!ouvert || !ok) return; let vivant = true; setListe(null);
+    (async()=>{ try{ const r = await gmReq('messages?maxResults=15&q='+encodeURIComponent(q));
+      const ms = await Promise.all((r.messages||[]).map(m=>gmReq('messages/'+m.id+'?format=metadata&metadataHeaders=Subject&metadataHeaders=To&metadataHeaders=Date').catch(()=>null)));
+      if(vivant) setListe(ms.filter(Boolean)); }catch(e){ if(vivant){ setListe([]); toast && toast('Gmail : '+apiErrMsg(e)); } } })();
+    return ()=>{ vivant = false; }; },[ouvert, ok, q]);
+  const importer = async m0 => { setOcc('Lecture du courriel…');
+    try{ const m = await gmReq('messages/'+m0.id+'?format=full'); const c = gmCorps(m.payload);
+      const texte = (c.txt || c.html.replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div)>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&')).replace(/\n{3,}/g,'\n\n').trim();
+      const images = c.pj.filter(a=>/^image\//.test(a.type||'') || /\.(jpe?g|png|heic|webp)$/i.test(a.nom));
+      let dos = d.dossier, ajout = [];
+      if(images.length){
+        if(!peutDeposer()) await requestToken('consent');
+        if(!dos){ dos = await driveDossier((d.nom||'Client')+(d.adresse?' — '+d.adresse.split(',')[0]:''), await driveDossier(PHOTOS_RACINE)); }
+        for(let i=0;i<images.length;i++){ const a = images[i]; setOcc('Photo '+(i+1)+'/'+images.length+'…');
+          const r = await gmReq('messages/'+m.id+'/attachments/'+a.id); const bin = atob(String(r.data||'').replace(/-/g,'+').replace(/_/g,'/'));
+          const f = new File([Uint8Array.from(bin, ch=>ch.charCodeAt(0))], a.nom, {type:a.type||'image/jpeg'});
+          const up = await driveDeposer(f, dos); ajout.push({id:up.id, titre:'', notes:''}); } }
+      const sujet = gmEntete(m,'Subject'), quand = new Date(+m.internalDate).toLocaleDateString('fr-CA',{day:'numeric',month:'short'});
+      setD(o=>({...o, dossier: dos || o.dossier, plan:[...(o.plan||[]), ...ajout], visite:[o.visite, '— Courriel du '+quand+(sujet ? ' : '+sujet : '')+' —\n'+texte].filter(Boolean).join('\n\n')}));
+      toast && toast('Courriel importé'+(ajout.length ? ' · '+ajout.length+' photo'+(ajout.length>1?'s':'')+' dans le plan des travaux' : '')+' — enregistre la soumission');
+      setOuvert(false);
+    }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
+    setOcc(''); };
+  return <>
+    <button className={'btn btn-sm'+(ouvert?' btn-p':'')} onClick={()=>setOuvert(!ouvert)}>📧 Importer mon courriel</button>
+    {ouvert && <div style={{marginTop:6,border:'1px solid var(--border2)',borderRadius:8,padding:8,width:'100%'}}>
+      {!ok ? <div style={{fontSize:13}}>Le CRM doit pouvoir lire tes courriels (une seule fois). <button className="btn btn-sm btn-p" onClick={async()=>{ try{ await requestToken('consent', SCOPE_GMAIL_LIRE); setOk(peutLireCourriels()); }catch(e){} }}>🔓 Autoriser</button></div>
+      : <>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Recherche Gmail" title="Recherche Gmail (ex. from:me newer_than:7d, ou un nom)" style={{width:'100%',boxSizing:'border-box',padding:'4px 8px',marginBottom:6}}/>
+        {occ && <div className="muted" style={{fontSize:12.5}}>{occ}</div>}
+        {liste===null && <div className="muted" style={{fontSize:12.5}}>Lecture de Gmail…</div>}
+        {liste && !liste.length && <div className="muted" style={{fontSize:12.5}}>Aucun courriel.</div>}
+        <div style={{maxHeight:240,overflowY:'auto'}}>{(liste||[]).map(m=><div key={m.id} onClick={()=>!occ && importer(m)} style={{padding:'6px 4px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}>
+          <b>{gmEntete(m,'Subject')||'(sans objet)'}</b> <span className="muted" style={{fontSize:12}}>· {gmQuand(m.internalDate)} — {m.snippet}</span></div>)}</div>
+        <div className="muted" style={{fontSize:11.5,marginTop:4}}>Le texte va dans « Mesures et notes », les photos dans le plan des travaux (dossier Drive de la soumission).</div>
+      </>}
+    </div>}
+  </>;
 }
 // Soumission acceptée : déplace son événement de l'agenda « Soumission » vers « En Attente ».
 async function soumAccepteeVersEnAttente(cfg, s, toast){
@@ -7847,12 +7914,20 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
         {champ('nom','Nom du client')}{champ('tel','Téléphone')}{champ('courriel','Courriel')}{champ('titre','Titre du projet (ex. Borne Flo X3)')}
       </div>
       <ChampAdresse value={d.adresse} onChange={a=>maj({adresse:a})} placeholder="Adresse"/>
-      {d.type==='Soumission' && <ChoixEvenementSoumission toast={toast} onChoix={(ev, calId)=>{ const i = infosEvenement(ev);
+      {d.type==='Soumission' && <ChoixEvenementSoumission toast={toast} ouvertDefaut={!d.nom && !d.numero} onChoix={(ev, calId)=>{ const i = infosEvenement(ev);
         setD(o=>({...o, nom:o.nom||i.nom, tel:o.tel||i.tel, courriel:o.courriel||i.courriel, adresse:o.adresse||i.adresse, titre:o.titre||i.titre, travaux:o.travaux||i.travaux, evenement:{id:ev.id, calId, titre:ev.summary||''}}));
         toast && toast('Client pris dans l\'agenda'); }}/>}
-      {d.evenement && <div className="muted" style={{fontSize:12}}>📅 Lié à « {d.evenement.titre} » (agenda Soumission) — acceptée, il ira dans En Attente.</div>}
+      {d.evenement && <div className="muted" style={{fontSize:12}}>📅 Lié à « {d.evenement.titre} »{d.evenement.calId===SOUM_CAL_ID ? ' (agenda Soumission) — acceptée, il ira dans En Attente.' : ' ('+((SOUM_AGENDAS.find(x=>x[0]===d.evenement.calId)||[])[1]||'agenda')+')'}</div>}
       <textarea value={d.travaux} onChange={e=>maj({travaux:e.target.value})} rows={d.travaux && d.travaux.length>160 ? 5 : 2} placeholder="Travaux…" style={{resize:'vertical',fontFamily:'inherit'}}/>
       {d.dossier && <div><span className="muted" style={{fontSize:12}}>PDF et photos du client :</span><SoumPhotos dossier={d.dossier}/></div>}
+      {d.type==='Soumission' && <div style={{borderTop:'1px dashed var(--border2)',paddingTop:8,marginTop:2}}>
+        <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginBottom:4}}>
+          <b style={{fontSize:13}}>📏 Sur place : mesures et notes</b><span className="muted" style={{fontSize:11.5}}>(pour toi — pas imprimé sur la soumission)</span>
+          <span style={{marginLeft:'auto'}}><ImporterCourrielVisite d={d} setD={setD} toast={toast}/></span>
+        </div>
+        <textarea value={d.visite||''} onChange={e=>maj({visite:e.target.value})} rows={d.visite && d.visite.length>120 ? 6 : 3} placeholder={'ex. Panneau 100 A au sous-sol, 12 pi jusqu\'au garage, 2 circuits libres…'} style={{width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
+        <div className="muted" style={{fontSize:11.5}}>Photos : 📷 dans « Plan des travaux » plus bas (elles vont dans le dossier Drive de la soumission).</div>
+      </div>}
     </div>
 
     {d.type==='Soumission' && <div className="card" style={{marginBottom:10}}>
