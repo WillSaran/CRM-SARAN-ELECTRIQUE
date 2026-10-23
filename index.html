@@ -147,13 +147,15 @@ function loadCfg(){
 function saveCfg(cfg){ localStorage.setItem('crm_cfg', JSON.stringify(cfg)); }
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.send';
+// v282 : lire la boîte Gmail (archiver, lu/non lu, libellés) — demandé seulement quand on ouvre Courriels › Gmail, jamais à la connexion
+const SCOPE_GMAIL_LIRE = 'https://www.googleapis.com/auth/gmail.modify';
 // v202 : ouvrir une section déjà filtrée sur un client (boutons de la fiche du Répertoire) — {cible, nom, q, code, vue, jobIds, suivi}
 let NAV_FOCUS = null;
 const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NAV_FOCUS.t||0) < 5000 ? NAV_FOCUS : null;
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v281';
+const APP_VERSION = 'v282';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -881,7 +883,8 @@ let tokenExpire = 0;
 let tokenScopes = '';   // permissions accordées (pour savoir si on peut déposer des photos dans Drive)
 function peutDeposer(){ return /drive\.file|auth\/drive(\s|$)/.test(tokenScopes); }
 function peutEnvoyerCourriel(){ return /gmail\.send/.test(tokenScopes); }
-function requestToken(prompt){
+function peutLireCourriels(){ return /gmail\.modify|mail\.google\.com/.test(tokenScopes); }
+function requestToken(prompt, extra){
   return new Promise((resolve,reject)=>{
     tokenClient.callback = (resp)=>{
       if(resp && resp.access_token){
@@ -892,7 +895,7 @@ function requestToken(prompt){
       } else { reject(resp); }
     };
     tokenClient.error_callback = (e)=>reject(e);
-    tokenClient.requestAccessToken({prompt: prompt!==undefined ? prompt : (window.gapi.client.getToken()?'':'consent')});
+    tokenClient.requestAccessToken({prompt: prompt!==undefined ? prompt : (window.gapi.client.getToken()?'':'consent'), include_granted_scopes:true, ...(extra ? {scope: SCOPES+' '+extra} : {})});
   });
 }
 function restoreToken(){
@@ -3224,7 +3227,141 @@ function cvFinSemaineProchaine(){ const d=new Date(); const dow=(d.getDay()+6)%7
 function cvJoursDepuis(d){ const t=Date.parse(String(d).slice(0,10)); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
 
 // ── UI: Courriels — suivi des fils de courriels de tes jobs (onglet « Courriels » rempli par La mémoire).
-function CourrielsView({cfg, refreshKey}){
+// v282 : boîte Gmail dans le CRM — Boîte de réception, À catégoriser, Suivi Isabelle (libellés de Gmail).
+const GM = 'https://gmail.googleapis.com/gmail/v1/users/me/';
+const gmReq = (path, opts) => window.gapi.client.request({path:GM+path, ...(opts||{})}).then(r=>r.result);
+function gmB64(s){ try{ const bin = atob(String(s||'').replace(/-/g,'+').replace(/_/g,'/')); return new TextDecoder('utf-8').decode(Uint8Array.from(bin, c=>c.charCodeAt(0))); }catch(e){ return ''; } }
+function gmEntete(m, n){ const h = ((m.payload||{}).headers||[]).find(x=>x.name.toLowerCase()===n.toLowerCase()); return h ? h.value : ''; }
+function gmNom(de){ const m = String(de||'').match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>/); return m ? (m[1].trim() || m[2]) : String(de||''); }
+function gmCorps(payload){ let html='', txt=''; const pj=[];
+  const tour = p => { if(!p) return;
+    if(p.filename && p.body && p.body.attachmentId) pj.push({nom:p.filename, id:p.body.attachmentId, type:p.mimeType, taille:p.body.size||0});
+    else if(p.mimeType==='text/html' && p.body && p.body.data && !html) html = gmB64(p.body.data);
+    else if(p.mimeType==='text/plain' && p.body && p.body.data && !txt) txt = gmB64(p.body.data);
+    (p.parts||[]).forEach(tour); };
+  tour(payload); return {html, txt, pj}; }
+function gmQuand(ms){ const d = new Date(+ms), auj = new Date(); if(d.toDateString()===auj.toDateString()) return d.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'});
+  return d.toLocaleDateString('fr-CA', d.getFullYear()===auj.getFullYear() ? {day:'numeric',month:'short'} : {day:'numeric',month:'short',year:'numeric'}); }
+const GM_VUES = [['INBOX','Boîte de réception'],['3-À CATÉGORISER','À catégoriser'],['Suivi Isabelle','Suivi Isabelle']];
+// Corps d'un message : HTML dans un cadre isolé (aucun script), liens dans un nouvel onglet
+function GmCorpsMessage({m}){
+  const {html, txt} = gmCorps(m.payload); const ref = useRef(null);
+  const doc = html ? '<base target="_blank"><style>body{font-family:Arial,sans-serif;font-size:14px;margin:8px;color:#222;background:#fff;word-wrap:break-word}img{max-width:100%;height:auto}</style>'+html
+    : '<base target="_blank"><style>body{font-family:Arial,sans-serif;font-size:14px;margin:8px;white-space:pre-wrap;color:#222;background:#fff}</style>'+String(txt||m.snippet||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const ajuster = () => { try{ const f = ref.current; if(f && f.contentDocument) f.style.height = Math.min(4000, f.contentDocument.documentElement.scrollHeight+10)+'px'; }catch(e){} };
+  return <iframe ref={ref} title="courriel" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" srcDoc={doc} onLoad={()=>{ ajuster(); setTimeout(ajuster, 600); }} style={{width:'100%',border:'none',borderRadius:6,background:'#fff',minHeight:80}}/>;
+}
+function GmailBoite({toast}){
+  const [ok,setOk]=useState(()=>peutLireCourriels());
+  const [vue,setVueS]=useState(()=>{ try{ return localStorage.getItem('gm_vue')||'INBOX'; }catch(e){ return 'INBOX'; } });
+  const setVue = v => { setVueS(v); setOuvert(null); try{ localStorage.setItem('gm_vue', v); }catch(e){} };
+  const [labels,setLabels]=useState(null), [nbs,setNbs]=useState({});
+  const [liste,setListe]=useState(null), [suite,setSuite]=useState(null), [err,setErr]=useState('');
+  const [q,setQ]=useState(''), [cherche,setCherche]=useState('');
+  const [ouvert,setOuvert]=useState(null), [occ,setOcc]=useState('');
+  const idDe = v => v==='INBOX' ? 'INBOX' : (labels||{})[v];
+  useEffect(()=>{ if(!ok) return; gmReq('labels').then(r=>{ const m = {}; (r.labels||[]).forEach(l=>{ m[l.name] = l.id; }); setLabels(m); }).catch(e=>setErr(apiErrMsg(e))); },[ok]);
+  const compter = useCallback(async()=>{ if(!labels) return; const n = {};
+    await Promise.all(GM_VUES.map(async([v])=>{ const id = v==='INBOX' ? 'INBOX' : labels[v]; if(!id) return; try{ const l = await gmReq('labels/'+encodeURIComponent(id)); n[v] = l.threadsUnread||0; }catch(e){} }));
+    setNbs(n); },[labels]);
+  const charger = useCallback(async(token)=>{ const id = idDe(vue);
+    if(!id){ setListe([]); setErr(vue==='INBOX' ? '' : 'Le libellé « '+vue+' » est introuvable dans Gmail.'); return; }
+    setErr(''); if(!token) setListe(null);
+    try{ const qs = 'threads?maxResults=25&labelIds='+encodeURIComponent(id)+(cherche ? '&q='+encodeURIComponent(cherche) : '')+(token ? '&pageToken='+token : '');
+      const r = await gmReq(qs);
+      const fils = await Promise.all((r.threads||[]).map(t=>gmReq('threads/'+t.id+'?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date').catch(()=>null)));
+      const l = fils.filter(Boolean).map(t=>{ const ms = t.messages||[], der = ms[ms.length-1]||{}, pre = ms[0]||{};
+        const lbl = [...new Set(ms.flatMap(m=>m.labelIds||[]))];
+        return {id:t.id, sujet:gmEntete(pre,'Subject')||'(sans objet)', de:[...new Set(ms.map(m=>gmNom(gmEntete(m,'From'))))].slice(-3).join(', '), extrait:t.snippet||der.snippet||'', quand:der.internalDate,
+          n:ms.length, nonLu:lbl.includes('UNREAD'), isabelle:labels && labels['Suivi Isabelle'] && lbl.includes(labels['Suivi Isabelle']), pj:ms.some(m=>gmCorps(m.payload).pj.length), labels:lbl}; });
+      setListe(x=>token ? [...(x||[]), ...l] : l); setSuite(r.nextPageToken||null);
+    }catch(e){ setErr(apiErrMsg(e)); setListe([]); } },[vue, labels, cherche]);
+  useEffect(()=>{ if(ok && labels) { charger(); compter(); } },[ok, labels, vue, cherche]);
+  const modifier = async (t, ajout, retrait) => { await gmReq('threads/'+t.id+'/modify', {method:'POST', body:{addLabelIds:ajout||[], removeLabelIds:retrait||[]}}); };
+  const ouvrir = async t => { setOcc('lire'); try{ const f = await gmReq('threads/'+t.id+'?format=full'); setOuvert({...t, messages:f.messages||[]});
+      if(t.nonLu){ await modifier(t, [], ['UNREAD']); setListe(l=>(l||[]).map(x=>x.id===t.id ? {...x, nonLu:false} : x)); compter(); } }
+    catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOcc(''); };
+  const action = async (t, quoi) => { setOcc(quoi);
+    try{
+      if(quoi==='archiver'){ await modifier(t, [], ['INBOX']); setListe(l=>(l||[]).filter(x=>x.id!==t.id)); setOuvert(null); toast && toast('Archivé'); }
+      if(quoi==='nonlu'){ await modifier(t, ['UNREAD'], []); setListe(l=>(l||[]).map(x=>x.id===t.id ? {...x, nonLu:true} : x)); setOuvert(null); }
+      if(quoi==='isabelle'){ const id = labels['Suivi Isabelle']; if(!id){ toast && toast('Libellé « Suivi Isabelle » introuvable'); }
+        else { const a = !t.isabelle; await modifier(t, a?[id]:[], a?[]:[id]); setListe(l=>(l||[]).map(x=>x.id===t.id ? {...x, isabelle:a} : x)); if(ouvert && ouvert.id===t.id) setOuvert(o=>({...o, isabelle:a})); toast && toast(a ? 'Mis dans Suivi Isabelle' : 'Retiré de Suivi Isabelle'); } }
+      if(quoi==='categoriser'){ const id = labels['3-À CATÉGORISER']; if(id){ const a = !t.labels.includes(id); await modifier(t, a?[id]:[], a?[]:[id]); t.labels = a ? [...t.labels, id] : t.labels.filter(x=>x!==id); setListe(l=>(l||[]).map(x=>x.id===t.id ? {...x, labels:t.labels} : x)); toast && toast(a ? 'Mis dans À catégoriser' : 'Retiré de À catégoriser'); } }
+      compter();
+    }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
+    setOcc(''); };
+  const telecharger = async (m, a) => { try{ const r = await gmReq('messages/'+m.id+'/attachments/'+a.id); const bin = atob(String(r.data||'').replace(/-/g,'+').replace(/_/g,'/'));
+      const url = URL.createObjectURL(new Blob([Uint8Array.from(bin, c=>c.charCodeAt(0))], {type:a.type||'application/octet-stream'}));
+      const lien = document.createElement('a'); lien.href = url; lien.download = a.nom; lien.target = '_blank'; document.body.appendChild(lien); lien.click(); lien.remove(); setTimeout(()=>URL.revokeObjectURL(url), 60000); }
+    catch(e){ toast && toast('Pièce jointe : '+apiErrMsg(e)); } };
+  const lienGmail = t => 'https://mail.google.com/mail/?authuser=info@saranelectrique.com#all/'+t.id;
+  if(!ok) return <div className="card" style={{fontSize:13.5}}>
+    <div style={{marginBottom:8}}>Pour voir ta boîte Gmail ici (boîte de réception, À catégoriser, Suivi Isabelle), Google doit permettre au CRM de lire tes courriels. Une seule fois.</div>
+    <button className="btn btn-p" onClick={async()=>{ try{ await requestToken('consent', SCOPE_GMAIL_LIRE); setOk(peutLireCourriels()); if(!peutLireCourriels()) toast && toast('Permission refusée — coche « Gmail » dans la fenêtre Google.'); }catch(e){ toast && toast('Connexion annulée'); } }}>🔓 Autoriser la lecture des courriels</button>
+  </div>;
+  const catId = labels && labels['3-À CATÉGORISER'];
+  return <div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+      {GM_VUES.map(([v,l])=><button key={v} className={'btn btn-sm'+(vue===v?' btn-p':'')} onClick={()=>setVue(v)}>{l}{nbs[v] ? <span style={{marginLeft:5,background:vue===v?'rgba(255,255,255,.25)':'var(--accent)',color:'#fff',borderRadius:999,padding:'0 6px',fontSize:11}}>{nbs[v]}</span> : null}</button>)}
+      <form onSubmit={e=>{ e.preventDefault(); setCherche(q.trim()); }} style={{flex:'1 1 200px',display:'flex',gap:4,minWidth:0}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher dans ce dossier (comme dans Gmail)…" style={{flex:1,minWidth:0,padding:'6px 10px'}}/>
+        {cherche && <button type="button" className="btn btn-sm" onClick={()=>{ setQ(''); setCherche(''); }}>✕</button>}
+      </form>
+      <button className="btn btn-sm" title="Relire" onClick={()=>{ charger(); compter(); }}>⟳</button>
+    </div>
+    {err && <div className="card" style={{color:'var(--danger)',fontSize:13,marginBottom:10}}>{err}</div>}
+    {ouvert ? <div className="card">
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+        <button className="btn btn-sm" onClick={()=>setOuvert(null)}>← Retour</button>
+        {ouvert.labels.includes('INBOX') && <button className="btn btn-sm" disabled={!!occ} onClick={()=>action(ouvert,'archiver')}>📥 Archiver</button>}
+        <button className="btn btn-sm" disabled={!!occ} onClick={()=>action(ouvert,'nonlu')}>Marquer non lu</button>
+        <button className={'btn btn-sm'+(ouvert.isabelle?' btn-p':'')} disabled={!!occ} onClick={()=>action(ouvert,'isabelle')}>{ouvert.isabelle ? '✓ Suivi Isabelle' : '+ Suivi Isabelle'}</button>
+        {catId && <button className={'btn btn-sm'+(ouvert.labels.includes(catId)?' btn-p':'')} disabled={!!occ} onClick={()=>action(ouvert,'categoriser')}>{ouvert.labels.includes(catId) ? '✓ À catégoriser' : '+ À catégoriser'}</button>}
+        <a className="btn btn-sm btn-p" href={lienGmail(ouvert)} target="_blank" rel="noopener" style={{textDecoration:'none',marginLeft:'auto'}}>↩ Répondre dans Gmail</a>
+      </div>
+      <div className="fh" style={{fontSize:18,marginBottom:8}}>{ouvert.sujet}</div>
+      {ouvert.messages.map((m,i)=>{ const pj = gmCorps(m.payload).pj; const dernier = i===ouvert.messages.length-1;
+        return <details key={m.id} open={dernier || ouvert.messages.length<=2} style={{borderTop:'1px solid var(--border)',padding:'8px 0'}}>
+          <summary style={{cursor:'pointer',display:'flex',justifyContent:'space-between',gap:8,fontSize:13}}>
+            <span><b>{gmNom(gmEntete(m,'From'))}</b> <span className="muted">{(gmEntete(m,'From').match(/<([^>]+)>/)||[])[1]||''}</span>{!dernier && <span className="muted"> — {m.snippet && m.snippet.slice(0,80)}</span>}</span>
+            <span className="muted" style={{whiteSpace:'nowrap'}}>{new Date(+m.internalDate).toLocaleString('fr-CA',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span></summary>
+          <div className="muted" style={{fontSize:11.5,margin:'2px 0 6px'}}>À : {gmEntete(m,'To')}{gmEntete(m,'Cc') ? ' · Cc : '+gmEntete(m,'Cc') : ''}</div>
+          <GmCorpsMessage m={m}/>
+          {pj.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6}}>{pj.map(a=><button key={a.id} className="btn btn-sm" onClick={()=>telecharger(m, a)}>📎 {a.nom} <span className="muted">({Math.max(1,Math.round(a.taille/1024))} Ko)</span></button>)}</div>}
+        </details>; })}
+    </div>
+    : <div className="card" style={{padding:0}}>
+      {liste===null && <div className="muted" style={{padding:14}}>Lecture de Gmail…</div>}
+      {liste && !liste.length && !err && <div className="muted" style={{padding:14}}>{cherche ? 'Rien trouvé.' : vue==='INBOX' ? '🎉 Boîte de réception vide.' : 'Rien ici.'}</div>}
+      {(liste||[]).map(t=><div key={t.id} onClick={()=>ouvrir(t)} style={{display:'flex',gap:10,alignItems:'center',padding:'9px 12px',borderBottom:'1px solid var(--border)',cursor:'pointer',background:t.nonLu?'rgba(var(--accent-rgb),.06)':undefined}}>
+        <span style={{width:8,height:8,borderRadius:'50%',background:t.nonLu?'var(--accent)':'transparent',flexShrink:0}}></span>
+        <div style={{flex:'0 1 170px',minWidth:70,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontWeight:t.nonLu?800:500,fontSize:13.5}}>{t.de}{t.n>1 && <span className="muted" style={{fontWeight:400}}> {t.n}</span>}</div>
+        <div style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:13.5}}>
+          {t.isabelle && <span className="badge" style={{background:'#8e24aa',color:'#fff',marginRight:5}}>Isabelle</span>}
+          {catId && t.labels.includes(catId) && vue!=='3-À CATÉGORISER' && <span className="badge" style={{background:'var(--bg4)',color:'var(--text)',marginRight:5}}>À catégoriser</span>}
+          <span style={{fontWeight:t.nonLu?800:500}}>{t.sujet}</span> <span className="muted">— {t.extrait}</span></div>
+        {t.pj && <span title="Pièce jointe">📎</span>}
+        <span style={{flexShrink:0,fontSize:12,fontWeight:t.nonLu?800:400}} className={t.nonLu?'':'muted'}>{gmQuand(t.quand)}</span>
+        {vue==='INBOX' && <button className="btn btn-sm" title="Archiver" disabled={!!occ} onClick={e=>{ e.stopPropagation(); action(t,'archiver'); }} style={{padding:'1px 7px'}}>📥</button>}
+      </div>)}
+      {suite && <div style={{padding:10,textAlign:'center'}}><button className="btn btn-sm" onClick={()=>charger(suite)}>Plus ancien…</button></div>}
+    </div>}
+    {occ==='lire' && <div className="muted" style={{fontSize:12,marginTop:6}}>Ouverture…</div>}
+  </div>;
+}
+function CourrielsView({cfg, refreshKey, toast}){
+  const [onglet,setOngletS]=useState(()=>{ try{ return localStorage.getItem('courriels_onglet')||'gmail'; }catch(e){ return 'gmail'; } });
+  const setOnglet = k => { setOngletS(k); try{ localStorage.setItem('courriels_onglet', k); }catch(e){} };
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 8px',fontSize:22}}>Courriels</h2>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
+      {[['gmail','Gmail'],['jobs','Suivi des jobs']].map(([k,l])=><button key={k} className={'btn'+(onglet===k?' btn-p':'')} onClick={()=>setOnglet(k)}>{l}</button>)}
+    </div>
+    {onglet==='gmail' ? <GmailBoite toast={toast}/> : <CourrielsJobs cfg={cfg} refreshKey={refreshKey}/>}
+  </div>;
+}
+function CourrielsJobs({cfg, refreshKey}){
   const {loading, err, events, registry, factures, courriels} = useClientsData(cfg, refreshKey+'|c');
   const [reglés, marquer] = useCourrielsReglés(cfg);
   const [filtre,setFiltre]=useState('repondre');
@@ -3247,7 +3384,6 @@ function CourrielsView({cfg, refreshKey}){
     .sort((a,b)=> filtre==='regles'||filtre==='info' ? String(b.dernier).localeCompare(String(a.dernier)) : String(a.dernier).localeCompare(String(b.dernier)));
   const couleur = j => j==null ? 'var(--muted)' : j>=7 ? 'var(--danger)' : j>=3 ? 'var(--warning)' : 'var(--success)';
   return <div>
-    <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Courriels</h2>
     <div className="muted" style={{fontSize:13,marginBottom:12}}>Les fils de courriels de tes jobs, lus par La mémoire à midi et à minuit. Les plus vieux en premier : ce qui attend depuis longtemps est en rouge.</div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
       {Object.entries(groupes).map(([k,g])=><button key={k} className={'btn btn-sm'+(filtre===k?' btn-p':'')} onClick={()=>setFiltre(k)}>{g.l} ({tous.filter(g.f).length})</button>)}
@@ -11499,7 +11635,7 @@ function App(){
             : cible==='factures' ? <FacturesView cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/>
             : cible==='paiements' ? <PaiementsOnglet cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/>
             : cible==='soumissions' ? <SoumissionsView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/> : null}/>}
-        {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey}/>}
+        {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey} toast={show}/>}
         {nav==='contacts' && <RepertoireView key={'rc'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts}/>}
         {nav==='projets' && <ProjetsView key={'p'+navKey} data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='agenda' && <AgendaView cfg={effectiveCfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
