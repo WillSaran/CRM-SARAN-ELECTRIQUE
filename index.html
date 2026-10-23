@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v277';
+const APP_VERSION = 'v278';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8079,7 +8079,7 @@ function bcQteTexte(l){ const f = l.format||'', q = l.qte;
   if(f==='pied') return q+' pi';
   return q+' '+(l.unite && l.unite!=='un' ? l.unite+' ' : '')+'×'; }
 // Liste du catalogue (catégories + recherche) — pour le bon et pour les assemblages
-function ChoixArticles({C, qteDe, onAjouter, hauteur}){
+function ChoixArticles({C, qteDe, onAjouter, hauteur, estDans, onLibre}){
   const [q,setQ]=useState(''), [cat,setCat]=useState(''), [sous,setSous]=useState('');
   const sousCats = cat ? [...new Set(C.produits.filter(p=>p.cat===cat && p.sous).map(p=>p.sous))].sort() : [];
   const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat) && (!sous || p.sous===sous) && (!q || rechercheOk(texteProduit(p), q)));
@@ -8092,15 +8092,55 @@ function ChoixArticles({C, qteDe, onAjouter, hauteur}){
       <button className={'btn btn-sm'+(!sous?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>setSous('')}>Tout {cat}</button>
       {sousCats.map(x=><button key={x} className={'btn btn-sm'+(sous===x?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>setSous(x)}>{x}</button>)}
     </div>}
-    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un article…" style={{width:'100%',boxSizing:'border-box',marginBottom:6}}/>
+    <div style={{display:'flex',gap:6,marginBottom:6}}>
+      <input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter' && onLibre && q.trim() && !produits.length){ onLibre(q.trim()); setQ(''); } }} placeholder={onLibre ? 'Chercher un article… (pas trouvé ? + l\'ajoute tel quel)' : 'Chercher un article…'} style={{flex:1,minWidth:0}}/>
+      {onLibre && <button className="btn btn-sm btn-p" disabled={!q.trim()} title="Pas dans le catalogue : l'ajouter tel quel (le comptoir saura quoi te donner)" onClick={()=>{ onLibre(q.trim()); setQ(''); }} style={{fontSize:16,padding:'0 12px'}}>+</button>}
+    </div>
+    {onLibre && q.trim() && !produits.length && <div style={{fontSize:12.5,marginBottom:6}}>Pas dans le catalogue. <span style={{color:'var(--accent)',cursor:'pointer',fontWeight:700}} onClick={()=>{ onLibre(q.trim()); setQ(''); }}>+ Ajouter « {q.trim()} » tel quel</span></div>}
     <div style={{maxHeight:hauteur||320,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
-      {produits.map(p=>{ const n = qteDe(p.code); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:n?'var(--bg3)':undefined}}>
-        <b style={{minWidth:100}}>{p.code}</b><span style={{flex:1}} className={n?'':'muted'}>{p.desc}</span>
+      {produits.map(p=>{ const n = qteDe(p.code), dans = n || (estDans && estDans(p.code)); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:dans?'var(--bg3)':undefined}}>
+        <b style={{minWidth:100}}>{p.code}</b><span style={{flex:1}} className={dans?'':'muted'}>{p.desc}</span>
         <button className="btn btn-sm" onClick={()=>onAjouter(p,-1)} disabled={!n} style={{width:32}}>−</button>
-        <span style={{width:28,textAlign:'center',fontWeight:700}}>{n||''}</span>
+        <span style={{width:28,textAlign:'center',fontWeight:700}}>{n || (dans ? '0' : '')}</span>
         <button className="btn btn-sm" onClick={()=>onAjouter(p,1)} style={{width:32}}>+</button>
       </div>; })}
       {!C.lu && <div className="muted" style={{padding:10}}>Chargement…</div>}
+    </div>
+  </div>;
+}
+// v278 : sections d'un assemblage (Appareils Décora, Plaques Décora, Disjoncteurs…) ; une quantité de base peut être 0
+const AS_SECTIONS = ['Appareils Décora','Plaques Décora','Boîtes','Fil','Disjoncteurs','Éclairage','Chauffage','Divers'];
+const SANS_SECTION = 'Sans section';
+function sectionsDe(lignes){ return [...new Set(lignes.map(l=>l.section||SANS_SECTION))]; }
+// Compteur − qté + (le 0 est permis)
+function Compteur({v, onChange}){
+  const n = cvNum(v)||0;
+  return <span style={{display:'inline-flex',alignItems:'center',gap:3,flexShrink:0}}>
+    <button className="btn btn-sm" onClick={()=>onChange(String(Math.max(0, n-1)))} disabled={n<=0} style={{width:30}}>−</button>
+    <input value={v} inputMode="decimal" onChange={e=>onChange(e.target.value)} style={{width:46,textAlign:'center',padding:'4px 2px',fontWeight:700,color:n?'var(--text)':'var(--muted)'}}/>
+    <button className="btn btn-sm" onClick={()=>onChange(String(n+1))} style={{width:30}}>+</button>
+  </span>;
+}
+// Remplir un assemblage / modèle avant de le mettre dans le bon : chaque article part de sa quantité de base (souvent 0), tu marques ce qu'il faut, puis OK.
+function RemplirPanel({titre, lignes, onOk, onAnnuler}){
+  const [rows,setRows]=useState(()=>lignes.map((l,i)=>({...l, k:i, qte:String(cvNum(l.qte)||0)})));
+  const secs = sectionsDe(rows), total = rows.filter(r=>cvNum(r.qte)>0).length;
+  return <div style={{border:'2px solid var(--accent)',borderRadius:10,padding:10,marginBottom:10,background:'var(--bg2)'}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:6}}>
+      <div className="fh" style={{fontSize:15}}>{titre}</div>
+      <span className="muted" style={{fontSize:12}}>Marque les quantités ; les articles à 0 ne vont pas dans le bon.</span>
+    </div>
+    {secs.map(sec=><div key={sec} style={{marginBottom:6}}>
+      <div style={{fontSize:11.5,fontWeight:800,textTransform:'uppercase',letterSpacing:'.04em',color:'var(--accent)',padding:'6px 0 2px'}}>{sec}</div>
+      {rows.filter(r=>(r.section||SANS_SECTION)===sec).map(r=><div key={r.k} style={{display:'flex',gap:6,alignItems:'center',padding:'4px 0',borderBottom:'1px solid var(--border)',fontSize:13,opacity:cvNum(r.qte)>0?1:.6}}>
+        {r.code ? <b style={{minWidth:90}}>{r.code}</b> : <span className="muted" style={{minWidth:90,fontSize:11.5}}>hors catalogue</span>}
+        <span style={{flex:1,minWidth:0}}>{r.desc}</span>
+        <Compteur v={r.qte} onChange={v=>setRows(l=>l.map(x=>x.k===r.k?{...x, qte:v}:x))}/>
+      </div>)}
+    </div>)}
+    <div style={{display:'flex',justifyContent:'flex-end',gap:6,marginTop:8}}>
+      <button className="btn btn-sm" onClick={onAnnuler}>Annuler</button>
+      <button className="btn btn-sm btn-p" disabled={!total} onClick={()=>onOk(rows.filter(r=>cvNum(r.qte)>0))}>OK — mettre {total} article{total>1?'s':''} dans le bon</button>
     </div>
   </div>;
 }
@@ -8123,47 +8163,71 @@ function FiltresAs({q, setQ, cat, setCat, phase, setPhase, avecPhase=true}){
 function AssemblagesOnglet({C, AS, toast}){
   const [q,setQ]=useState(''), [cat,setCat]=useState(''), [phase,setPhase]=useState('');
   const [ed,setEd]=useState(null), [occ,setOcc]=useState(false), [voir,setVoir]=useState('');
+  const [nouvSec,setNouvSec]=useState('');
   const prodDe = code => C.produits.find(p=>codeNorm(p.code)===codeNorm(code) || (p.alias && codeNorm(p.alias)===codeNorm(code)));
-  const nouveau = () => setEd({nom:'', desc:'', cat:'', phase:'', lignes:[], libre:''});
-  const ouvrir = a => setEd({...a, lignes:a.lignes.filter(l=>l.code).map(l=>{ const p = prodDe(l.code); return {...l, desc:l.desc||(p&&p.desc)||'', unite:l.unite||(p&&p.unite)||''}; }), libre:a.lignes.filter(l=>!l.code).map(l=>(l.qte?l.qte+' × ':'')+l.desc).join('\n')});
-  const qteDe = code => { const l = ed && ed.lignes.find(x=>codeNorm(x.code)===codeNorm(code)); return l ? (cvNum(l.qte)||0) : 0; };
-  const ajouter = (p, delta) => setEd(x=>{ const ex = x.lignes.find(l=>codeNorm(l.code)===codeNorm(p.code)); const n = Math.max(0, (ex ? cvNum(ex.qte)||0 : 0) + delta);
-    let lignes = ex ? x.lignes.map(l=>l===ex ? {...l, qte:n} : l) : [...x.lignes, {code:p.code, desc:p.desc, unite:p.unite, qte:n, f:bcFournCode(p.code)||'Dubo'}];
-    return {...x, lignes:lignes.filter(l=>cvNum(l.qte))}; });
+  const nouveau = () => setEd({nom:'', desc:'', cat:'', phase:'', lignes:[], sections:[], active:'', libDesc:''});
+  const ouvrir = a => { const lignes = a.lignes.map((l,i)=>{ const p = l.code ? prodDe(l.code) : null; return {...l, k:'L'+i, desc:l.desc||(p&&p.desc)||'', unite:l.unite||(p&&p.unite)||'', qte:String(cvNum(l.qte)||0)}; });
+    const secs = sectionsDe(lignes).filter(x=>x!==SANS_SECTION); setEd({...a, lignes, sections:secs, active:secs[0]||'', libDesc:''}); };
+  const qteDe = code => { const l = ed && ed.lignes.find(x=>x.code && codeNorm(x.code)===codeNorm(code)); return l ? (cvNum(l.qte)||0) : 0; };
+  const estDans = code => !!(ed && ed.lignes.some(x=>x.code && codeNorm(x.code)===codeNorm(code)));
+  // + dans le catalogue : 1er clic = l'article entre dans la section choisie à 0 ; les clics suivants montent la quantité
+  const ajouter = (p, delta) => setEd(x=>{ const ex = x.lignes.find(l=>l.code && codeNorm(l.code)===codeNorm(p.code));
+    if(!ex){ if(delta<0) return x; return {...x, lignes:[...x.lignes, {k:'L'+Date.now(), code:p.code, desc:p.desc, unite:p.unite, qte:'0', f:bcFournCode(p.code)||'Dubo', section:x.active||''}]}; }
+    return {...x, lignes:x.lignes.map(l=>l===ex ? {...l, qte:String(Math.max(0,(cvNum(l.qte)||0)+delta))} : l)}; });
+  const majLigne = (k, patch) => setEd(x=>({...x, lignes:x.lignes.map(l=>l.k===k ? {...l, ...patch} : l)}));
+  const ajouterSection = n => { const t = String(n||'').trim(); if(!t) return; setEd(x=>({...x, sections: x.sections.includes(t) ? x.sections : [...x.sections, t], active:t})); setNouvSec(''); };
+  const retirerSection = sec => setEd(x=>({...x, sections:x.sections.filter(y=>y!==sec), active: x.active===sec ? '' : x.active, lignes:x.lignes.map(l=>l.section===sec ? {...l, section:''} : l)}));
+  const ajouterLibre = d => { d = String(d||'').trim(); if(!d) return; setEd(x=>({...x, lignes:[...x.lignes, {k:'L'+Date.now(), code:'', desc:d, unite:'', qte:'0', section:x.active||''}]})); };
   const sauver = async () => {
     const n = ed.nom.trim(); if(!n){ toast && toast('Donne un nom à l\'assemblage'); return; }
     if(!ed.row && AS.liste.some(x=>cvNorm(x.nom)===cvNorm(n))){ toast && toast('Un assemblage porte déjà ce nom'); return; }
-    const libres = ed.libre.split('\n').map(t=>t.trim()).filter(Boolean).map(t=>{ const m = t.match(/^(\d+(?:[.,]\d+)?)\s*[×x]\s*(.+)$/i); return m ? {code:'', desc:m[2], qte:cvNum(m[1]), unite:''} : {code:'', desc:t, qte:0, unite:''}; });
-    const lignes = [...ed.lignes.filter(l=>cvNum(l.qte)).map(l=>({code:l.code, desc:l.desc, qte:cvNum(l.qte), unite:l.unite||'', f:l.f||'Dubo'})), ...libres];
+    const ordre = [...ed.sections, ''];
+    const lignes = ed.lignes.slice().sort((a,b)=>ordre.indexOf(a.section||'')-ordre.indexOf(b.section||''))
+      .map(l=>l.code ? {code:l.code, desc:l.desc, qte:cvNum(l.qte)||0, unite:l.unite||'', f:l.f||'Dubo', section:l.section||'', ...(l.format?{format:l.format}:{})} : {code:'', desc:l.desc, qte:cvNum(l.qte)||0, unite:'', section:l.section||''});
     if(!lignes.length){ toast && toast('Ajoute au moins un article'); return; }
     setOcc(true);
     try{ await AS.enregistrer({row:ed.row, nom:n, desc:ed.desc, cat:ed.cat, phase:ed.phase, lignes}); toast && toast('« '+n+' » enregistré'); setEd(null); }
     catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
     setOcc(false); };
-  if(ed) return <div className="card">
+  if(ed){ const secs = [...ed.sections, ...(ed.lignes.some(l=>!l.section) ? [''] : [])];
+    return <div className="card">
     <div className="fh" style={{fontSize:16,marginBottom:8}}>{ed.row ? 'Modifier « '+ed.nom+' »' : 'Nouvel assemblage'}</div>
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:8,marginBottom:8}}>
       <label style={{fontSize:12}}>Nom<input value={ed.nom} onChange={e=>setEd({...ed, nom:e.target.value})} placeholder="ex. Finition salle de bain"/></label>
       <label style={{fontSize:12}}>Catégorie / type de job<select value={ed.cat} onChange={e=>setEd({...ed, cat:e.target.value})}><option value="">—</option>{AS_CATS.map(c=><option key={c}>{c}</option>)}</select></label>
       <label style={{fontSize:12}}>Phase<select value={ed.phase} onChange={e=>setEd({...ed, phase:e.target.value})}><option value="">—</option>{AS_PHASES.map(c=><option key={c}>{c}</option>)}</select></label>
     </div>
-    <input value={ed.desc} onChange={e=>setEd({...ed, desc:e.target.value})} placeholder="Description / notes (quand l'utiliser, variantes…)" style={{marginBottom:8}}/>
-    <div style={{fontWeight:700,marginBottom:4}}>Articles {ed.lignes.length>0 && <span className="muted" style={{fontWeight:400}}>· {ed.lignes.length}</span>}</div>
-    {ed.lignes.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
-      {ed.lignes.map((l,i)=><div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
-        <b style={{minWidth:90}}>{l.code}</b><span style={{flex:'1 1 140px'}}>{l.desc}</span>
-        <FournLigne f={l.f||'Dubo'} onChange={f=>{ bcRetenirFournCode(l.code, f); setEd(x=>({...x, lignes:x.lignes.map((y,k)=>k===i?{...y,f}:y)})); }}/>
-        <input value={l.qte} inputMode="decimal" onChange={e=>setEd(x=>({...x, lignes:x.lignes.map((y,k)=>k===i?{...y,qte:e.target.value}:y)}))} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{l.unite}</span>
-        <button className="btn btn-sm" onClick={()=>setEd(x=>({...x, lignes:x.lignes.filter((y,k)=>k!==i)}))}>✕</button>
-      </div>)}
-    </div>}
-    <ChoixArticles C={C} qteDe={qteDe} onAjouter={ajouter} hauteur={260}/>
-    <textarea value={ed.libre} onChange={e=>setEd({...ed, libre:e.target.value})} rows={2} placeholder={"Autres articles, une ligne chacun (ex. 2 × boîte 4x4 profonde)"} style={{width:'100%',boxSizing:'border-box',marginTop:6,fontFamily:'inherit'}}/>
+    <input value={ed.desc} onChange={e=>setEd({...ed, desc:e.target.value})} placeholder="Description / notes (quand l'utiliser, variantes…)" style={{marginBottom:10}}/>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
+      <b style={{fontSize:13}}>Sections :</b>
+      {AS_SECTIONS.filter(x=>!ed.sections.includes(x)).map(x=><button key={x} className="btn btn-sm" style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>ajouterSection(x)}>+ {x}</button>)}
+      <input value={nouvSec} onChange={e=>setNouvSec(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouterSection(nouvSec); }} placeholder="Autre section…" style={{width:150,padding:'3px 8px',fontSize:12.5}}/>
+      {nouvSec.trim() && <button className="btn btn-sm" onClick={()=>ajouterSection(nouvSec)}>OK</button>}
+    </div>
+    {!ed.lignes.length && <div className="muted" style={{fontSize:13,marginBottom:8}}>Choisis une section, puis ajoute les articles du catalogue plus bas. Ils entrent à 0 : tu montes seulement ceux qui ont une quantité de base.</div>}
+    {secs.map(sec=>{ const ls = ed.lignes.filter(l=>(l.section||'')===sec); const actif = (ed.active||'')===sec;
+      return <div key={sec||'_'} style={{border:'1px solid '+(actif?'var(--accent)':'var(--border2)'),borderRadius:8,marginBottom:8}}>
+        <div style={{display:'flex',alignItems:'center',gap:6,padding:'6px 8px',background:'var(--bg3)',borderRadius:'8px 8px 0 0',cursor:'pointer'}} onClick={()=>setEd(x=>({...x, active:sec}))}>
+          <span style={{fontWeight:800,fontSize:12,textTransform:'uppercase',letterSpacing:'.04em',color:actif?'var(--accent)':'var(--text)',flex:1}}>{sec||SANS_SECTION} <span className="muted" style={{fontWeight:500,textTransform:'none'}}>· {ls.length}</span></span>
+          {actif ? <span style={{fontSize:11,color:'var(--accent)'}}>← les ajouts vont ici</span> : <span className="muted" style={{fontSize:11}}>cliquer pour y ajouter</span>}
+          {sec && <button className="btn btn-sm" style={{padding:'0 6px',fontSize:11}} title="Retirer la section (ses articles restent, sans section)" onClick={e=>{ e.stopPropagation(); retirerSection(sec); }}>✕</button>}
+        </div>
+        {ls.map(l=><div key={l.k} style={{display:'flex',gap:6,alignItems:'center',padding:'4px 8px',borderTop:'1px solid var(--border)',fontSize:13,flexWrap:'wrap',opacity:cvNum(l.qte)>0?1:.75}}>
+          {l.code ? <b style={{minWidth:90}}>{l.code}</b> : <span className="muted" style={{minWidth:90,fontSize:11.5}}>hors catalogue</span>}<span style={{flex:'1 1 140px'}}>{l.desc}</span>
+          {ed.sections.length>0 && <select value={l.section||''} onChange={e=>majLigne(l.k, {section:e.target.value})} title="Section" style={{width:'auto',padding:'2px 5px',fontSize:11.5}}><option value="">{SANS_SECTION}</option>{ed.sections.map(x=><option key={x}>{x}</option>)}</select>}
+          {l.code && <FournLigne f={l.f||'Dubo'} onChange={f=>{ bcRetenirFournCode(l.code, f); majLigne(l.k, {f}); }}/>}
+          <Compteur v={l.qte} onChange={v=>majLigne(l.k, {qte:v})}/>
+          <button className="btn btn-sm" onClick={()=>setEd(x=>({...x, lignes:x.lignes.filter(y=>y.k!==l.k)}))}>✕</button>
+        </div>)}
+        {!ls.length && <div className="muted" style={{fontSize:12,padding:'6px 8px'}}>Vide.</div>}
+      </div>; })}
+    <div className="muted" style={{fontSize:12,marginBottom:4}}>Catalogue — le 1er + met l'article à 0 dans « {ed.active||SANS_SECTION} », les suivants montent la quantité.</div>
+    <ChoixArticles C={C} qteDe={qteDe} estDans={estDans} onAjouter={ajouter} onLibre={ajouterLibre} hauteur={260}/>
     <div style={{display:'flex',gap:6,justifyContent:'space-between',flexWrap:'wrap',marginTop:8}}>
       {ed.row ? <button className="btn btn-sm" disabled={occ} onClick={async()=>{ if(!window.confirm('Retirer l\'assemblage « '+ed.nom+' » ? (la ligne reste dans La mémoire, marquée Actif = non)')) return; setOcc(true); try{ await AS.retirer(ed); setEd(null); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOcc(false); }}>🗑 Retirer</button> : <span></span>}
       <span style={{display:'flex',gap:6}}><button className="btn btn-sm" onClick={()=>setEd(null)}>Annuler</button><button className="btn btn-sm btn-p" disabled={occ} onClick={sauver}>{occ?'…':'Enregistrer'}</button></span>
     </div>
-  </div>;
+  </div>; }
   const l = filtrerAs(AS.liste, q, cat, phase).sort((a,b)=>(a.cat||'~').localeCompare(b.cat||'~') || a.nom.localeCompare(b.nom,'fr'));
   return <div className="card">
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:8}}>
@@ -8181,8 +8245,8 @@ function AssemblagesOnglet({C, AS, toast}){
         <button className="btn btn-sm" onClick={()=>ouvrir(a)}>Modifier</button>
       </div>
       {a.desc && <div className="muted" style={{fontSize:12}}>{a.desc}</div>}
-      {voir===a.nom && <div style={{fontSize:12.5,marginTop:4}}>{a.lignes.map((x,i)=><div key={i} style={{display:'flex',gap:6,padding:'2px 0'}}>
-        <span style={{width:52,textAlign:'right',fontWeight:700}}>{x.qte||''}{x.unite && x.unite!=='un' ? ' '+x.unite : ''}</span><b style={{minWidth:90}}>{x.code}</b><span className="muted" style={{flex:1}}>{x.desc || ((prodDe(x.code||'')||{}).desc) || ''}</span>{x.code && <span className="muted" style={{fontSize:11}}>{x.f||'Dubo'}</span>}</div>)}</div>}
+      {voir===a.nom && <div style={{fontSize:12.5,marginTop:4}}>{a.lignes.map((x,i)=><React.Fragment key={i}>{(i===0 || (a.lignes[i-1].section||'')!==(x.section||'')) && (x.section || i>0) && <div style={{fontSize:10.5,fontWeight:800,textTransform:'uppercase',color:'var(--accent)',marginTop:4}}>{x.section||SANS_SECTION}</div>}<div style={{display:'flex',gap:6,padding:'2px 0',opacity:cvNum(x.qte)>0?1:.6}}>
+        <span style={{width:52,textAlign:'right',fontWeight:700}}>{cvNum(x.qte)||0}{x.unite && x.unite!=='un' ? ' '+x.unite : ''}</span><b style={{minWidth:90}}>{x.code}</b><span className="muted" style={{flex:1}}>{x.desc || ((prodDe(x.code||'')||{}).desc) || ''}</span>{x.code && <span className="muted" style={{fontSize:11}}>{x.f||'Dubo'}</span>}</div></React.Fragment>)}</div>}
     </div>)}
   </div>;
 }
@@ -8255,6 +8319,7 @@ function CommandesView({cfg, toast, refreshKey}){
   const choisirOngletC = k => { setOngletC(k); try{ localStorage.setItem('cmd_onglet', k); }catch(e){} };
   const [pick,setPick]=useState('');   // '' | 'as' | 'mo' : sélecteur ouvert dans le bon
   const [pq,setPq]=useState(''), [pcat,setPcat]=useState(''), [pph,setPph]=useState('');
+  const [remplir,setRemplir]=useState(null);   // v278 : {titre, lignes} — assemblage / modèle à remplir avant d'aller dans le bon
   const [bc,setBc]=useState(bcVide());
   const courrielDe = f => (K.map[f] && K.map[f].courriel) || bcCourriel(f);
   useEffect(()=>{ if(K.lu && K.map[bc.fournisseur] && K.map[bc.fournisseur].courriel && bc.courriel===bcCourriel(bc.fournisseur)) setBc(x=>({...x, courriel:K.map[x.fournisseur].courriel})); },[K.lu, K.map]);
@@ -8288,21 +8353,41 @@ function CommandesView({cfg, toast, refreshKey}){
   });
   // v274 : chaque article a son fournisseur (Dubo par défaut, retenu par article : ex. le chauffage chez Lumen)
   const fDe = l => l.f || bc.fournisseur;
+  const secDe = l => l.section || (l.libre ? 'Hors catalogue' : ((prodDe(l.code)||{}).cat || 'Autres'));
+  const parSection = ls => { const m = new Map(); ls.forEach(l=>{ const k = secDe(l); if(!m.has(k)) m.set(k, []); m.get(k).push(l); }); return [...m.entries()]; };
   const changerFormat = (l, k) => { bcRetenirFormat(l.code, k); setBc(x=>({...x, lignes:x.lignes.map(y=>y.code===l.code ? {...y, format:k} : y)})); };
   // v277 : article hors catalogue — petite fiche (description + quantité + OK), il va dans le bon comme les autres
   const [libDesc,setLibDesc]=useState(''), [libQte,setLibQte]=useState('1');
-  const ajouterLibre = () => { const d = libDesc.trim(); if(!d) return;
-    setBc(x=>({...x, lignes:[...x.lignes, {code:'LIB-'+Date.now(), libre:true, desc:d, unite:'', qte:libQte||'1', f:x.fournisseur}]})); setLibDesc(''); setLibQte('1'); };
+  const ajouterLibre = d => { d = String(d||'').trim(); if(!d) return;
+    setBc(x=>{ const ex = x.lignes.find(y=>y.libre && cvNorm(y.desc)===cvNorm(d));
+      return {...x, lignes: ex ? x.lignes.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+1} : y) : [...x.lignes, {code:'LIB-'+Date.now(), libre:true, desc:d, unite:'', qte:'1', f:x.fournisseur}]}; });
+    toast && toast('« '+d+' » ajouté au bon (hors catalogue)'); };
   const changerF = (l, f) => { bcRetenirFournCode(l.code, f); setBc(x=>({...x, lignes:x.lignes.map(y=>y.code===l.code ? {...y, f} : y)})); };
   // Code du fournisseur (ex. LEV-T5325-W chez Dubo) quand on l'a déjà acheté là
   const codeFourn = (code, fo, format) => { const f = fo || bc.fournisseur; if(String(code).startsWith('LIB-')) return '';
     const lg = String(format||'').startsWith('bobine:') ? +String(format).split(':')[1] : 0;
     const os = C.offresDe(code).filter(x=>cvNorm(x.f)===cvNorm(f)); const o = (lg && os.find(x=>bcLongueurOffre(x)===lg)) || os[0]; if(o) return o.codeF; const a = C.coutsDe(code).find(c=>c.fournisseur===f); return a ? a.code : ''; };
   const choisies = bc.lignes.filter(l=>cvNum(l.qte));
+  const sections = [...new Set(choisies.map(l=>l.section || (l.libre ? 'Hors catalogue' : ((C.produits.find(p=>codeNorm(p.code)===codeNorm(l.code))||{}).cat || 'Autres'))))];
   // v236 : assemblages — on ajoute ses articles au bon (les quantités s'additionnent), × le nombre choisi
   const [asMult,setAsMult]=useState(1), [asVoir,setAsVoir]=useState(''), [asEdit,setAsEdit]=useState(null), [asNom,setAsNom]=useState(''), [asOcc,setAsOcc]=useState(false);
   const prodDe = code => C.produits.find(p=>codeNorm(p.code)===codeNorm(code) || (p.alias && codeNorm(p.alias)===codeNorm(code)));
-  const asLigne = l => { const p = l.code ? prodDe(l.code) : null; return {code:p?p.code:(l.code||''), desc:(p&&p.desc)||l.desc||'', unite:(p&&p.unite)||l.unite||'', qte:cvNum(l.qte)||0, f:l.f||'', format:l.format||''}; };
+  const asLigne = l => { const p = l.code ? prodDe(l.code) : null; return {code:p?p.code:(l.code||''), desc:(p&&p.desc)||l.desc||'', unite:(p&&p.unite)||l.unite||'', qte:cvNum(l.qte)||0, f:l.f||'', format:l.format||'', section:l.section||''}; };
+  // v278 : lignes d'un assemblage (× quantité) / d'un modèle, pour le panneau Remplir
+  const lignesAs = (a, m) => a.lignes.map(l0=>{ const l = asLigne(l0); return {...l, qte:(l.qte||0)*m}; });
+  const ouvrirRemplirAs = a => { const m = cvNum(asMult) || 1; setRemplir({titre:a.nom+(m>1?' × '+m:''), lignes:lignesAs(a, m)}); setPick(''); };
+  const ouvrirRemplirMo = mo => { const m = cvNum(asMult) || 1; const manque = [];
+    const lignes = mo.as.flatMap(x=>{ const a = AS.liste.find(y=>cvNorm(y.nom)===cvNorm(x.nom)); if(!a){ manque.push(x.nom); return []; } return lignesAs(a, (cvNum(x.mult)||1)*m).map(l=>({...l, section:l.section || a.nom})); });
+    if(manque.length) toast && toast('Introuvable : '+manque.join(', '));
+    setRemplir({titre:mo.nom+(m>1?' × '+m:''), lignes}); setPick(''); };
+  const mettreDansBon = rows => { setBc(x=>{ let lignes = [...x.lignes];
+      rows.forEach((l,i)=>{ const q = cvNum(l.qte)||0; if(!q) return;
+        if(!l.code){ const ex = lignes.find(y=>y.libre && cvNorm(y.desc)===cvNorm(l.desc));
+          lignes = ex ? lignes.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+q} : y) : [...lignes, {code:'LIB-'+Date.now()+'-'+i, libre:true, desc:l.desc, unite:'', qte:q, f:l.f || x.fournisseur, section:l.section||''}]; return; }
+        const ex = lignes.find(y=>codeNorm(y.code)===codeNorm(l.code)); const p = prodDe(l.code);
+        lignes = ex ? lignes.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+q} : y) : [...lignes, {code:l.code, desc:l.desc, unite:l.unite, qte:q, f:l.f || bcFournCode(l.code) || x.fournisseur, format:l.format || (p ? bcFormatDefaut(p, C) : ''), section:l.section||''}]; });
+      return {...x, lignes}; });
+    toast && toast(rows.length+' article'+(rows.length>1?'s':'')+' de « '+remplir.titre+' » dans le bon'); setRemplir(null); };
   const ajouterAssemblage = (a, mult, silence) => { const m = mult || cvNum(asMult) || 1;
     setBc(x=>{ let lignes = [...x.lignes], libre = x.libre;
       a.lignes.forEach((l0,i)=>{ const l = asLigne(l0);
@@ -8316,7 +8401,7 @@ function CommandesView({cfg, toast, refreshKey}){
   const ajouterModele = (mo, mult) => { const m = mult || cvNum(asMult) || 1; let n = 0, manque = [];
     mo.as.forEach(x=>{ const a = AS.liste.find(y=>cvNorm(y.nom)===cvNorm(x.nom)); if(a){ ajouterAssemblage(a, (cvNum(x.mult)||1)*m, true); n++; } else manque.push(x.nom); });
     toast && toast('« '+mo.nom+' »'+(m>1?' × '+m:'')+' ajouté au bon ('+n+' assemblage'+(n>1?'s':'')+')'+(manque.length ? ' — introuvable : '+manque.join(', ') : '')); };
-  const lignesDuBon = () => [...choisies.map(l=>l.libre ? {code:'', desc:l.desc, qte:cvNum(l.qte), unite:'', f:fDe(l)} : {code:l.code, desc:l.desc, qte:cvNum(l.qte), unite:l.unite||'', f:fDe(l), format:l.format||''}),
+  const lignesDuBon = () => [...choisies.map(l=>l.libre ? {code:'', desc:l.desc, qte:cvNum(l.qte), unite:'', f:fDe(l), section:l.section||''} : {code:l.code, desc:l.desc, qte:cvNum(l.qte), unite:l.unite||'', f:fDe(l), format:l.format||'', section:l.section||''}),
     ...bc.libre.split('\n').map(t=>t.trim()).filter(Boolean).map(t=>{ const m = t.match(/^(\d+(?:[.,]\d+)?)\s*[×x]\s*(.+)$/i); return m ? {code:'', desc:m[2], qte:cvNum(m[1]), unite:''} : {code:'', desc:t, qte:0, unite:''}; })];
   const sauverAssemblage = async (a, nom) => { const lignes = lignesDuBon();
     if(!lignes.length){ toast && toast('Le bon est vide — ajoute les articles de l\'assemblage d\'abord'); return; }
@@ -8333,8 +8418,9 @@ function CommandesView({cfg, toast, refreshKey}){
   const libresF = f => f===bc.fournisseur ? bc.libre.split('\n').map(s=>s.trim()).filter(Boolean) : [];
   const fournsBon = BC_FOURNS.filter(f=>lignesF(f).length || libresF(f).length);
   const courrielF = f => f===bc.fournisseur ? bc.courriel : courrielDe(f);
-  const texteArticles = f => [...lignesF(f).map(l=>{ if(l.libre) return '- '+l.qte+' × '+l.desc; const cf = codeFourn(l.code, f, l.format); return '- '+bcQteTexte(l)+' '+l.code+(cf && codeNorm(cf)!==codeNorm(l.code)?' ('+cf+')':'')+' — '+l.desc; }),
-    ...libresF(f).map(s=>'- '+s)].join('\n');
+  const ligneTexte = (l, f) => { if(l.libre) return '- '+l.qte+' × '+l.desc; const cf = codeFourn(l.code, f, l.format); return '- '+bcQteTexte(l)+' '+l.code+(cf && codeNorm(cf)!==codeNorm(l.code)?' ('+cf+')':'')+' — '+l.desc; };
+  const texteArticles = f => { const g = parSection(lignesF(f));
+    return [...(g.length>1 ? g.flatMap(([sec, ls], i)=>[(i?'\n':'')+sec.toUpperCase()+' :', ...ls.map(l=>ligneTexte(l, f))]) : lignesF(f).map(l=>ligneTexte(l, f))), ...libresF(f).map(s=>'- '+s)].join('\n'); };
   // v274 : un bon (un courriel) par fournisseur ; ce qui est envoyé sort du bon, le reste attend son envoi
   const envoyer = async (f)=>{
     const articles = texteArticles(f), courriel = courrielF(f);
@@ -8442,31 +8528,29 @@ function CommandesView({cfg, toast, refreshKey}){
         <div style={{maxHeight:240,overflowY:'auto'}}>
           {pick==='as' && (asFiltres.length ? asFiltres.map(a=><div key={a.row} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
               <span style={{flex:1}}><b>{a.nom}</b> <span className="muted" style={{fontSize:11.5}}>{[a.cat, a.phase, a.lignes.length+' article'+(a.lignes.length>1?'s':'')].filter(Boolean).join(' · ')}</span></span>
-              <button className="btn btn-sm btn-p" onClick={()=>ajouterAssemblage(a)}>+ Ajouter{asMult>1?' × '+asMult:''}</button></div>)
+              <button className="btn btn-sm btn-p" onClick={()=>ouvrirRemplirAs(a)}>Choisir{asMult>1?' × '+asMult:''}</button></div>)
             : <div className="muted" style={{fontSize:12.5}}>{AS.liste.length ? 'Aucun assemblage pour ces filtres.' : 'Aucun assemblage — crée-les dans l\'onglet Assemblages.'}</div>)}
           {pick==='mo' && (moFiltres.length ? moFiltres.map(m=><div key={m.row} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
               <span style={{flex:1}}><b>{m.nom}</b> <span className="muted" style={{fontSize:11.5}}>{[m.cat, m.as.map(x=>(cvNum(x.mult)>1?cvNum(x.mult)+'×':'')+x.nom).join(', ')].filter(Boolean).join(' · ')}</span></span>
-              <button className="btn btn-sm btn-p" onClick={()=>ajouterModele(m)}>+ Ajouter{asMult>1?' × '+asMult:''}</button></div>)
+              <button className="btn btn-sm btn-p" onClick={()=>ouvrirRemplirMo(m)}>Choisir{asMult>1?' × '+asMult:''}</button></div>)
             : <div className="muted" style={{fontSize:12.5}}>{MO.liste.length ? 'Aucun modèle pour ces filtres.' : 'Aucun modèle — crée-les dans l\'onglet Modèles.'}</div>)}
         </div>
       </div>}
+      {remplir && <RemplirPanel key={remplir.titre+remplir.lignes.length} titre={remplir.titre} lignes={remplir.lignes} onOk={mettreDansBon} onAnnuler={()=>setRemplir(null)}/>}
       {!choisies.length && !bc.libre.trim() && <div className="muted" style={{fontSize:13,marginBottom:6}}>Vide pour l'instant : ajoute un assemblage, un modèle, ou des articles du catalogue plus bas.</div>}
       {choisies.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
-        {choisies.map(l=>{ const p = l.libre ? null : prodDe(l.code), fs = p ? bcFormats(p, C) : [], cf = l.libre ? '' : codeFourn(l.code, fDe(l), l.format);
+        {parSection(choisies).map(([sec, ls])=><React.Fragment key={sec}>
+          {sections.length>1 && <div style={{fontSize:11,fontWeight:800,textTransform:'uppercase',letterSpacing:'.04em',color:'var(--accent)',padding:'6px 8px 2px',background:'var(--bg3)'}}>{sec}</div>}
+          {ls.map(l=>{ const p = l.libre ? null : prodDe(l.code), fs = p ? bcFormats(p, C) : [], cf = l.libre ? '' : codeFourn(l.code, fDe(l), l.format);
           return <div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
           {l.libre ? <span className="muted" style={{minWidth:90,fontSize:11.5}}>hors catalogue</span> : <b style={{minWidth:90}}>{l.code}</b>}{cf && codeNorm(cf)!==codeNorm(l.code) && <span className="muted" style={{fontSize:11}}>{fDe(l)} : {cf}</span>}<span style={{flex:'1 1 140px'}}>{l.desc}</span>
           <FournLigne f={fDe(l)} onChange={f=>changerF(l, f)}/>
           {fs.length>0 && <select value={l.format && fs.some(x=>x.k===l.format) ? l.format : fs[0].k} onChange={e=>changerFormat(l, e.target.value)} title="Format d'achat" style={{width:'auto',padding:'3px 6px',fontSize:12}}>{fs.map(x=><option key={x.k} value={x.k}>{x.l}</option>)}</select>}
           <input value={l.qte} inputMode="decimal" onChange={e=>changerQte(l, 0, e.target.value)} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{fs.length ? (String(l.format||fs[0].k).startsWith('bobine') ? 'bobine'+(cvNum(l.qte)>1?'s':'') : String(l.format||fs[0].k).startsWith('longueur') ? 'long.' : (fs.find(x=>x.k===l.format)||{}).court) : l.unite}</span>
           <button className="btn btn-sm" onClick={()=>setBc(x=>({...x, lignes:x.lignes.filter(y=>y.code!==l.code)}))}>✕</button>
-        </div>; })}
+        </div>; })}</React.Fragment>)}
       </div>}
       {bc.libre.trim() && <textarea value={bc.libre} onChange={e=>maj({libre:e.target.value})} rows={2} style={{width:'100%',boxSizing:'border-box',fontFamily:'inherit',marginBottom:6}}/>}
-      <div style={{display:'flex',gap:6,alignItems:'center'}}>
-        <input value={libDesc} onChange={e=>setLibDesc(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouterLibre(); }} placeholder="Article hors catalogue (ex. boîte 4x4 profonde)" style={{flex:1,minWidth:0}}/>
-        <input value={libQte} onChange={e=>setLibQte(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouterLibre(); }} inputMode="decimal" title="Quantité" style={{width:60,textAlign:'right'}}/>
-        <button className="btn btn-sm btn-p" disabled={!libDesc.trim()} onClick={ajouterLibre}>OK</button>
-      </div>
       <input value={bc.note} onChange={e=>maj({note:e.target.value})} placeholder="Note au comptoir (optionnel)" style={{width:'100%',boxSizing:'border-box',marginTop:6}}/>
       <div style={{display:'flex',justifyContent:'space-between',gap:6,marginTop:8,flexWrap:'wrap',alignItems:'center'}}>
         <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
@@ -8483,7 +8567,7 @@ function CommandesView({cfg, toast, refreshKey}){
 
     <div className="card" style={{marginBottom:10}}>
       <div style={{fontWeight:700,marginBottom:6}}>Catalogue <span className="muted" style={{fontWeight:400,fontSize:12}}>— chaque article ajouté va dans le bon ci-dessus</span></div>
-      <ChoixArticles C={C} qteDe={qteDe} onAjouter={(p,d)=>changerQte(p,d)}/>
+      <ChoixArticles C={C} qteDe={qteDe} onAjouter={(p,d)=>changerQte(p,d)} onLibre={ajouterLibre}/>
     </div>
     </>}
   </div>;
