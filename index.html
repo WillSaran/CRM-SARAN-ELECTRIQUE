@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v280';
+const APP_VERSION = 'v281';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8121,8 +8121,68 @@ function Compteur({v, onChange}){
     <button className="btn btn-sm" onClick={()=>onChange(String(n+1))} style={{width:30}}>+</button>
   </span>;
 }
+// v281 : Variantes — produits équivalents qu'on bascule sur une ligne (plaque standard ⇄ sans vis, WP3100 ⇄ WP5100, Leviton ⇄ Lutron ⇄ Caséta).
+// La mémoire — Jobs › « Variantes » : Groupe | Code | Nom | Mis à jour (une ligne par code ; Groupe vide = retiré).
+const VAR_ENTETE = ['Groupe','Code','Nom','Mis à jour'];
+function useVariantes(cfg){
+  const [rows,setRows]=useState([]); const [existe,setExiste]=useState(false);
+  const id = cfg.memoireJobsSpreadsheetId;
+  const lire = useCallback(async(force)=>{ if(!id) return;
+    try{ const r = await lireCache(id, qSheet('Variantes')+'!A1:D', force); setExiste(true);
+      setRows((r.result.values||[]).slice(1).map((x,i)=>({row:i+2, g:String(x[0]||'').trim(), code:String(x[1]||'').trim(), nom:String(x[2]||'').trim()})).filter(x=>x.g && x.code)); }
+    catch(e){ setRows([]); } },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const groupeDe = code => { const r = rows.find(x=>codeNorm(x.code)===codeNorm(code)); return r ? rows.filter(x=>x.g===r.g) : []; };
+  const ecrire = async (code, g, nom) => { const ex = rows.find(x=>codeNorm(x.code)===codeNorm(code)), ligne = [g, code, nom||'', cvDay(new Date().toISOString())];
+    if(!existe){ await ensureSheetsExist(id, [{name:'Variantes', headers:VAR_ENTETE}]); setExiste(true); }
+    if(ex) await sheetsUpdateRow(id, qSheet('Variantes'), ex.row, ligne); else await sheetsAppendRow(id, qSheet('Variantes'), ligne); };
+  // Relier B à A (A garde son groupe s'il en a un ; sinon un nouveau groupe)
+  const lier = async (codeA, nomA, codeB, nomB) => {
+    const ga = groupeDe(codeA), gb = groupeDe(codeB);
+    const g = (ga[0] && ga[0].g) || (gb[0] && gb[0].g) || ('V'+Date.now());
+    if(!ga.length || nomA!==(ga.find(x=>codeNorm(x.code)===codeNorm(codeA))||{}).nom) await ecrire(codeA, g, nomA);
+    for(const x of gb) if(x.g!==g) await ecrire(x.code, g, x.nom);   // B avait déjà ses équivalents : tout le monde ensemble
+    await ecrire(codeB, g, nomB);
+    await lire(true); };
+  const delier = async code => { await ecrire(code, '', ''); await lire(true); };
+  const nommer = async (code, nom) => { const r = rows.find(x=>codeNorm(x.code)===codeNorm(code)); if(r){ await ecrire(r.code, r.g, nom); await lire(true); } };
+  return {rows, groupeDe, lier, delier, nommer};
+}
+// Sélecteur de variante sur une ligne + ⇄ pour relier un équivalent du catalogue
+function VarianteLigne({code, V, C, onChange, toast}){
+  const [ouvert,setOuvert]=useState(false), [q,setQ]=useState(''), [nomA,setNomA]=useState(''), [choix,setChoix]=useState(null), [nomB,setNomB]=useState(''), [occ,setOcc]=useState(false);
+  if(!V || !code || String(code).startsWith('LIB-')) return null;
+  const g = V.groupeDe(code);
+  const prod = c => C.produits.find(p=>codeNorm(p.code)===codeNorm(c));
+  const libelle = x => x.nom || x.code;
+  const cands = q.trim().length>=2 ? C.produits.filter(p=>codeNorm(p.code)!==codeNorm(code) && rechercheOk(texteProduit(p), q)).slice(0,8) : [];
+  const relier = async () => { if(!choix) return; setOcc(true);
+    try{ await V.lier(code, nomA.trim() || ((g.find(x=>codeNorm(x.code)===codeNorm(code))||{}).nom) || code, choix.code, nomB.trim() || choix.code); toast && toast(choix.code+' relié comme équivalent'); setOuvert(false); setQ(''); setChoix(null); setNomB(''); }
+    catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOcc(false); };
+  return <span style={{display:'inline-flex',alignItems:'center',gap:4,position:'relative',flexShrink:0}}>
+    {g.length>1 && <span style={{display:'inline-flex',border:'1px solid var(--border2)',borderRadius:6,overflow:'hidden'}}>
+      {g.map(x=>{ const sel = codeNorm(x.code)===codeNorm(code); return <button key={x.code} title={x.code+((prod(x.code)||{}).desc ? ' — '+prod(x.code).desc : '')} onClick={()=>{ if(!sel){ const p = prod(x.code); onChange(x.code, p); } }}
+        style={{border:'none',padding:'2px 7px',fontSize:11,fontWeight:700,cursor:sel?'default':'pointer',background:sel?'#3f51b5':'transparent',color:sel?'#fff':'var(--muted)'}}>{libelle(x)}</button>; })}
+    </span>}
+    <button className="btn btn-sm" title={g.length>1 ? 'Ajouter un autre équivalent' : 'Relier un équivalent (ex. sans vis, autre marque)'} onClick={()=>{ setOuvert(o=>!o); setNomA((g.find(x=>codeNorm(x.code)===codeNorm(code))||{}).nom || ''); }} style={{padding:'1px 6px',fontSize:12}}>⇄</button>
+    {ouvert && <div className="card" style={{position:'absolute',right:0,top:'110%',zIndex:40,width:320,padding:10,boxShadow:'0 8px 24px rgba(0,0,0,.4)',fontSize:12.5}} onClick={e=>e.stopPropagation()}>
+      <div style={{fontWeight:700,marginBottom:6}}>Équivalent de {code}</div>
+      <label style={{fontSize:11.5}}>Nom court de {code}<input value={nomA} onChange={e=>setNomA(e.target.value)} placeholder="ex. Standard, Leviton, WP3100" style={{padding:'4px 8px'}}/></label>
+      {!choix ? <><input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher l'équivalent dans le catalogue…" style={{padding:'4px 8px',marginTop:6}}/>
+          {cands.map(p=><div key={p.code} onClick={()=>{ setChoix(p); setNomB(''); }} style={{padding:'4px 2px',borderBottom:'1px solid var(--border)',cursor:'pointer'}}><b>{p.code}</b> <span className="muted">{p.desc}</span></div>)}
+          {q.trim().length>=2 && !cands.length && <div className="muted" style={{marginTop:4}}>Rien trouvé.</div>}</>
+        : <div style={{marginTop:6}}><b>{choix.code}</b> <span className="muted">{choix.desc}</span> <span style={{color:'var(--accent)',cursor:'pointer'}} onClick={()=>setChoix(null)}>changer</span>
+          <label style={{fontSize:11.5,display:'block',marginTop:4}}>Nom court<input autoFocus value={nomB} onChange={e=>setNomB(e.target.value)} placeholder="ex. Sans vis, Lutron, WP5100" style={{padding:'4px 8px'}}/></label></div>}
+      <div style={{display:'flex',justifyContent:'space-between',gap:6,marginTop:8}}>
+        {g.length>1 ? <button className="btn btn-sm" disabled={occ} title={'Retirer '+code+' de ses équivalents'} onClick={async()=>{ setOcc(true); try{ await V.delier(code); setOuvert(false); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOcc(false); }}>Délier {code}</button> : <span></span>}
+        <span style={{display:'flex',gap:6}}><button className="btn btn-sm" onClick={()=>setOuvert(false)}>Fermer</button>
+          <button className="btn btn-sm btn-p" disabled={occ || !choix} onClick={relier}>{occ?'…':'Relier'}</button></span>
+      </div>
+    </div>}
+  </span>;
+}
 // Remplir un assemblage / modèle avant de le mettre dans le bon : chaque article part de sa quantité de base (souvent 0), tu marques ce qu'il faut, puis OK.
-function RemplirPanel({titre, lignes, onOk, onAnnuler}){
+function RemplirPanel({titre, lignes, onOk, onAnnuler, V, C, toast}){
   const [rows,setRows]=useState(()=>lignes.map((l,i)=>({...l, k:i, qte:String(cvNum(l.qte)||0)})));
   const secs = sectionsDe(rows), total = rows.filter(r=>cvNum(r.qte)>0).length;
   return <div style={{border:'2px solid var(--accent)',borderRadius:10,padding:10,marginBottom:10,background:'var(--bg2)'}}>
@@ -8135,6 +8195,7 @@ function RemplirPanel({titre, lignes, onOk, onAnnuler}){
       {rows.filter(r=>(r.section||SANS_SECTION)===sec).map(r=><div key={r.k} style={{display:'flex',gap:6,alignItems:'center',padding:'4px 0',borderBottom:'1px solid var(--border)',fontSize:13,opacity:cvNum(r.qte)>0?1:.6}}>
         {r.code ? <b style={{minWidth:90}}>{r.code}</b> : <span className="muted" style={{minWidth:90,fontSize:11.5}}>hors catalogue</span>}
         <span style={{flex:1,minWidth:0}}>{r.desc}</span>
+        {V && C && r.code && <VarianteLigne code={r.code} V={V} C={C} toast={toast} onChange={(c, p)=>setRows(l=>l.map(x=>x.k===r.k?{...x, code:c, desc:(p&&p.desc)||x.desc, unite:(p&&p.unite)||x.unite, format:''}:x))}/>}
         <Compteur v={r.qte} onChange={v=>setRows(l=>l.map(x=>x.k===r.k?{...x, qte:v}:x))}/>
       </div>)}
     </div>)}
@@ -8160,7 +8221,7 @@ function FiltresAs({q, setQ, cat, setCat, phase, setPhase, avecPhase=true}){
   </div>;
 }
 // Onglet Assemblages : créer, modifier, filtrer
-function AssemblagesOnglet({C, AS, toast}){
+function AssemblagesOnglet({C, AS, toast, V}){
   const [q,setQ]=useState(''), [cat,setCat]=useState(''), [phase,setPhase]=useState('');
   const [ed,setEd]=useState(null), [occ,setOcc]=useState(false), [voir,setVoir]=useState('');
   const [nouvSec,setNouvSec]=useState('');
@@ -8239,6 +8300,7 @@ function AssemblagesOnglet({C, AS, toast}){
             <button className="btn btn-sm" style={{padding:'0 4px',fontSize:9,lineHeight:'11px'}} disabled={j===ls.length-1} title="Descendre" onClick={()=>bouger(l.k,1)}>▼</button></span>
           {l.code ? <b style={{minWidth:90}}>{l.code}</b> : <span className="muted" style={{minWidth:90,fontSize:11.5}}>hors catalogue</span>}<span style={{flex:'1 1 140px'}}>{l.desc}</span>
           {ed.sections.length>0 && <select value={l.section||''} onChange={e=>majLigne(l.k, {section:e.target.value})} title="Section" style={{width:'auto',padding:'2px 5px',fontSize:11.5}}><option value="">{SANS_SECTION}</option>{ed.sections.map(x=><option key={x}>{x}</option>)}</select>}
+          {l.code && <VarianteLigne code={l.code} V={V} C={C} toast={toast} onChange={(c, p)=>majLigne(l.k, {code:c, desc:(p&&p.desc)||l.desc, unite:(p&&p.unite)||l.unite, format:''})}/>}
           {l.code && <FournLigne f={l.f||'Dubo'} onChange={f=>{ bcRetenirFournCode(l.code, f); majLigne(l.k, {f}); }}/>}
           <Compteur v={l.qte} onChange={v=>majLigne(l.k, {qte:v})}/>
           <button className="btn btn-sm" onClick={()=>setEd(x=>({...x, lignes:x.lignes.filter(y=>y.k!==l.k)}))}>✕</button>
@@ -8337,6 +8399,11 @@ function CommandesView({cfg, toast, refreshKey}){
   const B = useBonsCommande(cfg);
   const AS = useAssemblages(cfg);
   const MO = useModelesCommande(cfg);
+  const V = useVariantes(cfg);
+  // v281 : basculer une ligne du bon vers un équivalent (la quantité, la section et le fournisseur suivent)
+  const basculer = (l, c, p) => setBc(x=>{ const ex = x.lignes.find(y=>y!==l && codeNorm(y.code)===codeNorm(c));
+    if(ex) return {...x, lignes:x.lignes.filter(y=>y.code!==l.code).map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+(cvNum(l.qte)||0)} : y)};
+    return {...x, lignes:x.lignes.map(y=>y.code===l.code ? {...y, code:c, desc:(p&&p.desc)||y.desc, unite:(p&&p.unite)||y.unite, f:bcFournCode(c)||y.f, format: p ? bcFormatDefaut(p, C) : ''} : y)}; });
   const K = useContactsFournisseurs(cfg);
   // v274 : onglets Bon de commande | Assemblages | Modèles | À commander
   const [ongletC,setOngletC]=useState(()=>{ if(BC_PREFILL) return 'bon'; try{ return localStorage.getItem('cmd_onglet')||'bon'; }catch(e){ return 'bon'; } });
@@ -8484,7 +8551,7 @@ function CommandesView({cfg, toast, refreshKey}){
       {[['bon','Bon de commande'],['assemblages','Assemblages'],['modeles','Modèles'],['acommander','À commander'+(nbAFaire?' · '+nbAFaire:'')]].map(([k,l])=><button key={k} className={'btn'+(ongletC===k?' btn-p':'')} onClick={()=>choisirOngletC(k)}>{l}</button>)}
     </div>
 
-    {ongletC==='assemblages' && <AssemblagesOnglet C={C} AS={AS} toast={toast}/>}
+    {ongletC==='assemblages' && <AssemblagesOnglet C={C} AS={AS} toast={toast} V={V}/>}
     {ongletC==='modeles' && <ModelesOnglet AS={AS} MO={MO} toast={toast}/>}
     {ongletC==='acommander' && <>
     <div className="card" style={{marginBottom:10}}>
@@ -8560,7 +8627,7 @@ function CommandesView({cfg, toast, refreshKey}){
             : <div className="muted" style={{fontSize:12.5}}>{MO.liste.length ? 'Aucun modèle pour ces filtres.' : 'Aucun modèle — crée-les dans l\'onglet Modèles.'}</div>)}
         </div>
       </div>}
-      {remplir && <RemplirPanel key={remplir.titre+remplir.lignes.length} titre={remplir.titre} lignes={remplir.lignes} onOk={mettreDansBon} onAnnuler={()=>setRemplir(null)}/>}
+      {remplir && <RemplirPanel key={remplir.titre+remplir.lignes.length} titre={remplir.titre} lignes={remplir.lignes} onOk={mettreDansBon} onAnnuler={()=>setRemplir(null)} V={V} C={C} toast={toast}/>}
       {!choisies.length && !bc.libre.trim() && <div className="muted" style={{fontSize:13,marginBottom:6}}>Vide pour l'instant : ajoute un assemblage, un modèle, ou des articles du catalogue plus bas.</div>}
       {choisies.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
         {parSection(choisies).map(([sec, ls])=><React.Fragment key={sec}>
@@ -8568,6 +8635,7 @@ function CommandesView({cfg, toast, refreshKey}){
           {ls.map(l=>{ const p = l.libre ? null : prodDe(l.code), fs = p ? bcFormats(p, C) : [], cf = l.libre ? '' : codeFourn(l.code, fDe(l), l.format);
           return <div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
           {l.libre ? <span className="muted" style={{minWidth:90,fontSize:11.5}}>hors catalogue</span> : <b style={{minWidth:90}}>{l.code}</b>}{cf && codeNorm(cf)!==codeNorm(l.code) && <span className="muted" style={{fontSize:11}}>{fDe(l)} : {cf}</span>}<span style={{flex:'1 1 140px'}}>{l.desc}</span>
+          {!l.libre && <VarianteLigne code={l.code} V={V} C={C} toast={toast} onChange={(c, p2)=>basculer(l, c, p2)}/>}
           <FournLigne f={fDe(l)} onChange={f=>changerF(l, f)}/>
           {fs.length>0 && <select value={l.format && fs.some(x=>x.k===l.format) ? l.format : fs[0].k} onChange={e=>changerFormat(l, e.target.value)} title="Format d'achat" style={{width:'auto',padding:'3px 6px',fontSize:12}}>{fs.map(x=><option key={x.k} value={x.k}>{x.l}</option>)}</select>}
           <input value={l.qte} inputMode="decimal" onChange={e=>changerQte(l, 0, e.target.value)} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{fs.length ? (String(l.format||fs[0].k).startsWith('bobine') ? 'bobine'+(cvNum(l.qte)>1?'s':'') : String(l.format||fs[0].k).startsWith('longueur') ? 'long.' : (fs.find(x=>x.k===l.format)||{}).court) : l.unite}</span>
