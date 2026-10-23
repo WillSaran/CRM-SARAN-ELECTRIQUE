@@ -153,7 +153,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v278';
+const APP_VERSION = 'v279';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8164,6 +8164,18 @@ function AssemblagesOnglet({C, AS, toast}){
   const [q,setQ]=useState(''), [cat,setCat]=useState(''), [phase,setPhase]=useState('');
   const [ed,setEd]=useState(null), [occ,setOcc]=useState(false), [voir,setVoir]=useState('');
   const [nouvSec,setNouvSec]=useState('');
+  // v279 : glisser-déposer — un article vers une autre section / un autre rang ; une section pour changer l'ordre des sections
+  const drag = useRef(null); const [survol,setSurvol]=useState('');
+  const deplacer = (k, versK, sec) => setEd(x=>{ const l = x.lignes.find(y=>y.k===k); if(!l || k===versK) return x;
+    const reste = x.lignes.filter(y=>y.k!==k), m = {...l, section:sec};
+    let i = versK ? reste.findIndex(y=>y.k===versK) : -1;
+    if(i<0){ const derniers = reste.map((y,j)=>(y.section||'')===sec ? j : -1).filter(j=>j>=0); i = derniers.length ? derniers[derniers.length-1]+1 : reste.length; }
+    return {...x, lignes:[...reste.slice(0,i), m, ...reste.slice(i)]}; });
+  const bouger = (k, d) => setEd(x=>{ const l = x.lignes.find(y=>y.k===k); const meme = x.lignes.filter(y=>(y.section||'')===(l.section||''));
+    const j = meme.indexOf(l), autre = meme[j+d]; if(!autre) return x;
+    const L = [...x.lignes], a = L.indexOf(l), b = L.indexOf(autre); L[a] = autre; L[b] = l; return {...x, lignes:L}; });
+  const bougerSection = (sec, versSec) => setEd(x=>{ if(sec===versSec) return x; const r = x.sections.filter(y=>y!==sec); const i = r.indexOf(versSec); r.splice(i<0 ? r.length : i, 0, sec); return {...x, sections:r}; });
+  const finDrag = () => { drag.current = null; setSurvol(''); };
   const prodDe = code => C.produits.find(p=>codeNorm(p.code)===codeNorm(code) || (p.alias && codeNorm(p.alias)===codeNorm(code)));
   const nouveau = () => setEd({nom:'', desc:'', cat:'', phase:'', lignes:[], sections:[], active:'', libDesc:''});
   const ouvrir = a => { const lignes = a.lignes.map((l,i)=>{ const p = l.code ? prodDe(l.code) : null; return {...l, k:'L'+i, desc:l.desc||(p&&p.desc)||'', unite:l.unite||(p&&p.unite)||'', qte:String(cvNum(l.qte)||0)}; });
@@ -8204,22 +8216,34 @@ function AssemblagesOnglet({C, AS, toast}){
       <input value={nouvSec} onChange={e=>setNouvSec(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouterSection(nouvSec); }} placeholder="Autre section…" style={{width:150,padding:'3px 8px',fontSize:12.5}}/>
       {nouvSec.trim() && <button className="btn btn-sm" onClick={()=>ajouterSection(nouvSec)}>OK</button>}
     </div>
+    {ed.lignes.length>1 && <div className="muted" style={{fontSize:12,marginBottom:6}}>⠿ Glisse un article vers une autre section ou un autre rang (▲▼ sur téléphone). Glisse l'en-tête d'une section pour changer l'ordre des sections.</div>}
     {!ed.lignes.length && <div className="muted" style={{fontSize:13,marginBottom:8}}>Choisis une section, puis ajoute les articles du catalogue plus bas. Ils entrent à 0 : tu montes seulement ceux qui ont une quantité de base.</div>}
     {secs.map(sec=>{ const ls = ed.lignes.filter(l=>(l.section||'')===sec); const actif = (ed.active||'')===sec;
-      return <div key={sec||'_'} style={{border:'1px solid '+(actif?'var(--accent)':'var(--border2)'),borderRadius:8,marginBottom:8}}>
-        <div style={{display:'flex',alignItems:'center',gap:6,padding:'6px 8px',background:'var(--bg3)',borderRadius:'8px 8px 0 0',cursor:'pointer'}} onClick={()=>setEd(x=>({...x, active:sec}))}>
+      return <div key={sec||'_'} style={{border:'1px solid '+(survol==='S:'+sec ? 'var(--accent)' : actif?'var(--accent)':'var(--border2)'),borderRadius:8,marginBottom:8,background:survol==='S:'+sec?'rgba(var(--accent-rgb),.06)':undefined}}
+          onDragOver={e=>{ if(!drag.current) return; e.preventDefault(); if(survol!=='S:'+sec && drag.current.t==='l') setSurvol('S:'+sec); }}
+          onDrop={e=>{ const d = drag.current; if(!d) return; e.preventDefault(); if(d.t==='l') deplacer(d.k, null, sec); else if(sec) bougerSection(d.sec, sec); finDrag(); }}>
+        <div draggable={!!sec} onDragStart={e=>{ drag.current = {t:'s', sec}; e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain', sec); }catch(x){} }} onDragEnd={finDrag}
+          style={{display:'flex',alignItems:'center',gap:6,padding:'6px 8px',background:'var(--bg3)',borderRadius:'8px 8px 0 0',cursor:sec?'grab':'pointer'}} onClick={()=>setEd(x=>({...x, active:sec}))}>
+          {sec && <span className="muted" title="Glisser pour changer l'ordre des sections" style={{cursor:'grab'}}>⠿</span>}
           <span style={{fontWeight:800,fontSize:12,textTransform:'uppercase',letterSpacing:'.04em',color:actif?'var(--accent)':'var(--text)',flex:1}}>{sec||SANS_SECTION} <span className="muted" style={{fontWeight:500,textTransform:'none'}}>· {ls.length}</span></span>
           {actif ? <span style={{fontSize:11,color:'var(--accent)'}}>← les ajouts vont ici</span> : <span className="muted" style={{fontSize:11}}>cliquer pour y ajouter</span>}
           {sec && <button className="btn btn-sm" style={{padding:'0 6px',fontSize:11}} title="Retirer la section (ses articles restent, sans section)" onClick={e=>{ e.stopPropagation(); retirerSection(sec); }}>✕</button>}
         </div>
-        {ls.map(l=><div key={l.k} style={{display:'flex',gap:6,alignItems:'center',padding:'4px 8px',borderTop:'1px solid var(--border)',fontSize:13,flexWrap:'wrap',opacity:cvNum(l.qte)>0?1:.75}}>
+        {ls.map((l,j)=><div key={l.k} draggable onDragStart={e=>{ e.stopPropagation(); drag.current = {t:'l', k:l.k}; e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain', l.k); }catch(x){} }} onDragEnd={finDrag}
+          onDragOver={e=>{ if(!drag.current || drag.current.t!=='l') return; e.preventDefault(); e.stopPropagation(); if(survol!=='L:'+l.k) setSurvol('L:'+l.k); }}
+          onDrop={e=>{ const d = drag.current; if(!d || d.t!=='l') return; e.preventDefault(); e.stopPropagation(); deplacer(d.k, l.k, sec); finDrag(); }}
+          style={{display:'flex',gap:6,alignItems:'center',padding:'4px 8px',borderTop:survol==='L:'+l.k ? '3px solid var(--accent)' : '1px solid var(--border)',fontSize:13,flexWrap:'wrap',opacity:cvNum(l.qte)>0?1:.75,cursor:'grab',background:'var(--bg2)'}}>
+          <span className="muted" title="Glisser vers une autre section ou un autre rang" style={{cursor:'grab',fontSize:14}}>⠿</span>
+          <span style={{display:'inline-flex',flexDirection:'column',lineHeight:1}}>
+            <button className="btn btn-sm" style={{padding:'0 4px',fontSize:9,lineHeight:'11px'}} disabled={j===0} title="Monter" onClick={()=>bouger(l.k,-1)}>▲</button>
+            <button className="btn btn-sm" style={{padding:'0 4px',fontSize:9,lineHeight:'11px'}} disabled={j===ls.length-1} title="Descendre" onClick={()=>bouger(l.k,1)}>▼</button></span>
           {l.code ? <b style={{minWidth:90}}>{l.code}</b> : <span className="muted" style={{minWidth:90,fontSize:11.5}}>hors catalogue</span>}<span style={{flex:'1 1 140px'}}>{l.desc}</span>
           {ed.sections.length>0 && <select value={l.section||''} onChange={e=>majLigne(l.k, {section:e.target.value})} title="Section" style={{width:'auto',padding:'2px 5px',fontSize:11.5}}><option value="">{SANS_SECTION}</option>{ed.sections.map(x=><option key={x}>{x}</option>)}</select>}
           {l.code && <FournLigne f={l.f||'Dubo'} onChange={f=>{ bcRetenirFournCode(l.code, f); majLigne(l.k, {f}); }}/>}
           <Compteur v={l.qte} onChange={v=>majLigne(l.k, {qte:v})}/>
           <button className="btn btn-sm" onClick={()=>setEd(x=>({...x, lignes:x.lignes.filter(y=>y.k!==l.k)}))}>✕</button>
         </div>)}
-        {!ls.length && <div className="muted" style={{fontSize:12,padding:'6px 8px'}}>Vide.</div>}
+        {!ls.length && <div className="muted" style={{fontSize:12,padding:'10px 8px'}}>Vide — glisse des articles ici.</div>}
       </div>; })}
     <div className="muted" style={{fontSize:12,marginBottom:4}}>Catalogue — le 1er + met l'article à 0 dans « {ed.active||SANS_SECTION} », les suivants montent la quantité.</div>
     <ChoixArticles C={C} qteDe={qteDe} estDans={estDans} onAjouter={ajouter} onLibre={ajouterLibre} hauteur={260}/>
