@@ -155,7 +155,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v284';
+const APP_VERSION = 'v285';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2985,6 +2985,17 @@ function RappelsBoite({cfg, data, toast}){
     }
     setBusy(false);
   };
+  // v285 : relances de comptes à recevoir (onglet « Suivi comptes » de La mémoire — Factures) — seulement quand c'est le jour
+  const idF = cfg && cfg.memoireFacturesSpreadsheetId;
+  const [relances,setRelances]=useState([]);
+  const [rTick,setRTick]=useState(0);
+  useEffect(()=>{ if(!idF) return; let ok = true;
+    lireCache(idF, SUIVI_CPT_RANGE, rTick>0).then(r=>{ if(ok) setRelances(Object.values(suiviCptLire(r.result.values||[]))); }).catch(()=>{});
+    return ()=>{ ok = false; }; },[idF, rTick]);
+  const aRelancer = relances.filter(x=>x.relance && x.prochaine && x.prochaine<=todayISO());
+  const relancer = async (x, arreter) => { setRelances(l=>l.map(y=>y.k===x.k ? {...y, relance:!arreter, prochaine:arreter ? '' : suiviCptPlus30()} : y));
+    try{ await suiviCptEcrire(idF, x, {...x, relance:!arreter, prochaine:arreter ? '' : suiviCptPlus30()}); setRTick(t=>t+1); }
+    catch(e){ setRTick(t=>t+1); toast && toast('Impossible : '+apiErrMsg(e),'err'); } };
   const cocher = async (r)=>{
     setFaits(f=>({...f, [r.id]:true}));
     try{
@@ -2994,17 +3005,22 @@ function RappelsBoite({cfg, data, toast}){
     }catch(e){ setFaits(f=>{ const n={...f}; delete n[r.id]; return n; }); toast && toast('Impossible : '+apiErrMsg(e),'err'); }
   };
   return <div className="card" style={{marginBottom:14}}>
-    <div className="fh" style={{fontSize:15,marginBottom:6}}>Rappels {ouverts.length>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{ouverts.length}</span>}</div>
+    <div className="fh" style={{fontSize:15,marginBottom:6}}>Rappels {(ouverts.length+aRelancer.length)>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{ouverts.length+aRelancer.length}</span>}</div>
     <div style={{display:'flex',gap:6}}>
       <input value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouter(); }} placeholder="Noter un petit truc…" style={{flex:1,minWidth:0,padding:'6px 10px'}}/>
       <button className="btn btn-sm btn-p" disabled={!txt.trim() || busy} onClick={ajouter}>Ajouter</button>
     </div>
+    {aRelancer.map(x=><div key={'rel'+x.k} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+      <input type="checkbox" checked={false} onChange={()=>relancer(x)} title="Relancé : prochain rappel dans 30 jours" style={{width:16,height:16,marginTop:1,flexShrink:0,cursor:'pointer'}}/>
+      <span style={{flex:1}}><b style={{color:'var(--danger)'}}>Relancer {x.nom || 'le client'}</b>{x.note ? <span className="muted"> · {x.note}</span> : null}</span>
+      <button className="btn btn-sm" style={{fontSize:11,padding:'0 7px',flexShrink:0}} title="Ne plus me rappeler pour ce client" onClick={()=>relancer(x, true)}>Arrêter</button>
+    </div>)}
     {ouverts.map(r=><label key={r.id} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
       <input type="checkbox" checked={false} onChange={()=>cocher(r)} style={{width:16,height:16,marginTop:1,flexShrink:0}}/>
       <span style={{flex:1}}>{r.titre}{r.description ? <span className="muted"> · {r.description}</span> : null}</span>
       {r.dateEcheance && <span className="muted" style={{fontSize:11.5,flexShrink:0,color:r.dateEcheance<todayISO()?'var(--danger)':undefined}}>{r.dateEcheance}</span>}
     </label>)}
-    {!ouverts.length && <div className="muted" style={{fontSize:12.5,marginTop:6}}>Rien à se rappeler.</div>}
+    {!ouverts.length && !aRelancer.length && <div className="muted" style={{fontSize:12.5,marginTop:6}}>Rien à se rappeler.</div>}
   </div>;
 }
 function DashboardRappelsCard({data, onNavigate}){
@@ -4800,7 +4816,7 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
     const nn = f.nomRep || paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
     f.payeLogiciel = !f.creditee && !f.remplaceePar && f.solde>0.05 && (f.payeLog||0) >= f.solde - 0.05;   // v233 : « Payé » inscrit sur le PDF (logiciel comptable)
     f.etat = f.annulee || f.creditee ? 'annulee' : f.remplaceePar ? 'remplacee' : (f.aDeposer && f.paye<0.05 && !f.payeLogiciel) ? 'adeposer' : f.ouverte ? 'ouverte' : (f.ttc < -0.05 && !f.applique && f.solde < -0.05) ? 'credit' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 || f.payeLogiciel ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
-    f.age = paiJours(f.envoi || f.date); });
+    f.age = paiJours(f.envoi || f.date); f.ageFac = paiJours(f.date); if(f.ageFac==null) f.ageFac = f.age; });   // v285 : âge depuis la date de la facture (comme l'état de compte)
   const ouvertes = Object.values(F).filter(f=>(f.etat==='impayee' || f.etat==='partielle' || f.etat==='credit') && (String(f.date).slice(0,10) >= PAI_DEBUT || String(f.envoi||'').slice(0,10) >= PAI_DEBUT));
   // v182 : paiement pour des factures plus vieilles que le registre (avant qu'il existe) : rangé à part, pas à confirmer
   const nums = Object.keys(F).map(Number).filter(n=>n>0), minNum = nums.length ? Math.min(...nums) : 0;
@@ -4856,6 +4872,12 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
     Object.values(groupes).forEach(g=>{ const ok = g.some(nomOk); if(!ok && g.length>6) return;
       const l = g.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).slice(0, ok ? 22 : 6);
       paiSommes(l, p.montant, l.length>16 ? 3 : 5).forEach(fs=>ajoute(fs, fs.length+' factures du même client = le montant', ok ? 'sur' : 'probable')); });
+    // v285 : le client paie tout son compte d'un coup, sans numéros (ex. Payne : 28 000 $ + 1 797,77 $ = toutes ses factures moins ses crédits)
+    paiGroupesCompagnies(cands.filter(f=>f.etat==='impayee' || f.etat==='partielle' || f.etat==='credit')).forEach(g=>{
+      if(g.fs.length<2 || !g.fs.some(nomOk)) return; const tot = Math.round(g.fs.reduce((t,f)=>t+f.solde,0)*100)/100;
+      if(Math.abs(tot-p.montant)>=1) return; const nc = g.fs.filter(f=>f.etat==='credit').length, nf = g.fs.length - nc;
+      ajoute(g.fs.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)) || (+a.num - +b.num)),
+        'Tout le compte du client ('+nf+' facture'+(nf>1?'s':'')+(nc ? ' − '+nc+' crédit'+(nc>1?'s':'') : '')+')'+(Math.abs(tot-p.montant)>0.05 ? ' — écart de '+cvMoney(Math.round((p.montant-tot)*100)/100) : ''), 'sur'); });
     exacts.filter(f=>!nomOk(f) && adrOk(f)).forEach(f=>ajoute([f], 'Même montant · même adresse (conjoint ?)', 'sur'));
     exacts.filter(f=>!nomOk(f) && !adrOk(f)).forEach(f=>ajoute([f], 'Même montant (nom différent)', 'probable'));
     // 4. Le client ressemble mais le montant ne balance pas : paiement partiel ou acompte ?
@@ -4903,6 +4925,23 @@ async function paiEcrireStatut(id, row, nums, statut, note){
   return window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Paiements!J'+row+':L'+row, valueInputOption:'RAW',
     resource:{values:[[nums.join(', '), statut, note]]}});
 }
+// v285 : suivi des comptes à recevoir — une note par client (ex. « va payer en 3 versements ») et un rappel de relance aux 30 jours.
+// Onglet « Suivi comptes » de La mémoire — Factures (créé au premier enregistrement).
+const SUIVI_CPT = 'Suivi comptes', SUIVI_CPT_ENTETE = ['Client (clé)','Client','Note','Relance aux 30 jours','Prochaine relance','Mis à jour'];
+const SUIVI_CPT_RANGE = "'Suivi comptes'!A1:F";
+function suiviCptLire(rows){ const m = {}; (rows||[]).slice(1).forEach((r,i)=>{ const k = String(r[0]||'').trim(); if(k) m[k] = {row:i+2, k, nom:String(r[1]||''), note:String(r[2]||''), relance:/^oui/i.test(String(r[3]||'')), prochaine:String(r[4]||'').slice(0,10), maj:String(r[5]||'')}; }); return m; }
+function suiviCptPlus30(){ const d = new Date(); d.setDate(d.getDate()+30); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+async function suiviCptEcrire(id, ex, o){
+  const ligne = [o.k, o.nom||'', o.note||'', o.relance ? 'Oui' : '', o.relance ? (o.prochaine||suiviCptPlus30()) : '', paiAujourdhui()];
+  const S = window.gapi.client.sheets.spreadsheets; suivreEcritures();
+  if(ex && ex.row) return S.values.update({spreadsheetId:id, range:"'Suivi comptes'!A"+ex.row+':F'+ex.row, valueInputOption:'RAW', resource:{values:[ligne]}});
+  const ajout = () => S.values.append({spreadsheetId:id, range:"'Suivi comptes'!A1:F1", valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:[ligne]}});
+  try{ return await ajout(); } catch(e){ await ensureSheetsExist(id, [{name:SUIVI_CPT, headers:SUIVI_CPT_ENTETE}]); return ajout(); }
+}
+// v285 : âge d'une facture (jours depuis l'envoi) — rouge pâle > 30 j, rouge > 60 j, rouge foncé > 120 j
+function paiAgeCouleur(age){ return age==null ? null : age>120 ? {c:'#9b1c1c', bg:'rgba(229,72,77,.20)', fw:800} : age>60 ? {c:'var(--danger)', bg:'rgba(229,72,77,.10)', fw:700} : age>30 ? {c:'#e5737a', bg:'rgba(229,72,77,.05)', fw:600} : null; }
+function PaiAge({f}){ const a = f.ageFac!=null ? f.ageFac : f.age; if(f.etat==='credit' || a==null) return null; const st = paiAgeCouleur(a);
+  return <span title="Jours depuis la date de la facture" style={{fontSize:11.5, padding:'0 6px', borderRadius:6, color:st ? st.c : 'var(--muted)', background:st ? st.bg : 'transparent', fontWeight:st ? st.fw : 400, whiteSpace:'nowrap'}}>{a} j</span>; }
 const paiAujourdhui = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
 
 function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
@@ -4915,6 +4954,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   // v252 : à quel projet (même nom et PO que l'onglet Projets) appartient chaque facture — pour les comptes à recevoir des contracteurs
   const jobDeFac = useMemo(()=>{ const m = {}; Object.values(clientsR||{}).forEach(c=>(c.jobs||[]).forEach(j=>(j.factures||[]).forEach(n=>{ if(!m[n]) m[n] = j; }))); return m; },[clientsR]);
   const regParPO = useMemo(()=>{ const m = {}; (dR.registry||[]).forEach(r=>{ if(r.po) m[r.po] = r; }); return m; },[dR.registry]);
+  const [noteEd,setNoteEd]=useState(null);   // v285 : note / relance d'un client {k, nom, note, relance}
   const [cieOuv,setCieOuv]=useState({});   // v252 : contracteurs repliés par défaut dans « En attente de paiement »
   const R = useMemo(()=>repConstruire({clients:clientsR, registry:dR.registry||[], factures:dR.factures||{}, achats:dR.achats||[], soumissions:dR.soumissions||[], F:FR, contacts, gcmeq:dR.gcmeq||[]}),[clientsR, dR.registry, dR.factures, dR.achats, dR.soumissions, dR.fiches, contacts, dR.gcmeq]);
   const parCourriel = useMemo(()=>{ const m = {};
@@ -5002,8 +5042,8 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       .catch(e=>setErr('Confirmation automatique impossible : '+apiErrMsg(e)));
   },[data, nomDe, separes, adr]);
   useEffect(()=>{ if(!id) return; let ok=true;
-    Promise.all([lireCache(id, 'A1:N', refreshKey>0||tick>0), lireCache(id, 'Paiements!A1:L', refreshKey>0||tick>0).catch(()=>null)])
-      .then(([f,p])=>{ if(ok){ setData({factures:paiLireFactures(f.result.values||[]), paiements: p ? paiLirePaiements(p.result.values||[]) : [], onglet: !!p}); setErr(''); } })
+    Promise.all([lireCache(id, 'A1:N', refreshKey>0||tick>0), lireCache(id, 'Paiements!A1:L', refreshKey>0||tick>0).catch(()=>null), lireCache(id, SUIVI_CPT_RANGE, refreshKey>0||tick>0).catch(()=>null)])
+      .then(([f,p,sv])=>{ if(ok){ setData({factures:paiLireFactures(f.result.values||[]), paiements: p ? paiLirePaiements(p.result.values||[]) : [], onglet: !!p, suivi: sv ? suiviCptLire(sv.result.values||[]) : {}}); setErr(''); } })
       .catch(e=>{ if(ok) setErr(apiErrMsg(e)); });
     return ()=>{ ok=false; }; },[id, refreshKey, tick]);
   if(!id) return <div className="card">Configure l'ID du Sheet « La mémoire — Factures » dans Réglages.</div>;
@@ -5055,6 +5095,10 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const annulerFacture = async f => { setBusy('a'+f.num);
     try{ await paiAnnulerFacture(id, data.factures, f); setAnnule(''); setTick(t=>t+1); }
     catch(e){ alert('Impossible d\'annuler : '+apiErrMsg(e)); } setBusy(''); };
+  // v285 : note et rappel de relance d'un client (onglet « Suivi comptes »)
+  const sauverSuivi = async o => { setBusy('n'+o.k);
+    try{ await suiviCptEcrire(id, (data.suivi||{})[o.k], o); setNoteEd(null); setTick(t=>t+1); }
+    catch(e){ alert('Note pas enregistrée : '+apiErrMsg(e)); } setBusy(''); };
   // Deux factures ouvertes du même client, même montant = probablement la même facture faite deux fois
   const doublonsDe = p => { const o = (A.propositions[p.row]||[]).filter(x=>x.factures.length===1).map(x=>A.F[x.factures[0]]).filter(Boolean);
     const out = []; o.forEach((a,i)=>o.slice(i+1).forEach(b=>{ if(paiClientCle(a)===paiClientCle(b) && Math.abs(a.ttc-b.ttc)<=0.02) out.push([a,b]); })); return out; };
@@ -5342,6 +5386,9 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
 
     {sous==='recevoir' && <div className="card">
       <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Factures en attente de paiement (ou payées en partie), par client, la plus vieille en premier. Les notes de crédit pas encore utilisées sont déduites du total du client, comme sur son état de compte.</div>
+      {(()=>{ const b = [[30,'Plus de 30 jours'],[60,'Plus de 60 jours'],[120,'Plus de 120 jours']].map(([n,l])=>{ const fs = aRecevoir.filter(f=>f.etat!=='credit' && f.ageFac>n);
+          return {l, n:fs.length, v:Math.round(fs.reduce((t,f)=>t+f.solde,0)*100)/100, st:paiAgeCouleur(n+1)}; }).filter(x=>x.n>0);
+        return b.length ? <div style={{display:'flex',gap:8,flexWrap:'wrap',fontSize:12,marginBottom:8}}>{b.map(x=><span key={x.l} style={{padding:'2px 9px',borderRadius:8,color:x.st.c,background:x.st.bg,fontWeight:x.st.fw}}>{x.l} : {cvMoney(x.v)} · {x.n} facture{x.n>1?'s':''}</span>)}</div> : null; })()}
       {!aRecevoir.length && <div className="muted" style={{padding:'8px 0'}}>Tout est payé.</div>}
       {(()=>{ const G = paiGroupesCompagnies(aRecevoir, FR);   // v249 : même compagnie = une seule ligne
         return G.map(x=>[x.nom, x.fs.sort((a,b)=>(b.age||0)-(a.age||0)), x.k]).sort((a,b)=>(b[1][0].age||0)-(a[1][0].age||0)).map(([k,fs,cleG])=>
@@ -5350,9 +5397,30 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
               onClick={()=>{ if(String(cleG).startsWith('C:')) setCieOuv(o=>({...o, [cleG]:!o[cleG]})); }}>
               <span>{String(cleG).startsWith('C:') && <span className="muted" style={{display:'inline-block',width:14}}>{cieOuv[cleG] ? '▾' : '▸'}</span>}<b style={{color:'var(--accent)'}}>{k}</b>{fs[0].nomRep && fs[0].client.includes('@') && <span className="muted" style={{fontSize:11.5}}> · {fs[0].client}</span>}
                 {fs[0].sansFiche && <> <span className="muted" style={{fontSize:11.5}}>{k!==fs[0].sansFiche ? '· '+fs[0].sansFiche+' ' : ''}pas dans le Répertoire</span> <button className="btn btn-sm" style={{fontSize:11.5,padding:'1px 7px'}} disabled={!!busy} onClick={()=>setAssoc({courriel:fs[0].sansFiche, q:k.includes('@')?'':k, nom:k.includes('@')?'':k})}>👤 Associer</button></>}</span>
-              <b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(fs.reduce((s,f)=>s+f.solde,0))}<span className="muted" style={{fontWeight:400,fontSize:12}}> · {fs.length} facture{fs.length>1?'s':''}</span></b></div>
+              <span style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                {(()=>{ const vieux = fs.filter(f=>f.etat!=='credit' && f.ageFac!=null).reduce((m,f)=>Math.max(m,f.ageFac),-1); return vieux>30 ? <PaiAge f={{ageFac:vieux}}/> : null; })()}
+                <b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(fs.reduce((s,f)=>s+f.solde,0))}<span className="muted" style={{fontWeight:400,fontSize:12}}> · {fs.length} facture{fs.length>1?'s':''}</span></b>
+                <button className="btn btn-sm" style={{fontSize:11.5,padding:'1px 8px'}} title="Note sur ce compte (ex. va payer en 3 versements) et rappel de relance aux 30 jours"
+                  onClick={e=>{ e.stopPropagation(); const sv = (data.suivi||{})[cleG]; setNoteEd({k:cleG, nom:k, note:sv ? sv.note : '', relance:sv ? sv.relance : false}); }}>{(data.suivi||{})[cleG] && ((data.suivi||{})[cleG].note || (data.suivi||{})[cleG].relance) ? 'Modifier la note' : 'Note'}</button>
+              </span></div>
+            {(()=>{ const sv = (data.suivi||{})[cleG], auj = paiAujourdhui();
+              if(noteEd && noteEd.k===cleG) return <div style={{margin:'6px 0 2px',padding:8,border:'1px solid var(--border)',borderRadius:8,background:'var(--bg2)'}}>
+                <textarea rows={2} value={noteEd.note} onChange={e=>{ const v = e.target.value; setNoteEd(n=>({...n, note:v})); }} placeholder="Ex. : va payer en 3 versements, le 1er le 15 novembre" style={{width:'100%',fontSize:13,boxSizing:'border-box'}}/>
+                <label style={{display:'flex',gap:6,alignItems:'center',fontSize:12.5,margin:'4px 0 6px'}}><input type="checkbox" checked={!!noteEd.relance} onChange={e=>{ const v = e.target.checked; setNoteEd(n=>({...n, relance:v})); }}/> Me rappeler de relancer aux 30 jours (dans les rappels du tableau de bord)</label>
+                <div style={{display:'flex',gap:6}}>
+                  <button className="btn btn-sm btn-p" disabled={busy==='n'+cleG} onClick={()=>sauverSuivi({...noteEd, prochaine: noteEd.relance ? (sv && sv.relance && sv.prochaine ? sv.prochaine : suiviCptPlus30()) : ''})}>{busy==='n'+cleG ? '…' : 'Enregistrer'}</button>
+                  <button className="btn btn-sm" onClick={()=>setNoteEd(null)}>Annuler</button>
+                  {sv && (sv.note || sv.relance) && <button className="btn btn-sm" style={{marginLeft:'auto'}} disabled={busy==='n'+cleG} onClick={()=>sauverSuivi({k:cleG, nom:k, note:'', relance:false})}>Effacer</button>}
+                </div></div>;
+              if(!sv || (!sv.note && !sv.relance)) return null;
+              const du = sv.relance && sv.prochaine && sv.prochaine<=auj;
+              return <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:12.5,margin:'4px 0 2px'}}>
+                {sv.note && <span style={{fontStyle:'italic'}}>Note : {sv.note}</span>}
+                {sv.relance && <span style={{fontSize:11.5,padding:'0 7px',borderRadius:6,color:du?'#fff':'var(--muted)',background:du?'var(--danger)':'var(--bg3)',fontWeight:du?700:400}}>{du ? 'À relancer' : 'Relance le '+cvFmtDay(sv.prochaine)}</span>}
+                {du && <button className="btn btn-sm" style={{fontSize:11.5,padding:'1px 8px'}} disabled={busy==='n'+cleG} onClick={()=>sauverSuivi({...sv, nom:k, prochaine:suiviCptPlus30()})}>Relancé · prochain rappel dans 30 j</button>}
+              </div>; })()}
             {(()=>{ const ligneF = f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'3px 0'}}>
-              <span>🧾 <b>#{f.num}</b> <span className="muted">· {f.date}</span>{f.nom && f.nom!==k ? ' · '+f.nom : ''}{f.nomAffiche && f.nomAffiche!==k && f.nomAffiche!==f.nom ? <span className="muted"> · {f.nomAffiche}</span> : ''}{f.desc ? <span className="muted"> · {f.desc}</span> : ''}
+              <span>🧾 <b>#{f.num}</b> <span className="muted">· {f.date}</span> <PaiAge f={f}/>{f.nom && f.nom!==k ? ' · '+f.nom : ''}{f.nomAffiche && f.nomAffiche!==k && f.nomAffiche!==f.nom ? <span className="muted"> · {f.nomAffiche}</span> : ''}{f.desc ? <span className="muted"> · {f.desc}</span> : ''}
                 {f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}
                 {f.etat==='credit' && <span style={{color:'var(--success)',fontWeight:700}}> · note de crédit (déduite)</span>}</span>
               <span style={{display:'flex',gap:8,alignItems:'center'}}>
@@ -5368,7 +5436,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
               // v252 : contracteur replié par défaut ; ouvert → ses projets nommés comme dans l'onglet Projets (nom · PO), une ligne courte par facture
               if(!cieOuv[cleG]) return null;
               const ligneC = f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'2px 0'}}>
-                <span>#{f.num} <span className="muted">· {cvFmtDay(f.date)}{f.age!=null ? ' · '+f.age+' j' : ''}</span>{f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}{f.etat==='credit' && <span style={{color:'var(--success)',fontWeight:700}}> · note de crédit (déduite)</span>}</span>
+                <span>#{f.num} <span className="muted">· {cvFmtDay(f.date)}</span> <PaiAge f={f}/>{f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}{f.etat==='credit' && <span style={{color:'var(--success)',fontWeight:700}}> · note de crédit (déduite)</span>}</span>
                 <span style={{display:'flex',gap:8,alignItems:'center'}}>
                   <span style={{fontVariantNumeric:'tabular-nums'}}>{f.estime ? '≈ ' : ''}{cvMoney(f.solde)}</span>
                   {f.pdf && <a href={repPdf(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>PDF</a>}
