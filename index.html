@@ -156,7 +156,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v290';
+const APP_VERSION = 'v291';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5031,7 +5031,7 @@ function PaiAge({f}){ const a = f.ageFac!=null ? f.ageFac : f.age; if(f.etat==='
   return <span title="Jours depuis la date de la facture" style={{fontSize:11.5, padding:'0 6px', borderRadius:6, color:st ? st.c : 'var(--muted)', background:st ? st.bg : 'transparent', fontWeight:st ? st.fw : 400, whiteSpace:'nowrap'}}>{a} j</span>; }
 const paiAujourdhui = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
 
-function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
+function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
   const id = cfg.memoireFacturesSpreadsheetId;
   // v186 : Répertoire (même lecture que l'onglet Répertoire) pour mettre un nom sur les courriels des factures
   const [repTick,setRepTick]=useState(0);
@@ -5289,6 +5289,14 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const etiquette = {sur:'Sûr', probable:'Probable', verifier:'À vérifier'};
   const Tuile = ({v, l, c, onClick}) => <div className="card" style={{padding:12,cursor:onClick?'pointer':'default'}} onClick={onClick}><div style={{fontSize:20,fontWeight:800,color:c||'inherit',fontVariantNumeric:'tabular-nums'}}>{v}</div><div className="muted" style={{fontSize:12}}>{l}</div></div>;
 
+  // v291 : dans la fiche d'un client (Répertoire) : seulement ses paiements, sans totaux
+  if(compact){ const sesF = n => A.F[n] && filtreF(A.F[n]);
+    const liste = data.paiements.filter(p=>/^confirm/i.test(p.statut) && (filtreP(p) || p.confirmees.some(sesF))).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+    if(!liste.length) return <div className="muted" style={{fontSize:12.5}}>Aucun paiement.</div>;
+    return <div>{liste.map(p=><div key={p.row} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'5px 0',borderBottom:'1px dashed var(--border)'}}>
+      <span><b>{cvFmtDay(String(p.date).slice(0,10))} {String(p.date).slice(0,4)}</b> · <b>{cvMoney(p.montant)}</b> <span className="muted">· {p.source}{p.de ? ' · '+p.de : ''}</span></span>
+      <span style={{display:'flex',gap:8,alignItems:'center'}}><span style={{color:'var(--success)'}}>→ {p.confirmees.map(n=>'#'+n).join(', ')}</span>
+        {p.lien && <a href={p.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>↗</a>}</span></div>)}</div>; }
   return <div>
     {!data.onglet && <div className="card" style={{marginBottom:10,borderColor:'var(--warning)'}}>
       <b>L'onglet « Paiements » n'existe pas encore dans La mémoire — Factures.</b>
@@ -10814,6 +10822,7 @@ function SettingsView({cfg, setCfg, toast}){
       <div className="field"><label>Adresse « Mettre à jour La mémoire » (application Web Apps Script, finit par /exec)</label><input value={f.memoireMajUrl||''} placeholder="https://script.google.com/macros/s/…/exec" onChange={e=>setF({...f,memoireMajUrl:e.target.value.trim()})}/></div>
       <div className="field"><label>Calendriers (séparés par virgule)</label><input value={f.calendarIds} onChange={e=>setF({...f,calendarIds:e.target.value})}/></div>
       <button className="btn btn-p" onClick={()=>{ saveCfg(f); setCfg(f); toast('Réglages enregistrés.','ok'); }}>Enregistrer les réglages</button>
+      <CodeComptaReglage cfg={f} toast={toast}/>
       <div className="muted" style={{fontSize:11.5}}>Version {APP_VERSION}</div>
     </div>
   </div>;
@@ -11305,8 +11314,9 @@ function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.se
 const CPT_NAV = {factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
 const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Comptes clients'],['factures','Bons de travail'],['paiements','Paiements']];   // v272   // v240
 // v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
-function PaiementsOnglet({cfg, cfgRep, refreshKey, contacts}){
+function PaiementsOnglet({cfg, cfgRep, refreshKey, contacts, compact}){
   const [q,setQ]=useState(()=>(navFocus('paiements')||{}).q || '');
+  if(compact) return <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={q} contacts={contacts} compact/>;   // v291 : fiche du Répertoire — ses paiements seulement
   return <div>
     <h2 className="fh" style={{margin:'0 0 8px',fontSize:20}}>Paiements</h2>
     <div style={{display:'flex',gap:6,marginBottom:10}}>
@@ -11315,6 +11325,54 @@ function PaiementsOnglet({cfg, cfgRep, refreshKey, contacts}){
     </div>
     <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={q} contacts={contacts}/>
   </div>;
+}
+// v291 : code pour ouvrir Comptabilité. L'empreinte du code (SHA-256, jamais le code) est dans l'onglet « Accès » du Sheet CRM.
+// Une fois le bon code entré, c'est ouvert jusqu'à la fermeture de l'onglet du navigateur. Pas de code inscrit = ouvert.
+// (Ça verrouille l'écran du CRM ; les Sheets restent protégés par leur partage Google.)
+async function comptaEmpreinte(code){ const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('saran-compta|'+String(code).trim()));
+  return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join(''); }
+async function comptaLireEmpreinte(cfg){ if(!cfg.crmSpreadsheetId) return '';
+  try{ const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:cfg.crmSpreadsheetId, range:"'Accès'!B1"}); return String(((r.result.values||[])[0]||[])[0]||'').trim(); }
+  catch(e){ return ''; } }
+async function comptaEcrireEmpreinte(cfg, h){
+  const ecr = () => window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:cfg.crmSpreadsheetId, range:"'Accès'!A1:B1", valueInputOption:'RAW', resource:{values:[['Code comptabilité (empreinte)', h]]}});
+  try{ await ecr(); }catch(e){ await ensureSheetsExist(cfg.crmSpreadsheetId, [{name:'Accès', headers:['Code comptabilité (empreinte)', h]}]); } }
+function VerrouCompta({cfg, children}){
+  const [etat,setEtat]=useState('lecture');   // lecture | ouvert | ferme
+  const [code,setCode]=useState(''); const [err,setErr]=useState('');
+  useEffect(()=>{ let ok = true; comptaLireEmpreinte(cfg).then(h=>{ if(!ok) return; let deja = ''; try{ deja = sessionStorage.getItem('compta_ok')||''; }catch(e){}
+    setEtat(!h || deja===h ? 'ouvert' : 'ferme'); }); return ()=>{ ok = false; }; },[cfg.crmSpreadsheetId]);
+  const essayer = async () => { const h = await comptaLireEmpreinte(cfg), e = await comptaEmpreinte(code);
+    if(!h || e===h){ try{ sessionStorage.setItem('compta_ok', h); }catch(x){} setEtat('ouvert'); setErr(''); } else { setErr('Mauvais code.'); setCode(''); } };
+  if(etat==='ouvert') return children;
+  if(etat==='lecture') return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Vérification…</span></div>;
+  return <div className="card" style={{maxWidth:340}}>
+    <div className="fh" style={{fontSize:17,marginBottom:6}}>Comptabilité</div>
+    <div className="muted" style={{fontSize:12.5,marginBottom:10}}>Entre le code pour ouvrir.</div>
+    <div style={{display:'flex',gap:6}}>
+      <input autoFocus type="password" inputMode="numeric" autoComplete="off" value={code} onChange={e=>{ setCode(e.target.value); setErr(''); }} onKeyDown={e=>{ if(e.key==='Enter' && code) essayer(); }} placeholder="Code" style={{flex:1,minWidth:0,padding:'7px 10px',letterSpacing:'.2em'}}/>
+      <button className="btn btn-p" disabled={!code} onClick={essayer}>Ouvrir</button>
+    </div>
+    {err && <div style={{color:'var(--danger)',fontSize:12.5,marginTop:6}}>{err}</div>}
+  </div>;
+}
+function CodeComptaReglage({cfg, toast}){
+  const [h,setH]=useState(null); const [actuel,setActuel]=useState(''); const [nouveau,setNouveau]=useState(''); const [busy,setBusy]=useState(false);
+  useEffect(()=>{ comptaLireEmpreinte(cfg).then(setH); },[cfg.crmSpreadsheetId]);
+  const sauver = async retirer => { setBusy(true);
+    try{ if(h && (await comptaEmpreinte(actuel))!==h){ toast('Code actuel incorrect.','err'); setBusy(false); return; }
+      const n = retirer ? '' : await comptaEmpreinte(nouveau); await comptaEcrireEmpreinte(cfg, n);
+      try{ sessionStorage.setItem('compta_ok', n); }catch(e){} setH(n); setActuel(''); setNouveau(''); toast(retirer ? 'Code retiré : Comptabilité est ouverte.' : 'Code de Comptabilité enregistré.','ok'); }
+    catch(e){ toast('Impossible : '+apiErrMsg(e),'err'); } setBusy(false); };
+  if(!cfg.crmSpreadsheetId) return null;
+  return <div className="field"><label>Code pour ouvrir Comptabilité {h===null ? '' : h ? '(un code est en place)' : '(aucun code : ouvert à tous)'}</label>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+      {h && <input type="password" autoComplete="off" value={actuel} onChange={e=>setActuel(e.target.value)} placeholder="Code actuel" style={{width:120}}/>}
+      <input type="password" autoComplete="new-password" value={nouveau} onChange={e=>setNouveau(e.target.value)} placeholder={h ? 'Nouveau code' : 'Choisir un code'} style={{width:130}}/>
+      <button className="btn btn-sm btn-p" disabled={busy || nouveau.trim().length<4 || (h && !actuel)} onClick={()=>sauver(false)}>{h ? 'Changer' : 'Mettre le code'}</button>
+      {h && <button className="btn btn-sm" disabled={busy || !actuel} onClick={()=>sauver(true)}>Retirer</button>}
+    </div>
+    <div className="muted" style={{fontSize:11.5,marginTop:4}}>Au moins 4 caractères. Le code est demandé une fois par onglet du navigateur. Les Sheets restent protégés par leur partage Google.</div></div>;
 }
 function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, onglet0}){
   const [onglet,setOnglet]=useState(onglet0==='verif' ? 'clients' : (onglet0 || 'clients'));
@@ -12153,15 +12211,15 @@ function App(){
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {(nav==='repertoire' || nav==='clients') && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts} onAller={allerFiltre}
           rendreSection={cible => cible==='projets' ? <ProjetsView data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>
-            : cible==='factures' ? <FacturesView cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/>
-            : cible==='paiements' ? <PaiementsOnglet cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/>
+            : cible==='factures' ? <VerrouCompta cfg={effectiveCfg}><FacturesView cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/></VerrouCompta>
+            : cible==='paiements' ? <VerrouCompta cfg={effectiveCfg}><PaiementsOnglet cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} compact/></VerrouCompta>
             : cible==='soumissions' ? <SoumissionsView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/> : null}/>}
         {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey} toast={show}/>}
         {nav==='contacts' && <RepertoireView key={'rc'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts}/>}
         {nav==='projets' && <ProjetsView key={'p'+navKey} data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='agenda' && <AgendaView cfg={effectiveCfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
         {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
-        {CPT_NAV[nav] && <ComptabiliteView key={'cpt'+navKey} onglet0={CPT_NAV[nav]} cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} toast={show} isDesktop={isDesktop}/>}
+        {CPT_NAV[nav] && <VerrouCompta cfg={effectiveCfg}><ComptabiliteView key={'cpt'+navKey} onglet0={CPT_NAV[nav]} cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} toast={show} isDesktop={isDesktop}/></VerrouCompta>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='soumissions' && <AppelsServiceSection key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {nav==='commandes' && <CommandesView key={'bc'+navKey} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
