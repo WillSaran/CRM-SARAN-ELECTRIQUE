@@ -156,7 +156,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v288';
+const APP_VERSION = 'v289';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -202,7 +202,7 @@ function buildProjetAddressIndex(projets){
 }
 // Onglet "Rappels" du CRM — suivis/rappels créés manuellement (indépendants du pipeline
 // Opportunités). statut: 'A faire' | 'Fait'. assigneA: 'William' | 'Isabelle'.
-const RAPPELS_HEADERS = ['id','titre','description','dateEcheance','adresse','statut','dateCreation','assigneA'];
+const RAPPELS_HEADERS = ['id','titre','description','dateEcheance','adresse','statut','dateCreation','assigneA','auteur'];   // v289 : auteur = qui a écrit le rappel
 
 // ── Contracteurs (mêmes abréviations que PunchPro) ───────────────────────
 // 'PARTICULIER' = client résidentiel, pas de contracteur associé.
@@ -2968,6 +2968,10 @@ function ConvertisseurBarre({compact}){
 // Onglet « Rappels » du CRM. Cocher = fait (la note disparaît, rien n'est effacé de la feuille).
 function RappelsBoite({cfg, data, toast}){
   const [txt,setTxt]=useState('');
+  // v289 : qui écrit le rappel (gardé sur cet appareil) ; les noms déjà utilisés sont proposés
+  const [auteur,setAuteur]=useState(()=>{ try{ return localStorage.getItem('rappel_auteur')||''; }catch(e){ return ''; } });
+  const choisirAuteur = v => { setAuteur(v); try{ localStorage.setItem('rappel_auteur', v); }catch(e){} };
+  const nomsAuteurs = [...new Set((data.rappels||[]).map(r=>String(r.auteur||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'fr'));
   const [busy,setBusy]=useState(false);
   const [local,setLocal]=useState([]);       // ajoutées ici, en attendant la relecture
   const [faits,setFaits]=useState({});       // cochées ici, en attendant la relecture
@@ -2977,7 +2981,7 @@ function RappelsBoite({cfg, data, toast}){
   const ajouter = async ()=>{
     const titre = txt.trim(); if(!titre || busy) return;
     setBusy(true);
-    const obj = {id:genId(), dateCreation:todayISO(), statut:'A faire', titre};
+    const obj = {id:genId(), dateCreation:todayISO(), statut:'A faire', titre, auteur:auteur.trim()};
     setLocal(l=>[...l, obj]); setTxt('');
     try{ await data.addRappel(obj); }
     catch(e){
@@ -3008,6 +3012,8 @@ function RappelsBoite({cfg, data, toast}){
   return <div className="card" style={{marginBottom:14}}>
     <div className="fh" style={{fontSize:15,marginBottom:6}}>Rappels {(ouverts.length+aRelancer.length)>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{ouverts.length+aRelancer.length}</span>}</div>
     <div style={{display:'flex',gap:6}}>
+      <input value={auteur} onChange={e=>choisirAuteur(e.target.value)} list="rappel-auteurs" placeholder="Ton nom" title="Qui écrit le rappel (gardé sur cet appareil)" style={{width:92,flexShrink:0,padding:'6px 8px'}}/>
+      <datalist id="rappel-auteurs">{nomsAuteurs.map(n=><option key={n} value={n}/>)}</datalist>
       <input value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouter(); }} placeholder="Noter un petit truc…" style={{flex:1,minWidth:0,padding:'6px 10px'}}/>
       <button className="btn btn-sm btn-p" disabled={!txt.trim() || busy} onClick={ajouter}>Ajouter</button>
     </div>
@@ -3018,7 +3024,7 @@ function RappelsBoite({cfg, data, toast}){
     </div>)}
     {ouverts.map(r=><label key={r.id} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
       <input type="checkbox" checked={false} onChange={()=>cocher(r)} style={{width:16,height:16,marginTop:1,flexShrink:0}}/>
-      <span style={{flex:1}}>{r.titre}{r.description ? <span className="muted"> · {r.description}</span> : null}</span>
+      <span style={{flex:1}}>{r.titre}{r.description ? <span className="muted"> · {r.description}</span> : null}{r.auteur ? <span className="muted" style={{fontSize:11.5}}> — {r.auteur}</span> : null}</span>
       {r.dateEcheance && <span className="muted" style={{fontSize:11.5,flexShrink:0,color:r.dateEcheance<todayISO()?'var(--danger)':undefined}}>{r.dateEcheance}</span>}
     </label>)}
     {!ouverts.length && !aRelancer.length && <div className="muted" style={{fontSize:12.5,marginTop:6}}>Rien à se rappeler.</div>}
