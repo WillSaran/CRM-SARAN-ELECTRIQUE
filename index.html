@@ -156,7 +156,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v289';
+const APP_VERSION = 'v290';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2966,22 +2966,25 @@ function ConvertisseurBarre({compact}){
 }
 // Petite boîte « Rappels » du Tableau de bord : notes rapides communes (pas de William / Isabelle, pas de date).
 // Onglet « Rappels » du CRM. Cocher = fait (la note disparaît, rien n'est effacé de la feuille).
+const RAPPEL_GENS = [{nom:'Will', c:'#2f80ed'}, {nom:'Yanaël', c:'#27ae60'}, {nom:'Isabelle', c:'#e5484d'}];   // v290
 function RappelsBoite({cfg, data, toast}){
   const [txt,setTxt]=useState('');
-  // v289 : qui écrit le rappel (gardé sur cet appareil) ; les noms déjà utilisés sont proposés
-  const [auteur,setAuteur]=useState(()=>{ try{ return localStorage.getItem('rappel_auteur')||''; }catch(e){ return ''; } });
+  // v290 : Will, Yanaël, Isabelle — on choisit son nom (comme les équipes de l'agenda) : on voit ses rappels et ceux qu'on ajoute sont à son nom
+  const [auteur,setAuteur]=useState(()=>{ try{ const v = localStorage.getItem('rappel_auteur')||''; return RAPPEL_GENS.some(g=>g.nom===v) ? v : ''; }catch(e){ return ''; } });
   const choisirAuteur = v => { setAuteur(v); try{ localStorage.setItem('rappel_auteur', v); }catch(e){} };
-  const nomsAuteurs = [...new Set((data.rappels||[]).map(r=>String(r.auteur||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'fr'));
+  const aMoi = r => !auteur || cvNorm(r.auteur||'')===cvNorm(auteur) || (cvNorm(auteur)==='isabelle' && cvNorm(r.auteur||'')==='isa');
   const [busy,setBusy]=useState(false);
   const [local,setLocal]=useState([]);       // ajoutées ici, en attendant la relecture
   const [faits,setFaits]=useState({});       // cochées ici, en attendant la relecture
   const ouverts = [...(data.rappels||[]).filter(r=>r.statut!=='Fait'), ...local.filter(l=>!(data.rappels||[]).some(r=>r.id===l.id))]
     .filter(r=>!faits[r.id])
     .sort((a,b)=>String(a.dateCreation||'').localeCompare(String(b.dateCreation||'')));
+  const nbDe = nom => ouverts.filter(r=>!nom || cvNorm(r.auteur||'')===cvNorm(nom) || (cvNorm(nom)==='isabelle' && cvNorm(r.auteur||'')==='isa')).length;
+  const visibles = ouverts.filter(aMoi);
   const ajouter = async ()=>{
     const titre = txt.trim(); if(!titre || busy) return;
     setBusy(true);
-    const obj = {id:genId(), dateCreation:todayISO(), statut:'A faire', titre, auteur:auteur.trim()};
+    const obj = {id:genId(), dateCreation:todayISO(), statut:'A faire', titre, auteur};
     setLocal(l=>[...l, obj]); setTxt('');
     try{ await data.addRappel(obj); }
     catch(e){
@@ -3010,11 +3013,15 @@ function RappelsBoite({cfg, data, toast}){
     }catch(e){ setFaits(f=>{ const n={...f}; delete n[r.id]; return n; }); toast && toast('Impossible : '+apiErrMsg(e),'err'); }
   };
   return <div className="card" style={{marginBottom:14}}>
-    <div className="fh" style={{fontSize:15,marginBottom:6}}>Rappels {(ouverts.length+aRelancer.length)>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{ouverts.length+aRelancer.length}</span>}</div>
+    <div className="fh" style={{fontSize:15,marginBottom:6}}>Rappels {(visibles.length+aRelancer.length)>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{visibles.length+aRelancer.length}</span>}</div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+      {[{nom:'', l:'Tous', c:'var(--muted)'}, ...RAPPEL_GENS.map(g=>({...g, l:g.nom}))].map(g=>{ const on = auteur===g.nom, n = nbDe(g.nom);
+        return <button key={g.l} className="btn btn-sm" onClick={()=>choisirAuteur(g.nom)} title={g.nom ? 'Voir les rappels de '+g.nom+' — ceux que tu ajoutes sont à son nom' : 'Voir tous les rappels'}
+          style={{display:'inline-flex',alignItems:'center',gap:6,borderColor:on?g.c:undefined,background:on?'color-mix(in srgb, '+g.c+' 18%, transparent)':undefined,fontWeight:on?700:500}}>
+          <span style={{width:9,height:9,borderRadius:'50%',background:g.c,display:'inline-block'}}></span>{g.l}{n>0 && <span className="muted" style={{fontWeight:400}}>{n}</span>}</button>; })}
+    </div>
     <div style={{display:'flex',gap:6}}>
-      <input value={auteur} onChange={e=>choisirAuteur(e.target.value)} list="rappel-auteurs" placeholder="Ton nom" title="Qui écrit le rappel (gardé sur cet appareil)" style={{width:92,flexShrink:0,padding:'6px 8px'}}/>
-      <datalist id="rappel-auteurs">{nomsAuteurs.map(n=><option key={n} value={n}/>)}</datalist>
-      <input value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouter(); }} placeholder="Noter un petit truc…" style={{flex:1,minWidth:0,padding:'6px 10px'}}/>
+      <input value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouter(); }} placeholder={auteur ? 'Rappel pour '+auteur+'…' : 'Noter un petit truc… (choisis ton nom pour qu\'il soit à ton nom)'} style={{flex:1,minWidth:0,padding:'6px 10px'}}/>
       <button className="btn btn-sm btn-p" disabled={!txt.trim() || busy} onClick={ajouter}>Ajouter</button>
     </div>
     {aRelancer.map(x=><div key={'rel'+x.k} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
@@ -3022,12 +3029,12 @@ function RappelsBoite({cfg, data, toast}){
       <span style={{flex:1}}><b style={{color:'var(--danger)'}}>Relancer {x.nom || 'le client'}</b>{x.note ? <span className="muted"> · {x.note}</span> : null}</span>
       <button className="btn btn-sm" style={{fontSize:11,padding:'0 7px',flexShrink:0}} title="Ne plus me rappeler pour ce client" onClick={()=>relancer(x, true)}>Arrêter</button>
     </div>)}
-    {ouverts.map(r=><label key={r.id} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
+    {visibles.map(r=><label key={r.id} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
       <input type="checkbox" checked={false} onChange={()=>cocher(r)} style={{width:16,height:16,marginTop:1,flexShrink:0}}/>
-      <span style={{flex:1}}>{r.titre}{r.description ? <span className="muted"> · {r.description}</span> : null}{r.auteur ? <span className="muted" style={{fontSize:11.5}}> — {r.auteur}</span> : null}</span>
+      <span style={{flex:1}}>{r.titre}{r.description ? <span className="muted"> · {r.description}</span> : null}{r.auteur && !auteur ? <span style={{fontSize:11.5,marginLeft:6,display:'inline-flex',alignItems:'center',gap:4,color:'var(--muted)'}}><span style={{width:7,height:7,borderRadius:'50%',background:(RAPPEL_GENS.find(g=>cvNorm(g.nom)===cvNorm(r.auteur) || (g.nom==='Isabelle' && cvNorm(r.auteur)==='isa'))||{}).c||'var(--muted)',display:'inline-block'}}></span>{r.auteur}</span> : null}</span>
       {r.dateEcheance && <span className="muted" style={{fontSize:11.5,flexShrink:0,color:r.dateEcheance<todayISO()?'var(--danger)':undefined}}>{r.dateEcheance}</span>}
     </label>)}
-    {!ouverts.length && !aRelancer.length && <div className="muted" style={{fontSize:12.5,marginTop:6}}>Rien à se rappeler.</div>}
+    {!visibles.length && !aRelancer.length && <div className="muted" style={{fontSize:12.5,marginTop:6}}>{auteur ? 'Rien à se rappeler pour '+auteur+'.' : 'Rien à se rappeler.'}</div>}
   </div>;
 }
 function DashboardRappelsCard({data, onNavigate}){
