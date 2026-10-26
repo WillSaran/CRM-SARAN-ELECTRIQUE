@@ -156,7 +156,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v286';
+const APP_VERSION = 'v287';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4677,6 +4677,43 @@ async function factPdfListe(){ const out = []; let page = '';
 async function factPdfTelecharger(id){ const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
   const r = await fetch('https://www.googleapis.com/drive/v3/files/'+id+'?alt=media', {headers:{Authorization:'Bearer '+tok}});
   if(!r.ok) throw new Error('Drive '+r.status); return r.blob(); }
+// v287 : « Auxiliaire des comptes à recevoir » du logiciel comptable (PDF déposé dans Factures PDF) → { date, factures:[{num, date, client, courriel, montant, paye, solde, type}] }
+function auxLire(pages){
+  const argentRe = /^-?\d{1,3}(?: \d{3})*,\d{2}$/, num = s => Number(String(s).replace(/[  ]/g,'').replace(',','.'));
+  const out = []; let dateAux = '', client = '', enAttente = [];
+  pages.forEach(p=>{ const its = p.filter(it=>it.str && it.str.trim()).sort((a,b)=>b.y-a.y || a.x-b.x);
+    const L = []; its.forEach(it=>{ let l = L.find(x=>Math.abs(x.y-it.y)<=2); if(!l){ l = {y:it.y, its:[]}; L.push(l); } l.its.push(it); });
+    L.sort((a,b)=>b.y-a.y); L.forEach(l=>l.its.sort((a,b)=>a.x-b.x));
+    L.forEach((l,k)=>{ const t = l.its.map(it=>it.str.trim()), txt = t.join(' ');
+      const au = txt.match(/Au\s*:\s*(\d{2})-(\d{2})-(\d{4})/); if(au && !dateAux) dateAux = au[3]+'-'+au[2]+'-'+au[1];
+      if(t[0]==='Contrat' && t.includes('Facture')){ const prec = L[k-1]; if(prec && prec.its.length===1 && !/Page \d+ de|@|www\./.test(prec.its[0].str)) { if(prec.its[0].str.trim()!==client){ client = prec.its[0].str.trim(); enAttente = []; } } return; }
+      const iN = t.findIndex(s=>/^\d{4,5}$/.test(s)), iD = t.findIndex(s=>/^\d{2}-\d{2}-\d{4}$/.test(s));
+      if(iN===0 && iD===1 && client){ const m = t.slice(2).filter(s=>argentRe.test(s)).map(num); if(m.length<3) return;
+        const d = t[1].split('-'), type = t.filter(s=>/^(Appel de service|Divers)/.test(s)).join(' ');
+        const f = {num:t[0], date:d[2]+'-'+d[1]+'-'+d[0], client, courriel:'', montant:m[0], paye:m[1], solde:m[2], type}; out.push(f); enAttente.push(f); return; }
+      const c = txt.match(/[\w.+'-]+@[\w-]+(?:\.[\w-]+)+/); if(c && !/@saranelectrique\.com$/i.test(c[0]) && enAttente.length){ enAttente.forEach(f=>{ if(!f.courriel) f.courriel = c[0].toLowerCase(); }); } }); });
+  return {date:dateAux, factures:out};
+}
+// v287 : le plus récent auxiliaire des comptes à recevoir du dossier Factures PDF (lu une fois, gardé tant que le fichier ne change pas)
+async function auxCharger(){
+  const q = encodeURIComponent("'"+FACT_PDF_DOSSIER+"' in parents and trashed=false and mimeType='application/pdf' and (name contains 'recevoir' or name contains 'Auxiliaire' or name contains 'auxiliaire')");
+  const r = await driveFetch('https://www.googleapis.com/drive/v3/files?q='+q+'&orderBy=modifiedTime%20desc&fields=files(id,name,modifiedTime)&pageSize=5');
+  const f = (r.files||[])[0]; if(!f) return null;
+  try{ const c = JSON.parse(localStorage.getItem('aux_cache')||'null'); if(c && c.id===f.id && c.mt===f.modifiedTime && c.r) return {...c.r, fichier:f.name}; }catch(e){}
+  const lu = auxLire(await relevePdfPages(await factPdfTelecharger(f.id)));
+  if(!lu.date || !lu.factures.length) return null;
+  try{ localStorage.setItem('aux_cache', JSON.stringify({id:f.id, mt:f.modifiedTime, r:lu})); }catch(e){}
+  return {...lu, fichier:f.name};
+}
+// v287 : les factures d'avant le 1er juin encore dues à l'auxiliaire s'ajoutent aux comptes à recevoir (solde de l'auxiliaire ; les paiements reçus après sa date les ferment)
+function auxFusionner(factures, aux){
+  if(!factures || !aux || !aux.date || !(aux.factures||[]).length) return factures;
+  const out = Object.create(Object.getPrototypeOf(factures), Object.getOwnPropertyDescriptors(factures)), V = factures.__vieilles || {};
+  aux.factures.forEach(a=>{ if(a.date >= PAI_DEBUT || !(a.solde > 0.05) || factures[a.num]) return; const b = V[a.num] || {};
+    out[a.num] = {...b, num:a.num, row:b.row, date:a.date, client:b.client || a.client, nom:a.client, desc:b.desc || a.type, ttc:a.montant, escompte:0, payeLog:0, envoi:'', pdf:b.pdf || '',
+      annulee:false, statut:'Auxiliaire au '+aux.date, ouverte:false, estime:false, aDeposer:false, avantJuin:true, auxDate:aux.date, payeAvant:Math.max(0, a.montant - a.solde)}; });
+  return out;
+}
 // Texte d'un PDF avec la position de chaque morceau (pdf.js, chargé seulement quand on importe un relevé)
 async function relevePdfPages(file){
   if(!window.pdfjsLib){ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
@@ -4778,8 +4815,8 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
     let reste = p.montant; const tous = p.confirmees.map(n=>F[n]).filter(Boolean);
     // v284 : note de crédit nommée dans le paiement (ex. Payne paie 2639 moins le crédit 2682) : le crédit est utilisé et s'ajoute au montant reçu
     tous.filter(f=>f.ttc < -0.05).forEach(c=>{ const d = Math.round((c.ttc - c.paye)*100)/100; if(d < -0.005){ c.paye += d; reste -= d; c.paiements.push({date:p.date, de:p.de, montant:d, source:'Crédit utilisé', row:p.row}); } });
-    const fs = tous.filter(f=>!(f.ttc < -0.05));
-    fs.forEach((f,i)=>{ const du = Math.max(0, f.ttc - (f.escompte||0) - f.paye); const part = i===fs.length-1 ? reste : Math.min(reste, du);
+    const fs = tous.filter(f=>!(f.ttc < -0.05) && !(f.avantJuin && String(p.date).slice(0,10) <= f.auxDate));   // v287 : déjà compté dans le solde de l'auxiliaire
+    fs.forEach((f,i)=>{ const du = Math.max(0, f.ttc - (f.escompte||0) - (f.payeAvant||0) - f.paye); const part = i===fs.length-1 ? reste : Math.min(reste, du);
       f.paye += part; reste -= part; f.paiements.push({date:p.date, de:p.de, montant:part, source:p.source, row:p.row}); });
     const k = cvNorm(p.de); if(k) tous.forEach(f=>{ (appris[k]=appris[k]||new Set()).add(paiClientCle(f)); }); });
   // Nom du client appris des paiements confirmés (factures où il n'y a qu'un courriel).
@@ -4804,7 +4841,7 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   // à 14 jours près (30 si l'une des deux est payée). Si une seule est payée, l'autre est le doublon ; sinon, la plus récente remplace l'ancienne.
   // Rien n'est écrit dans le registre (le ✕ « annuler » reste là pour l'inscrire).
   const descN = f => cvNorm(String(f.desc||'').replace(/[·\-–]?\s*travaux\s+\d{4}-\d{2}-\d{2}/ig,''));
-  const payee = f => f.paye>0.05 && f.ttc-(f.escompte||0)-f.paye<=0.05;
+  const payee = f => f.paye>0.05 && f.ttc-(f.escompte||0)-(f.payeAvant||0)-f.paye<=0.05;
   const L = Object.values(F).filter(f=>!f.creditee && !f.annulee && f.ttc>0.05 && descN(f));
   L.forEach(f=>L.forEach(g=>{ if(+g.num<=+f.num || f.remplaceePar || g.remplaceePar) return;
     if(cleG(g)!==cleG(f) || Math.abs(g.ttc-f.ttc)>0.02 || descN(g)!==descN(f)) return;
@@ -4813,12 +4850,12 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
     if(j > 14) return;   // v257 : 14 jours même si l'une est payée (ex. Éclairage Saran : 740,10 $ chaque mois, ce ne sont pas des doublons)
     if(pf && !pg && g.paye<0.05) g.remplaceePar = f.num;            // l'ancienne est payée : la nouvelle est le doublon
     else if(!pf && f.paye<0.05) f.remplaceePar = g.num; }));        // sinon : la plus récente remplace l'ancienne
-  Object.values(F).forEach(f=>{ f.solde = f.creditee || f.remplaceePar ? 0 : Math.round((f.ttc - (f.escompte||0) - f.paye)*100)/100;   // v230 : montant dû = total − escompte
+  Object.values(F).forEach(f=>{ f.solde = f.creditee || f.remplaceePar ? 0 : Math.round((f.ttc - (f.escompte||0) - (f.payeAvant||0) - f.paye)*100)/100;   // v287 : moins le payé avant l'auxiliaire · v230 : montant dû = total − escompte
     const nn = f.nomRep || paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
     f.payeLogiciel = !f.creditee && !f.remplaceePar && f.solde>0.05 && (f.payeLog||0) >= f.solde - 0.05;   // v233 : « Payé » inscrit sur le PDF (logiciel comptable)
     f.etat = f.annulee || f.creditee ? 'annulee' : f.remplaceePar ? 'remplacee' : (f.aDeposer && f.paye<0.05 && !f.payeLogiciel) ? 'adeposer' : f.ouverte ? 'ouverte' : (f.ttc < -0.05 && !f.applique && f.solde < -0.05) ? 'credit' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 || f.payeLogiciel ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
     f.age = paiJours(f.envoi || f.date); f.ageFac = paiJours(f.date); if(f.ageFac==null) f.ageFac = f.age; });   // v285 : âge depuis la date de la facture (comme l'état de compte)
-  const ouvertes = Object.values(F).filter(f=>(f.etat==='impayee' || f.etat==='partielle' || f.etat==='credit') && (String(f.date).slice(0,10) >= PAI_DEBUT || String(f.envoi||'').slice(0,10) >= PAI_DEBUT));
+  const ouvertes = Object.values(F).filter(f=>(f.etat==='impayee' || f.etat==='partielle' || f.etat==='credit') && (String(f.date).slice(0,10) >= PAI_DEBUT || String(f.envoi||'').slice(0,10) >= PAI_DEBUT || f.avantJuin));
   // v182 : paiement pour des factures plus vieilles que le registre (avant qu'il existe) : rangé à part, pas à confirmer
   const nums = Object.keys(F).map(Number).filter(n=>n>0), minNum = nums.length ? Math.min(...nums) : 0;
   const minDate = Object.values(F).map(f=>String(f.date).slice(0,10)).filter(Boolean).sort()[0] || '';
@@ -5023,10 +5060,14 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       catch(e){ /* pas de permission Drive : rien à montrer */ } })();
     return ()=>{ vivant = false; }; },[data]);
   // v184 : les paiements « Sûr » (une seule proposition sûre) sont confirmés tout seuls ; ↩ dans « Tous les paiements » pour annuler
+  // v287 : factures d'avant le 1er juin encore dues selon le dernier auxiliaire des comptes à recevoir (dossier Factures PDF)
+  const [aux,setAux]=useState(null);
+  useEffect(()=>{ let ok = true; auxCharger().then(r=>{ if(ok) setAux(r); }).catch(()=>{}); return ()=>{ ok = false; }; },[refreshKey]);
+  const facturesX = useMemo(()=>data ? auxFusionner(data.factures, aux) : null,[data, aux]);
   const essayes = useRef(new Set());
   const [autoConf,setAutoConf]=useState([]);   // [{de, montant, factures}]
   useEffect(()=>{ if(!data || !data.onglet || !id) return;
-    const A0 = paiementsAnalyser(data.factures, data.paiements, nomDe, separes, adr), pris = new Set(), lot = [];
+    const A0 = paiementsAnalyser(facturesX, data.paiements, nomDe, separes, adr), pris = new Set(), lot = [];
     A0.attente.forEach(p=>{ if(essayes.current.has(p.row)) return; const o = A0.propositions[p.row]||[]; const surs = o.filter(x=>x.niveau==='sur');
       if(surs.length!==1 || o[0]!==surs[0] || surs[0].factures.some(n=>pris.has(n))) return;
       surs[0].factures.forEach(n=>pris.add(n)); lot.push({p, factures:surs[0].factures}); });
@@ -5041,7 +5082,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
       data:lot.map(x=>({range:'Paiements!J'+x.p.row+':L'+x.p.row, values:[[x.factures.join(', '), 'Confirmé', note+(x.groupe ? ' — '+x.groupe+' virements ensemble' : '')]]}))}})
       .then(()=>{ setAutoConf(a=>[...a, ...lot.map(x=>({de:x.p.de, montant:x.p.montant, factures:x.factures}))]); setTick(t=>t+1); })
       .catch(e=>setErr('Confirmation automatique impossible : '+apiErrMsg(e)));
-  },[data, nomDe, separes, adr]);
+  },[data, facturesX, nomDe, separes, adr]);
   useEffect(()=>{ if(!id) return; let ok=true;
     Promise.all([lireCache(id, 'A1:N', refreshKey>0||tick>0), lireCache(id, 'Paiements!A1:L', refreshKey>0||tick>0).catch(()=>null), lireCache(id, SUIVI_CPT_RANGE, refreshKey>0||tick>0).catch(()=>null)])
       .then(([f,p,sv])=>{ if(ok){ setData({factures:paiLireFactures(f.result.values||[]), paiements: p ? paiLirePaiements(p.result.values||[]) : [], onglet: !!p, suivi: sv ? suiviCptLire(sv.result.values||[]) : {}}); setErr(''); } })
@@ -5050,7 +5091,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   if(!id) return <div className="card">Configure l'ID du Sheet « La mémoire — Factures » dans Réglages.</div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>{err}</div>;
   if(!data) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des factures et des paiements…</span></div>;
-  const A = paiementsAnalyser(data.factures, data.paiements, nomDe, separes, adr);
+  const A = paiementsAnalyser(facturesX, data.paiements, nomDe, separes, adr);
   const qq = cvNorm(q||'');
   const filtreF = f => !qq || cvNorm([f.num, f.nom, f.client, f.nomAffiche, f.desc, f.po].join(' ')).includes(qq);
   const filtreP = p => !qq || cvNorm([p.de, p.message, p.montant, p.confirmees.join(' ')].join(' ')).includes(qq);
@@ -5093,7 +5134,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
   const annuler = async p => { if(!confirm('Remettre ce paiement « à confirmer » ?')) return; setBusy('p'+p.row);
     try{ if(/^manuel-/.test(p.id)) await paiEcrireStatut(id, p.row, p.confirmees, 'Annulé', 'Annulé dans le CRM le '+paiAujourdhui()); else await paiEcrireStatut(id, p.row, [], '', ''); setTick(t=>t+1); }
     catch(e){ alert('Impossible : '+apiErrMsg(e)); } setBusy(''); };
-  const annulerFacture = async f => { setBusy('a'+f.num);
+  const annulerFacture = async f => { if(!f.row){ alert('La facture #'+f.num+' vient de l\'auxiliaire des comptes à recevoir (avant le 1er juin) : elle se ferme quand un paiement la nomme, ou au prochain auxiliaire déposé dans Factures PDF.'); setAnnule(''); return; } setBusy('a'+f.num);
     try{ await paiAnnulerFacture(id, data.factures, f); setAnnule(''); setTick(t=>t+1); }
     catch(e){ alert('Impossible d\'annuler : '+apiErrMsg(e)); } setBusy(''); };
   // v285 : note et rappel de relance d'un client (onglet « Suivi comptes »)
@@ -5128,7 +5169,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
         lignes.push({t, id:t.id, de, message, hors, garder:!hors}); });
       // Factures proposées : même analyse que les paiements à confirmer
       const synth = lignes.map((l,i)=>({row:900000+i, id:l.id, date:l.t.date+' 12:00', de:l.de, montant:l.t.montant, message:l.message, ref:'', lues:paiNums(l.message), lien:'', source:'Relevé', confirmees:[], statut:'', note:''}));
-      try{ const A2 = paiementsAnalyser(data.factures, [...data.paiements, ...synth], nomDe, separes, adr);
+      try{ const A2 = paiementsAnalyser(facturesX, [...data.paiements, ...synth], nomDe, separes, adr);
         lignes.forEach((l,i)=>{ const o = (A2.propositions[900000+i]||[])[0]; if(o) l.sugg = o; }); }catch(e){}
       setRel({source:file.name, lignes, deja:deja.size, retraits:T.length-dep.length, etape:'apercu'}); }
     catch(e){ setRel(null); alert('Relevé illisible : '+e.message); } };
@@ -5386,7 +5427,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
     </div>}
 
     {sous==='recevoir' && <div className="card">
-      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Factures en attente de paiement (ou payées en partie), par client, la plus vieille en premier. Les notes de crédit pas encore utilisées sont déduites du total du client, comme sur son état de compte.</div>
+      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Factures en attente de paiement (ou payées en partie), par client, la plus vieille en premier. Les notes de crédit pas encore utilisées sont déduites du total du client, comme sur son état de compte.{aux ? ' Les factures d\'avant le 1er juin encore dues viennent de l\'auxiliaire des comptes à recevoir au '+cvFmtDay(aux.date)+' ('+aux.fichier+') ; un paiement reçu depuis les ferme.' : ''}</div>
       {(()=>{ const b = [[30,'Plus de 30 jours'],[60,'Plus de 60 jours'],[120,'Plus de 120 jours']].map(([n,l])=>{ const fs = aRecevoir.filter(f=>f.etat!=='credit' && f.ageFac>n);
           return {l, n:fs.length, v:Math.round(fs.reduce((t,f)=>t+f.solde,0)*100)/100, st:paiAgeCouleur(n+1)}; }).filter(x=>x.n>0);
         return b.length ? <div style={{display:'flex',gap:8,flexWrap:'wrap',fontSize:12,marginBottom:8}}>{b.map(x=><span key={x.l} style={{padding:'2px 9px',borderRadius:8,color:x.st.c,background:x.st.bg,fontWeight:x.st.fw}}>{x.l} : {cvMoney(x.v)} · {x.n} facture{x.n>1?'s':''}</span>)}</div> : null; })()}
@@ -5421,7 +5462,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
                 {du && <button className="btn btn-sm" style={{fontSize:11.5,padding:'1px 8px'}} disabled={busy==='n'+cleG} onClick={()=>sauverSuivi({...sv, nom:k, prochaine:suiviCptPlus30()})}>Relancé · prochain rappel dans 30 j</button>}
               </div>; })()}
             {(()=>{ const ligneF = f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'3px 0'}}>
-              <span>🧾 <b>#{f.num}</b> <span className="muted">· {f.date}</span> <PaiAge f={f}/>{f.nom && f.nom!==k ? ' · '+f.nom : ''}{f.nomAffiche && f.nomAffiche!==k && f.nomAffiche!==f.nom ? <span className="muted"> · {f.nomAffiche}</span> : ''}{f.desc ? <span className="muted"> · {f.desc}</span> : ''}
+              <span>🧾 <b>#{f.num}</b> <span className="muted">· {f.date}</span> <PaiAge f={f}/>{f.avantJuin && <span className="muted" style={{fontSize:11.5}}> · avant juin (auxiliaire)</span>}{f.nom && f.nom!==k ? ' · '+f.nom : ''}{f.nomAffiche && f.nomAffiche!==k && f.nomAffiche!==f.nom ? <span className="muted"> · {f.nomAffiche}</span> : ''}{f.desc ? <span className="muted"> · {f.desc}</span> : ''}
                 {f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}
                 {f.etat==='credit' && <span style={{color:'var(--success)',fontWeight:700}}> · note de crédit (déduite)</span>}</span>
               <span style={{display:'flex',gap:8,alignItems:'center'}}>
@@ -5437,7 +5478,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts}){
               // v252 : contracteur replié par défaut ; ouvert → ses projets nommés comme dans l'onglet Projets (nom · PO), une ligne courte par facture
               if(!cieOuv[cleG]) return null;
               const ligneC = f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'2px 0'}}>
-                <span>#{f.num} <span className="muted">· {cvFmtDay(f.date)}</span> <PaiAge f={f}/>{f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}{f.etat==='credit' && <span style={{color:'var(--success)',fontWeight:700}}> · note de crédit (déduite)</span>}</span>
+                <span>#{f.num} <span className="muted">· {cvFmtDay(f.date)}{f.avantJuin ? ' '+String(f.date).slice(0,4) : ''}</span> <PaiAge f={f}/>{f.avantJuin && <span className="muted" style={{fontSize:11.5}}> · avant juin (auxiliaire)</span>}{f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}{f.etat==='credit' && <span style={{color:'var(--success)',fontWeight:700}}> · note de crédit (déduite)</span>}</span>
                 <span style={{display:'flex',gap:8,alignItems:'center'}}>
                   <span style={{fontVariantNumeric:'tabular-nums'}}>{f.estime ? '≈ ' : ''}{cvMoney(f.solde)}</span>
                   {f.pdf && <a href={repPdf(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>PDF</a>}
