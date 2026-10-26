@@ -93,6 +93,7 @@ tr:hover td{background:var(--bg3)}
 .toast.err{border-color:rgba(248,81,73,0.5);color:var(--danger)}
 .toast.ok{border-color:rgba(63,185,80,0.5);color:var(--success)}
 .close-x{position:absolute;top:14px;right:16px;background:none;border:none;color:var(--muted);font-size:20px;padding:4px}
+@media (max-width:860px){.cam-grille{grid-template-columns:1fr !important}}
 </style>
 </head>
 <body>
@@ -155,7 +156,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v285';
+const APP_VERSION = 'v286';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8957,14 +8958,291 @@ function CommandesView({cfg, toast, refreshKey}){
 // stock déjà suivi par projet (champ stockStatut, réglé depuis le Tableau de
 // bord ou la fiche projet), pour préparer les commandes selon les besoins.
 // v275 : section Inventaire — Catalogue (ex-Produits) et Inventaire (ex-Stock)
+// ── v286 : Inventaire des camions — rack Packout en 3D (tablettes, caissons de 2/3/4 tiroirs, coffres, organisateurs) ──
+// Onglet « Camions » de La mémoire — Jobs : Id | Camion | Ordre | Contenu (JSON : tablettes et caissons) | Mis à jour.
+// Pas de prix ici. Clique un tiroir dans le 3D pour voir ou modifier son contenu.
+const CAM_ONGLET = 'Camions', CAM_ENTETE = ['Id','Camion','Ordre','Contenu (JSON)','Mis à jour'];
+const CAM_TYPES = {0:'Coffre', 1:'Organisateur', 2:'Packout 2 tiroirs', 3:'Packout 3 tiroirs', 4:'Packout 4 tiroirs'};
+const CAM_PLAN3D = {"shelves":[{"name":"Bas"},{"name":"Haut"},{"name":"Dessus"}],"units":[{"id":"p1","name":"Boîtes, dispositifs, plaques","kind":3,"shelf":0,"drawers":[{"t":"Boîtes métalliques (panneaux)","items":["Boîtes 1110 + couverts","4-11/16","2020","1104","54151-LD"],"note":"Tous les genres de boîtes qui peuvent aider pour des panneaux.","flag":false},{"t":"Prises & switch 15 A","items":["Switch simples","Prises 15 A (straight blade)","Prises Decora"],"note":"Facile d'accès quand les gars ramènent le camion.","flag":false},{"t":"Plaques","items":["Plaques 1, 2, 3 et 4 gangs","Plaques Decora (un contracteur en pose beaucoup)"],"note":"Les plaques sécheuse / poêle sont maintenant en haut.","flag":false}]},{"id":"p2","name":"GFI, USB, gradateurs, thermostats","kind":3,"shelf":0,"drawers":[{"t":"GFI · prise 20 A · prise USB","items":["Prises 20 A","GFI (Leviton SmartlockPro)","Minuteries 5-15","Prises USB et USB-C"],"note":"Gravé sur le tiroir : GFI / PRISE 20A / PRISE USB.","flag":false},{"t":"Gradateurs (dimmers)","items":["Modèle Lutron habituel","Autres modèles achetés pour essayer"],"note":"Modèle exact à confirmer.","flag":true},{"t":"Thermostats","items":["TH401 (Aube/Honeywell, triac)","TH450","Sinopé : éventuellement"],"note":"","flag":false}]},{"id":"p3","name":"Chauffage & disjoncteurs","kind":3,"shelf":0,"drawers":[{"t":"Plancher chauffant · TH intégré · relais","items":["Thermostat plancher chauffant","Thermostats intégrés (convecteur, + 1 pour le kit)","Relais 120 V et 240 V","Limit switch (Stelpro)"],"note":"Gravé : THERMOSTAT PLANCHER CHAUFFANT / TH INTÉGRÉ RELAIS.","flag":false},{"t":"Disjoncteurs (1)","items":["Toutes les sortes (Square D, Siemens, Federal…)"],"note":"Les deux tiroirs du bas sont réservés aux disjoncteurs; le gros stock est à la shop.","flag":false},{"t":"Disjoncteurs (2)","items":["Suite — formats moins courants"],"note":"","flag":false}]},{"id":"p4","name":"Extérieur & connecteurs","kind":2,"shelf":0,"drawers":[{"t":"Extérieur","items":["Couverts étanches (while-in-use) petits et gros","Transfo de sonnette","Photocellules","Fiches (plugs) de dépannage"],"note":"Position dans le rack à confirmer.","flag":true},{"t":"Connecteurs & splice","items":["Connecteurs NMWU","Connecteurs liquid-tight / tuyau flexible","Kit d'épissure étanche (splice kit)"],"note":"Pour réparer un câble frappé sans refaire la run.","flag":false}]},{"id":"h1","name":"PVC","kind":3,"shelf":1,"drawers":[{"t":"PVC de toutes sortes","items":["Assez pour des entrées 1\" et 2\"","Coudes, adaptateurs, clips","LB (petits formats)","Boîtes octogonales / FS"],"note":"Si t'es mal pris dans le PVC, tu ouvres ça et tu trouves.","flag":false}]},{"id":"h2","name":"Prises hors standard, TECK, fusibles","kind":3,"shelf":1,"drawers":[{"t":"Sécheuse · poêle","items":["Prises sécheuse 30 A","Prises cuisinière 50 A","Plaques rondes / couverts assortis"],"note":"Ancien tiroir des plaques, transféré.","flag":false},{"t":"Connecteurs TECK","items":["3 grosseurs pour panneaux"],"note":"Gravé : CONNECTEUR TECK.","flag":false},{"t":"Fusibles","items":["Tous les formats (Bussmann)","240 V et 347/600 V — pour tous les panneaux"],"note":"Gravé : FUSIBLE.","flag":false}]},{"id":"h3","name":"Outils à sertir","kind":1,"shelf":1,"drawers":[{"t":"Organisateur","items":["Crimping tools et cosses"],"note":"D'habitude à la shop — à confirmer ce qui reste dans le camion.","flag":true}]},{"id":"h4","name":"Petit stock","kind":1,"shelf":1,"drawers":[{"t":"Organisateur","items":["Petites pièces (à inventorier)"],"note":"","flag":true}]},{"id":"t1","name":"Coffres Packout","kind":3,"shelf":2,"drawers":[{"t":"Coffres du dessus","items":["Outils (à inventorier)"],"note":"Rangée du dessus pas filmée en détail.","flag":true}]}]};   // contenu du plan 3D fait avec Claude (Camion 1, 26 oct. 2026)
+function camUid(){ return Math.random().toString(36).slice(2,8); }
+function camVide(){ return {shelves:[{name:'Bas'},{name:'Haut'},{name:'Dessus'}], units:[]}; }
+function camNormaliser(d){
+  d = d && typeof d==='object' ? d : {};
+  const shelves = Array.isArray(d.shelves) && d.shelves.length ? d.shelves.map(s=>({name:String((s && s.name) || '')})) : camVide().shelves;
+  const units = (Array.isArray(d.units) ? d.units : []).map(u=>({id:String(u.id||camUid()), name:String(u.name||''), kind:[0,1,2,3,4].includes(+u.kind) ? +u.kind : 3,
+    shelf:Math.max(0, Math.min(shelves.length-1, +u.shelf||0)),
+    drawers:(Array.isArray(u.drawers) && u.drawers.length ? u.drawers : [{t:u.name||'Tiroir'}]).map(x=>({t:String(x.t||''), items:Array.isArray(x.items) ? x.items.map(String) : [], note:String(x.note||''), flag:!!x.flag}))}));
+  return {shelves, units};
+}
+function camNouveauCaisson(name, kind, shelf){ const k = +kind, n = k>=2 ? k : 1;
+  return {id:camUid(), name, kind:k, shelf, drawers:Array.from({length:n}, (_,i)=>({t:n>1 ? 'Tiroir '+(i+1) : name, items:[], note:'', flag:false}))}; }
+function useCamions(cfg){
+  const id = cfg.memoireJobsSpreadsheetId;
+  const [liste,setListe]=useState([]); const [lu,setLu]=useState(false); const existe = useRef(false);
+  const lire = useCallback(async(force)=>{
+    if(!id){ setLu(true); return []; }
+    try{ const r = await lireCache(id, qSheet(CAM_ONGLET)+'!A1:E', force); existe.current = true;
+      const l = (r.result.values||[]).slice(1).map((x,i)=>{ let c = null; try{ c = JSON.parse(x[3]||'{}'); }catch(e){}
+        return {row:i+2, id:String(x[0]||'').trim(), nom:String(x[1]||'').trim() || 'Camion', ordre:+x[2]||0, contenu:camNormaliser(c)}; })
+        .filter(c=>c.id).sort((a,b)=>a.ordre-b.ordre || a.row-b.row);
+      setListe(l); setLu(true); return l; }
+    catch(e){ setListe([]); setLu(true); return []; }
+  },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const ligneDe = c => [c.id, c.nom, String(c.ordre||0), JSON.stringify({shelves:c.contenu.shelves, units:c.contenu.units}), new Date().toISOString().slice(0,16).replace('T',' ')];
+  const ajouter = async cs => {   // un ou plusieurs camions d'un coup
+    if(!existe.current){ await ensureSheetsExist(id, [{name:CAM_ONGLET, headers:CAM_ENTETE}]); existe.current = true; }
+    for(const c of cs) await sheetsAppendRow(id, qSheet(CAM_ONGLET), ligneDe(c));
+    return lire(true); };
+  const sauver = c => sheetsUpdateRow(id, qSheet(CAM_ONGLET), c.row, ligneDe(c));
+  const retirer = async c => { await sheetsUpdateRow(id, qSheet(CAM_ONGLET), c.row, ['', c.nom+' (supprimé)', '', '', new Date().toISOString().slice(0,16).replace('T',' ')]); return lire(true); };
+  return {id, liste, lu, lire, ajouter, sauver, retirer};
+}
+
+// 3D : three.js chargé seulement quand on ouvre l'onglet
+function camBatir(s, etat, sel){
+  const T = s.T, rack = s.rack, M = s.M;
+  while(rack.children.length){ const o = rack.children[0]; rack.remove(o); if(o.geometry) o.geometry.dispose(); if(o.material && o.material.map) o.material.map.dispose(); }
+  s.pick = [];
+  const UW=0.56, UD=0.42, GAP=0.14, DH=0.17, SG=0.68;
+  const sur = i => etat.units.filter(u=>u.shelf===i);
+  const n = etat.shelves.length, maxU = Math.max(1, ...etat.shelves.map((_,i)=>sur(i).length));
+  const L = Math.max(2.4, maxU*(UW+GAP)+0.3), H = 0.05+n*SG, VH = Math.max(2.0, H+0.4);
+  const boite = (w,h,d,m,x,y,z,data) => { const g = new T.Mesh(new T.BoxGeometry(w,h,d), m); g.position.set(x,y,z); rack.add(g); if(data){ g.userData = data; s.pick.push(g); } return g; };
+  const etiquette = (txt,x,y,z) => { const c = document.createElement('canvas'); c.width = 512; c.height = 64; const g = c.getContext('2d');
+    g.font = 'bold 38px "Arial Narrow", Arial, sans-serif'; g.fillStyle = '#fff'; g.textAlign = 'center'; g.fillText(String(txt).slice(0,24), 256, 46);
+    const sp = new T.Sprite(new T.SpriteMaterial({map:new T.CanvasTexture(c), transparent:true, depthTest:false})); sp.scale.set(1.0,0.125,1); sp.position.set(x,y,z); rack.add(sp); };
+  const van = new T.Mesh(new T.BoxGeometry(L+1.2, VH, 2.3), M.van); van.position.set(L/2, VH/2, 0.6); rack.add(van);
+  const sol = new T.Mesh(new T.PlaneGeometry(L+1.2, 2.3), M.sol); sol.rotation.x = -Math.PI/2; sol.position.set(L/2, 0.001, 0.6); rack.add(sol);
+  for(let i=0;i<n;i++) boite(L, 0.03, 0.52, M.alu, L/2, 0.05+i*SG, 0);
+  for(const x of [0.02, L/2, L-0.02]){ boite(0.04, H, 0.04, M.alu, x, H/2, -0.26); boite(0.04, H, 0.04, M.alu, x, H/2, 0.26); }
+  etat.shelves.forEach((_,si)=>{ const y0 = 0.05+si*SG+0.015;
+    sur(si).forEach((u,ui)=>{ const x = 0.15+ui*(UW+GAP)+UW/2; let haut;
+      const choisi = i => sel && sel.u===u.id && sel.i===i;
+      if(u.kind===0){ const h = 0.36; boite(UW, h, UD, choisi(0) ? M.rougeHi : M.rouge, x, y0+h/2, 0, {u:u.id, i:0}); boite(UW*.9, 0.04, UD*.9, M.noir, x, y0+h+0.02, 0); haut = y0+h+0.1; }
+      else if(u.kind===1){ const h = 0.12; boite(UW, h, UD, choisi(0) ? M.rougeHi : M.rouge, x, y0+h/2, 0, {u:u.id, i:0}); boite(UW*.92, 0.02, UD*.9, M.clair, x, y0+h+0.01, 0); haut = y0+h+0.1; }
+      else { const k = u.drawers.length, h = k*DH+0.05; boite(UW, h, UD, M.noir, x, y0+h/2, 0);
+        for(let i=0;i<k;i++){ const yy = y0+0.025+DH*(k-1-i)+DH/2; boite(UW-0.04, DH-0.03, 0.03, choisi(i) ? M.rougeHi : M.rouge, x, yy, UD/2+0.015, {u:u.id, i}); boite(0.18, 0.025, 0.02, M.noir, x, yy+0.03, UD/2+0.04); }
+        haut = y0+h+0.08; }
+      etiquette(u.name, x, haut, UD/2+0.05); }); });
+  s.target.set(L/2, H/2+0.1, 0.1); s.placer();
+}
+function Camion3D({etat, sel, onPick}){
+  const ref = useRef(null), S = useRef(null), pickRef = useRef(onPick);
+  const [pret,setPret]=useState(!!window.THREE); const [err,setErr]=useState('');
+  pickRef.current = onPick;
+  useEffect(()=>{ if(window.THREE) return; loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js').then(()=>setPret(true)).catch(()=>setErr('Le 3D ne se charge pas (connexion ?). La liste des tiroirs plus bas fonctionne quand même.')); },[]);
+  useEffect(()=>{ if(!pret || !ref.current) return; const T = window.THREE, canvas = ref.current;
+    let renderer; try{ renderer = new T.WebGLRenderer({canvas, antialias:true, alpha:true}); }catch(e){ setErr('Le 3D n\'est pas disponible sur cet appareil.'); return; }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+    const scene = new T.Scene(), cam = new T.PerspectiveCamera(42, 1, 0.1, 100);
+    scene.add(new T.HemisphereLight(0xffffff, 0x444444, 0.9)); const sun = new T.DirectionalLight(0xffffff, 0.8); sun.position.set(-3,6,4); scene.add(sun);
+    const M = {rouge:new T.MeshStandardMaterial({color:0xc8281c, roughness:.6}), rougeHi:new T.MeshStandardMaterial({color:0xff6a5c, roughness:.5, emissive:0x551100}),
+      noir:new T.MeshStandardMaterial({color:0x2a2a2a, roughness:.8}), alu:new T.MeshStandardMaterial({color:0x9aa0a6, roughness:.35, metalness:.6}),
+      clair:new T.MeshStandardMaterial({color:0xd8e4ea, roughness:.2, transparent:true, opacity:.65}), van:new T.MeshStandardMaterial({color:0xe9e9e6, roughness:.9, side:T.BackSide}),
+      sol:new T.MeshStandardMaterial({color:0x5a5c5e, roughness:1})};
+    const rack = new T.Group(); scene.add(rack);
+    const s = {T, renderer, scene, cam, rack, M, pick:[], target:new T.Vector3(2,0.9,0.1), theta:0.55, phi:1.15, dist:5.6, raf:0};
+    s.placer = () => { cam.position.set(s.target.x+s.dist*Math.sin(s.phi)*Math.sin(s.theta), s.target.y+s.dist*Math.cos(s.phi), s.target.z+s.dist*Math.sin(s.phi)*Math.cos(s.theta)); cam.lookAt(s.target); };
+    let drag = null, bouge = false, pince = null;
+    const down = e => { drag = {x:e.clientX, y:e.clientY}; bouge = false; try{ canvas.setPointerCapture(e.pointerId); }catch(x){} };
+    const move = e => { if(!drag) return; const dx = e.clientX-drag.x, dy = e.clientY-drag.y; if(Math.abs(dx)+Math.abs(dy)>3) bouge = true;
+      s.theta -= dx*0.006; s.phi = Math.min(1.5, Math.max(0.3, s.phi-dy*0.006)); drag = {x:e.clientX, y:e.clientY}; s.placer(); };
+    const ray = new T.Raycaster(), v2 = new T.Vector2();
+    const up = e => { const etait = drag; drag = null; if(!etait || bouge) return; const r = canvas.getBoundingClientRect();
+      v2.x = ((e.clientX-r.left)/r.width)*2-1; v2.y = -((e.clientY-r.top)/r.height)*2+1; ray.setFromCamera(v2, cam);
+      const h = ray.intersectObjects(s.pick)[0]; pickRef.current && pickRef.current(h ? h.object.userData : null); };
+    const roue = e => { e.preventDefault(); s.dist = Math.min(12, Math.max(2.2, s.dist*(1+e.deltaY*0.001))); s.placer(); };
+    const tmove = e => { if(e.touches.length!==2) return; const d = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+      if(pince) s.dist = Math.min(12, Math.max(2.2, s.dist*pince/d)); pince = d; s.placer(); };
+    const tend = () => { pince = null; };
+    canvas.addEventListener('pointerdown', down); canvas.addEventListener('pointermove', move); canvas.addEventListener('pointerup', up);
+    canvas.addEventListener('wheel', roue, {passive:false}); canvas.addEventListener('touchmove', tmove, {passive:true}); canvas.addEventListener('touchend', tend);
+    const boucle = () => { const w = canvas.clientWidth, h = canvas.clientHeight, pr = renderer.getPixelRatio();
+      if(w && (canvas.width!==Math.round(w*pr) || canvas.height!==Math.round(h*pr))){ renderer.setSize(w, h, false); cam.aspect = w/h; cam.updateProjectionMatrix(); }
+      renderer.render(scene, cam); s.raf = requestAnimationFrame(boucle); };
+    s.placer(); boucle(); S.current = s; setErr('');
+    return () => { cancelAnimationFrame(s.raf); canvas.removeEventListener('pointerdown', down); canvas.removeEventListener('pointermove', move); canvas.removeEventListener('pointerup', up);
+      canvas.removeEventListener('wheel', roue); canvas.removeEventListener('touchmove', tmove); canvas.removeEventListener('touchend', tend);
+      Object.values(M).forEach(m=>m.dispose()); renderer.dispose(); S.current = null; };
+  },[pret]);
+  useEffect(()=>{ if(S.current && etat) camBatir(S.current, etat, sel); },[pret, etat, sel]);
+  return <div style={{position:'relative'}}>
+    <canvas ref={ref} style={{display:'block', width:'100%', height:'min(60vh,520px)', touchAction:'none', cursor:'grab'}}/>
+    <div className="muted" style={{position:'absolute', left:10, top:8, fontSize:11.5, background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:6, padding:'3px 8px', pointerEvents:'none'}}>Glisse pour tourner · molette ou pince pour zoomer · clique un tiroir</div>
+    {!pret && !err && <div className="muted" style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', gap:8}}><div className="spin"></div> Chargement du 3D…</div>}
+    {err && <div className="muted" style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', textAlign:'center', padding:20}}>{err}</div>}
+    {pret && etat && !etat.units.length && <div className="muted" style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', textAlign:'center', padding:20, pointerEvents:'none'}}>Aucun caisson. Ajoute-en un avec « Ajouter un caisson ».</div>}
+  </div>;
+}
+
+function CamionsView({cfg, toast}){
+  const C = useCamions(cfg);
+  const [courant,setCourant]=useState(()=>{ try{ return localStorage.getItem('cam_courant')||''; }catch(e){ return ''; } });
+  const [etat,setEtat]=useState(null);       // copie de travail du camion affiché
+  const [sel,setSel]=useState(null);         // {u:id du caisson, i:tiroir}
+  const [edit,setEdit]=useState(null);       // formulaire du tiroir
+  const [statut,setStatut]=useState('');
+  const [busy,setBusy]=useState('');
+  const [nom,setNom]=useState(null);         // {mode:'renommer'|'nouveau'|'dupliquer', v}
+  const [ajout,setAjout]=useState({name:'', kind:'3', shelf:0});
+  const [armer,setArmer]=useState('');
+  const timer = useRef(null), enAttente = useRef(null);
+  const cam = C.liste.find(c=>c.id===courant) || C.liste[0] || null;
+  useEffect(()=>{ if(cam && cam.id!==courant) setCourant(cam.id); },[cam && cam.id]);
+  // la copie de travail est reprise du Sheet seulement quand on change de camion (pas pendant qu'on modifie)
+  useEffect(()=>{ if(!cam){ setEtat(null); return; } setEtat(JSON.parse(JSON.stringify(cam.contenu))); setSel(null); setEdit(null); try{ localStorage.setItem('cam_courant', cam.id); }catch(e){} },[cam && cam.id, C.lu]);
+  const vider = async () => { clearTimeout(timer.current); const x = enAttente.current; enAttente.current = null; if(!x) return;
+    setStatut('Enregistrement…'); try{ await C.sauver(x); setStatut('Enregistré'); } catch(e){ setStatut('Pas enregistré : '+apiErrMsg(e)); } };
+  useEffect(()=>()=>{ vider(); },[]);
+  const maj = fn => { if(!cam) return; setEtat(e=>{ const n = JSON.parse(JSON.stringify(e)); fn(n); n.units.forEach(u=>{ u.shelf = Math.max(0, Math.min(n.shelves.length-1, u.shelf)); });
+    enAttente.current = {...cam, contenu:n}; clearTimeout(timer.current); timer.current = setTimeout(vider, 700); setStatut('Modifications…'); return n; }); };
+  const changer = async id => { await vider(); setCourant(id); };
+  const prochainNom = () => 'Camion '+(C.liste.length+1);
+  const creer = async (cs, msg) => { setBusy('c'); try{ await vider(); const l = await C.ajouter(cs); const der = cs[cs.length-1]; if(l.find(c=>c.id===der.id)) setCourant(cs[0].id); toast && toast(msg,'ok'); }
+    catch(e){ toast ? toast('Impossible : '+apiErrMsg(e),'err') : alert(apiErrMsg(e)); } setBusy(''); };
+  const ordreSuiv = () => C.liste.reduce((m,c)=>Math.max(m, c.ordre), 0)+1;
+  const validerNom = async () => { const v = String(nom.v||'').trim(); if(!v) return;
+    if(nom.mode==='renommer'){ setNom(null); await vider(); setBusy('r'); try{ await C.sauver({...cam, nom:v, contenu:etat}); await C.lire(true); }catch(e){ toast && toast('Impossible : '+apiErrMsg(e),'err'); } setBusy(''); return; }
+    const contenu = nom.mode==='dupliquer' ? JSON.parse(JSON.stringify(etat)) : camVide();
+    setNom(null); await creer([{id:'c'+camUid(), nom:v, ordre:ordreSuiv(), contenu}], nom.mode==='dupliquer' ? 'Camion copié' : 'Camion créé'); };
+  const sur = i => etat ? etat.units.filter(u=>u.shelf===i) : [];
+  const deplacer = (uid, m) => maj(n=>{ const u = n.units.find(x=>x.id===uid); if(!u) return; const meme = n.units.filter(x=>x.shelf===u.shelf), k = meme.indexOf(u), i = n.units.indexOf(u);
+    if(m==='g' && k>0){ const j = n.units.indexOf(meme[k-1]); n.units.splice(i,1); n.units.splice(j,0,u); }
+    else if(m==='d' && k<meme.length-1){ const j = n.units.indexOf(meme[k+1]); n.units.splice(i,1); n.units.splice(j,0,u); }
+    else if(m==='h' && u.shelf<n.shelves.length-1) u.shelf++;
+    else if(m==='b' && u.shelf>0) u.shelf--; });
+  const uSel = sel && etat ? etat.units.find(u=>u.id===sel.u) : null, dSel = uSel ? uSel.drawers[sel.i] : null;
+  const montrer = (uid, i) => { setSel({u:uid, i}); setEdit(null); setArmer(''); };
+  const onPick = useCallback(d => { if(d) montrer(d.u, d.i); else { setSel(null); setEdit(null); } },[]);
+  const copierVers = async (uid, cibleId) => { const u = etat.units.find(x=>x.id===uid), cible = C.liste.find(c=>c.id===cibleId); if(!u || !cible) return;
+    setBusy('cp'); try{ await vider(); const cont = JSON.parse(JSON.stringify(cible.contenu)); const copie = {...JSON.parse(JSON.stringify(u)), id:camUid(), shelf:Math.min(u.shelf, cont.shelves.length-1)};
+      cont.units.push(copie); await C.sauver({...cible, contenu:cont}); await C.lire(true); toast && toast('Caisson copié dans '+cible.nom,'ok'); }
+    catch(e){ toast && toast('Impossible : '+apiErrMsg(e),'err'); } setBusy(''); };
+
+  if(!C.id) return <div className="card">Configure l'ID du Sheet « La mémoire — Jobs » dans Réglages.</div>;
+  if(!C.lu) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des camions…</span></div>;
+  if(!C.liste.length) return <div className="card">
+    <div className="fh" style={{fontSize:18,marginBottom:6}}>Inventaire des camions</div>
+    <div className="muted" style={{fontSize:13,marginBottom:12}}>Le rack Packout de chaque camion en 3D : tablettes, caissons de 2, 3 ou 4 tiroirs, coffres et organisateurs. Clique un tiroir pour voir ce qu'il contient.</div>
+    <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+      <button className="btn btn-p" disabled={!!busy} onClick={()=>creer([1,2,3].map(n=>({id:'c'+camUid(), nom:'Camion '+n, ordre:n, contenu:camNormaliser(JSON.parse(JSON.stringify(CAM_PLAN3D)))})), '3 camions créés')}>{busy ? '…' : 'Créer mes 3 camions avec le plan 3D'}</button>
+      <button className="btn" disabled={!!busy} onClick={()=>creer([{id:'c'+camUid(), nom:'Camion 1', ordre:1, contenu:camVide()}], 'Camion créé')}>Commencer avec un camion vide</button>
+    </div>
+    <div className="muted" style={{fontSize:12,marginTop:8}}>Les 3 camions partent du même rack (celui du plan 3D) ; tu ajustes ensuite ce qui est différent dans chacun.</div>
+  </div>;
+
+  const inp = {padding:'6px 8px', fontSize:13.5, minWidth:0};
+  return <div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+      {C.liste.map(c=><button key={c.id} className={'btn btn-sm'+(cam && c.id===cam.id ? ' btn-p' : '')} onClick={()=>changer(c.id)}>{c.nom}</button>)}
+      {nom ? <>
+        <input autoFocus value={nom.v} onChange={e=>{ const v = e.target.value; setNom(n=>({...n, v})); }} onKeyDown={e=>{ if(e.key==='Enter') validerNom(); if(e.key==='Escape') setNom(null); }} style={{...inp, width:160}} placeholder="Nom du camion"/>
+        <button className="btn btn-sm btn-p" onClick={validerNom}>{nom.mode==='renommer' ? 'Renommer' : nom.mode==='dupliquer' ? 'Copier' : 'Créer'}</button>
+        <button className="btn btn-sm" onClick={()=>setNom(null)}>Annuler</button></>
+      : <>
+        <button className="btn btn-sm" disabled={!!busy} onClick={()=>setNom({mode:'nouveau', v:prochainNom()})}>+ Camion</button>
+        <button className="btn btn-sm" disabled={!!busy} title="Nouveau camion avec le même rack que celui-ci" onClick={()=>setNom({mode:'dupliquer', v:prochainNom()})}>Copier ce camion</button>
+        <button className="btn btn-sm" disabled={!!busy} onClick={()=>setNom({mode:'renommer', v:cam.nom})}>Renommer</button>
+        {armer==='camion'
+          ? <button className="btn btn-sm btn-danger" disabled={!!busy} onClick={async()=>{ setArmer(''); setBusy('x'); try{ clearTimeout(timer.current); enAttente.current = null; await C.retirer(cam); setCourant(''); }catch(e){ toast && toast('Impossible : '+apiErrMsg(e),'err'); } setBusy(''); }}>Confirmer : supprimer {cam.nom}</button>
+          : <button className="btn btn-sm" style={{color:'var(--muted)'}} disabled={!!busy} onClick={()=>setArmer('camion')}>Supprimer</button>}</>}
+      <span className="muted" style={{fontSize:12,marginLeft:'auto'}}>{statut}</span>
+    </div>
+    {etat && <div className="cam-grille" style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 330px',gap:12,alignItems:'start'}}>
+      <div className="card" style={{padding:0,overflow:'hidden',position:'relative'}}>
+        <Camion3D etat={etat} sel={sel} onPick={onPick}/>
+        {uSel && dSel && <div style={{position:'absolute',right:10,bottom:10,left:10,maxWidth:400,marginLeft:'auto',background:'var(--bg2)',border:'1px solid var(--border2)',borderLeft:'4px solid #d62b1f',borderRadius:8,padding:'10px 12px',boxShadow:'0 6px 20px rgba(0,0,0,.3)',maxHeight:'calc(100% - 20px)',overflow:'auto'}}>
+          <button className="btn btn-sm" style={{position:'absolute',top:6,right:6,padding:'0 7px'}} onClick={()=>{ setSel(null); setEdit(null); }}>✕</button>
+          <div className="fh" style={{fontSize:17,marginRight:30}}>{dSel.t}</div>
+          <div className="muted" style={{fontSize:11.5,textTransform:'uppercase',letterSpacing:'.05em',marginBottom:6}}>{uSel.name} · {CAM_TYPES[uSel.kind]}{uSel.drawers.length>1 ? ' · tiroir '+(sel.i+1) : ''} · {(etat.shelves[uSel.shelf]||{}).name}</div>
+          {!edit ? <>
+            {dSel.items.length ? <ul style={{margin:0,paddingLeft:18,fontSize:13.5,lineHeight:1.45}}>{dSel.items.map((x,k)=><li key={k}>{x}</li>)}</ul> : <div className="muted" style={{fontSize:13}}>(vide)</div>}
+            {(dSel.note || dSel.flag) && <div className="muted" style={{fontSize:12.5,fontStyle:'italic',marginTop:6}}>{dSel.flag ? 'À confirmer. ' : ''}{dSel.note}</div>}
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:10,alignItems:'center'}}>
+              <button className="btn btn-sm btn-p" onClick={()=>setEdit({uname:uSel.name, t:dSel.t, items:dSel.items.join('\n'), note:dSel.note, flag:dSel.flag})}>Modifier</button>
+              {C.liste.length>1 && <select value="" disabled={!!busy} onChange={e=>{ if(e.target.value) copierVers(uSel.id, e.target.value); }} style={{...inp,fontSize:12.5,width:'auto'}}>
+                <option value="">Copier le caisson vers…</option>{C.liste.filter(c=>c.id!==cam.id).map(c=><option key={c.id} value={c.id}>{c.nom}</option>)}</select>}
+              <span style={{flex:1}}></span>
+              {armer==='caisson'
+                ? <button className="btn btn-sm btn-danger" onClick={()=>{ const id = uSel.id; setArmer(''); setSel(null); maj(n=>{ n.units = n.units.filter(u=>u.id!==id); }); }}>Confirmer la suppression</button>
+                : <button className="btn btn-sm" style={{color:'var(--muted)'}} onClick={()=>setArmer('caisson')}>Supprimer le caisson</button>}
+            </div></>
+          : <div style={{display:'grid',gap:6}}>
+            <label className="muted" style={{fontSize:11.5}}>Caisson<input value={edit.uname} onChange={e=>{ const v = e.target.value; setEdit(x=>({...x, uname:v})); }} style={{...inp,width:'100%'}}/></label>
+            <label className="muted" style={{fontSize:11.5}}>Nom du tiroir<input value={edit.t} onChange={e=>{ const v = e.target.value; setEdit(x=>({...x, t:v})); }} style={{...inp,width:'100%'}}/></label>
+            <label className="muted" style={{fontSize:11.5}}>Contenu (un article par ligne)<textarea rows={6} value={edit.items} onChange={e=>{ const v = e.target.value; setEdit(x=>({...x, items:v})); }} style={{...inp,width:'100%',boxSizing:'border-box'}}/></label>
+            <label className="muted" style={{fontSize:11.5}}>Note<input value={edit.note} onChange={e=>{ const v = e.target.value; setEdit(x=>({...x, note:v})); }} style={{...inp,width:'100%'}}/></label>
+            <label style={{display:'flex',gap:6,alignItems:'center',fontSize:12.5}}><input type="checkbox" checked={!!edit.flag} onChange={e=>{ const v = e.target.checked; setEdit(x=>({...x, flag:v})); }}/> À confirmer</label>
+            <div style={{display:'flex',gap:6}}>
+              <button className="btn btn-sm btn-p" onClick={()=>{ const e = edit, id = uSel.id, i = sel.i; maj(n=>{ const u = n.units.find(x=>x.id===id); if(!u) return; u.name = e.uname.trim() || u.name; const d = u.drawers[i];
+                d.t = e.t.trim() || d.t; d.items = e.items.split('\n').map(x=>x.trim()).filter(Boolean); d.note = e.note.trim(); d.flag = !!e.flag; }); setEdit(null); }}>Enregistrer</button>
+              <button className="btn btn-sm" onClick={()=>setEdit(null)}>Annuler</button>
+            </div></div>}
+        </div>}
+      </div>
+      <div className="card" style={{padding:'10px 12px',minWidth:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}><div className="fh" style={{fontSize:17,flex:1}}>Tablettes</div>
+          <button className="btn btn-sm" onClick={()=>maj(n=>{ n.shelves.push({name:'Tablette '+(n.shelves.length+1)}); })}>+ Tablette</button></div>
+        {etat.shelves.map((s,si)=>({s,si})).reverse().map(({s,si})=><div key={si} style={{borderTop:'1px solid var(--border)',padding:'7px 0'}}>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <span style={{fontSize:11.5,color:'#d62b1f',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',whiteSpace:'nowrap'}}>Tablette {si+1}</span>
+            <input key={cam.id+':'+si+':'+s.name} defaultValue={s.name} onBlur={e=>{ const v = e.target.value.trim(); if(v && v!==s.name) maj(n=>{ n.shelves[si].name = v; }); }} style={{...inp,flex:1,fontSize:12.5,padding:'3px 6px'}}/>
+            {etat.shelves.length>1 && !sur(si).length && <button className="btn btn-sm" style={{fontSize:11,padding:'0 6px',color:'var(--muted)'}} onClick={()=>maj(n=>{ n.shelves.splice(si,1); n.units.forEach(u=>{ if(u.shelf>si) u.shelf--; }); })}>retirer</button>}
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr)',gap:4,marginTop:5}}>
+            {!sur(si).length && <div className="muted" style={{fontSize:12}}>vide</div>}
+            {sur(si).map((u,ui,arr)=><div key={u.id} style={{display:'flex',alignItems:'center',gap:4,border:'1px solid '+(sel && sel.u===u.id ? '#d62b1f' : 'var(--border)'),borderRadius:6,padding:'4px 6px',fontSize:12.5,background:sel && sel.u===u.id ? 'rgba(214,43,31,.10)' : 'var(--bg3)'}}>
+              <div style={{flex:1,minWidth:0,cursor:'pointer'}} onClick={()=>montrer(u.id, 0)}>
+                <div style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{u.name}{u.drawers.some(d=>d.flag) && <span style={{color:'var(--warning)',fontSize:10.5,fontWeight:700}}> · à confirmer</span>}</div>
+                <div className="muted" style={{fontSize:10.5}}>{CAM_TYPES[u.kind]}</div></div>
+              {[['g','◀','Vers la gauche',ui===0],['d','▶','Vers la droite',ui===arr.length-1],['h','▲','Tablette au-dessus',si===etat.shelves.length-1],['b','▼','Tablette en dessous',si===0]].map(([m,t,ti,off])=>
+                <button key={m} className="btn btn-sm" title={ti} disabled={off} style={{width:24,height:24,padding:0,fontSize:11}} onClick={()=>deplacer(u.id, m)}>{t}</button>)}
+            </div>)}
+          </div></div>)}
+        <div style={{border:'1px dashed var(--border2)',borderRadius:8,padding:8,marginTop:8,display:'grid',gridTemplateColumns:'minmax(0,1fr)',gap:6}}>
+          <div className="fh" style={{fontSize:14}}>Ajouter un caisson</div>
+          <input value={ajout.name} onChange={e=>{ const v = e.target.value; setAjout(a=>({...a, name:v})); }} placeholder="Nom (ex. GFI, USB, gradateurs)" style={inp}/>
+          <div style={{display:'flex',gap:6}}>
+            <select value={ajout.kind} onChange={e=>{ const v = e.target.value; setAjout(a=>({...a, kind:v})); }} style={{...inp,flex:1}}>
+              <option value="3">Packout 3 tiroirs</option><option value="2">Packout 2 tiroirs</option><option value="4">Packout 4 tiroirs</option><option value="0">Coffre</option><option value="1">Organisateur</option></select>
+            <select value={Math.min(ajout.shelf, etat.shelves.length-1)} onChange={e=>{ const v = +e.target.value; setAjout(a=>({...a, shelf:v})); }} style={{...inp,flex:1}}>
+              {etat.shelves.map((s,i)=><option key={i} value={i}>{s.name || 'Tablette '+(i+1)}</option>)}</select>
+          </div>
+          <button className="btn btn-sm btn-p" disabled={!ajout.name.trim()} onClick={()=>{ const u = camNouveauCaisson(ajout.name.trim(), ajout.kind, Math.min(ajout.shelf, etat.shelves.length-1)); maj(n=>{ n.units.push(u); }); setAjout(a=>({...a, name:''})); montrer(u.id, 0); }}>Ajouter</button>
+          <div className="muted" style={{fontSize:11.5}}>Il arrive au bout de la tablette ; déplace-le avec ◀ ▶ ▲ ▼.</div>
+        </div>
+      </div>
+    </div>}
+    {etat && <div style={{marginTop:18}}>
+      <div className="fh" style={{fontSize:19,marginBottom:2}}>Contenu de {cam.nom}</div>
+      <div className="muted" style={{fontSize:12.5,marginBottom:8}}>Tablette par tablette. Clique un tiroir pour l'ouvrir dans le 3D.</div>
+      {!etat.units.length && <div className="muted">Rien d'inventorié dans ce camion.</div>}
+      {etat.shelves.map((s,si)=>({s,si})).reverse().filter(x=>sur(x.si).length).map(({s,si})=><div key={si} style={{marginBottom:12}}>
+        <div style={{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'#d62b1f',margin:'10px 0 6px'}}>Tablette {si+1} — {s.name}</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(270px,1fr))',gap:10}}>
+          {sur(si).map(u=><div key={u.id} className="card" style={{padding:'10px 12px',margin:0}}>
+            <div className="fh" style={{fontSize:15.5}}>{u.name}</div>
+            <div className="muted" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.05em',marginBottom:4}}>{CAM_TYPES[u.kind]}</div>
+            {u.drawers.map((d,i)=><div key={i} onClick={()=>{ montrer(u.id, i); window.scrollTo({top:0, behavior:'smooth'}); }} style={{borderTop:'1px solid var(--border)',padding:'6px 0',cursor:'pointer'}}>
+              <div style={{fontWeight:600,fontSize:13}}>{u.drawers.length>1 ? 'Tiroir '+(i+1)+' — ' : ''}{d.t}{d.flag && <span style={{color:'var(--warning)',fontSize:10.5,fontWeight:700}}> · à confirmer</span>}</div>
+              <div style={{fontSize:12.5,lineHeight:1.4}}>{d.items.length ? d.items.join(' · ') : <span className="muted">(vide)</span>}</div>
+              {d.note && <div className="muted" style={{fontSize:11.5,fontStyle:'italic'}}>{d.note}</div>}
+            </div>)}
+          </div>)}
+        </div></div>)}
+    </div>}
+  </div>;
+}
+
 function InventaireSection({initial, cfg, toast, data}){
   const [sous,setSous]=useState(()=>{ if(initial) return initial; try{ return localStorage.getItem('inv_sous')||'catalogue'; }catch(e){ return 'catalogue'; } });
   const choisir = k => { setSous(k); try{ localStorage.setItem('inv_sous', k); }catch(e){} };
   return <div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
-      {[['catalogue','Catalogue'],['inventaire','Inventaire']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
+      {[['catalogue','Catalogue'],['inventaire','Inventaire'],['camions','Camions']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
     </div>
-    {sous==='catalogue' ? <ProduitsView cfg={cfg} toast={toast}/> : <StockView data={data}/>}
+    {sous==='catalogue' ? <ProduitsView cfg={cfg} toast={toast}/> : sous==='camions' ? <CamionsView cfg={cfg} toast={toast}/> : <StockView data={data}/>}
   </div>;
 }
 function StockView({data}){
