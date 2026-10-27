@@ -156,7 +156,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v293';
+const APP_VERSION = 'v294';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7849,9 +7849,16 @@ function planFond(src, rot){
   try{ ctx.drawImage(src, -W0/2, -H0/2, W0, H0); }catch(e){ ctx.fillStyle = '#ddd'; ctx.fillRect(-W0/2, -H0/2, W0, H0); }
   return off;
 }
+// v294 : photo HEIC (iPhone) convertie en JPEG dans le navigateur (heic2any, chargé seulement au besoin)
+async function planEstHeic(b){ try{ if(/heic|heif/i.test(b.type||'')) return true; const t = new TextDecoder().decode(new Uint8Array(await b.slice(4,12).arrayBuffer())); return /^ftyp(heic|heix|hevc|hevx|heim|heis|mif1|msf1)/.test(t); }catch(e){ return false; } }
+async function planDeHeic(b){
+  if(!window.heic2any) await loadScript('https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js');
+  const r = await window.heic2any({blob:b, toType:'image/jpeg', quality:0.9}); return Array.isArray(r) ? r[0] : r; }
 async function planCharger(image){
-  try{ const b = await (await fetch(image)).blob(); return await createImageBitmap(b, {imageOrientation:'from-image'}); }
-  catch(e){ const im = new Image(); im.src = image; await im.decode(); if(!im.naturalWidth) throw new Error('image vide'); return im; }
+  let b = await (await fetch(image)).blob();
+  if(await planEstHeic(b)) b = await planDeHeic(b);
+  try{ return await createImageBitmap(b, {imageOrientation:'from-image'}); }
+  catch(e){ const u = URL.createObjectURL(b), im = new Image(); im.src = u; await im.decode(); if(!im.naturalWidth) throw new Error('image vide'); return im; }
 }
 function PlanAnnoter({image, onSave, onClose}){
   const ref = useRef(null), imgRef = useRef(null), srcRef = useRef(null);
@@ -7865,9 +7872,9 @@ function PlanAnnoter({image, onSave, onClose}){
   const enCours = useRef(null);
   // Image de fond (photo) ou feuille blanche quadrillée (croquis)
   useEffect(()=>{ let vivant=true;
-    (async()=>{ const c = ref.current; if(!c) return; setPrete(false); setErrImg('');
+    (async()=>{ const c = ref.current; if(!c) return; setPrete(false); setErrImg('');   // (une photo HEIC prend quelques secondes à convertir)
       if(image){ let src = null;
-        try{ src = await planCharger(image); }catch(e){ if(vivant) setErrImg('Cette photo ne s\'ouvre pas ici (format HEIC ou fichier abîmé). Choisis-la en JPEG, ou fais une capture d\'écran de la photo.'); return; }
+        try{ src = await planCharger(image); }catch(e){ if(vivant) setErrImg('Cette photo ne s\'ouvre pas ici ('+(e && e.message ? e.message : 'fichier illisible')+'). Essaie une capture d\'écran de la photo.'); return; }
         if(!vivant) return; srcRef.current = src; const f = planFond(src, 0); c.width = f.width; c.height = f.height; imgRef.current = f; setRot(0); }
       else { c.width = 1400; c.height = 1000; imgRef.current = null; srcRef.current = null; }
       setPrete(true); })();
@@ -8022,11 +8029,49 @@ function RepSuggestionsListe({cfg, contacts, q, onChoix}){
   const res = mots.length ? L.filter(x=>mots.every(m=>x.cherche.includes(m))).sort((a,b)=>(cvNorm(b.nom).startsWith(mots[0])-cvNorm(a.nom).startsWith(mots[0])) || a.nom.localeCompare(b.nom,'fr')).slice(0,8) : [];
   return <div style={{position:'absolute',left:0,right:0,top:'100%',zIndex:30,marginTop:2,background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,boxShadow:'0 8px 24px rgba(0,0,0,.35)',maxHeight:300,overflowY:'auto'}}>
     {!R && <div className="muted" style={{padding:'8px 10px',fontSize:12.5,display:'flex',gap:8,alignItems:'center'}}><div className="spin"></div> Lecture du Répertoire…</div>}
-    {R && !res.length && <div className="muted" style={{padding:'8px 10px',fontSize:12.5}}>Pas dans le Répertoire — continue d'écrire, c'est un nouveau client.</div>}
+    {R && !res.length && <div className="muted" style={{padding:'8px 10px',fontSize:12.5}}>Pas dans le Répertoire.</div>}
     {res.map(x=><div key={x.id} onMouseDown={e=>{ e.preventDefault(); onChoix(x); }} style={{padding:'7px 10px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}>
       <div><b>{x.nom}</b> <span className="muted" style={{fontSize:11.5}}>· {x.type}</span></div>
       <div className="muted" style={{fontSize:11.5}}>{[x.adresse, x.tel, x.courriel].filter(Boolean).join(' · ') || 'aucune coordonnée'}</div>
     </div>)}
+    {R && String(q||'').trim().length>=4 && <ClientCourriels q={String(q).trim()} onChoix={onChoix}/>}
+  </div>;
+}
+// v294 : client pas dans le Répertoire → chercher son nom dans Gmail (courriels reçus de lui, ou tes notes « Client : / Courriel : / Adresse : »)
+async function clientDansCourriels(q){
+  const r = await gmReq('messages?q='+encodeURIComponent('"'+q+'"')+'&maxResults=10'); const ids = (r.messages||[]).map(m=>m.id);
+  const nq = cvNorm(q), out = {nom:'', courriel:'', adresse:'', tel:'', sources:[]};
+  for(const id of ids){ let m; try{ m = await gmReq('messages/'+id+'?format=full'); }catch(e){ continue; }
+    const de = gmEntete(m,'From'), mailDe = (de.match(/[\w.+'-]+@[\w-]+(?:\.[\w-]+)+/)||[''])[0].toLowerCase(), nomDe = gmNom(de);
+    const c = gmCorps(m.payload), txt = (c.txt || String(c.html||'').replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|tr|li)>/gi,'\n').replace(/<[^>]+>/g,' ')).replace(/&nbsp;/g,' ');
+    const lab = re => { const x = txt.match(re); return x ? x[1].trim() : ''; };
+    const cl = lab(/(?:^|\n)\s*Client\s*:\s*([^\n]+)/i);
+    const pourLui = !cl || cvNorm(cl).includes(nq) || nq.includes(cvNorm(cl));
+    if(cvNorm(nomDe).includes(nq) && mailDe && !/@saranelectrique\.com$/.test(mailDe)){ out.courriel = out.courriel || mailDe; out.nom = out.nom || nomDe; }
+    if(pourLui){
+      const mail = (lab(/(?:^|\n)\s*Courriel\s*:\s*([^\n]+)/i).match(/[\w.+'-]+@[\w-]+(?:\.[\w-]+)+/)||[''])[0].toLowerCase();
+      if(mail && !/@saranelectrique\.com$/.test(mail)) out.courriel = out.courriel || mail;
+      const adr = lab(/(?:^|\n)\s*Adresse\s*:\s*([^\n]+)/i); if(adr && !/582 boul/i.test(adr)) out.adresse = out.adresse || adr;
+      const tel = lab(/(?:^|\n)\s*(?:T[ée]l(?:[ée]phone)?|Cell(?:ulaire)?)\s*:\s*([^\n]+)/i); if(tel && /\d{3}.*\d{4}/.test(tel) && !/490-3412|703-1795/.test(tel)) out.tel = out.tel || tel;
+      if(cl && !out.nom) out.nom = cl; }
+    out.sources.push({sujet:gmEntete(m,'Subject'), quand:gmQuand(m.internalDate)});
+    if(out.courriel && out.adresse && out.tel) break; }
+  return out;
+}
+function ClientCourriels({q, onChoix}){
+  const [etat,setEtat]=useState(null);   // null | 'cherche' | {…} | 'rien' | 'perm'
+  const chercher = async () => { if(!peutLireCourriels()){ setEtat('perm'); return; } setEtat('cherche');
+    try{ const r = await clientDansCourriels(q); setEtat(r.courriel || r.adresse || r.tel ? r : 'rien'); }catch(e){ setEtat('rien'); } };
+  useEffect(()=>{ setEtat(null); },[q]);
+  return <div style={{padding:'7px 10px',fontSize:12.5,borderTop:'1px solid var(--border)'}}>
+    {etat===null && <span style={{color:'var(--accent)',cursor:'pointer'}} onMouseDown={e=>{ e.preventDefault(); chercher(); }}>Chercher « {q} » dans mes courriels ›</span>}
+    {etat==='perm' && <span>Le CRM doit pouvoir lire tes courriels (une fois). <button className="btn btn-sm" onMouseDown={async e=>{ e.preventDefault(); try{ await requestToken('consent', SCOPE_GMAIL_LIRE); }catch(x){} if(peutLireCourriels()) chercher(); }}>Autoriser</button></span>}
+    {etat==='cherche' && <span className="muted" style={{display:'flex',gap:8,alignItems:'center'}}><span className="spin"></span> Recherche dans Gmail…</span>}
+    {etat==='rien' && <span className="muted">Rien trouvé dans tes courriels pour « {q} ».</span>}
+    {etat && typeof etat==='object' && <div onMouseDown={e=>{ e.preventDefault(); onChoix({nom:etat.nom || q, courriel:etat.courriel, adresse:etat.adresse, tel:etat.tel, deCourriel:true}); }} style={{cursor:'pointer'}}>
+      <div><b>{etat.nom || q}</b> <span className="muted" style={{fontSize:11.5}}>· trouvé dans tes courriels</span></div>
+      <div className="muted" style={{fontSize:11.5}}>{[etat.adresse, etat.tel, etat.courriel].filter(Boolean).join(' · ')}</div>
+      <div className="muted" style={{fontSize:11}}>{etat.sources.slice(0,2).map(x=>'« '+x.sujet+' » ('+x.quand+')').join(' · ')}</div></div>}
   </div>;
 }
 function ChampClient({cfg, contacts, value, onChange, onChoix}){
@@ -8166,10 +8211,18 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, contacts}){
 
     <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:6}}>
-        <ChampClient cfg={cfg} contacts={contacts} value={d.nom} onChange={v=>maj({nom:v})} onChoix={x=>{ setD(o=>({...o, nom:x.nom, tel:x.tel || o.tel, courriel:x.courriel || o.courriel, adresse:x.adresse || o.adresse})); toast && toast(x.nom+' : fiche du Répertoire remplie'); }}/>
+        <ChampClient cfg={cfg} contacts={contacts} value={d.nom} onChange={v=>maj({nom:v, deRepertoire:false})} onChoix={x=>{ setD(o=>({...o, nom:x.nom, tel:x.tel || o.tel, courriel:x.courriel || o.courriel, adresse:x.adresse || o.adresse, deRepertoire:!x.deCourriel})); toast && toast(x.deCourriel ? x.nom+' : infos prises dans tes courriels' : x.nom+' : fiche du Répertoire remplie'); }}/>
         {champ('tel','Téléphone')}{champ('courriel','Courriel')}{champ('titre','Titre du projet (ex. Borne Flo X3)')}
       </div>
       <ChampAdresse value={d.adresse} onChange={a=>maj({adresse:a})} placeholder="Adresse"/>
+      {d.nom && d.nom.trim().length>=3 && !d.deRepertoire && <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:12.5}}>
+        <span className="muted">{d.nom} n'est pas choisi dans le Répertoire.</span>
+        <button className="btn btn-sm" disabled={occupe==='fiche'} onClick={async()=>{ setOccupe('fiche');
+          try{ const adr = String(d.adresse||''), parts = adr.split(/\s*,\s*/);
+            await ficheEcrire(cfg, {type:'Client', code:'PART', nom:d.nom.trim(), alias:[], adresse:parts[0]||'', ville:parts.slice(1).filter(x=>!/^(QC|Québec|Quebec|Canada)$/i.test(x)).join(', '), tel:d.tel||'', courriel:d.courriel||'', notes:''});
+            setD(o=>({...o, deRepertoire:true})); toast && toast(d.nom.trim()+' ajouté au Répertoire'); }
+          catch(e){ toast && toast('Pas ajouté : '+apiErrMsg(e)); }
+          setOccupe(''); }}>{occupe==='fiche' ? '…' : '+ Ajouter au Répertoire'}</button></div>}
       {d.type==='Soumission' && <ChoixEvenementSoumission toast={toast} ouvertDefaut={false} onChoix={(ev, calId)=>{ const i = infosEvenement(ev);
         setD(o=>({...o, nom:o.nom||i.nom, tel:o.tel||i.tel, courriel:o.courriel||i.courriel, adresse:o.adresse||i.adresse, titre:o.titre||i.titre, travaux:o.travaux||i.travaux, evenement:{id:ev.id, calId, titre:ev.summary||''}}));
         toast && toast('Client pris dans l\'agenda'); }}/>}
