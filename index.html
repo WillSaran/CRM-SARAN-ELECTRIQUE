@@ -159,7 +159,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v309';
+const APP_VERSION = 'v310';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9763,6 +9763,8 @@ function cvClientDescription(desc, titre){
   essai(/(?:^|[\s.;•-])(?:clients?|cliente|contact|nom du client)\s*:\s*(.+)$/i);
   // 1b. v308 : « Client Patrick Barbeau » (sans deux-points) au début d'une ligne
   if(!noms) essai(/^(?:clients?|cliente|contact)\s+(.+)$/i);
+  // 1c. v310 : titre « CONTACTS : » (ou « Client : ») seul sur sa ligne, le nom sur la ligne suivante
+  if(!noms) L.some((l,i)=>{ if(!/^(?:clients?|cliente|contacts?|coordonn[ée]es(?: du client)?)\s*:?\s*$/i.test(l) || !L[i+1]) return false; const n = nomsDe(L[i+1]); if(n){ noms = n; i0 = i+1; return true; } return false; });
   // 2. « Mme Andrée Benn » / « M. Jean Tremblay » (avec téléphone ou courriel tout près)
   if(!noms) essai(/(?:^|\s)((?:Mme|M\.|Madame|Monsieur)\s+.+)$/, (l,i)=>L.slice(i, i+3).some(x=>reTel.test(x) || reMail.test(x)));
   // 3. « Prénom Nom — 438-… » ou « Prénom Nom, courriel » au début d'une ligne
@@ -11368,9 +11370,9 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   if(part) part.jobs.forEach(j=>{
     const jc = jobContrDe(j.name);
     if(jc){ jc.events.push(...j.events.filter(e=>!e.attente)); jc.cles.add(j.name); if(j.id) jc.ids.add(j.id); if(!jc.adresse && j.address) jc.adresse = jc.adresse || j.address; jc.sansCode = (jc.sansCode||[]).concat(j); return; }
-    // v206 : le client vient de la DESCRIPTION de l'événement (The Crew seulement, pas En Attente) : nom complet, téléphone, courriel.
+    // v206 : le client vient de la DESCRIPTION de l'événement : nom complet, téléphone, courriel. v310 : En Attente aussi (jamais pour une job de contracteur)
     // Sans client dans la description : le titre sert seulement à relier la job à une fiche qui existe déjà (pas de nouvelle fiche).
-    const cli = j.events.filter(e=>e.calId===CREW_CAL && !e.attente && e.client).sort((a,b)=>String(a.day).localeCompare(String(b.day))).map(e=>e.client).pop();
+    const cli = j.events.filter(e=>(e.calId===CREW_CAL || e.calId===EN_ATTENTE_CAL) && e.client).sort((a,b)=>String(a.day).localeCompare(String(b.day))).map(e=>e.client).pop();
     const kT = nNom(j.name);
     if(cli){
       const r = rec({nNom:nNom(cli.nom), nMail:nMail(cli.courriel), nAdr:nAdresse(j.address), nom:cli.nom, adresse:j.address, kind:'job', agenda:true, cli:{...cli, adresse:j.address||''}, obj:j,
@@ -11751,7 +11753,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
     if(!nouveaux.length) return;
     nouveaux.forEach(p=>autoFait.current.add(persCle(p.agenda.nom)));
     const le = new Date().toLocaleString('fr-CA');
-    const lignes = nouveaux.map(p=>{ const a = p.agenda; return ['Client', a.nom, 'PART', '', a.adresse||p.adresses[0]||'', '', a.tel ? repTelFmt(a.tel) : '', a.courriel||'', 'Créée depuis l\'agenda The Crew', '', a.conjoint ? 'Conjoint: '+a.conjoint : '', le]; });
+    const lignes = nouveaux.map(p=>{ const a = p.agenda; return ['Client', a.nom, 'PART', '', a.adresse||p.adresses[0]||'', '', a.tel ? repTelFmt(a.tel) : '', a.courriel||'', 'Créée depuis l\'agenda', '', a.conjoint ? 'Conjoint: '+a.conjoint : '', le]; });
     suivreEcritures();
     window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:cfg.memoireJobsSpreadsheetId, range:'Fiches!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:lignes}})
       .then(()=>{ try{ localStorage.setItem('crm_fiches_agenda', JSON.stringify([...deja, ...nouveaux.map(p=>persCle(p.agenda.nom))].slice(-2000))); }catch(e){}
