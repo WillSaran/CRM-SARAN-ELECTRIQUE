@@ -37,6 +37,9 @@ h1,h2,h3,.fh{font-family:var(--font-head);font-weight:800;letter-spacing:-0.01em
 a{color:inherit}
 button{font-family:var(--font-body);cursor:pointer;touch-action:manipulation}
 input,select,textarea{font-family:var(--font-body);background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:8px;padding:9px 11px;font-size:14px;width:100%}
+.calc-rapide select{width:auto;max-width:100%;padding:6px 8px;font-size:13px}
+.calc-rapide input{padding:6px 8px;font-size:13px}
+.calc-rapide input[type=checkbox]{width:auto;padding:0}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .muted{color:var(--muted)}
 .topbar{position:sticky;top:0;z-index:40;height:var(--topbar-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:var(--bg2);border-bottom:1px solid var(--border)}
@@ -156,7 +159,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v296';
+const APP_VERSION = 'v297';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7527,7 +7530,7 @@ const CALC_SOUMISSION = {
       const sel = (val, on, opts, st) => <select value={val} onChange={e=>on(e.target.value)} style={st}>{opts.map(([a,b])=><option key={a} value={a}>{b}</option>)}</select>;
       const r = (k, opts) => sel(v[k], x=>maj({[k]:x}), opts);
       const c = (k, l) => <label style={{display:'flex',gap:4,alignItems:'center',fontSize:13}}><input type="checkbox" checked={!!v[k]} onChange={e=>maj({[k]:e.target.checked})}/> {l}</label>;
-      const long = (val, on) => <input value={val} inputMode="decimal" placeholder={v.unite} onChange={e=>on(e.target.value)} style={{width:64}}/>;
+      const long = (val, on) => <input value={val} inputMode="decimal" placeholder={v.unite} onChange={e=>on(e.target.value)} style={{width:72}}/>;
       // Changer m ↔ pi convertit toutes les longueurs déjà tapées
       const unite = u => { if(u===v.unite) return; const f = u==='pi' ? 3.281 : 1/3.281, cv = x => { const n=cvNum(x); return n==null ? x : String(Math.round(n*f*10)/10); };
         maj({unite:u, dist:cv(v.dist), segs:v.segs.map(s=>({...s, long:cv(s.long)}))}); };
@@ -7799,7 +7802,7 @@ function CalculRapide({C, d, setD, toast, onRempli}){
       {Object.entries(CALC_SOUMISSION).map(([k,x])=><button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>ouvrir(k)}>{x.nom}</button>)}
       <span className="muted" style={{fontSize:11.5}}>(entrée électrique, rough, finition, cuisine, salle de bain, maison neuve, blocs : à venir)</span>
     </div>
-    {def && <div style={{marginTop:8,padding:10,background:'var(--bg3)',borderRadius:8}}>
+    {def && <div className="calc-rapide" style={{marginTop:8,padding:10,background:'var(--bg3)',borderRadius:8}}>
       {def.champs(v, patch=>setV(x=>({...x, ...patch})))}
       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:10}}>
         {r.manque.length ? <span style={{fontSize:12.5,color:'var(--warning)'}}>Il manque {r.manque.length} tarif{r.manque.length>1?'s':''} : ouvre ⚙ Tarifs.</span>
@@ -7870,9 +7873,14 @@ function planFond(src, rot){
 }
 // v294 : photo HEIC (iPhone) convertie en JPEG dans le navigateur (heic2any, chargé seulement au besoin)
 async function planEstHeic(b){ try{ if(/heic|heif/i.test(b.type||'')) return true; const t = new TextDecoder().decode(new Uint8Array(await b.slice(4,12).arrayBuffer())); return /^ftyp(heic|heix|hevc|hevx|heim|heis|mif1|msf1)/.test(t); }catch(e){ return false; } }
+// v297 : les photos des iPhone récents ne passent pas dans heic2any (ERR_LIBHEIF) → heic-to (libheif à jour) d'abord, heic2any en secours
 async function planDeHeic(b){
-  if(!window.heic2any) await loadScript('https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js');
-  const r = await window.heic2any({blob:b, toType:'image/jpeg', quality:0.9}); return Array.isArray(r) ? r[0] : r; }
+  try{ const im = await createImageBitmap(b); im.close && im.close(); return b; }catch(e){}   // Safari lit déjà le HEIC
+  try{ if(!window.HeicTo) await loadScript('https://cdn.jsdelivr.net/npm/heic-to@1.6.2/dist/iife/heic-to.js');
+    return await window.HeicTo({blob:b, type:'image/jpeg', quality:0.9}); }
+  catch(e1){
+    if(!window.heic2any) await loadScript('https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js');
+    const r = await window.heic2any({blob:b, toType:'image/jpeg', quality:0.9}); return Array.isArray(r) ? r[0] : r; } }
 async function planCharger(image){
   let b = await (await fetch(image)).blob();
   if(await planEstHeic(b)) b = await planDeHeic(b);
