@@ -156,7 +156,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v294';
+const APP_VERSION = 'v295';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7829,6 +7829,15 @@ function planDessiner(ctx, W, formes){
     ctx.restore();
   });
 }
+// v295 : section repliable (une ligne cliquable)
+function Repli({titre, info, ouvert0, premier, children}){
+  const [o,setO]=useState(!!ouvert0);
+  return <div style={premier ? null : {borderTop:'1px dashed var(--border2)',paddingTop:8,marginTop:2}}>
+    <div onClick={()=>setO(!o)} style={{cursor:'pointer',display:'flex',gap:8,alignItems:'baseline',userSelect:'none'}}>
+      <b style={{fontSize:13.5}}>{o ? '▾' : '▸'} {titre}</b>{info && <span className="muted" style={{fontSize:11.5}}>{info}</span>}</div>
+    {o && <div style={{marginTop:6}}>{children}</div>}
+  </div>;
+}
 // v293 : si une partie plante, seulement elle s'arrête (avant : écran noir, tout le CRM tombait)
 class Parechoc extends React.Component {
   constructor(p){ super(p); this.state = {err:null}; }
@@ -7930,7 +7939,7 @@ function PlanVignette({id}){
   useEffect(()=>{ let v=true; if(!src) planImage(id).then(u=>{ if(v) setSrc(u); }).catch(()=>{}); return ()=>{v=false}; },[id]);
   return src ? <img src={src} alt="" style={{width:110,height:82,objectFit:'cover',borderRadius:6,border:'1px solid var(--border2)'}}/> : <span className="muted" style={{width:110,fontSize:11}}>…</span>;
 }
-function PlanTravaux({d, setD, toast}){
+function PlanTravaux({d, setD, toast, dansCarte}){
   const [annoter,setAnnoter]=useState(null);          // {image, index}
   const [occupe,setOccupe]=useState('');
   const [ok,setOk]=useState(peutDeposer());
@@ -7959,10 +7968,10 @@ function PlanTravaux({d, setD, toast}){
       const q = encodeURIComponent("'"+d.dossier+"' in parents and trashed=false and mimeType contains 'image/'");
       const r = await fetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id,name,thumbnailLink)&pageSize=50&supportsAllDrives=true&includeItemsFromAllDrives=true', {headers:{Authorization:'Bearer '+tok}});
       setDossierListe(r.ok ? ((await r.json()).files||[]) : []); }catch(e){ setDossierListe([]); } };
-  if(!ok) return <div className="card" style={{marginBottom:10}}><b style={{fontSize:13.5}}>📐 Plan des travaux</b> <button className="btn btn-sm" onClick={async()=>{ try{ await requestToken('consent'); setOk(peutDeposer()); }catch(e){} }}>🔓 Autoriser les photos (une fois)</button></div>;
-  return <div className="card" style={{marginBottom:10}}>
+  if(!ok) return <div className={dansCarte ? '' : 'card'} style={{marginBottom:dansCarte?0:10}}><b style={{fontSize:13.5}}>📐 Plan des travaux</b> <button className="btn btn-sm" onClick={async()=>{ try{ await requestToken('consent'); setOk(peutDeposer()); }catch(e){} }}>🔓 Autoriser les photos (une fois)</button></div>;
+  return <div className={dansCarte ? '' : 'card'} style={{marginBottom:dansCarte?0:10}}>
     <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-      <b style={{fontSize:13.5}}>📐 Plan des travaux</b><span className="muted" style={{fontSize:12}}>photos annotées — ajoutées au PDF (🖨️)</span>
+      {!dansCarte && <><b style={{fontSize:13.5}}>📐 Plan des travaux</b><span className="muted" style={{fontSize:12}}>photos annotées — ajoutées au PDF (🖨️)</span></>}
       <input ref={refPhoto} type="file" accept="image/*" style={{display:'none'}} onChange={e=>{ const f=e.target.files[0]; e.target.value=''; ouvrirFichier(f); }}/>
       <span style={{marginLeft:'auto',display:'flex',gap:5,flexWrap:'wrap'}}>
         <button className="btn btn-sm" disabled={!!occupe} onClick={()=>refPhoto.current && refPhoto.current.click()}>📷 Photo</button>
@@ -8224,20 +8233,26 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, contacts}){
           catch(e){ toast && toast('Pas ajouté : '+apiErrMsg(e)); }
           setOccupe(''); }}>{occupe==='fiche' ? '…' : '+ Ajouter au Répertoire'}</button></div>}
       {d.type==='Soumission' && <ChoixEvenementSoumission toast={toast} ouvertDefaut={false} onChoix={(ev, calId)=>{ const i = infosEvenement(ev);
-        setD(o=>({...o, nom:o.nom||i.nom, tel:o.tel||i.tel, courriel:o.courriel||i.courriel, adresse:o.adresse||i.adresse, titre:o.titre||i.titre, travaux:o.travaux||i.travaux, evenement:{id:ev.id, calId, titre:ev.summary||''}}));
+        setD(o=>({...o, nom:o.nom||i.nom, tel:o.tel||i.tel, courriel:o.courriel||i.courriel, adresse:o.adresse||i.adresse, titre:o.titre||i.titre, visite: i.travaux && !String(o.visite||'').includes(i.travaux.trim()) ? [o.visite, '— Description de l\'agenda —\n'+i.travaux.trim()].filter(Boolean).join('\n\n') : o.visite, evenement:{id:ev.id, calId, titre:ev.summary||''}}));
         toast && toast('Client pris dans l\'agenda'); }}/>}
       {d.evenement && <div className="muted" style={{fontSize:12}}>📅 Lié à « {d.evenement.titre} »{d.evenement.calId===SOUM_CAL_ID ? ' (agenda Soumission) — acceptée, il ira dans En Attente.' : ' ('+((SOUM_AGENDAS.find(x=>x[0]===d.evenement.calId)||[])[1]||'agenda')+')'}</div>}
-      <textarea value={d.travaux} onChange={e=>maj({travaux:e.target.value})} rows={d.travaux && d.travaux.length>160 ? 5 : 2} placeholder="Travaux…" style={{resize:'vertical',fontFamily:'inherit'}}/>
-      {d.dossier && <div><span className="muted" style={{fontSize:12}}>PDF et photos du client :</span><SoumPhotos dossier={d.dossier}/></div>}
-      {d.type==='Soumission' && <div style={{borderTop:'1px dashed var(--border2)',paddingTop:8,marginTop:2}}>
-        <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginBottom:4}}>
-          <b style={{fontSize:13}}>📏 Sur place : mesures et notes</b><span className="muted" style={{fontSize:11.5}}>(pour toi — pas imprimé sur la soumission)</span>
-          <span style={{marginLeft:'auto'}}><ImporterCourrielVisite d={d} setD={setD} toast={toast}/></span>
-        </div>
-        <textarea value={d.visite||''} onChange={e=>maj({visite:e.target.value})} rows={d.visite && d.visite.length>120 ? 6 : 3} placeholder={'ex. Panneau 100 A au sous-sol, 12 pi jusqu\'au garage, 2 circuits libres…'} style={{width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
-        <div className="muted" style={{fontSize:11.5}}>Photos : 📷 dans « Plan des travaux » plus bas (elles vont dans le dossier Drive de la soumission).</div>
-      </div>}
     </div>
+
+    {/* v295 : Travaux (imprimé) avec Photos et plan, puis Notes privées (pas imprimées) */}
+    <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
+      <div style={{display:'flex',gap:8,alignItems:'baseline'}}><b style={{fontSize:13.5}}>Travaux</b><span className="muted" style={{fontSize:11.5}}>imprimé sur le document</span></div>
+      <textarea value={d.travaux} onChange={e=>maj({travaux:e.target.value})} rows={d.travaux && d.travaux.length>160 ? 5 : 3} placeholder="Description des travaux…" style={{resize:'vertical',fontFamily:'inherit'}}/>
+      {d.type!=='Facture' && <Repli key={'ph'+(d.numero||'n')+((d.plan||[]).length?'p':'')} titre="Photos et plan" info={(d.plan||[]).length ? (d.plan||[]).length+' photo'+((d.plan||[]).length>1?'s':'')+' — page à part dans le PDF' : 'photos annotées — page à part dans le PDF'} ouvert0={(d.plan||[]).length>0 || !!d.dossier}>
+        {d.dossier && <div style={{marginBottom:6}}><span className="muted" style={{fontSize:12}}>PDF et photos du client :</span><SoumPhotos dossier={d.dossier}/></div>}
+        <Parechoc nom="Le plan des travaux"><PlanTravaux d={d} setD={setD} toast={toast} dansCarte/></Parechoc>
+      </Repli>}
+    </div>
+    {d.type!=='Facture' && <div className="card" style={{marginBottom:10}}>
+      <Repli premier key={'np'+(d.numero||'n')+(String(d.visite||'').trim()?'v':'')} titre="Notes privées" info="mesures et notes sur place — pas imprimées" ouvert0={!!String(d.visite||'').trim()}>
+        <div style={{display:'flex',justifyContent:'flex-end',marginBottom:4}}><ImporterCourrielVisite d={d} setD={setD} toast={toast}/></div>
+        <textarea value={d.visite||''} onChange={e=>maj({visite:e.target.value})} rows={d.visite && d.visite.length>120 ? 6 : 3} placeholder={'ex. Panneau 100 A au sous-sol, 12 pi jusqu\'au garage, 2 circuits libres…'} style={{width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
+      </Repli>
+    </div>}
 
     {d.type==='Soumission' && <div className="card" style={{marginBottom:10}}>
       <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginBottom:6}}>
@@ -8281,7 +8296,6 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, contacts}){
       </div>}
     </div>
 
-    {d.type!=='Facture' && <Parechoc nom="Le plan des travaux"><PlanTravaux d={d} setD={setD} toast={toast}/></Parechoc>}
 
     <div className="card" style={{marginBottom:10}}>
       <div style={{fontWeight:700,marginBottom:6}}>Matériel {choisies.length>0 && <span className="muted" style={{fontWeight:400}}>· {choisies.length} article{choisies.length>1?'s':''}</span>}</div>
