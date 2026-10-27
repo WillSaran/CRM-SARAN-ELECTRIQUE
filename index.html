@@ -159,7 +159,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v297';
+const APP_VERSION = 'v298';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7509,16 +7509,19 @@ function ApercuPdf({d, prixDe, onImprimer, onFermer}){
 // cuisine, salle de bain, maison neuve, blocs — même moule.
 const piDe = m => Math.ceil((Number(m)||0)*3.281);
 const arr5 = n => Math.round(n/5)*5;
+// v298 : borne à l'intérieur — par où passe le câble (texte de la soumission ; l'entretoit ajoute son tarif)
+const BORNE_PARCOURS_INT = [['ssol','par le sous-sol seulement','en passant par le sous-sol'],['ssol-garage','par le sous-sol, puis le garage','en passant par le sous-sol, puis dans le garage'],
+  ['entretoit','à côté du garage, par l\'entretoit','le panneau étant à côté du garage, en passant par l\'entretoit']];
 const CALC_SOUMISSION = {
   borne: {
     nom:'🔌 Borne', typeProjet:'Borne de recharge',
     tarifs:[['BORNE-BASE','Installation de base ($) — disjoncteur, raccordement, déplacement, quincaillerie, mise en service'],
       ['BORNE-INCLUS-M','Mètres de câble inclus dans la base (m)'],['BORNE-M-INT','Câble à l\'intérieur, en plus ($/m)'],
       ['BORNE-SORTIE','Sortie à l\'extérieur ($) — percer le mur / la fondation'],['BORNE-M-EXT','Dehors, câble TECK/ACWU au mur ($/m)'],
-      ['BORNE-M-TUYAU','Dehors, tuyau PVC au mur ($/m)'],['BORNE-M-SOUT','Sous terre — tranchée ($/m)'],['BORNE-BETON','Béton : percer, descendre au sol, remonter ($)'],
+      ['BORNE-M-TUYAU','Dehors, tuyau PVC au mur ($/m)'],['BORNE-M-SOUT','Sous terre — tranchée ($/m)'],['BORNE-BETON','Percer dans le béton ou la brique ($)'],
       ['BORNE-ENTRETOIT','Passage par l\'entretoit ($)'],['BORNE-DCC','Contrôleur de charge DCC ($)'],['FLOX3','Borne FLO Maison X3 fournie ($)']],
     // Longueurs : tapées dans l'unité choisie (m ou pi) ; changer l'unité convertit ; les calculs sont toujours en mètres.
-    defaut:{lieu:'ext', unite:'m', dist:'', intCable:'NMD', segs:[{type:'TECK', long:'', fil:'RW90'}], borne:'flox3', modele:'', prixBorne:'', amp:'60', panneau:'QO', beton:false, entretoit:false, dcc:false, note:''},
+    defaut:{lieu:'ext', unite:'m', dist:'', intCable:'NMD', segs:[{type:'TECK', long:'', fil:'RW90'}], borne:'flox3', modele:'', prixBorne:'', amp:'60', panneau:'QO', parcoursInt:'ssol', percage:'', beton:false, entretoit:false, dcc:false, note:''},
     deviner(txt){ const t=String(txt||''), v={};
       const m=t.match(/(\d+(?:[.,]\d+)?)\s*(m\b|m[eè]tres?|pi\b|pieds?|')/i);
       if(m){ v.dist=m[1].replace(',','.'); v.unite=/^m/i.test(m[2])?'m':'pi'; }
@@ -7539,6 +7542,7 @@ const CALC_SOUMISSION = {
       const ext = v.lieu==='ext';
       return <div style={{display:'grid',gap:8,fontSize:13}}>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>1. Parcours</b> — la borne est {r('lieu',[['ext','à l\'extérieur'],['int','à l\'intérieur (garage)']])} · mesures en {uSel}</div>
+        {!ext && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:12}}>Le câble passe {sel(v.parcoursInt||'ssol', x=>maj({parcoursInt:x, entretoit:x==='entretoit'}), BORNE_PARCOURS_INT.map(([a,b])=>[a,b]))}</div>}
         {!ext && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:12}}>Câble NMD du panneau à la borne : {long(v.dist, x=>maj({dist:x}))} {v.unite}</div>}
         {ext && <div style={{display:'grid',gap:5,paddingLeft:12}}>
           <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Du panneau jusqu'à la sortie : {long(v.dist, x=>maj({dist:x}))} {v.unite} en {r('intCable',[['NMD','NMD'],['TECK','TECK / ACWU']])}</div>
@@ -7551,7 +7555,7 @@ const CALC_SOUMISSION = {
           </div>)}
           <div style={{paddingLeft:12}}><button className="btn btn-sm" onClick={()=>maj({segs:[...v.segs, {type:'TUYAU', long:'', fil:'RW90'}]})}>+ Un bout (ex. sous terre, puis remonter en tuyau)</button></div>
         </div>}
-        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}}>{c('beton','Béton / coin de maison : percer, descendre au sol, remonter')}{c('entretoit','Passage par l\'entretoit')}</div>
+        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}}><span style={{display:'flex',gap:6,alignItems:'center'}}>Perçage {sel(v.percage || (v.beton?'beton':''), x=>maj({percage:x, beton:false}), [['','aucun'],['beton','percer dans le béton'],['brique','percer dans la brique']])}</span>{c('entretoit','Passage par l\'entretoit')}</div>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>2. Borne</b> {r('borne',[['flox3','FLO Maison X3 (fournie)'],['autre','Autre borne (fournie)'],['client','Le client a sa borne']])}
           {v.borne!=='flox3' && <input value={v.modele} onChange={e=>maj({modele:e.target.value})} placeholder="Modèle" style={{width:140}}/>}
           {v.borne==='autre' && <input value={v.prixBorne} inputMode="decimal" placeholder="prix $" onChange={e=>maj({prixBorne:e.target.value})} style={{width:80}}/>}</div>
@@ -7561,7 +7565,8 @@ const CALC_SOUMISSION = {
       </div>; },
     calculer(v, t){
       const f = v.unite==='pi' ? 0.3048 : 1, m = x => Math.max(0, (cvNum(x)||0)*f), r1 = x => String(Math.round(x*10)/10).replace('.',',');
-      const ext = v.lieu==='ext', six = v.amp==='60', amp = v.amp;
+      const ext = v.lieu==='ext', six = v.amp==='60', amp = v.amp, perc = v.percage || (v.beton ? 'beton' : '');
+      const pInt = !ext && (BORNE_PARCOURS_INT.find(x=>x[0]===(v.parcoursInt||'ssol'))||[])[2];
       const I = m(v.dist);                                                       // intérieur (ou tout le parcours si borne dedans)
       const segs = ext ? v.segs.map(s=>({...s, m:m(s.long), sol:/_SOL$/.test(s.type), tuyau:/^TUYAU/.test(s.type)})).filter(s=>s.m>0) : [];
       const E = segs.reduce((a,s)=>a+s.m,0), D = I+E, S = segs.filter(s=>s.sol).reduce((a,s)=>a+s.m,0);
@@ -7573,7 +7578,7 @@ const CALC_SOUMISSION = {
       const iExtra = prend(I); if(iExtra) inst += iExtra*T('BORNE-M-INT');
       if(ext) inst += T('BORNE-SORTIE');
       segs.forEach(s=>{ const x = s.sol ? s.m : prend(s.m); if(x) inst += x*T(s.sol ? 'BORNE-M-SOUT' : s.tuyau ? 'BORNE-M-TUYAU' : 'BORNE-M-EXT'); });
-      if(v.beton) inst += T('BORNE-BETON');
+      if(perc) inst += T('BORNE-BETON');
       if(v.entretoit) inst += T('BORNE-ENTRETOIT');
       if(v.dcc) inst += T('BORNE-DCC');
       inst = arr5(inst);
@@ -7618,24 +7623,24 @@ const CALC_SOUMISSION = {
       }
       if(ext){ if(segs[0] && segs[0].tuyau) ajout('RSLB30S','LB PVC 1 po (sortie du mur)', 1); else ajout('CIDUCT-1','Composé scellant (passage du mur)', 1); }
       if(S) ajout('RUBAN-AVERT','Ruban d\'avertissement rouge (tranchée)', piDe(S), 'pi');
-      if(v.beton) ajout('USC-72100','Tapcon 3/16 × 1-1/4 (boîte de 100)', 1);
+      if(perc) ajout('USC-72100','Tapcon 3/16 × 1-1/4 (boîte de 100)', 1);
       if(v.borne==='flox3') ajout('FLOX3','Borne FLO Maison X3, connecteur J1772',1);
       else if(v.borne==='autre') ajout('BORNE','Borne '+(v.modele||'de recharge'),1);
       if(v.dcc) ajout('DCC','Contrôleur de charge (DCC)',1);
       // --- Heures (ordre de travail ; le prix, lui, est le forfait) ---
-      const h = Math.round((3 + (ext?1:0) + S*0.3 + jb*0.5 + (v.beton?1:0) + (v.entretoit?1.5:0) + (v.dcc?1:0) + D*0.04)*2)/2;
+      const h = Math.round((3 + (ext?1:0) + S*0.3 + jb*0.5 + (perc?1:0) + (v.entretoit?1.5:0) + (v.dcc?1:0) + D*0.04)*2)/2;
       // --- Texte pour le client ---
       const nomSeg = s => ({TECK:'câble TECK fixé au mur', TECK_SOL:'câble enterré', TUYAU:'tuyau PVC rigide au mur', TUYAU_SOL:'tuyau PVC rigide enterré'}[s.type]);
       const txt = [];
       txt.push(v.borne==='client' ? 'Installation d\'une borne de recharge de niveau 2 (240 V) fournie par le client'+(v.modele?' ('+v.modele+')':'')+'.' : 'Fourniture et installation d\'une borne de recharge '+nomBorne+' (niveau 2, 240 V).');
       txt.push('Emplacement : '+(ext?'à l\'extérieur':'à l\'intérieur (garage)')+(v.note?', '+v.note:'')+'.');
       txt.push('Raccordement au panneau électrique avec un nouveau disjoncteur 2 pôles '+amp+' A'+(v.dcc?' et contrôleur de charge (DCC) pour respecter la capacité du panneau':'')+'.');
-      if(D) txt.push('Câblage d\'environ '+r1(D)+' m'+(ext ? ' : '+r1(I)+' m à l\'intérieur'+(v.entretoit?' (par l\'entretoit)':'')+', sortie par le mur'+(segs.length ? ', puis '+segs.map(s=>r1(s.m)+' m en '+nomSeg(s)).join(', ') : '')+' jusqu\'à la borne' : (v.entretoit?' en passant par l\'entretoit':' à l\'intérieur'))+'.');
+      if(D) txt.push('Câblage d\'environ '+r1(D)+' m'+(ext ? ' : '+r1(I)+' m à l\'intérieur'+(v.entretoit?' (par l\'entretoit)':'')+', sortie par le mur'+(segs.length ? ', puis '+segs.map(s=>r1(s.m)+' m en '+nomSeg(s)).join(', ') : '')+' jusqu\'à la borne' : ' à l\'intérieur, '+(pInt || (v.entretoit?'en passant par l\'entretoit':'')))+'.');
       if(S) txt.push('Tranchée d\'environ '+r1(S)+' m pour la partie enterrée.');
-      if(v.beton) txt.push('Perçage et fixation dans le béton (coin de maison / fondation) pour descendre au sol et remonter à la borne.');
+      if(perc) txt.push(perc==='brique' ? 'Perçage dans la brique pour le passage du câble.' : 'Perçage dans le béton pour le passage du câble.');
       txt.push('Inclus : matériel électrique, déplacement, mise en service et essai de la borne.');
       const detail = pBorne ? 'Détail : borne '+nomBorne+' — '+cvMoney(pBorne)+' · câblage et installation — '+cvMoney(inst)+'.' : '';
-      const exclus = (S||v.beton) ? 'Ne comprend pas la réfection du béton, de l\'asphalte ou de l\'aménagement paysager.' : '';
+      const exclus = (S||perc) ? 'Ne comprend pas la réfection du béton, de l\'asphalte ou de l\'aménagement paysager.' : '';
       return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(inst+pBorne), installation:inst, borne:pBorne, metres:r1(D),
         titre: v.borne==='client' ? 'Installation borne de recharge' : 'Borne '+nomBorne, travaux: txt.join('\n'), remarques:[detail, exclus].filter(Boolean).join('\n'), lignes:L, heures:h};
     }
