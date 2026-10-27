@@ -159,7 +159,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v305';
+const APP_VERSION = 'v306';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -12206,11 +12206,21 @@ function evNomTitre(c){ const n = String((c.fiche && c.fiche.nom) || c.nom || ''
   if(c.commerce) return n.replace(/[,.]?\s*\b(inc|ltée|ltee|enr|senc|s\.e\.n\.c)\.?$/i,'').replace(/^(l['’]\s*|le\s+|la\s+|les\s+)/i,'').trim().toUpperCase();
   const avant = n.includes(',') ? n.split(',')[0] : n.split(/\s+/).filter(Boolean).slice(-1)[0] || n;   // « Boucher, Jean » ou « Jean Boucher »
   return avant.trim().toUpperCase(); }
+// v306 : particuliers — « 696 Montée de la Cannerie, Saint-Jean » → « 696CANNERIE » (numéro + nom de la rue, sans le type de voie ni les petits mots)
+function evAdrTitre(adresse){
+  const a = String(adresse||'').replace(/^(\d+[A-Za-z]?)\s*,\s*/,'$1 ').split(',')[0].replace(/\b(app|apt|appartement|suite|unité|local)\.?\s*\S+$/i,'').replace(/#\s*\S+$/,'').trim();
+  const m = a.match(/^(\d+[A-Za-z]?)(?:[-–]\d+)?\s+(.+)$/); if(!m) return '';
+  const VOIES = /^(rue|r\.|montée|montee|mtée|boulevard|boul\.?|bd|blvd|avenue|av\.?|chemin|ch\.?|rang|route|rte|place|pl\.?|croissant|cr\.?|impasse|allée|allee|terrasse|carré|carre|côte|cote|promenade|ruelle|voie|square|parc)$/i;
+  const PETITS = /^(de|du|des|la|le|les|d|l|nord|sud|est|ouest|n\.?|s\.?|e\.?|o\.?)$/i;
+  const mots = m[2].replace(/\b([dl])['’]/gi,'$1 ').split(/\s+/).filter(Boolean);
+  let i = 0; while(i<mots.length-1 && VOIES.test(mots[i])) i++;
+  const reste = mots.slice(i), garde = reste.filter(w=>!PETITS.test(w));
+  return (m[1]+(garde.length ? garde : reste).join('')).toUpperCase(); }
 function EvenementClient({c, adresse, tel, courriel, onFermer}){
   const [type,setType]=useState('SERV');
   const [serv,setServ]=useState('');
   const [travaux,setTravaux]=useState('');
-  const auto = [evNomTitre(c), type, type==='SERV' ? serv : ''].filter(Boolean).join(' ');
+  const auto = [evNomTitre(c), c.commerce ? '' : evAdrTitre(adresse), type, type==='SERV' ? serv : ''].filter(Boolean).join(' ');
   const [titre,setTitre]=useState(null);           // null = suit le choix ; sinon modifié à la main
   const t = titre!=null ? titre : auto;
   const date = cvSamediProchain();
