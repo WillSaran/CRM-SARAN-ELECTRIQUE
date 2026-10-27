@@ -156,7 +156,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v292';
+const APP_VERSION = 'v293';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7829,8 +7829,34 @@ function planDessiner(ctx, W, formes){
     ctx.restore();
   });
 }
+// v293 : si une partie plante, seulement elle s'arrête (avant : écran noir, tout le CRM tombait)
+class Parechoc extends React.Component {
+  constructor(p){ super(p); this.state = {err:null}; }
+  static getDerivedStateFromError(err){ return {err}; }
+  componentDidCatch(err){ try{ console.error('[Parechoc]', err); }catch(e){} }
+  render(){ if(!this.state.err) return this.props.children;
+    return React.createElement('div', {className:'card', style:{marginBottom:10, borderColor:'var(--danger)', fontSize:13}},
+      React.createElement('b', null, (this.props.nom || 'Cette partie')+' a eu un problème. '),
+      React.createElement('span', {className:'muted'}, String((this.state.err && this.state.err.message) || this.state.err).slice(0,160)+' '),
+      React.createElement('button', {className:'btn btn-sm', onClick:()=>{ this.setState({err:null}); this.props.onReset && this.props.onReset(); }}, 'Réessayer')); }
+}
+// v293 : photo lue dans le bon sens (orientation de l'appareil), réduite à 1600 px, tournée de 90° au besoin — dans un canevas à part
+function planFond(src, rot){
+  const w0 = src.width || src.naturalWidth || 1200, h0 = src.height || src.naturalHeight || 900, k = Math.min(1, 1600/Math.max(w0, h0));
+  const W0 = Math.max(1, Math.round(w0*k)), H0 = Math.max(1, Math.round(h0*k)), tourne = rot%2===1;
+  const off = document.createElement('canvas'); off.width = tourne ? H0 : W0; off.height = tourne ? W0 : H0;
+  const ctx = off.getContext('2d'); ctx.translate(off.width/2, off.height/2); ctx.rotate(rot*Math.PI/2);
+  try{ ctx.drawImage(src, -W0/2, -H0/2, W0, H0); }catch(e){ ctx.fillStyle = '#ddd'; ctx.fillRect(-W0/2, -H0/2, W0, H0); }
+  return off;
+}
+async function planCharger(image){
+  try{ const b = await (await fetch(image)).blob(); return await createImageBitmap(b, {imageOrientation:'from-image'}); }
+  catch(e){ const im = new Image(); im.src = image; await im.decode(); if(!im.naturalWidth) throw new Error('image vide'); return im; }
+}
 function PlanAnnoter({image, onSave, onClose}){
-  const ref = useRef(null), imgRef = useRef(null);
+  const ref = useRef(null), imgRef = useRef(null), srcRef = useRef(null);
+  const [rot,setRot]=useState(0);
+  const [errImg,setErrImg]=useState('');
   const [formes,setFormes]=useState([]);
   const [outil,setOutil]=useState('ligne');
   const [coul,setCoul]=useState('#e00000');
@@ -7839,16 +7865,23 @@ function PlanAnnoter({image, onSave, onClose}){
   const enCours = useRef(null);
   // Image de fond (photo) ou feuille blanche quadrillée (croquis)
   useEffect(()=>{ let vivant=true;
-    (async()=>{ const c = ref.current; if(!c) return;
-      if(image){ const im = new Image(); im.src = image; await im.decode().catch(()=>{}); if(!vivant) return;
-        const k = Math.min(1, 1600/Math.max(im.naturalWidth||1, im.naturalHeight||1)); c.width = Math.round((im.naturalWidth||1200)*k); c.height = Math.round((im.naturalHeight||900)*k); imgRef.current = im; }
-      else { c.width = 1400; c.height = 1000; imgRef.current = null; }
+    (async()=>{ const c = ref.current; if(!c) return; setPrete(false); setErrImg('');
+      if(image){ let src = null;
+        try{ src = await planCharger(image); }catch(e){ if(vivant) setErrImg('Cette photo ne s\'ouvre pas ici (format HEIC ou fichier abîmé). Choisis-la en JPEG, ou fais une capture d\'écran de la photo.'); return; }
+        if(!vivant) return; srcRef.current = src; const f = planFond(src, 0); c.width = f.width; c.height = f.height; imgRef.current = f; setRot(0); }
+      else { c.width = 1400; c.height = 1000; imgRef.current = null; srcRef.current = null; }
       setPrete(true); })();
     return ()=>{ vivant=false; }; },[image]);
+  // Tourner la photo de 90° (les traits déjà faits tournent avec)
+  const tourner = sens => { const c = ref.current, src = srcRef.current; if(!c || !src) return;
+    const W = c.width, H = c.height, nr = (rot + (sens>0 ? 1 : 3)) % 4;
+    const tp = (x,y) => sens>0 ? [H - y, x] : [y, W - x];
+    setFormes(fs=>fs.map(f=>{ const [a,b] = tp(f.x1,f.y1), [x2,y2] = f.x2!=null ? tp(f.x2,f.y2) : [undefined, undefined]; return {...f, x1:a, y1:b, ...(f.x2!=null ? {x2, y2} : {})}; }));
+    const fd = planFond(src, nr); c.width = fd.width; c.height = fd.height; imgRef.current = fd; setRot(nr); };
   const rendre = useCallback((extra)=>{ const c = ref.current; if(!c || !prete) return; const ctx = c.getContext('2d');
-    if(imgRef.current) ctx.drawImage(imgRef.current, 0, 0, c.width, c.height);
+    if(imgRef.current){ try{ ctx.drawImage(imgRef.current, 0, 0, c.width, c.height); }catch(e){} }
     else { ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height); ctx.strokeStyle='#e6e6e6'; ctx.lineWidth=1; for(let x=0;x<c.width;x+=50){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,c.height); ctx.stroke(); } for(let y=0;y<c.height;y+=50){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(c.width,y); ctx.stroke(); } }
-    planDessiner(ctx, c.width, extra ? [...formes, extra] : formes); },[formes, prete]);
+    planDessiner(ctx, c.width, extra ? [...formes, extra] : formes); },[formes, prete, rot]);
   useEffect(()=>{ rendre(); },[rendre]);
   const pos = e => { const c = ref.current, r = c.getBoundingClientRect(); return {x:(e.clientX-r.left)*c.width/r.width, y:(e.clientY-r.top)*c.height/r.height}; };
   const bas = e => { e.preventDefault(); const p = pos(e);
@@ -7864,10 +7897,13 @@ function PlanAnnoter({image, onSave, onClose}){
       {outil==='texte' && <input autoFocus value={texte} onChange={e=>setTexte(e.target.value)} placeholder="Texte, puis touche la photo" style={{width:200}}/>}
       {outil!=='texte' && PLAN_COULEURS.map(([c,n])=><button key={c} title={n} onClick={()=>setCoul(c)} style={{width:24,height:24,borderRadius:12,background:c,border:coul===c?'3px solid var(--accent)':'1px solid #999'}}/>)}
       <button className="btn btn-sm" disabled={!formes.length} onClick={()=>setFormes(f=>f.slice(0,-1))}>↶ Annuler</button>
+      {image && <><button className="btn btn-sm" disabled={!prete} title="Tourner à gauche" onClick={()=>tourner(-1)}>⟲</button><button className="btn btn-sm" disabled={!prete} title="Tourner à droite" onClick={()=>tourner(1)}>⟳</button></>}
       <span style={{marginLeft:'auto',display:'flex',gap:5}}><button className="btn btn-sm" onClick={onClose}>Fermer</button><button className="btn btn-sm btn-p" disabled={!prete} onClick={garder}>✓ Garder</button></span>
     </div>
     <div style={{flex:1,overflow:'auto',display:'flex',justifyContent:'center',alignItems:'flex-start'}}>
-      <canvas ref={ref} onPointerDown={bas} onPointerMove={bouge} onPointerUp={haut} onPointerCancel={haut} style={{maxWidth:'100%',maxHeight:'100%',touchAction:'none',background:'#fff',borderRadius:6,cursor:'crosshair'}}/>
+      {errImg && <div className="card" style={{maxWidth:420,margin:'20px auto',fontSize:13.5}}>{errImg}<div style={{marginTop:8}}><button className="btn btn-sm" onClick={onClose}>Fermer</button></div></div>}
+      {!errImg && !prete && image && <div className="muted" style={{margin:20,display:'flex',gap:8,alignItems:'center',color:'#fff'}}><div className="spin"></div> Ouverture de la photo…</div>}
+      <canvas ref={ref} onPointerDown={bas} onPointerMove={bouge} onPointerUp={haut} onPointerCancel={haut} style={{maxWidth:'100%',maxHeight:'100%',touchAction:'none',background:'#fff',borderRadius:6,cursor:'crosshair',display:errImg || !prete ? 'none' : 'block'}}/>
     </div>
   </div>;
 }
@@ -7920,7 +7956,7 @@ function PlanTravaux({d, setD, toast}){
   return <div className="card" style={{marginBottom:10}}>
     <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
       <b style={{fontSize:13.5}}>📐 Plan des travaux</b><span className="muted" style={{fontSize:12}}>photos annotées — ajoutées au PDF (🖨️)</span>
-      <input ref={refPhoto} type="file" accept="image/*" capture="environment" style={{display:'none'}} onChange={e=>{ const f=e.target.files[0]; e.target.value=''; ouvrirFichier(f); }}/>
+      <input ref={refPhoto} type="file" accept="image/*" style={{display:'none'}} onChange={e=>{ const f=e.target.files[0]; e.target.value=''; ouvrirFichier(f); }}/>
       <span style={{marginLeft:'auto',display:'flex',gap:5,flexWrap:'wrap'}}>
         <button className="btn btn-sm" disabled={!!occupe} onClick={()=>refPhoto.current && refPhoto.current.click()}>📷 Photo</button>
         {d.dossier && <button className="btn btn-sm" disabled={!!occupe} onClick={depuisDossier}>🗂 Photos du client</button>}
@@ -7941,7 +7977,10 @@ function PlanTravaux({d, setD, toast}){
         <textarea value={p.notes} onChange={e=>majItem(i,{notes:e.target.value})} rows={2} placeholder={'Notes (une par ligne)\nex. Tranchée de 500 mm et remblai par le propriétaire.'} style={{resize:'vertical',fontFamily:'inherit'}}/>
       </div>
       <div style={{display:'grid',gap:4}}>
-        <button className="btn btn-sm" title="Retracer" onClick={async()=>{ try{ setAnnoter({image: await planImage(p.id), index:i}); }catch(e){ toast && toast('Erreur : '+e.message); } }}>✏️</button>
+        {plan.length>1 && <div style={{display:'flex',gap:3}}>
+          <button className="btn btn-sm" style={{padding:'1px 7px'}} title="Monter" disabled={i===0} onClick={()=>setD(o=>{ const l = [...(o.plan||[])]; [l[i-1], l[i]] = [l[i], l[i-1]]; return {...o, plan:l}; })}>▲</button>
+          <button className="btn btn-sm" style={{padding:'1px 7px'}} title="Descendre" disabled={i===plan.length-1} onClick={()=>setD(o=>{ const l = [...(o.plan||[])]; [l[i+1], l[i]] = [l[i], l[i+1]]; return {...o, plan:l}; })}>▼</button></div>}
+        <button className="btn btn-sm" title="Retracer ou tourner" onClick={async()=>{ try{ setAnnoter({image: await planImage(p.id), index:i}); }catch(e){ toast && toast('Erreur : '+e.message); } }}>✏️</button>
         <button className="btn btn-sm" title="Enlever du plan (l'image reste dans le Drive)" onClick={()=>setD(o=>({...o, plan:(o.plan||[]).filter((x,k)=>k!==i)}))}>✕</button>
       </div>
     </div>)}
@@ -8189,7 +8228,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, contacts}){
       </div>}
     </div>
 
-    {d.type!=='Facture' && <PlanTravaux d={d} setD={setD} toast={toast}/>}
+    {d.type!=='Facture' && <Parechoc nom="Le plan des travaux"><PlanTravaux d={d} setD={setD} toast={toast}/></Parechoc>}
 
     <div className="card" style={{marginBottom:10}}>
       <div style={{fontWeight:700,marginBottom:6}}>Matériel {choisies.length>0 && <span className="muted" style={{fontWeight:400}}>· {choisies.length} article{choisies.length>1?'s':''}</span>}</div>
@@ -12248,6 +12287,7 @@ function App(){
       <div className="main" style={(nav==='agenda' && isDesktop) ? {maxWidth:'none',width:'100%'} : null}>
         {data.err && <div className="card" style={{borderColor:'var(--danger)',marginBottom:14,color:'var(--danger)'}}>{data.err}</div>}
         {!cfg.crmSpreadsheetId && <div className="card" style={{marginBottom:14}}>Configure d'abord l'ID du Google Sheet du CRM dans Réglages, puis clique "Initialiser les onglets".</div>}
+        <Parechoc key={'pc'+nav+navKey} nom="Cette page">
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {(nav==='repertoire' || nav==='clients') && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts} onAller={allerFiltre}
           rendreSection={cible => cible==='projets' ? <ProjetsView data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>
@@ -12265,6 +12305,7 @@ function App(){
         {nav==='commandes' && <CommandesView key={'bc'+navKey} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {(nav==='produits' || nav==='stock') && <InventaireSection key={'inv'+navKey} initial={nav==='stock' ? 'inventaire' : ''} cfg={effectiveCfg} toast={show} data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
+        </Parechoc>
       </div>
     </div>
     {toastNode}
