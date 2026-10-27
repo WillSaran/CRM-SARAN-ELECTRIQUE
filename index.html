@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v311';
+const APP_VERSION = 'v312';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5608,7 +5608,7 @@ function FacPdfLiens({txt, pdfs}){
     ? <a key={i} href={'https://drive.google.com/file/d/'+pdfs[x]+'/view'} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} title="Ouvrir le PDF de la facture" style={{color:'inherit',textDecoration:'underline'}}>{x}</a>
     : <React.Fragment key={i}>{x}</React.Fragment>)}</>;
 }
-function FacturesView({cfg, cfgRep, refreshKey, contacts}){
+function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 : compact = dans la fiche d'un client (seulement ses lignes, sans résumés ni choix de contracteur)
   const pdfs = usePdfFactures(cfgRep || cfg, refreshKey);
   const [loading,setLoading]=useState(true);
   const [rows,setRows]=useState([]);
@@ -5738,22 +5738,23 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts}){
     : r.statutFacture==='annule' ? <span className="muted" style={{fontWeight:700}}>{r.appelService==='-'||r.facture==='-' ? '- ' : '** '}Pas à facturer</span>
     : r.estPasseOuAujourdhui ? <span style={{color:'var(--danger)',fontWeight:700}}>Rien d'inscrit</span> : <span className="muted">À venir</span>;
   return <div>
-    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Bons de travail</h2>
-    <div className="muted" style={{fontSize:13,marginBottom:12}}>Tiré du Sheet « SUIVI TRAVAUX SARAN ÉLECTRIQUE ». Tout passage fait qui n'a pas encore de facture est ici, le plus vieux en premier. Un passage qui ne se facture pas (annulé, garantie, visite) : « Pas à facturer » met « ** » dans le Sheet.</div>
+    {!compact && <><h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Bons de travail</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:12}}>Tiré du Sheet « SUIVI TRAVAUX SARAN ÉLECTRIQUE ». Tout passage fait qui n'a pas encore de facture est ici, le plus vieux en premier. Un passage qui ne se facture pas (annulé, garantie, visite) : « Pas à facturer » met « ** » dans le Sheet.</div></>}
     {!id && <div className="card">Configure l'ID du Sheet "SUIVI TRAVAUX" dans Réglages.</div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {id && (loading ? <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture du suivi des travaux…</span></div> : <>
-      {vue!=='paiements' && <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginBottom:12}}>
+      {vue!=='paiements' && !compact && <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginBottom:12}}>
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('afacturer')}><div style={{fontSize:24,fontWeight:800,color:manquantes.length?'var(--danger)':'var(--success)'}}>{manquantes.length}</div><div className="muted" style={{fontSize:12}}>rien d'inscrit (ni appel ni facture)</div></div>
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('afacturer')}><div style={{fontSize:24,fontWeight:800,color:'var(--warning)'}}>{traitement.length}</div><div className="muted" style={{fontSize:12}}>appel fait, facture à faire</div></div>
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('papiers')}><div style={{fontSize:24,fontWeight:800,color:'var(--accent)'}}>{papiers.length}</div><div className="muted" style={{fontSize:12}}>papiers à traiter (AP / OT déposés)</div></div>
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('annulees')}><div style={{fontSize:24,fontWeight:800}}>{annulees.length}</div><div className="muted" style={{fontSize:12}}>pas à facturer (**)</div></div>
       </div>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
-        {[['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['tableur','📊 Mode tableur'],['papiers','Papiers à traiter ('+papiers.length+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
-        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (projet, adresse, no)…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
+        {(compact ? [['toutes','Toutes'],['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['annulees','Pas à facturer ('+annulees.length+')']]
+          : [['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['tableur','📊 Mode tableur'],['papiers','Papiers à traiter ('+papiers.length+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes']]).map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
+        {!compact && <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (projet, adresse, no)…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>}
       </div>
-      {vue!=='paiements' && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:10}}>
+      {vue!=='paiements' && !compact && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:10}}>
         <button className="btn btn-sm" style={!filterC?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(null)}>Tous</button>
         {contracteurs.map(c=><button key={c} className="btn btn-sm" style={filterC===c?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(filterC===c?null:c)}>{nom(c)}</button>)}
       </div>}
@@ -12613,7 +12614,7 @@ function App(){
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {(nav==='repertoire' || nav==='clients') && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts} onAller={allerFiltre}
           rendreSection={cible => cible==='projets' ? <ProjetsView data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>
-            : cible==='factures' ? <VerrouCompta cfg={effectiveCfg}><FacturesView cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/></VerrouCompta>
+            : cible==='factures' ? <VerrouCompta cfg={effectiveCfg}><FacturesView cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} compact/></VerrouCompta>
             : cible==='paiements' ? <VerrouCompta cfg={effectiveCfg}><PaiementsOnglet cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} compact/></VerrouCompta>
             : cible==='soumissions' ? <SoumissionsView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/> : null}/>}
         {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey} toast={show}/>}
