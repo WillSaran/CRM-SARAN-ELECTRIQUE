@@ -156,7 +156,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v291';
+const APP_VERSION = 'v292';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5980,8 +5980,8 @@ function AppelsServiceSection({cfg, data, toast, refreshKey, onNavigate}){
       {[['soum','Soumissions'],['ot','Ordres de travail'],['facture','Factures']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
     </div>
     {sous==='soum' && <SoumissionsView cfg={cfg} data={data} toast={toast} refreshKey={refreshKey} onNavigate={onNavigate}/>}
-    {sous==='ot' && <AppelServiceView key="ot" cfg={cfg} toast={toast} mode="ot"/>}
-    {sous==='facture' && <AppelServiceView key="facture" cfg={cfg} toast={toast} mode="facture"/>}
+    {sous==='ot' && <AppelServiceView key="ot" cfg={cfg} toast={toast} mode="ot" contacts={data && data.contacts}/>}
+    {sous==='facture' && <AppelServiceView key="facture" cfg={cfg} toast={toast} mode="facture" contacts={data && data.contacts}/>}
   </div>;
 }
 function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
@@ -6135,7 +6135,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
       {pill('recues','📥 Reçues des fournisseurs',recuesTout.length,onglet,setOnglet)}
       {pill('preparer','✏️ Préparer une soumission',null,onglet,k=>{ setOnglet(k); })}
     </div>
-    {onglet==='preparer' && <AppelServiceView key={'prep'+prepKey} cfg={cfg} toast={toast} mode="soumission" onEnvoye={doc=>{
+    {onglet==='preparer' && <AppelServiceView key={'prep'+prepKey} cfg={cfg} toast={toast} mode="soumission" contacts={data && data.contacts} onEnvoye={doc=>{
       const s = doc.origine && S.liste.find(x=>x.cle===doc.origine);
       if(s) S.marquer(s, 'Faite', 'Soumission '+doc.numero).catch(()=>{});
       setTimeout(()=>S.relire(), 1500); }}/>}
@@ -7959,7 +7959,46 @@ async function planPourImpression(doc){
 // Pré-remplissage quand on part d'une soumission « À faire » (bouton « 📝 Faire la soumission »).
 let DOC_PREFILL = null;
 // mode « soumission » : même éditeur, dans l'onglet Soumissions (type Soumission seulement). onEnvoye(doc) : après le courriel.
-function AppelServiceView({cfg, toast, mode, onEnvoye}){
+// v292 : nom du client avec suggestions du Répertoire (particuliers, commerces, contracteurs) — choisir remplit téléphone, courriel et adresse.
+// Le Répertoire est lu seulement quand on commence à écrire un nom (pas à l'ouverture du document).
+function repSuggestionsClient(R){
+  if(!R) return [];
+  const out = [];
+  R.pers.filter(p=>!p.masque && !p.sansNom).forEach(p=>out.push({id:p.id, type:(p.commerce ? 'Commerce' : 'Particulier')+(p.soumSeul ? ' · soumission / en attente' : ''), nom:p.nom, tel:p.tel||'', courriel:p.courriel||'', adresse:p.adresse||'',
+    cherche:cvNorm([p.nom, ...(p.noms||[]), ...(p.courriels||[]), ...(p.tels||[])].join(' '))}));
+  R.contr.forEach(c=>{ const nomC = CLIENT_CODES[c.code] || c.nom || c.code, compta = (c.compta||[])[0] || {};
+    out.push({id:c.id, type:'Contracteur', nom:nomC, tel:compta.tel||'', courriel:compta.courriel||'', adresse:compta.adresse||'', cherche:cvNorm([c.code, nomC].join(' '))});
+    (c.contacts||[]).forEach(k=>{ if(!k.nom) return; const mail = (k.courriels||[])[0] || String(k.courriel||'').split(/[\s,;]+/).find(e=>/@/.test(e)) || '';
+      out.push({id:c.id+':'+cvNorm(k.nom), type:'Contact · '+c.code, nom:k.nom, tel:(k.tels||[])[0]||'', courriel:mail, adresse:compta.adresse||'', cherche:cvNorm([k.nom, c.code, nomC, mail].join(' '))}); }); });
+  return out;
+}
+function RepSuggestionsListe({cfg, contacts, q, onChoix}){
+  const dR = useClientsData(cfg, 'sugg');
+  const FR = dR.fiches || {clients:[], jobs:[], fourn:[], masques:[], contacts:[]};
+  const clientsR = useMemo(()=>cvBuildClients(dR.events||[], dR.registry||[], dR.factures||{}),[dR.events, dR.registry, dR.factures]);
+  const R = useMemo(()=>dR.loading ? null : repConstruire({clients:clientsR, registry:dR.registry||[], factures:dR.factures||{}, achats:dR.achats||[], soumissions:dR.soumissions||[], F:FR, contacts:contacts||[], gcmeq:dR.gcmeq||[], contactsAuto:dR.contactsAuto||[]}),
+    [dR.loading, clientsR, dR.registry, dR.factures, dR.achats, dR.soumissions, dR.fiches, contacts, dR.gcmeq, dR.contactsAuto]);
+  const L = useMemo(()=>repSuggestionsClient(R),[R]);
+  const mots = cvNorm(q).length ? String(q).split(/\s+/).map(cvNorm).filter(Boolean) : [];
+  const res = mots.length ? L.filter(x=>mots.every(m=>x.cherche.includes(m))).sort((a,b)=>(cvNorm(b.nom).startsWith(mots[0])-cvNorm(a.nom).startsWith(mots[0])) || a.nom.localeCompare(b.nom,'fr')).slice(0,8) : [];
+  return <div style={{position:'absolute',left:0,right:0,top:'100%',zIndex:30,marginTop:2,background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,boxShadow:'0 8px 24px rgba(0,0,0,.35)',maxHeight:300,overflowY:'auto'}}>
+    {!R && <div className="muted" style={{padding:'8px 10px',fontSize:12.5,display:'flex',gap:8,alignItems:'center'}}><div className="spin"></div> Lecture du Répertoire…</div>}
+    {R && !res.length && <div className="muted" style={{padding:'8px 10px',fontSize:12.5}}>Pas dans le Répertoire — continue d'écrire, c'est un nouveau client.</div>}
+    {res.map(x=><div key={x.id} onMouseDown={e=>{ e.preventDefault(); onChoix(x); }} style={{padding:'7px 10px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}>
+      <div><b>{x.nom}</b> <span className="muted" style={{fontSize:11.5}}>· {x.type}</span></div>
+      <div className="muted" style={{fontSize:11.5}}>{[x.adresse, x.tel, x.courriel].filter(Boolean).join(' · ') || 'aucune coordonnée'}</div>
+    </div>)}
+  </div>;
+}
+function ChampClient({cfg, contacts, value, onChange, onChoix}){
+  const [focus,setFocus]=useState(false), [lu,setLu]=useState(false);
+  return <div style={{position:'relative'}}>
+    <input value={value} onChange={e=>{ onChange(e.target.value); setLu(true); setFocus(true); }} onFocus={()=>setFocus(true)} onBlur={()=>setTimeout(()=>setFocus(false),150)}
+      placeholder="Nom du client (écris pour chercher dans le Répertoire)" autoComplete="off" style={{width:'100%',boxSizing:'border-box'}}/>
+    {focus && lu && String(value||'').trim().length>=2 && <RepSuggestionsListe cfg={cfg} contacts={contacts} q={value} onChoix={x=>{ setFocus(false); setLu(false); onChoix(x); }}/>}
+  </div>;
+}
+function AppelServiceView({cfg, toast, mode, onEnvoye, contacts}){
   const soumMode = mode==='soumission';
   const typeFixe = mode==='soumission' ? 'Soumission' : mode==='ot' ? 'Ordre de travail' : mode==='facture' ? 'Facture' : null;
   const nouveauDoc = () => ({...docVide(), ...(typeFixe ? {type:typeFixe} : {})});
@@ -8088,10 +8127,11 @@ function AppelServiceView({cfg, toast, mode, onEnvoye}){
 
     <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:6}}>
-        {champ('nom','Nom du client')}{champ('tel','Téléphone')}{champ('courriel','Courriel')}{champ('titre','Titre du projet (ex. Borne Flo X3)')}
+        <ChampClient cfg={cfg} contacts={contacts} value={d.nom} onChange={v=>maj({nom:v})} onChoix={x=>{ setD(o=>({...o, nom:x.nom, tel:x.tel || o.tel, courriel:x.courriel || o.courriel, adresse:x.adresse || o.adresse})); toast && toast(x.nom+' : fiche du Répertoire remplie'); }}/>
+        {champ('tel','Téléphone')}{champ('courriel','Courriel')}{champ('titre','Titre du projet (ex. Borne Flo X3)')}
       </div>
       <ChampAdresse value={d.adresse} onChange={a=>maj({adresse:a})} placeholder="Adresse"/>
-      {d.type==='Soumission' && <ChoixEvenementSoumission toast={toast} ouvertDefaut={!d.nom && !d.numero} onChoix={(ev, calId)=>{ const i = infosEvenement(ev);
+      {d.type==='Soumission' && <ChoixEvenementSoumission toast={toast} ouvertDefaut={false} onChoix={(ev, calId)=>{ const i = infosEvenement(ev);
         setD(o=>({...o, nom:o.nom||i.nom, tel:o.tel||i.tel, courriel:o.courriel||i.courriel, adresse:o.adresse||i.adresse, titre:o.titre||i.titre, travaux:o.travaux||i.travaux, evenement:{id:ev.id, calId, titre:ev.summary||''}}));
         toast && toast('Client pris dans l\'agenda'); }}/>}
       {d.evenement && <div className="muted" style={{fontSize:12}}>📅 Lié à « {d.evenement.titre} »{d.evenement.calId===SOUM_CAL_ID ? ' (agenda Soumission) — acceptée, il ira dans En Attente.' : ' ('+((SOUM_AGENDAS.find(x=>x[0]===d.evenement.calId)||[])[1]||'agenda')+')'}</div>}
