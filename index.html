@@ -159,7 +159,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v308';
+const APP_VERSION = 'v309';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -12277,7 +12277,8 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
   const ajouterConjoint = nom => { const n = String(typeof nom==='string' ? nom : (conjN||'')).trim(); if(!n) return; const f = baseFiche();
     return ecrire([ligneLiens(f, f.liens||[], f.pasLies||[], [...conjoints, n])], n+' est maintenant le conjoint / la conjointe de '+c.nom+'. Ses paiements iront à ses factures.').then(ok=>{ if(ok) setConjN(null); }); };
   const retirerConjoint = n => { const f = baseFiche(); return ecrire([ligneLiens(f, f.liens||[], f.pasLies||[], conjoints.filter(x=>x!==n))], n+' retiré(e) comme conjoint(e).'); };
-  const lierA = q => { const f = baseFiche(), kq = clesDe(q);
+  // v309 : le nom de la fiche liée ne doit jamais rester dans « Aussi écrit » (sinon les deux fiches fusionnent et l'autre disparaît)
+  const lierA = q => { const f0 = baseFiche(), kq = clesDe(q), f = {...f0, alias:(f0.alias||[]).filter(n=>!kq.has(persCle(n)))};
     return ecrire([ligneLiens(f, [...(f.liens||[]).filter(n=>!kq.has(persCle(n))), q.nom], (f.pasLies||[]).filter(n=>!kq.has(persCle(n))))], c.nom+' est maintenant lié à '+q.nom+'.').then(ok=>{ if(ok) setLien(null); }); };
   const delier = q => { const f = baseFiche(), kq = clesDe(q), kc = clesDe(c);
     const lignes = [ligneLiens(f, (f.liens||[]).filter(n=>!kq.has(persCle(n))), [...(f.pasLies||[]).filter(n=>!kq.has(persCle(n))), q.nom])];
