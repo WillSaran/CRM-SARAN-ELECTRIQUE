@@ -159,7 +159,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v304';
+const APP_VERSION = 'v305';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -12198,6 +12198,56 @@ function RepContacts({c, busy, ecrire, onAller, filtre}){
   </div>;
 }
 const REP_NUM_ENT = /^\s*\d{4}[\s-]?\d{4}\s+qu[ée]?u?[ée]bec/i;   // « 9272-0473 Québec inc. »
+// v305 : « Créer un événement » depuis la fiche d'un particulier / commerce — agenda En Attente, toute la journée, le samedi de la semaine
+// Titre : NOM DE FAMILLE (ou nom du commerce) + type (SERV / ENTRÉE / ROUGH / FINITION) + type de service si SERV — ex. « BOUCHER SERV ECL »
+const EV_TYPES = ['SERV','ENTRÉE','ROUGH','FINITION'];
+const EV_SERV = ['ECL','PRISE','CHAUF','BORNE','PISCINE','SPA','PIÈCE','MAN','DEP','AUTRE'];
+function evNomTitre(c){ const n = String((c.fiche && c.fiche.nom) || c.nom || '').trim();
+  if(c.commerce) return n.replace(/[,.]?\s*\b(inc|ltée|ltee|enr|senc|s\.e\.n\.c)\.?$/i,'').replace(/^(l['’]\s*|le\s+|la\s+|les\s+)/i,'').trim().toUpperCase();
+  const avant = n.includes(',') ? n.split(',')[0] : n.split(/\s+/).filter(Boolean).slice(-1)[0] || n;   // « Boucher, Jean » ou « Jean Boucher »
+  return avant.trim().toUpperCase(); }
+function EvenementClient({c, adresse, tel, courriel, onFermer}){
+  const [type,setType]=useState('SERV');
+  const [serv,setServ]=useState('');
+  const [travaux,setTravaux]=useState('');
+  const auto = [evNomTitre(c), type, type==='SERV' ? serv : ''].filter(Boolean).join(' ');
+  const [titre,setTitre]=useState(null);           // null = suit le choix ; sinon modifié à la main
+  const t = titre!=null ? titre : auto;
+  const date = cvSamediProchain();
+  const [occupe,setOccupe]=useState(false);
+  const [fait,setFait]=useState(null);
+  const nomComplet = String((c.fiche && c.fiche.nom) || c.nom || '').trim();
+  const description = [travaux.trim() ? 'Travaux demandés :\n'+travaux.trim() : '',
+    ['Client : '+nomComplet, tel ? 'Tél. : '+tel : '', courriel ? 'Courriel : '+courriel : ''].filter(Boolean).join('\n')].filter(Boolean).join('\n\n');
+  const creer = async () => {
+    if(type==='SERV' && !serv && titre==null){ alert('Choisis le type de service (ECL, CHAUF, BORNE…).'); return; }
+    setOccupe(true);
+    try{
+      const lendemain = (()=>{ const d = new Date(date+'T12:00:00'); d.setDate(d.getDate()+1); return localDateStr(d); })();
+      const r = await window.gapi.client.calendar.events.insert({calendarId:EN_ATTENTE_CAL, resource:{summary:t.trim(), location:adresse||'', description, start:{date}, end:{date:lendemain}}});
+      setFait({titre:t.trim(), lien:(r.result||{}).htmlLink||''});
+    }catch(e){ alert('Agenda : '+apiErrMsg(e)); }
+    setOccupe(false); };
+  if(fait) return <div className="card" style={{marginTop:10,border:'1px solid var(--success)',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:13}}>
+    <span>« <b>{fait.titre}</b> » ajouté dans En Attente, le samedi {cvFmtDay(date)} (toute la journée).</span>
+    {fait.lien && <a href={fait.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>Ouvrir dans l'agenda ↗</a>}
+    <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={onFermer}>Fermer</button></div>;
+  return <div style={{marginTop:10,padding:12,border:'1px solid var(--accent)',borderRadius:10,display:'grid',gap:8,fontSize:13}}>
+    <b>Créer un événement</b>
+    <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}><span className="muted" style={{width:70}}>Type</span>
+      {EV_TYPES.map(x=><button key={x} className={'btn btn-sm'+(type===x?' btn-p':'')} onClick={()=>{ setType(x); setTitre(null); }}>{x}</button>)}</div>
+    {type==='SERV' && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}><span className="muted" style={{width:70}}>Service</span>
+      {EV_SERV.map(x=><button key={x} className={'btn btn-sm'+(serv===x?' btn-p':'')} onClick={()=>{ setServ(x); setTitre(null); }}>{x}</button>)}</div>}
+    <div style={{display:'flex',gap:6,alignItems:'center'}}><span className="muted" style={{width:70,flex:'0 0 70px'}}>Titre</span>
+      <input value={t} onChange={e=>setTitre(e.target.value)} style={{flex:1,minWidth:0,fontWeight:700}}/></div>
+    <textarea value={travaux} onChange={e=>setTravaux(e.target.value)} rows={3} placeholder="Travaux demandés (ex. remplacer 6 luminaires encastrés au salon, ajouter une prise extérieure)" style={{resize:'vertical',fontFamily:'inherit'}}/>
+    <div className="muted" style={{fontSize:12,whiteSpace:'pre-wrap',background:'var(--bg3)',borderRadius:8,padding:8}}>
+      {'Agenda : En Attente · samedi '+cvFmtDay(date)+', toute la journée'+(adresse ? '\nLieu : '+adresse : '')+'\n\n'+description}</div>
+    <div style={{display:'flex',gap:6,justifyContent:'flex-end'}}>
+      <button className="btn btn-sm" onClick={onFermer}>Annuler</button>
+      <button className="btn btn-sm btn-p" disabled={occupe || !t.trim()} onClick={creer}>{occupe ? 'Création…' : 'Créer dans l\'agenda'}</button></div>
+  </div>;
+}
 function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOuvrir, onAller, rendreSection}){
   const [section,setSection]=useState(null);   // v273 : Factures / Paiements / Projets / Soumissions affichés sous la fiche, sans changer de page
   const numsEnt = c.type==='pers' ? [...new Set([...(c.noms||[]), ...((c.fiche&&c.fiche.alias)||[])].filter(n=>REP_NUM_ENT.test(n)).map(n=>n.trim()))] : [];
@@ -12246,6 +12296,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
     if(fiche) lignes.push({...fiche, type:'Retiré'});
     return ecrire(lignes, c.nom+' est maintenant un contact de '+k.code+'.').then(ok=>{ if(ok){ setEdit(null); onContr && onContr(k.code); } }); };
   const [confSup,setConfSup]=useState(false);
+  const [evOuvert,setEvOuvert]=useState(false);
   const masquer = () => ecrire([{type:'Supprimé', code:'PART', nom:c.nom, alias:c.noms.filter(n=>!/@/.test(n))}, ...(fiche ? [{...fiche, type:'Retiré'}] : [])], c.nom+' est supprimé du répertoire.').then(ok=>{ if(ok && onLie) onLie(''); });
   const basculer = () => ecrire([{...(fiche || {alias:c.noms.filter(n=>n!==c.nom), tel:c.tel, courriel:c.courriel}), type:'Client', code:c.commerce ? 'PART' : 'COMMERCE', nom:c.nom}],
     c.nom+(c.commerce ? ' est maintenant dans les particuliers.' : ' est maintenant dans les commerces.'));
@@ -12306,6 +12357,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'stretch',flex:'0 0 auto',minWidth:200}}>
           {onSuivi && !onAller && <button className="btn btn-sm" onClick={onSuivi} style={nbAV ? {borderColor:'var(--danger)',color:'var(--danger)',fontWeight:700} : null}>🔎 Suivi des jobs{nbAV ? ' · '+nbAV+' à vérifier' : ''}</button>}
+          {pers && <button className={'btn btn-sm'+(evOuvert?' btn-p':'')} onClick={()=>setEvOuvert(!evOuvert)}>Créer un événement</button>}
           <button className="btn btn-sm" onClick={ouvrirEdit} disabled={busy}>✏️ Modifier la fiche</button>
           {pers && <button className="btn btn-sm" onClick={()=>{ setLien(lien===null ? '' : null); setLier(null); }} disabled={busy}>{c.commerce ? '🔗 Lier à un particulier' : '🔗 Lier à un commerce'}</button>}
           {pers && (!confSup ? <button className="btn btn-sm" style={{color:'var(--muted)'}} onClick={()=>setConfSup(true)} disabled={busy} title="Ce n'est pas un client (ex. Lettrage du camion 14)">🗑 Supprimer</button>
@@ -12315,6 +12367,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
               </span>)}
         </div>
       </div>
+      {pers && evOuvert && <EvenementClient c={c} adresse={adrToutes[0]||''} tel={telsTous[0]||''} courriel={courrielsTous[0]||''} onFermer={()=>setEvOuvert(false)}/>}
       {onAller && (()=>{ const q = pers ? c.nom : c.code;   // v202 : sections de ce client, déjà filtrées ; v273 : affichées ici, sous la fiche
         const filtres = {factures: pers ? {vue:'toutes', q:c.nom} : {vue:'toutes', code:c.code}, paiements:{q}, projets: pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code}, soumissions:{q:c.nom}};
         const montrer = cible => { if(!rendreSection){ onAller(cible, {...filtres[cible], nom:c.nom}); return; }
