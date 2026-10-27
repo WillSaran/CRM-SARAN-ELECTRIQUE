@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v314';
+const APP_VERSION = 'v315';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4890,7 +4890,9 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
     if(cible || cible2){ (cible || cible2).creditee = nc.num; nc.applique = (cible || cible2).num; }
     else { // v284 : la facture du même montant est déjà « Payé » dans le logiciel (le crédit y a été appliqué, ex. #2318 → #2317) : crédit déjà utilisé
       const fermee = Object.values(F).find(f=>!f.annulee && f.ttc>0.05 && (f.payeLog||0) >= f.ttc-0.05 && f.paye<0.05 && +f.num < +nc.num && cleG(f)===cleG(nc) && Math.abs(f.ttc + nc.ttc)<=0.02);
-      if(fermee) nc.applique = fermee.num; } });
+      if(fermee) nc.applique = fermee.num;
+      // v315 : le PDF de la note de crédit dit « Paiement » = son total (montant dû 0) : le crédit a déjà été utilisé dans le logiciel (ex. sur une facture d'avant juin)
+      else if((nc.payeLog||0) >= Math.abs(nc.ttc) - 0.05) nc.applique = 'logiciel'; } });
   // v231-232 : facture refaite (nom, date, adresse ou erreur corrigés) : même client, même montant, même description (sans la date des travaux),
   // à 14 jours près (30 si l'une des deux est payée). Si une seule est payée, l'autre est le doublon ; sinon, la plus récente remplace l'ancienne.
   // Rien n'est écrit dans le registre (le ✕ « annuler » reste là pour l'inscrire).
@@ -5253,10 +5255,10 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
         if(!r.pdf) set('pdf', l.fi.id);
         if(l.action==='corriger'){ set('ht', lu.ht); set('ttc', lu.ttc); set('st', ''); }
         if(lu.esc!=='' && !(r.escompte>0)) set('esc', lu.esc);
-        if(!lu.credit && lu.pay!=='' && !(r.payeLog>0)) set('plog', lu.pay); });
+        if(lu.pay!=='' && !(r.payeLog>0)) set('plog', lu.pay); });   // v315 : aussi pour une note de crédit (crédit déjà utilisé dans le logiciel)
       if(maj.length) await S.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:maj}});
       const nouvelles = L.filter(l=>l.action==='ajouter').map(l=>{ const lu = l.lu;
-        return [lu.num, lu.date, lu.client, lu.po || 'AUCUN', '', lu.desc, lu.ht, lu.ttc, '', l.fi.id, '', lu.esc, lu.credit ? '' : lu.pay]; });
+        return [lu.num, lu.date, lu.client, lu.po || 'AUCUN', '', lu.desc, lu.ht, lu.ttc, '', l.fi.id, '', lu.esc, lu.pay]; });
       if(nouvelles.length) await S.values.append({spreadsheetId:id, range:'A1:M1', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:nouvelles}});
       setFp({...x, etape:'fini', nb:L.length}); setTick(t=>t+1); }
     catch(e){ setFp({...x, etape:'apercu'}); alert('Inscription interrompue : '+apiErrMsg(e)); } };
