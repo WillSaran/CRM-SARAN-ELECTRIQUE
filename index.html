@@ -159,7 +159,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v298';
+const APP_VERSION = 'v299';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7510,8 +7510,7 @@ function ApercuPdf({d, prixDe, onImprimer, onFermer}){
 const piDe = m => Math.ceil((Number(m)||0)*3.281);
 const arr5 = n => Math.round(n/5)*5;
 // v298 : borne à l'intérieur — par où passe le câble (texte de la soumission ; l'entretoit ajoute son tarif)
-const BORNE_PARCOURS_INT = [['ssol','par le sous-sol seulement','en passant par le sous-sol'],['ssol-garage','par le sous-sol, puis le garage','en passant par le sous-sol, puis dans le garage'],
-  ['entretoit','à côté du garage, par l\'entretoit','le panneau étant à côté du garage, en passant par l\'entretoit']];
+const BORNE_PARCOURS_INT = [['ssol','par le sous-sol seulement','en passant par le sous-sol'],['ssol-garage','par le sous-sol, puis le garage','en passant par le sous-sol, puis dans le garage']];
 const CALC_SOUMISSION = {
   borne: {
     nom:'🔌 Borne', typeProjet:'Borne de recharge',
@@ -7529,7 +7528,7 @@ const CALC_SOUMISSION = {
       if(/wallbox|pulsar|tesla|grizzl/i.test(t)) { v.borne='autre'; v.modele=(t.match(/(wallbox[^,.\n]{0,20}|tesla[^,.\n]{0,20}|grizzl[^,.\n]{0,20})/i)||[])[1]||''; }
       if(/(j'ai|a d[ée]j[aà]|poss[eè]de).{0,25}borne/i.test(t)) v.borne='client';
       return v; },
-    champs(v, maj){
+    champs(v, maj, extra){
       const sel = (val, on, opts, st) => <select value={val} onChange={e=>on(e.target.value)} style={st}>{opts.map(([a,b])=><option key={a} value={a}>{b}</option>)}</select>;
       const r = (k, opts) => sel(v[k], x=>maj({[k]:x}), opts);
       const c = (k, l) => <label style={{display:'flex',gap:4,alignItems:'center',fontSize:13}}><input type="checkbox" checked={!!v[k]} onChange={e=>maj({[k]:e.target.checked})}/> {l}</label>;
@@ -7542,7 +7541,7 @@ const CALC_SOUMISSION = {
       const ext = v.lieu==='ext';
       return <div style={{display:'grid',gap:8,fontSize:13}}>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>1. Parcours</b> — la borne est {r('lieu',[['ext','à l\'extérieur'],['int','à l\'intérieur (garage)']])} · mesures en {uSel}</div>
-        {!ext && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:12}}>Le câble passe {sel(v.parcoursInt||'ssol', x=>maj({parcoursInt:x, entretoit:x==='entretoit'}), BORNE_PARCOURS_INT.map(([a,b])=>[a,b]))}</div>}
+        {!ext && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:12}}>Le câble passe {sel(BORNE_PARCOURS_INT.some(x=>x[0]===v.parcoursInt) ? v.parcoursInt : 'ssol', x=>maj({parcoursInt:x}), BORNE_PARCOURS_INT.map(([a,b])=>[a,b]))} {c('entretoit','Passage par l\'entretoit')}</div>}
         {!ext && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:12}}>Câble NMD du panneau à la borne : {long(v.dist, x=>maj({dist:x}))} {v.unite}</div>}
         {ext && <div style={{display:'grid',gap:5,paddingLeft:12}}>
           <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Du panneau jusqu'à la sortie : {long(v.dist, x=>maj({dist:x}))} {v.unite} en {r('intCable',[['NMD','NMD'],['TECK','TECK / ACWU']])}</div>
@@ -7555,18 +7554,20 @@ const CALC_SOUMISSION = {
           </div>)}
           <div style={{paddingLeft:12}}><button className="btn btn-sm" onClick={()=>maj({segs:[...v.segs, {type:'TUYAU', long:'', fil:'RW90'}]})}>+ Un bout (ex. sous terre, puis remonter en tuyau)</button></div>
         </div>}
-        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}}><span style={{display:'flex',gap:6,alignItems:'center'}}>Perçage {sel(v.percage || (v.beton?'beton':''), x=>maj({percage:x, beton:false}), [['','aucun'],['beton','percer dans le béton'],['brique','percer dans la brique']])}</span>{c('entretoit','Passage par l\'entretoit')}</div>
+        {ext && <div style={{paddingLeft:12}}>{c('entretoit','Passage par l\'entretoit')}</div>}
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>2. Borne</b> {r('borne',[['flox3','FLO Maison X3 (fournie)'],['autre','Autre borne (fournie)'],['client','Le client a sa borne']])}
           {v.borne!=='flox3' && <input value={v.modele} onChange={e=>maj({modele:e.target.value})} placeholder="Modèle" style={{width:140}}/>}
-          {v.borne==='autre' && <input value={v.prixBorne} inputMode="decimal" placeholder="prix $" onChange={e=>maj({prixBorne:e.target.value})} style={{width:80}}/>}</div>
+          {v.borne==='autre' && <input value={v.prixBorne} inputMode="decimal" placeholder="prix $" onChange={e=>maj({prixBorne:e.target.value})} style={{width:80}}/>}
+          · perçage {sel(v.percage || (v.beton?'beton':''), x=>maj({percage:x, beton:false}), [['','aucun'],['beton','percer dans le béton'],['brique','percer dans la brique']])}</div>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>3. Panneau</b> {r('panneau',[['QO','Square D QO'],['HOM','Square D Homeline'],['BR','Eaton BR / CHOM'],['SIE','Siemens'],['AUTRE','Autre']])}
-          disjoncteur {r('amp',[['60','2P 60 A (48 A de charge)'],['40','2P 40 A (32 A de charge)']])} {c('dcc','Panneau juste : contrôleur DCC')}</div>
-        <input value={v.note} onChange={e=>maj({note:e.target.value})} placeholder="Emplacement exact de la borne (ex. au bout du mur, près de l'allée)"/>
+          disjoncteur {r('amp',[['60','2P 60 A (48 A de charge)'],['40','2P 40 A (32 A de charge)']])} {c('dcc','La charge nécessite un DCC')}</div>
+        <div style={{display:'flex',gap:6,alignItems:'center'}}><input value={v.note} onChange={e=>maj({note:e.target.value})} placeholder="Emplacement exact de la borne (ex. au bout du mur, près de l'allée)" style={{flex:1,minWidth:0}}/>{extra && extra.photo}</div>
+        {extra && extra.photoVue}
       </div>; },
     calculer(v, t){
       const f = v.unite==='pi' ? 0.3048 : 1, m = x => Math.max(0, (cvNum(x)||0)*f), r1 = x => String(Math.round(x*10)/10).replace('.',',');
       const ext = v.lieu==='ext', six = v.amp==='60', amp = v.amp, perc = v.percage || (v.beton ? 'beton' : '');
-      const pInt = !ext && (BORNE_PARCOURS_INT.find(x=>x[0]===(v.parcoursInt||'ssol'))||[])[2];
+      const pInt = !ext && (BORNE_PARCOURS_INT.find(x=>x[0]===v.parcoursInt)||BORNE_PARCOURS_INT[0])[2];
       const I = m(v.dist);                                                       // intérieur (ou tout le parcours si borne dedans)
       const segs = ext ? v.segs.map(s=>({...s, m:m(s.long), sol:/_SOL$/.test(s.type), tuyau:/^TUYAU/.test(s.type)})).filter(s=>s.m>0) : [];
       const E = segs.reduce((a,s)=>a+s.m,0), D = I+E, S = segs.filter(s=>s.sol).reduce((a,s)=>a+s.m,0);
@@ -7635,7 +7636,7 @@ const CALC_SOUMISSION = {
       txt.push(v.borne==='client' ? 'Installation d\'une borne de recharge de niveau 2 (240 V) fournie par le client'+(v.modele?' ('+v.modele+')':'')+'.' : 'Fourniture et installation d\'une borne de recharge '+nomBorne+' (niveau 2, 240 V).');
       txt.push('Emplacement : '+(ext?'à l\'extérieur':'à l\'intérieur (garage)')+(v.note?', '+v.note:'')+'.');
       txt.push('Raccordement au panneau électrique avec un nouveau disjoncteur 2 pôles '+amp+' A'+(v.dcc?' et contrôleur de charge (DCC) pour respecter la capacité du panneau':'')+'.');
-      if(D) txt.push('Câblage d\'environ '+r1(D)+' m'+(ext ? ' : '+r1(I)+' m à l\'intérieur'+(v.entretoit?' (par l\'entretoit)':'')+', sortie par le mur'+(segs.length ? ', puis '+segs.map(s=>r1(s.m)+' m en '+nomSeg(s)).join(', ') : '')+' jusqu\'à la borne' : ' à l\'intérieur, '+(pInt || (v.entretoit?'en passant par l\'entretoit':'')))+'.');
+      if(D) txt.push('Câblage d\'environ '+r1(D)+' m'+(ext ? ' : '+r1(I)+' m à l\'intérieur'+(v.entretoit?' (par l\'entretoit)':'')+', sortie par le mur'+(segs.length ? ', puis '+segs.map(s=>r1(s.m)+' m en '+nomSeg(s)).join(', ') : '')+' jusqu\'à la borne' : ' à l\'intérieur, '+(pInt||'')+(v.entretoit ? (pInt ? ' et ' : '')+'par l\'entretoit' : ''))+'.');
       if(S) txt.push('Tranchée d\'environ '+r1(S)+' m pour la partie enterrée.');
       if(perc) txt.push(perc==='brique' ? 'Perçage dans la brique pour le passage du câble.' : 'Perçage dans le béton pour le passage du câble.');
       txt.push('Inclus : matériel électrique, déplacement, mise en service et essai de la borne.');
@@ -7808,7 +7809,7 @@ function CalculRapide({C, d, setD, toast, onRempli}){
       <span className="muted" style={{fontSize:11.5}}>(entrée électrique, rough, finition, cuisine, salle de bain, maison neuve, blocs : à venir)</span>
     </div>
     {def && <div className="calc-rapide" style={{marginTop:8,padding:10,background:'var(--bg3)',borderRadius:8}}>
-      {def.champs(v, patch=>setV(x=>({...x, ...patch})))}
+      {def.champs(v, patch=>setV(x=>({...x, ...patch})), {photo:<PhotoEmplacement d={d} setD={setD} toast={toast} note={v.note} bouton/>, photoVue:<PhotoEmplacement d={d} setD={setD} toast={toast} note={v.note}/>})}
       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:10}}>
         {r.manque.length ? <span style={{fontSize:12.5,color:'var(--warning)'}}>Il manque {r.manque.length} tarif{r.manque.length>1?'s':''} : ouvre ⚙ Tarifs.</span>
           : <span style={{fontSize:13.5}}>Installation <b>{cvMoney(r.installation)}</b>{r.borne ? <> + borne <b>{cvMoney(r.borne)}</b></> : null} = <b style={{fontSize:15}}>{cvMoney(r.forfait)}</b> <span className="muted">avant taxes · {r.heures} h · {r.lignes.length} articles</span></span>}
@@ -7961,6 +7962,38 @@ function PlanVignette({id}){
   const [src,setSrc]=useState(PLAN_IMG[id]||'');
   useEffect(()=>{ let v=true; if(!src) planImage(id).then(u=>{ if(v) setSrc(u); }).catch(()=>{}); return ()=>{v=false}; },[id]);
   return src ? <img src={src} alt="" style={{width:110,height:82,objectFit:'cover',borderRadius:6,border:'1px solid var(--border2)'}}/> : <span className="muted" style={{width:110,fontSize:11}}>…</span>;
+}
+// v299 : photo de l'emplacement de la borne (Soumission rapide) — tracée au besoin, gardée dans le dossier Drive et en tête du plan des travaux
+const EMPL_TITRE = 'EMPLACEMENT DE LA BORNE';
+async function planGarderImage(d, setD, blob, nomBase){
+  let dos = d.dossier;
+  if(!dos){ dos = await driveDossier((d.nom||'Client')+(d.adresse?' — '+d.adresse.split(',')[0]:''), await driveDossier(PHOTOS_RACINE)); setD(o=>({...o, dossier:dos})); }
+  const r = await driveDeposer(new File([blob], nomBase+' — '+(d.nom||'soumission')+'.jpg', {type:'image/jpeg'}), dos);
+  PLAN_IMG[r.id] = await new Promise(res=>{ const fr = new FileReader(); fr.onload = ()=>res(fr.result); fr.readAsDataURL(blob); });
+  return r.id;
+}
+function PhotoEmplacement({d, setD, toast, note, bouton}){
+  const [annoter,setAnnoter]=useState(null);
+  const [occupe,setOccupe]=useState('');
+  const ref = useRef(null);
+  const i = (d.plan||[]).findIndex(p=>p.titre===EMPL_TITRE), item = i>=0 ? d.plan[i] : null;
+  useEffect(()=>{ if(item && (note||'')!==(item.notes||'')) setD(o=>({...o, plan:(o.plan||[]).map(p=>p.titre===EMPL_TITRE ? {...p, notes:note||''} : p)})); },[note, item && item.id]);
+  const garder = async blob => { setOccupe('Envoi…');
+    try{ if(!peutDeposer()) await requestToken('consent');
+      const id = await planGarderImage(d, setD, blob, 'Emplacement borne');
+      setD(o=>{ const p = (o.plan||[]).filter(x=>x.titre!==EMPL_TITRE); return {...o, plan:[{id, titre:EMPL_TITRE, notes:note||''}, ...p]}; });
+      setAnnoter(null); toast && toast('Photo de l\'emplacement ajoutée au plan des travaux'); }
+    catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
+    setOccupe(''); };
+  if(bouton) return <>
+    <input ref={ref} type="file" accept="image/*" style={{display:'none'}} onChange={e=>{ const f=e.target.files[0]; e.target.value=''; if(f) setAnnoter({image:URL.createObjectURL(f)}); }}/>
+    <button className="btn btn-sm" disabled={!!occupe} title="Photo de l'emplacement : tu peux tracer dessus ; elle va dans le plan des travaux (PDF) pour les gars" onClick={()=>ref.current && ref.current.click()} style={{whiteSpace:'nowrap'}}>{occupe || (item ? 'Changer la photo' : 'Photo')}</button>
+    {annoter && <PlanAnnoter image={annoter.image} onClose={()=>setAnnoter(null)} onSave={garder}/>}
+  </>;
+  if(!item) return null;
+  return <div style={{display:'flex',gap:8,alignItems:'center'}}><PlanVignette id={item.id}/>
+    <span className="muted" style={{fontSize:12}}>Dans le plan des travaux (PDF et ordre de travail).</span>
+    <button className="btn btn-sm" onClick={()=>setD(o=>({...o, plan:(o.plan||[]).filter(x=>x.titre!==EMPL_TITRE)}))} title="Enlever du plan (l'image reste dans le Drive)">✕</button></div>;
 }
 function PlanTravaux({d, setD, toast, dansCarte}){
   const [annoter,setAnnoter]=useState(null);          // {image, index}
