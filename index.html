@@ -159,7 +159,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v306';
+const APP_VERSION = 'v307';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9741,7 +9741,8 @@ function cvClientDescription(desc, titre){
   t = t.replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|li|tr|h\d)>/gi,'\n').replace(/<[^>]+>/g,'')
     .replace(/&nbsp;/g,' ').replace(/&#39;|&apos;/g,"'").replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
   t = t.replace(/──\s*Suivi\s*──[\s\S]*?──\s*↑\s*──/g,'\n');
-  const L = t.split(/\n/).map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean);
+  // v307 : puces en début de ligne (« - Arleen Buzzell – 450-… », « • … », « 1) … ») enlevées
+  const L = t.split(/\n/).map(x=>x.replace(/\s+/g,' ').trim().replace(/^(?:[-–—•*·▪►✓]+|\d{1,2}[).]\s)\s*/,'').trim()).filter(Boolean);
   const reTel = /(?:\+?1[\s.-]?)?\(?(\d{3})\)?[\s.-]?(\d{3})[\s.-]?(\d{4})(?!\d)/, reMail = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
   const MOT = "[A-ZÀ-ÝÉÈ][A-Za-zÀ-ÿ'’.-]*";
   const reNom = new RegExp('^'+MOT+"(?:\\s+(?:de|du|des|la|le|van|von|d'|"+MOT+')){1,4}$');
@@ -9754,6 +9755,7 @@ function cvClientDescription(desc, titre){
       .split(/\s+[–—-]\s+|[,;|:]|\s+(?:t[ée]l|cell|courriel)\b/i)[0].replace(/^(m\.|mme|monsieur|madame)\s+/i,'').replace(/[.\s]+$/,'').replace(/\s+/g,' ').trim();
     const p = n.split(/\s*&\s*|\s+et\s+/).map(x=>x.trim()).filter(Boolean);
     if(p.length===2 && !p[0].includes(' ') && p[1].includes(' ')) p[0] = p[0]+' '+p[1].split(' ').slice(1).join(' ');
+    else if(p.length===2 && p[0].includes(' ') && !p[1].includes(' ')) p.splice(1);   // v307 : « Gabriel Curpas & Marie-Josée » → Gabriel Curpas (le nom de famille de la conjointe n'est pas deviné)
     return p.length && p.length<=2 && p.every(okNom) ? p : null; };
   let noms = null, i0 = -1;
   const essai = (re, sur) => L.some((l,i)=>{ const m = l.match(re); if(!m) return false; if(sur && !sur(l,i)) return false; const n = nomsDe(m[1]); if(n){ noms = n; i0 = i; return true; } return false; });
