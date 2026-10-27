@@ -159,7 +159,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v299';
+const APP_VERSION = 'v300';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7795,10 +7795,33 @@ function CalculRapide({C, d, setD, toast, onRempli}){
   const ouvrir = k => { const t = CALC_SOUMISSION[k]; setType(type===k?'':k); setV({...t.defaut, ...(t.deviner ? t.deviner([d.titre, d.travaux, d.remarques].join('\n')) : {})}); setTarifs(false); };
   const t = code => { const x = C.prix[codeNorm(code)]; return x && x.prix!=null ? x.prix : (C.prixDe(code)!=null ? C.prixDe(code) : null); };
   const r = def ? def.calculer(v, t) : null;
+  // v300 : deux façons de chiffrer — « Heures + matériel » (ta façon : temps × gars + matériel + buffer) ou « Tarifs » (forfait par tarifs)
+  const lsGet = (k, d0) => { try{ const x = localStorage.getItem(k); return x==null ? d0 : x; }catch(e){ return d0; } };
+  const lsSet = (k, x) => { try{ localStorage.setItem(k, x); }catch(e){} };
+  const [mode,setMode0]=useState(()=>lsGet('calc_mode','heures'));
+  const [gars,setGars]=useState(1);
+  const [heures,setHeures]=useState('');          // vide = l'estimé du calcul
+  const [buffer,setBuffer0]=useState(()=>lsGet('calc_buffer','10'));
+  const setMode = x => { setMode0(x); lsSet('calc_mode', x); };
+  const setBuffer = x => { setBuffer0(x); lsSet('calc_buffer', x); };
+  useEffect(()=>{ setHeures(''); setGars(1); },[type]);
+  const H = r ? (heures!=='' && cvNum(heures)!=null ? cvNum(heures) : r.heures) : 0;
+  // Lignes avec leur prix (catalogue ; la borne « autre » prend le prix tapé)
+  const lignesPx = r ? r.lignes.map(l=>{ if(l.code==='BORNE' && cvNum(v.prixBorne)) return {...l, prix:String(cvNum(v.prixBorne))}; return l; }) : [];
+  const pxL = l => l.prix!=='' && l.prix!=null ? cvNum(l.prix) : C.prixDe(l.code, l.unite);
+  const sansPrix = lignesPx.filter(l=>pxL(l)==null);
+  const matH = lignesPx.reduce((a,l)=>a+(pxL(l)||0)*(cvNum(l.qte)||0),0);
+  const moH = H*(C.prixDe('SA01')||0) + (gars===2 ? H*(C.prixDe('SA02')||0) : 0);
+  const dqH = (C.prixDe('DEPL')||0) + (C.prixDe('QUIN')||0);
+  const baseH = matH+moH+dqH, bufH = baseH*((cvNum(buffer)||0)/100), totalH = arr5(baseH+bufH);
   const remplir = () => {
     if(d.lignes.some(l=>cvNum(l.qte)) && !confirm('Remplacer le matériel, les heures et le prix par le calcul ?')) return;
-    setD(o=>({...o, typeProjet:def.typeProjet, titre: o.titre || r.titre, travaux:r.travaux, remarques:r.remarques, forfait: r.forfait!=='' ? String(r.forfait) : o.forfait,
-      lignes:r.lignes, depl:true, quin:true, jours:[{...(o.jours[0]||{}), date:(o.jours[0]&&o.jours[0].date)||cvDay(new Date().toISOString()), sa01:String(r.heures), sa02:''}, ...o.jours.slice(1)]}));
+    const enHeures = mode==='heures';
+    const forfait = enHeures ? (totalH>0 ? String(totalH) : '') : (r.forfait!=='' ? String(r.forfait) : null);
+    const remarques = enHeures ? r.remarques.split('\n').filter(x=>!/^Détail :/.test(x)).join('\n') : r.remarques;
+    setD(o=>({...o, typeProjet:def.typeProjet, titre: o.titre || r.titre, travaux:r.travaux, remarques, forfait: forfait!=null ? forfait : o.forfait,
+      lignes: enHeures ? lignesPx : r.lignes, depl:true, quin:true, jours:[{...(o.jours[0]||{}), date:(o.jours[0]&&o.jours[0].date)||cvDay(new Date().toISOString()),
+        sa01:String(enHeures ? H : r.heures), sa02: enHeures && gars===2 ? String(H) : ''}, ...o.jours.slice(1)]}));
     toast && toast('Soumission remplie — ajoute tes photos (📐 Plan) et vérifie l\'aperçu');
     onRempli && onRempli();
   };
@@ -7810,13 +7833,29 @@ function CalculRapide({C, d, setD, toast, onRempli}){
     </div>
     {def && <div className="calc-rapide" style={{marginTop:8,padding:10,background:'var(--bg3)',borderRadius:8}}>
       {def.champs(v, patch=>setV(x=>({...x, ...patch})), {photo:<PhotoEmplacement d={d} setD={setD} toast={toast} note={v.note} bouton/>, photoVue:<PhotoEmplacement d={d} setD={setD} toast={toast} note={v.note}/>})}
-      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:10}}>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:12,paddingTop:10,borderTop:'1px solid var(--border2)'}}>
+        <b>Prix</b>
+        {[['heures','Heures + matériel'],['tarifs','Tarifs']].map(([k,l])=><button key={k} className={'btn btn-sm'+(mode===k?' btn-p':'')} onClick={()=>setMode(k)}>{l}</button>)}
+      </div>
+      {mode==='heures' && <div style={{display:'grid',gap:8,marginTop:8,fontSize:13}}>
+        <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>Temps estimé :
+          {[1,2].map(n=><button key={n} className={'btn btn-sm'+(gars===n?' btn-p':'')} onClick={()=>setGars(n)}>{n} gars</button>)}
+          × <input value={heures!=='' ? heures : String(r.heures)} onChange={e=>setHeures(e.target.value)} inputMode="decimal" style={{width:64}}/> h
+          {heures!=='' && cvNum(heures)!==r.heures && <button className="btn btn-sm" onClick={()=>setHeures('')} title="Revenir à l'estimé du calcul">estimé : {r.heures} h</button>}
+          <span style={{marginLeft:8}}>Buffer</span> <input value={buffer} onChange={e=>setBuffer(e.target.value)} inputMode="decimal" style={{width:54}}/> %</div>
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          <span style={{fontSize:13.5}}>Matériel <b>{cvMoney(matH)}</b> + main-d'œuvre <b>{cvMoney(moH)}</b> <span className="muted">({H} h × {gars} gars)</span> + dépl./quinc. <b>{cvMoney(dqH)}</b> + buffer <b>{cvMoney(bufH)}</b> = <b style={{fontSize:15}}>{cvMoney(totalH)}</b> <span className="muted">avant taxes</span></span>
+          <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={remplir}>Remplir la soumission</button>
+        </div>
+        {sansPrix.length>0 && <span style={{fontSize:12.5,color:'var(--warning)'}}>Sans prix dans le catalogue : {sansPrix.map(l=>l.code).join(', ')} — compté 0 $.</span>}
+      </div>}
+      {mode==='tarifs' && <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:10}}>
         {r.manque.length ? <span style={{fontSize:12.5,color:'var(--warning)'}}>Il manque {r.manque.length} tarif{r.manque.length>1?'s':''} : ouvre ⚙ Tarifs.</span>
           : <span style={{fontSize:13.5}}>Installation <b>{cvMoney(r.installation)}</b>{r.borne ? <> + borne <b>{cvMoney(r.borne)}</b></> : null} = <b style={{fontSize:15}}>{cvMoney(r.forfait)}</b> <span className="muted">avant taxes · {r.heures} h · {r.lignes.length} articles</span></span>}
         <button className="btn btn-sm" onClick={()=>setTarifs(!tarifs)}>⚙ Tarifs</button>
         <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={remplir}>Remplir la soumission</button>
-      </div>
-      {tarifs && <div style={{display:'grid',gap:4,marginTop:8,fontSize:12.5}}>
+      </div>}
+      {mode==='tarifs' && tarifs && <div style={{display:'grid',gap:4,marginTop:8,fontSize:12.5}}>
         {def.tarifs.map(([k,l])=><label key={k} style={{display:'flex',gap:6,alignItems:'center',justifyContent:'space-between'}}><span>{l}</span>
           <input key={k+(t(k)!=null?t(k):'')} defaultValue={t(k)!=null?t(k):''} inputMode="decimal" style={{width:80,textAlign:'right'}}
             onBlur={async e=>{ const x=e.target.value.trim().replace(',','.'); if(x===String(t(k)!=null?t(k):'')) return; try{ await C.majPrix(k, x); toast&&toast('Tarif enregistré : '+k); }catch(er){ toast&&toast('Erreur : '+apiErrMsg(er)); } }}/></label>)}
