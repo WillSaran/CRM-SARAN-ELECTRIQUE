@@ -159,7 +159,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v302';
+const APP_VERSION = 'v303';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7507,7 +7507,7 @@ function ApercuPdf({d, prixDe, onImprimer, onFermer}){
 // heures et prix forfaitaire. AUCUN prix ici (le code est public) : les tarifs sont dans « La mémoire — Jobs › Prix »
 // (codes « BORNE-… », etc.), entrés une fois dans ⚙ Tarifs. Prochains types : entrée électrique, rough, finition,
 // cuisine, salle de bain, maison neuve, blocs — même moule.
-const piDe = m => Math.ceil((Number(m)||0)*3.281);
+const piDe = m => Math.ceil((Number(m)||0)/0.3048 - 1e-6);
 const arr5 = n => Math.round(n/5)*5;
 // v298 : borne à l'intérieur — par où passe le câble (texte de la soumission ; l'entretoit ajoute son tarif)
 const BORNE_PARCOURS_INT = [['ssol','par le sous-sol seulement','en passant par le sous-sol'],['ssol-garage','par le sous-sol, puis le garage','en passant par le sous-sol, puis dans le garage']];
@@ -7596,11 +7596,11 @@ const CALC_SOUMISSION = {
       const intCond = ext ? v.intCable : 'NMD';
       const chaine = [{cond:intCond, m:I, int:true}, ...segs.map(s=>({...s, cond: s.tuyau ? (s.fil==='CABLE' ? 'TECK' : s.fil) : 'TECK'}))].filter(s=>s.m>0);
       chaine.forEach(s=>{
-        const ft = piDe(s.m*1.1);
+        const ft = piDe(s.m);
         if(s.cond==='NMD') ajout(NMD, 'Fil NMD 2C #'+g, ft, 'pi');
         else if(s.cond==='TECK') ajout(TECK, 'Câble TECK 2C #'+g+' 1 kV', ft, 'pi');
         else { const pre = s.cond==='RW90' ? 'RW90' : 'T90', code = pre+g+'BLK';
-          ajout(code, 'Fil '+pre+' #'+g+' noir (2 conducteurs)', 2*piDe(s.m*1.15), 'pi'); ajout(pre+gt+'GRN', 'Fil '+pre+' #'+gt+' vert (mise à la terre)', piDe(s.m*1.15), 'pi'); }
+          ajout(code, 'Fil '+pre+' #'+g+' noir (2 conducteurs)', 2*piDe(s.m), 'pi'); ajout(pre+gt+'GRN', 'Fil '+pre+' #'+gt+' vert (mise à la terre)', piDe(s.m), 'pi'); }
         if(!s.int && !s.tuyau && !s.sol) ajout('RCS15-1','Sangle pour câble TECK', Math.ceil(s.m/1.5)+1);
       });
       // Boîtes de jonction : chaque fois que le conducteur change (NMD → TECK, TECK → fils RW90…)
@@ -7614,7 +7614,7 @@ const CALC_SOUMISSION = {
       if(tuy.length){
         let barres = 0, couplings = 0, tRuns = 0;
         segs.forEach((s,i)=>{ if(s.tuyau && !(i && segs[i-1].tuyau)) tRuns++; });
-        let run = 0; segs.forEach((s,i)=>{ if(s.tuyau) run += s.m; if(!s.tuyau || i===segs.length-1 || !segs[i+1].tuyau){ if(run){ const b = Math.ceil(piDe(run*1.1)/10); barres += b; couplings += Math.max(0,b-1); run = 0; } } });
+        let run = 0; segs.forEach((s,i)=>{ if(s.tuyau) run += s.m; if(!s.tuyau || i===segs.length-1 || !segs[i+1].tuyau){ if(run){ const b = Math.ceil(piDe(run)/10); barres += b; couplings += Math.max(0,b-1); run = 0; } } });
         ajout('RC4001010','Conduit PVC rigide 1 po (longueurs de 10 pi)', barres*10, 'pi');
         ajout('REC20','Coupling PVC 1 po', couplings);
         ajout('RTA20','Adaptateur de boîte PVC 1 po', 2*tRuns);
@@ -7820,7 +7820,8 @@ function CalculRapide({C, d, setD, toast, onRempli}){
     const enHeures = mode==='heures';
     const forfait = enHeures ? (totalH>0 ? String(totalH) : '') : (r.forfait!=='' ? String(r.forfait) : null);
     const remarques = enHeures ? r.remarques.split('\n').filter(x=>!/^Détail :/.test(x)).join('\n') : r.remarques;
-    setD(o=>({...o, typeProjet:def.typeProjet, titre: o.titre || r.titre, travaux:r.travaux, remarques, forfait: forfait!=null ? forfait : o.forfait,
+    const resume = enHeures ? '— Calcul du '+cvFmtDay(cvDay(new Date().toISOString()))+' : matériel '+cvMoney(matH)+' + main-d\'œuvre '+cvMoney(moH)+' ('+H+' h × '+gars+' gars) + dépl./quinc. '+cvMoney(dqH)+' = '+cvMoney(baseH)+' ; buffer '+(cvNum(buffer)||0)+' % = '+cvMoney(bufH)+' ; total '+cvMoney(totalH)+' avant taxes —' : '';
+    setD(o=>({...o, ...(resume ? {visite:[String(o.visite||'').split('\n').filter(x=>!/^— Calcul du /.test(x)).join('\n').trim(), resume].filter(Boolean).join('\n\n')} : {}), typeProjet:def.typeProjet, titre: o.titre || r.titre, travaux:r.travaux, remarques, forfait: forfait!=null ? forfait : o.forfait,
       lignes: enHeures ? lignesPx : r.lignes, depl:true, quin:true, jours:[{...(o.jours[0]||{}), date:(o.jours[0]&&o.jours[0].date)||cvDay(new Date().toISOString()),
         sa01:String(enHeures ? H : r.heures), sa02: enHeures && gars===2 ? String(H) : ''}, ...o.jours.slice(1)]}));
     toast && toast('Soumission remplie — ajoute tes photos (📐 Plan) et vérifie l\'aperçu');
@@ -7844,8 +7845,16 @@ function CalculRapide({C, d, setD, toast, onRempli}){
           × <input value={heures!=='' ? heures : String(r.heures)} onChange={e=>setHeures(e.target.value)} inputMode="decimal" style={{width:64}}/> h
           {heures!=='' && cvNum(heures)!==r.heures && <button className="btn btn-sm" onClick={()=>setHeures('')} title="Revenir à l'estimé du calcul">estimé : {r.heures} h</button>}
           <span style={{marginLeft:8}}>Buffer</span> <input value={buffer} onChange={e=>setBuffer(e.target.value)} inputMode="decimal" style={{width:54}}/> %</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:'2px 16px',maxWidth:420,fontSize:13.5}}>
+          <span>Matériel ({lignesPx.length} articles, quantités exactes)</span><b style={{textAlign:'right'}}>{cvMoney(matH)}</b>
+          <span>Main-d'œuvre <span className="muted">({H} h × {gars} gars)</span></span><b style={{textAlign:'right'}}>{cvMoney(moH)}</b>
+          <span>Déplacement et quincaillerie</span><b style={{textAlign:'right'}}>{cvMoney(dqH)}</b>
+          <span style={{borderTop:'1px solid var(--border2)',paddingTop:2}}>Sous-total</span><b style={{textAlign:'right',borderTop:'1px solid var(--border2)',paddingTop:2}}>{cvMoney(baseH)}</b>
+          <span>Buffer {cvNum(buffer)||0} %</span><b style={{textAlign:'right'}}>{cvMoney(bufH)}</b>
+          <span style={{fontSize:15}}>Prix de la soumission <span className="muted" style={{fontSize:12}}>avant taxes</span></span><b style={{textAlign:'right',fontSize:15}}>{cvMoney(totalH)}</b>
+        </div>
         <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-          <span style={{fontSize:13.5}}>Matériel <b>{cvMoney(matH)}</b> + main-d'œuvre <b>{cvMoney(moH)}</b> <span className="muted">({H} h × {gars} gars)</span> + dépl./quinc. <b>{cvMoney(dqH)}</b> + buffer <b>{cvMoney(bufH)}</b> = <b style={{fontSize:15}}>{cvMoney(totalH)}</b> <span className="muted">avant taxes</span></span>
+          <span className="muted" style={{fontSize:12}}>Le buffer ne touche pas au matériel ni aux heures ; il est noté dans tes notes privées (pas imprimé).</span>
           <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={remplir}>Remplir la soumission</button>
         </div>
         {sansPrix.length>0 && <span style={{fontSize:12.5,color:'var(--warning)'}}>Sans prix dans le catalogue : {sansPrix.map(l=>l.code).join(', ')} — compté 0 $.</span>}
