@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v320';
+const APP_VERSION = 'v321';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3891,6 +3891,129 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate, ini
   </Modal>;
 }
 
+// v321 : nouvelle job depuis l'agenda — choisir le client (contracteur → ses jobs ; particulier → le Répertoire), le type de job,
+// l'équipe et l'agenda (The Crew / En attente). Le titre reprend le nom de la job existante pour que les gars punchent sur la même job.
+function NouvelleJobAgenda({cfg, addProjet, toast, onClose, onDone, initialDate, initialHeure, clients, fiches}){
+  const [code,setCode]=useState(()=>{ try{ const x = localStorage.getItem('crm_last_prefixe'); return x==='PARTICULIER' || JOB_PREFIXES.includes(x) ? x : 'PARTICULIER'; }catch(e){ return 'PARTICULIER'; } });
+  const pro = code!=='PARTICULIER';
+  const [q,setQ]=useState('');
+  const [job,setJob]=useState(null);          // job existante d'un contracteur, ou 'nouvelle'
+  const [cli,setCli]=useState(null);          // fiche du Répertoire choisie, ou 'nouveau'
+  const [nom,setNom]=useState(''), [tel,setTel]=useState(''), [courriel,setCourriel]=useState(''), [adresse,setAdresse]=useState('');
+  const [type,setType]=useState('SERV'), [serv,setServ]=useState('');
+  const [qui,setQui]=useState(''), [attente,setAttente]=useState(false);
+  const [date,setDate]=useState(initialDate||todayISO()), [debut,setDebut]=useState(initialHeure||'07:00'), [fin,setFin]=useState('15:30'), [journee,setJournee]=useState(false);
+  const [travaux,setTravaux]=useState('');
+  const [titreM,setTitreM]=useState(null);
+  const [busy,setBusy]=useState(false);
+  const choisirCode = c => { setCode(c); setJob(null); setCli(null); setQ(''); setTitreM(null); try{ localStorage.setItem('crm_last_prefixe', c); }catch(e){} };
+  // Jobs du contracteur : en cours et à venir d'abord, puis les plus récentes
+  const jobsC = useMemo(()=>{ if(!pro) return []; const c = Object.values(clients||{}).find(x=>x.code===code);
+    const rang = j => j.status==='cours' ? 0 : j.status==='avenir' ? 1 : 2;
+    return ((c && c.jobs) || []).slice().sort((a,b)=>rang(a)-rang(b) || String(b.last||'').localeCompare(String(a.last||''))); },[clients, code, pro]);
+  const nq = cvNorm(q);
+  const jobsF = jobsC.filter(j=>!nq || cvNorm([j.name, j.address, j.po].join(' ')).includes(nq)).slice(0, nq ? 30 : 12);
+  const fichesF = useMemo(()=>{ if(pro || nq.length<2) return []; return ((fiches && fiches.clients) || []).filter(f=>cvNorm([f.nom, f.adresse, f.ville, f.tel, f.courriel].join(' ')).includes(nq)).slice(0, 10); },[fiches, nq, pro]);
+  const prendreFiche = f => { setCli(f); setNom(f.nom); setTel(f.tel||''); setCourriel(f.courriel||''); setAdresse([f.adresse, f.ville].filter(Boolean).join(', ')); setTitreM(null); };
+  const membre = cvEquipe().find(m=>m.colorId===qui);
+  const typeT = phaseTitre(type, type==='SERV' ? serv : '');
+  const jobEx = job && job!=='nouvelle' ? job : null;
+  const auto = pro
+    ? (jobEx ? [code, typeT, jobEx.name, jobEx.po, membre ? membre.ini : ''] : [code, typeT, nom.trim() || evAdrTitre(adresse), membre ? membre.ini : '']).filter(Boolean).join(' ')
+    : [evNomTitre(cli && cli!=='nouveau' ? {nom:cli.nom, fiche:cli, commerce:cli.commerce} : {nom}), cli && cli!=='nouveau' && cli.commerce ? '' : evAdrTitre(adresse), typeT].filter(Boolean).join(' ');
+  const titre = titreM!=null ? titreM : auto;
+  const lieu = jobEx ? (jobEx.address || adresse) : adresse;
+  const pret = titre.trim() && (pro ? !!job : (!!cli && nom.trim())) && (attente || journee || debut);
+  async function creer(){
+    if(!pret){ toast('Choisis le client et la job.','err'); return; }
+    setBusy(true);
+    try{
+      const d = attente ? cvSamediProchain() : date;
+      const lendemain = (()=>{ const x = new Date(d+'T12:00:00'); x.setDate(x.getDate()+1); return localDateStr(x); })();
+      const quand = (attente || journee) ? {start:{date:d}, end:{date:lendemain}}
+        : {start:{dateTime:d+'T'+debut+':00', timeZone:'America/Toronto'}, end:{dateTime:d+'T'+(fin>debut ? fin : debut)+':00', timeZone:'America/Toronto'}};
+      const description = pro ? (travaux.trim() ? 'Travaux demandés :\n'+travaux.trim() : '')
+        : [travaux.trim() ? 'Travaux demandés :\n'+travaux.trim() : '', ['Client : '+nom.trim(), tel ? 'Tél. : '+tel : '', courriel ? 'Courriel : '+courriel : ''].filter(Boolean).join('\n')].filter(Boolean).join('\n\n');
+      const resource = {summary:titre.trim(), location:lieu||'', ...(description ? {description} : {}), ...quand, ...(membre ? {colorId:membre.colorId} : {})};
+      const ev = await window.gapi.client.calendar.events.insert({calendarId: attente ? EN_ATTENTE_CAL : CREW_CAL, resource});
+      try{ await addProjet({opportuniteId:'', adresse:lieu, titre:titre.trim(), contracteur:code, phase:type, typeTravail:serv, client:pro ? '' : nom.trim(), telephone:tel, notes:travaux, eventId:ev.result.id}); }catch(e){}
+      toast('« '+titre.trim()+' » ajouté '+(attente ? 'dans En attente ('+cvFmtDay(d)+').' : 'le '+cvFmtDay(d)+'.'),'ok');
+      onDone && onDone(); onClose();
+    }catch(e){ toast('Erreur : '+apiErrMsg(e),'err'); }
+    setBusy(false);
+  }
+  const B = ({on, onClick, children, style}) => <button type="button" className={'btn btn-sm'+(on?' btn-p':'')} onClick={onClick} style={style}>{children}</button>;
+  const ligne = {padding:'6px 4px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13};
+  return <Modal title="Nouvelle job" onClose={onClose} wide>
+    <div className="field"><label>Client</label>
+      <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+        <B on={!pro} onClick={()=>choisirCode('PARTICULIER')}>Particulier</B>
+        {JOB_PREFIXES.map(c=><B key={c} on={code===c} onClick={()=>choisirCode(c)}>{c}</B>)}
+      </div></div>
+    {pro && <div className="field"><label>Job de {CLIENT_CODES[code]||code}</label>
+      {job ? <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          <b style={{fontSize:13.5}}>{jobEx ? jobEx.name : 'Nouvelle job'}</b>{jobEx && <span className="muted" style={{fontSize:12.5}}>{[jobEx.po, jobEx.address].filter(Boolean).join(' · ')}</span>}
+          <B onClick={()=>{ setJob(null); setTitreM(null); }}>Changer</B></div>
+        : <><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher une job (nom, adresse, PO)…"/>
+          <div style={{maxHeight:230,overflowY:'auto',marginTop:4,border:'1px solid var(--border2)',borderRadius:8}}>
+            <div style={{...ligne,fontWeight:700,color:'var(--accent)'}} onClick={()=>{ setJob('nouvelle'); setTitreM(null); }}>+ Nouvelle job pour {code}</div>
+            {jobsF.map(j=><div key={j.id} style={ligne} onClick={()=>{ setJob(j); setTitreM(null); }}>
+              <b>{j.name}</b> <span className="muted" style={{fontSize:12}}>· {[j.po, j.address, j.status==='done' ? 'terminée '+cvFmtDay(j.last) : j.status==='cours' ? 'en cours' : 'à venir'].filter(Boolean).join(' · ')}</span></div>)}
+            {!jobsF.length && <div className="muted" style={{...ligne,cursor:'default'}}>{jobsC.length ? 'Rien trouvé.' : 'Aucune job pour '+code+' dans l\'agenda.'}</div>}
+          </div></>}
+    </div>}
+    {pro && job==='nouvelle' && <div className="row2">
+      <div className="field"><label>Nom de la job</label><input value={nom} onChange={e=>{ setNom(e.target.value); setTitreM(null); }} placeholder="ex. Dauphine, Tremblay"/></div>
+      <div className="field"><label>Adresse</label><ChampAdresse value={adresse} onChange={x=>{ setAdresse(x); setTitreM(null); }} placeholder="Adresse (ou tape-la à la main)"/></div>
+    </div>}
+    {!pro && <div className="field"><label>Client du Répertoire</label>
+      {cli ? <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><b style={{fontSize:13.5}}>{cli==='nouveau' ? 'Nouveau client' : cli.nom}</b><B onClick={()=>{ setCli(null); setTitreM(null); }}>Changer</B></div>
+        : <><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un nom, une adresse, un téléphone…"/>
+          <div style={{maxHeight:230,overflowY:'auto',marginTop:4,border:'1px solid var(--border2)',borderRadius:8}}>
+            <div style={{...ligne,fontWeight:700,color:'var(--accent)'}} onClick={()=>{ setCli('nouveau'); setNom(q.trim()); setTitreM(null); }}>+ Nouveau client{q.trim() ? ' « '+q.trim()+' »' : ''}</div>
+            {fichesF.map(f=><div key={f.row} style={ligne} onClick={()=>prendreFiche(f)}><b>{f.nom}</b> <span className="muted" style={{fontSize:12}}>· {[f.adresse, f.ville, f.tel].filter(Boolean).join(' · ')}</span></div>)}
+            {nq.length>=2 && !fichesF.length && <div className="muted" style={{...ligne,cursor:'default'}}>Pas dans le Répertoire.</div>}
+          </div></>}
+    </div>}
+    {!pro && cli && <><div className="row2">
+        <div className="field"><label>Nom complet</label><input value={nom} onChange={e=>{ setNom(e.target.value); setTitreM(null); }}/></div>
+        <div className="field"><label>Téléphone</label><input value={tel} onChange={e=>setTel(e.target.value)}/></div></div>
+      <div className="row2">
+        <div className="field"><label>Adresse</label><ChampAdresse value={adresse} onChange={x=>{ setAdresse(x); setTitreM(null); }} placeholder="Adresse (ou tape-la à la main)"/></div>
+        <div className="field"><label>Courriel</label><input value={courriel} onChange={e=>setCourriel(e.target.value)}/></div></div></>}
+    <div className="field"><label>Type de job</label>
+      <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{EV_TYPES.map(x=><B key={x} on={type===x} onClick={()=>{ setType(x); if(x!=='SERV') setServ(''); setTitreM(null); }}>{x}</B>)}</div>
+      {type==='SERV' && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:6}}>{EV_SERV.map(x=><B key={x} on={serv===x} onClick={()=>{ setServ(serv===x ? '' : x); setTitreM(null); }}>{x}</B>)}</div>}
+    </div>
+    <div className="field"><label>Équipe</label>
+      <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+        <B on={!qui} onClick={()=>{ setQui(''); setTitreM(null); }}>À attitrer</B>
+        {EQUIPES_ORDRE.filter(k=>CREW_COLORS[k]).map(k=><button key={k} type="button" className="btn btn-sm" onClick={()=>{ setQui(k); setTitreM(null); }}
+          style={{background:GCAL_COLOR_MAP[k],color:texteSur(GCAL_COLOR_MAP[k]),border:'none',outline:qui===k?'3px solid var(--text)':'none',outlineOffset:1,fontWeight:qui===k?800:600}}>{equipeNom(k)}</button>)}
+      </div></div>
+    <div className="field"><label>Agenda</label>
+      <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
+        <B on={!attente} onClick={()=>setAttente(false)}>The Crew (cédulée)</B>
+        <B on={attente} onClick={()=>setAttente(true)}>En attente</B>
+        {attente && <span className="muted" style={{fontSize:12.5}}>toute la journée, samedi {cvFmtDay(cvSamediProchain())}</span>}
+      </div></div>
+    {!attente && <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'flex-end',marginBottom:12}}>
+      <div className="field" style={{margin:0}}><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
+      {!journee && <div className="field" style={{margin:0}}><label>Début</label><input type="time" value={debut} onChange={e=>setDebut(e.target.value)}/></div>}
+      {!journee && <div className="field" style={{margin:0}}><label>Fin</label><input type="time" value={fin} onChange={e=>setFin(e.target.value)}/></div>}
+      <label style={{display:'flex',gap:4,alignItems:'center',fontSize:13,paddingBottom:8}}><input type="checkbox" checked={journee} onChange={e=>setJournee(e.target.checked)} style={{width:'auto'}}/> Toute la journée</label>
+    </div>}
+    <div className="field"><label>Travaux demandés</label><textarea value={travaux} onChange={e=>setTravaux(e.target.value)} placeholder="Ce qu'il y a à faire (va dans la description de l'événement)"/></div>
+    <div className="field"><label>Titre</label><input value={titre} onChange={e=>setTitreM(e.target.value)}/>
+      {titreM!=null && titreM!==auto && <button type="button" className="btn btn-sm" style={{marginTop:4}} onClick={()=>setTitreM(null)}>Revenir au titre automatique</button>}</div>
+    {pro && jobEx && <div className="muted" style={{fontSize:12,marginBottom:10}}>Même nom de job{jobEx.po ? ' et même PO' : ''} que les autres passages : les gars punchent sur la même job.</div>}
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+      <button className="btn btn-s" onClick={onClose}>Annuler</button>
+      <button className="btn btn-p" onClick={creer} disabled={busy || !pret}>{busy ? 'Création…' : 'Créer la job'}</button>
+    </div>
+  </Modal>;
+}
+
 // ── UI: Agenda — Jour / Semaine / Mois (grille), + création de job ───────
 // ── UI: Modal modification de l'heure d'un événement existant ────────────
 // ── UI: fiche complète d'un événement Calendar — même niveau de détail que
@@ -4476,8 +4599,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         <button className="btn btn-p" onClick={()=>faireCedule(true)}>Confirmer dans The Crew</button>
       </div>
     </Modal>}
-    {showJobModal && data && <QuickJobModal cfg={cfg} addProjet={data.addProjet} toast={toast} initialDate={jobDate} initialHeure={jobHeure}
-      onClose={()=>setShowJobModal(false)} onDone={()=>setReloadKey(k=>k+1)}/>}
+    {showJobModal && data && <NouvelleJobAgenda cfg={cfg} addProjet={data.addProjet} toast={toast} initialDate={jobDate} initialHeure={jobHeure}
+      clients={cdClients} fiches={cd.fiches} onClose={()=>setShowJobModal(false)} onDone={()=>setReloadKey(k=>k+1)}/>}
     {editEvent && <EditEventModal event={editEvent} job={jobDeEvenement(editEvent)} toast={toast} onClose={()=>setEditEvent(null)} onSaved={()=>setReloadKey(k=>k+1)}/>}
   </div>;
 }
@@ -9858,7 +9981,7 @@ function equipeDe(e){ const id = e && (e.couleurId || couleurIdEvenement(e)); re
 function equipeNom(k){ if(k==='autre') return 'À attitrer'; const n = CREW_COLORS[k]||''; return EQUIPE_SURNOM[n] || n.split(' ')[0]; }
 function equipeCouleur(k){ return k==='autre' ? 'var(--muted)' : (GCAL_COLOR_MAP[k]||'var(--muted)'); }
 function equipeRang(k){ const i = EQUIPES_ORDRE.indexOf(k); return i<0 ? (k==='autre' ? 99 : 50) : i; }
-const PHASES = [['ROUGH','ROUGH'],['FINITION','FINITION'],['FINALE','FINITION'],['SERV','SERV'],['SERVICE','SERV'],['AJUSTEMENTS','AJUST'],['AJUSTEMENT','AJUST'],['RAPUP','RAPUP'],['DÉMO','DÉMO'],['DEMO','DÉMO']];
+const PHASES = [['ENTRÉE','ENTRÉE'],['ENTREE','ENTRÉE'],['ROUGH','ROUGH'],['FINITION','FINITION'],['FINALE','FINITION'],['SERV','SERV'],['SERVICE','SERV'],['AJUSTEMENTS','AJUST'],['AJUSTEMENT','AJUST'],['RAPUP','RAPUP'],['DÉMO','DÉMO'],['DEMO','DÉMO']];
 const CLIENT_IGNORE = /^(off\b|mon plan|plan de la semaine|topo|ma journée|congé|vacances|prep|préparation)|(^|[\s\-–(])(rdv|rendez[\s-]?vous|r\.d\.v\.?)(?=$|[\s\-–).,:])/i;   // v160 : « OFF Adèle », « OFF WILL » = congés, pas des jobs
 const CREW_CAL = 'saranelectrique@gmail.com';
 // Calendrier « En Attente » : jobs à faire mais pas encore cédulées (la date est un samedi provisoire).
@@ -9939,7 +10062,7 @@ function cvParseEvent(e){
   let code='', phase='', initials=[], nameParts=[], apresServ=false, servType='';
   toks.forEach(t=>{
     const T=t.toUpperCase();
-    if(apresServ && !servType && SERV_TYPES.includes(T)){ servType=T; return; }   // « SERV PRISE … » : PRISE n'est pas le nom
+    if(apresServ && !servType && (SERV_TYPES.includes(T) || (typeof EV_SERV!=='undefined' && EV_SERV.includes(T)))){ servType=T; return; }   // v321 : services de la fiche client aussi   // « SERV PRISE … » : PRISE n'est pas le nom
     apresServ = T==='SERV' || T==='SERVICE';
     if(!code && T==='PAYNE'){ code = 'PAY'; return; }                 // « Payne Edison » = PAY
     if(!code && CLIENT_CODES[T]){ code = (T==='PY'?'PAY':T); return; }
