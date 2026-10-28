@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v316';
+const APP_VERSION = 'v317';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4087,6 +4087,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   const [parEquipe,setParEquipe]=useState(()=>lu('agenda_par_equipe2', true));
   const basculerParEquipe = ()=>setParEquipe(v=>{ memo('agenda_par_equipe2', !v); return !v; });
   const [grandPanneau,setGrandPanneau]=useState(()=>lu('agenda_grand_panneau', true));
+  // v317 : panneau En attente fermé complètement (l'agenda prend toute la largeur) ; un bouton le rouvre
+  const [panneauFerme,setPanneauFerme]=useState(()=>lu('agenda_panneau_ferme', false));
+  const basculerPanneau = ()=>setPanneauFerme(v=>{ memo('agenda_panneau_ferme', !v); return !v; });
   const basculerGrand = ()=>setGrandPanneau(v=>{ memo('agenda_grand_panneau', !v); return !v; });
   const [chercheAtt,setChercheAtt]=useState('');
   const panneauDragRef = useRef(null);
@@ -4315,6 +4318,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       </div>
       <div style={{display:'flex',gap:4,marginLeft:'auto',flexWrap:'wrap'}}>
         {ongletAg==='agenda' && viewMode!=='mois' && <button className={'btn btn-sm'+(parEquipe?' btn-p':'')} onClick={basculerParEquipe} title="Diviser chaque jour en colonnes par équipe">Par équipe</button>}
+        {ongletAg==='agenda' && panneauFerme && <button className="btn btn-sm" onClick={basculerPanneau} title="Rouvrir le panneau des jobs En attente">⏳ En attente{attListe && attListe.length ? ' ('+attListe.length+')' : ''}</button>}
         {ongletAg==='agenda' && viewMode!=='jour' && <button className="btn btn-sm" onClick={basculerRepli} title="Replier ou afficher samedi et dimanche">{repli ? 'Sam.–dim. ▸' : '◂ Sam.–dim.'}</button>}
       </div>
     </div>
@@ -4329,7 +4333,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       {cachees.length>0 && <span style={{color:'var(--accent)',fontSize:12,cursor:'pointer'}} onClick={()=>{ setCachees([]); try{ localStorage.setItem('agenda_groupes_caches','[]'); }catch(e){} }}>Tout montrer</span>}
     </div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
-    {ongletAg==='agenda' && <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1fr) '+(grandPanneau?'420px':'280px'):'minmax(0,1fr)',gap:12,alignItems:'start'}}><div style={{minWidth:0}}>
+    {ongletAg==='agenda' && <div style={{display:'grid',gridTemplateColumns:isDesktop && !panneauFerme?'minmax(0,1fr) '+(grandPanneau?'420px':'280px'):'minmax(0,1fr)',gap:12,alignItems:'start'}}><div style={{minWidth:0}}>
     {majAg && !loading && <div className="muted" style={{position:'fixed',right:16,bottom:16,zIndex:60,fontSize:12,background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,padding:'4px 10px'}}>Mise à jour…</div>}
     {loading ? <div className="muted">Chargement...</div> :
 
@@ -4426,11 +4430,12 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       </div>
     </div>}
     </div>
-    <div className="card" style={{padding:10,position:isDesktop?'sticky':undefined,top:isDesktop?70:undefined,maxHeight:isDesktop?'calc(100vh - 90px)':undefined,overflowY:'auto'}}>
+    {!panneauFerme && <div className="card" style={{padding:10,position:isDesktop?'sticky':undefined,top:isDesktop?70:undefined,maxHeight:isDesktop?'calc(100vh - 90px)':undefined,overflowY:'auto'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,marginBottom:4}}>
         <div className="fh" style={{fontSize:14}}>⏳ En attente {attListe && attListe.length>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{attListe.length}</span>}</div>
         {!isDesktop ? <button className="btn btn-sm" onClick={()=>setVoirPanneau(v=>!v)}>{voirPanneau?'Cacher':'Voir'}</button>
-          : <button className="btn btn-sm" onClick={basculerGrand} title={grandPanneau?'Réduire le panneau':'Agrandir le panneau'}>{grandPanneau?'⇥ Réduire':'⇤ Agrandir'}</button>}
+          : <span style={{display:'flex',gap:4}}><button className="btn btn-sm" onClick={basculerGrand} title={grandPanneau?'Réduire le panneau':'Agrandir le panneau'}>{grandPanneau?'⇥ Réduire':'⇤ Agrandir'}</button>
+            <button className="btn btn-sm" onClick={basculerPanneau} title="Fermer le panneau : l'agenda prend toute la largeur (bouton « En attente » en haut pour le rouvrir)">✕</button></span>}
       </div>
       {voirPanneau && attListe && attListe.length>4 && <input value={chercheAtt} onChange={e=>setChercheAtt(e.target.value)} placeholder="Chercher (client, adresse, mot)…" style={{padding:'6px 10px',fontSize:13,marginBottom:8}}/>}
       {voirPanneau && <>
@@ -4447,7 +4452,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
               {e.attachments && e.attachments.length>0 && <div className="muted" style={{fontSize:11,marginTop:3}}>📎 {e.attachments.length} pièce{e.attachments.length>1?'s':''} jointe{e.attachments.length>1?'s':''}</div>}
             </div>; })}
       </>}
-    </div>
+    </div>}
     </div>}
     {cedule && <Modal title="Céduler" onClose={()=>setCedule(null)}>
       <div style={{fontWeight:700,marginBottom:4}}>{cedule.ev.title}</div>
