@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v322';
+const APP_VERSION = 'v323';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4313,21 +4313,38 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   function eventsForDay(dStr){ return evVisibles.filter(e=>String(e.start).slice(0,10)===dStr && !e.allDay); }
   function allDayForDay(dStr){ return evVisibles.filter(e=>e.allDay && couvre(e, dStr)); }
   // Glisser une job du panneau En attente sur la grille → fenêtre « Céduler » (rien n'est changé avant ta confirmation)
-  function dureeDe(src){ return (!src.allDay && src.end) ? Math.max(15*60000, new Date(src.end)-new Date(src.start)) : 3600000; }
+  function dureeDe(src, debut){ if(!src.allDay && src.end) return Math.max(15*60000, new Date(src.end)-new Date(src.start));
+    // v323 : une job « toute la journée » posée à une heure va jusqu'à 15 h 30 (journée standard), sinon 1 h
+    if(debut){ const f = new Date(debut); f.setHours(15,30,0,0); if(f-debut >= 3600000) return f-debut; }
+    return 3600000; }
+  // v323 : un événement de The Crew (ou autre) glissé change tout de suite ; un événement En attente passe par « Céduler »
+  async function appliquerOuCeduler(c){
+    if(c.ev.calendarId===EN_ATTENTE_CAL){ setCedule(c); return; }
+    try{ let res, d0, d1;
+      if(c.allDay){ const span = c.ev.allDay && c.ev.end ? Math.max(1, Math.round((new Date(String(c.ev.end).slice(0,10)+'T00:00:00') - new Date(String(c.ev.start).slice(0,10)+'T00:00:00'))/864e5)) : 1;
+        const fin = new Date(c.date+'T00:00:00'); fin.setDate(fin.getDate()+span); d0 = c.date; d1 = localDateStr(fin);
+        res = {start:{date:d0, dateTime:null, timeZone:null}, end:{date:d1, dateTime:null, timeZone:null}}; }
+      else { d0 = c.debut.toISOString(); d1 = c.fin.toISOString(); res = {start:{dateTime:d0, timeZone:'America/Toronto', date:null}, end:{dateTime:d1, timeZone:'America/Toronto', date:null}}; }
+      setEvents(l=>l.map(x=>x.id===c.ev.id && x.calendarId===c.ev.calendarId ? {...x, start:d0, end:d1, allDay:!!c.allDay} : x));
+      await window.gapi.client.calendar.events.patch({calendarId:c.ev.calendarId, eventId:c.ev.id, resource:res});
+      toast(c.allDay ? 'Déplacé au '+cvFmtDay(c.date)+' (toute la journée).' : 'Cédulé '+c.debut.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})+' à '+c.fin.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})+'.', 'ok');
+      setReloadKey(k=>k+1);
+    }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); setReloadKey(k=>k+1); }
+  }
   function dropPanneau(ev, dayIdx, journee){
     const src = panneauDragRef.current; if(!src) return; ev.preventDefault(); panneauDragRef.current = null;
     const d = new Date(days[dayIdx]); d.setHours(0,0,0,0);
-    if(journee){ setCedule({ev:src, allDay:true, date:localDateStr(d)}); return; }
+    if(journee){ appliquerOuCeduler({ev:src, allDay:true, date:localDateStr(d)}); return; }
     const rect = dayColRefs.current[dayIdx].getBoundingClientRect();
     let h = HOUR_START + (ev.clientY-rect.top)/PX_H; h = Math.max(0, Math.min(23.75, Math.round(h*4)/4));
     const debut = new Date(d); debut.setMinutes(Math.round(h*60));
-    setCedule({ev:src, allDay:false, debut, fin:new Date(debut.getTime()+dureeDe(src))});
+    appliquerOuCeduler({ev:src, allDay:false, debut, fin:new Date(debut.getTime()+dureeDe(src, debut))});
   }
   function dropMois(ev, d){
     const src = panneauDragRef.current; if(!src) return; ev.preventDefault(); ev.stopPropagation(); panneauDragRef.current = null;
-    if(src.allDay){ setCedule({ev:src, allDay:true, date:localDateStr(d)}); return; }
+    if(src.allDay){ appliquerOuCeduler({ev:src, allDay:true, date:localDateStr(d)}); return; }
     const o = new Date(src.start), debut = new Date(d); debut.setHours(o.getHours(), o.getMinutes(), 0, 0);
-    setCedule({ev:src, allDay:false, debut, fin:new Date(debut.getTime()+dureeDe(src))});
+    appliquerOuCeduler({ev:src, allDay:false, debut, fin:new Date(debut.getTime()+dureeDe(src))});
   }
   async function faireCedule(versCrew){
     const c = cedule; setCedule(null); if(!c) return;
@@ -4339,7 +4356,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         res = {start:{date:c.date, dateTime:null, timeZone:null}, end:{date:localDateStr(fin), dateTime:null, timeZone:null}};
       } else res = {start:{dateTime:c.debut.toISOString(), timeZone:'America/Toronto', date:null}, end:{dateTime:c.fin.toISOString(), timeZone:'America/Toronto', date:null}};
       await window.gapi.client.calendar.events.patch({calendarId:c.ev.calendarId, eventId:c.ev.id, resource:res});
-      if(versCrew) await window.gapi.client.calendar.events.move({calendarId:c.ev.calendarId, eventId:c.ev.id, destination:CREW_CAL});
+      if(versCrew && c.ev.calendarId!==CREW_CAL) await window.gapi.client.calendar.events.move({calendarId:c.ev.calendarId, eventId:c.ev.id, destination:CREW_CAL});
       toast(versCrew ? 'Cédulée dans The Crew.' : 'Nouvelle date — reste En attente.', 'ok'); setReloadKey(k=>k+1);
     }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
   }
@@ -4522,7 +4539,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
           const adEvents = allDayForDay(dStr);
           if(ferme(d)) return <div key={'a'+i} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, true)} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',background:'var(--bg3)',minHeight:22}}></div>;
           return <div key={'a'+i} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, true)} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
-            {adEvents.map(e=><div key={e.id} title={e.title} onClick={()=>setEditEvent(e)} style={{cursor:'pointer',...agendaStyle(e),fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>)}
+            {adEvents.map(e=><div key={e.id} title={e.title+(isDesktop ? ' — glisse-le à une heure pour le céduler' : '')} onClick={()=>setEditEvent(e)}
+              draggable={isDesktop} onDragStart={ev=>{ panneauDragRef.current = e; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }} onDragEnd={()=>{ panneauDragRef.current = null; }}
+              style={{cursor:isDesktop?'grab':'pointer',...agendaStyle(e),fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>)}
           </div>;
         })}
 
