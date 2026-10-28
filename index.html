@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v323';
+const APP_VERSION = 'v324';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3901,6 +3901,20 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate, ini
 
 // v321 : nouvelle job depuis l'agenda — choisir le client (contracteur → ses jobs ; particulier → le Répertoire), le type de job,
 // l'équipe et l'agenda (The Crew / En attente). Le titre reprend le nom de la job existante pour que les gars punchent sur la même job.
+// v324 : zone de notes compacte (4 lignes) qui s'agrandit pour tout montrer quand on clique dedans
+function TexteDeplie({value, onChange, placeholder, lignes}){
+  const ref = useRef(null); const [ouvert,setOuvert]=useState(false);
+  const ajuster = () => { const t = ref.current; if(!t) return;
+    if(!ouvert){ t.style.height = ''; return; }
+    t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight+4, Math.round(window.innerHeight*0.6))+'px'; };
+  useEffect(ajuster, [value, ouvert]);
+  const n = String(value||'').split('\n').length;
+  return <div>
+    <textarea ref={ref} value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={lignes||4}
+      onFocus={()=>setOuvert(true)} onBlur={()=>setOuvert(false)} style={{resize:'vertical',lineHeight:1.4,fontFamily:'var(--font-body)',overflowY:'auto'}}/>
+    {!ouvert && n>(lignes||4) && <div className="muted" style={{fontSize:11.5,marginTop:2,cursor:'pointer'}} onClick={()=>{ setOuvert(true); setTimeout(()=>ref.current && ref.current.focus(),0); }}>{n} lignes — clique dedans pour tout voir</div>}
+  </div>;
+}
 function NouvelleJobAgenda({cfg, addProjet, toast, onClose, onDone, initialDate, initialHeure, clients, fiches}){
   const [code,setCode]=useState(()=>{ try{ const x = localStorage.getItem('crm_last_prefixe'); return x==='PARTICULIER' || JOB_PREFIXES.includes(x) ? x : 'PARTICULIER'; }catch(e){ return 'PARTICULIER'; } });
   const pro = code!=='PARTICULIER';
@@ -4011,7 +4025,7 @@ function NouvelleJobAgenda({cfg, addProjet, toast, onClose, onDone, initialDate,
       {!journee && <div className="field" style={{margin:0}}><label>Fin</label><input type="time" value={fin} onChange={e=>setFin(e.target.value)}/></div>}
       <label style={{display:'flex',gap:4,alignItems:'center',fontSize:13,paddingBottom:8}}><input type="checkbox" checked={journee} onChange={e=>setJournee(e.target.checked)} style={{width:'auto'}}/> Toute la journée</label>
     </div>}
-    <div className="field"><label>Travaux demandés</label><textarea value={travaux} onChange={e=>setTravaux(e.target.value)} placeholder="Ce qu'il y a à faire (va dans la description de l'événement)"/></div>
+    <div className="field"><label>Travaux demandés</label><TexteDeplie value={travaux} onChange={setTravaux} placeholder="Ce qu'il y a à faire (va dans la description de l'événement)"/></div>
     <div className="field"><label>Titre</label><input value={titre} onChange={e=>setTitreM(e.target.value)}/>
       {titreM!=null && titreM!==auto && <button type="button" className="btn btn-sm" style={{marginTop:4}} onClick={()=>setTitreM(null)}>Revenir au titre automatique</button>}</div>
     {pro && jobEx && <div className="muted" style={{fontSize:12,marginBottom:10}}>Même nom de job{jobEx.po ? ' et même PO' : ''} que les autres passages : les gars punchent sur la même job.</div>}
@@ -4152,7 +4166,7 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
       <div className="field"><label>Début</label><input type="time" value={heureDebut} onChange={e=>setHeureDebut(e.target.value)}/></div>
       <div className="field"><label>Fin</label><input type="time" value={heureFin} onChange={e=>setHeureFin(e.target.value)}/></div>
     </div> : <div className="muted" style={{fontSize:12,marginBottom:10}}>Événement "toute la journée" — seule la date peut être changée ici (déplace l'événement, sans changer sa durée).</div>}
-    <div className="field tag-input"><label>Notes / description</label><textarea value={desc} onChange={e=>setDesc(e.target.value)}/></div>
+    <div className="field"><label>Notes / description</label><TexteDeplie value={desc} onChange={setDesc}/></div>
 
     <div className="field">
       <label>Pièces jointes (Google Drive)</label>
