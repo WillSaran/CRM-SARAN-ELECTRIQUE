@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v317';
+const APP_VERSION = 'v318';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2616,7 +2616,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   const [focus,setFocus]=useState(()=>navFocus('projets'));   // v202 : projets d'un client (bouton de sa fiche)
   const [filtre,setFiltre]=useState(()=>(navFocus('projets')||{}).code || '');
   const [seulManque,setSeulManque]=useState(false);
-  const [ouvert,setOuvert]=useState(null);
+  const [ouvert,setOuvert]=useState(()=>(navFocus('projets')||{}).ouvrir || null);   // v318 : ouverte depuis l'agenda
   const B = useBlocages(cfg), TJ = useTypesJob(cfg);   // v224 : blocages et type de job
   const poEtapes = usePOEtapes(cfg);                   // v237 : Rough / Finition / Entrée électrique selon le PO
   const [selEt,setSelEt]=useState(null);              // {k, id} : étape choisie sur la barre d'une job
@@ -3896,7 +3896,7 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate, ini
 // ── UI: fiche complète d'un événement Calendar — même niveau de détail que
 // directement dans Google Agenda: titre, lieu, description, heures, pièces
 // jointes Drive (par lien de partage) et suppression.
-function EditEventModal({event, onClose, onSaved, toast}){
+function EditEventModal({event, job, onClose, onSaved, toast}){
   const startDt = new Date(event.start);
   const endDt = event.end ? new Date(event.end) : new Date(startDt.getTime()+3600000);
   const [titre,setTitre]=useState(event.title||'');
@@ -3992,7 +3992,14 @@ function EditEventModal({event, onClose, onSaved, toast}){
     setBusy(false);
   }
 
+  const dossierJob = job && job.j.reg && job.j.reg.dossier;
   return <Modal title="Modifier l'événement" onClose={onClose} wide>
+    {job && <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:12,padding:'8px 10px',border:'1px solid var(--border)',borderRadius:8}}>
+      <span style={{fontSize:12.5,flex:'1 1 160px'}}><b>{(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}</b>{job.j.po ? <span className="muted"> · {job.j.po}</span> : null}</span>
+      {dossierJob ? <a className="btn btn-p btn-sm" href={'https://drive.google.com/drive/folders/'+dossierJob} target="_blank" rel="noopener" style={{textDecoration:'none'}}>Ouvrir le dossier ↗</a>
+        : <span className="muted" style={{fontSize:12}}>{job.j.po ? 'Pas de dossier rattaché à '+job.j.po : 'Pas de dossier (aucun PO)'}</span>}
+      <button type="button" className="btn btn-sm" onClick={()=>{ onClose(); CRM_ALLER && CRM_ALLER('projets', {jobIds:[job.j.id], ouvrir:job.c.code+job.j.id, nom:(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}); }}>Voir la job dans Projets</button>
+    </div>}
     <div className="field"><label>Titre</label><input value={titre} onChange={e=>setTitre(e.target.value)}/></div>
     <div className="field"><label>Équipe (couleur dans l'agenda)</label>
       <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
@@ -4062,6 +4069,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   const cd = useClientsData(cfg, refreshKey);
   const cdClients = useMemo(()=>cvBuildClients(cd.events, cd.registry, cd.factures),[cd.events, cd.registry, cd.factures]);
   const [commandes, basculerCommande] = useCommandes(cfg);
+  // v318 : job (et dossier Drive de La mémoire) d'un événement — visible seulement dans le CRM, rien n'est écrit dans l'événement
+  const jobParEv = useMemo(()=>{ const m = {}; Object.values(cdClients).forEach(c=>(c.jobs||[]).forEach(j=>(j.events||[]).forEach(e=>{ if(e.id){ m[e.id] = {c, j}; m[e.id.split('_')[0]] = m[e.id.split('_')[0]] || {c, j}; } }))); return m; },[cdClients]);
+  const jobDeEvenement = e => e && e.id ? (jobParEv[e.id] || jobParEv[String(e.id).split('_')[0]] || null) : null;
   const [manuelsAg] = useEtapesManuelles(cfg);
   const [loading,setLoading]=useState(true);
   const [events,setEvents]=useState([]);
@@ -4468,7 +4478,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
     </Modal>}
     {showJobModal && data && <QuickJobModal cfg={cfg} addProjet={data.addProjet} toast={toast} initialDate={jobDate} initialHeure={jobHeure}
       onClose={()=>setShowJobModal(false)} onDone={()=>setReloadKey(k=>k+1)}/>}
-    {editEvent && <EditEventModal event={editEvent} toast={toast} onClose={()=>setEditEvent(null)} onSaved={()=>setReloadKey(k=>k+1)}/>}
+    {editEvent && <EditEventModal event={editEvent} job={jobDeEvenement(editEvent)} toast={toast} onClose={()=>setEditEvent(null)} onSaved={()=>setReloadKey(k=>k+1)}/>}
   </div>;
 }
 
