@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v329';
+const APP_VERSION = 'v330';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9455,8 +9455,8 @@ function CmdSemaines({aVenir, loading, today, onCommander}){
 }
 // v325 : Assemblage rapide — les calculs de la Soumission rapide (entrée électrique, borne) sans faire de soumission :
 // on répond aux questions, on ajuste les quantités, et la liste va dans le bon de commande. Aucun prix.
-function AssemblageRapide({onAjouter}){
-  const [type,setType]=useState(()=>{ try{ const k = localStorage.getItem('cmd_rapide'); return CALC_SOUMISSION[k] ? k : 'entree'; }catch(e){ return 'entree'; } });
+function AssemblageRapide({onAjouter, type0}){
+  const [type,setType]=useState(()=>{ if(type0 && CALC_SOUMISSION[type0]) return type0; try{ const k = localStorage.getItem('cmd_rapide'); return CALC_SOUMISSION[k] ? k : 'entree'; }catch(e){ return 'entree'; } });
   const def = CALC_SOUMISSION[type];
   const [v,setV]=useState(()=>({...def.defaut}));
   const [fois,setFois]=useState(1);
@@ -9466,11 +9466,11 @@ function AssemblageRapide({onAjouter}){
   const lignes = r.lignes.map(l=>{ const q = qtes[l.code]!=null ? qtes[l.code] : String((cvNum(l.qte)||0)*fois); return {...l, qteTxt:q, qte:cvNum(q)||0}; });
   const garder = lignes.filter(l=>l.qte>0);
   return <div className="card calc-rapide">
-    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+    {!type0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
       <b style={{fontSize:13.5}}>Assemblage :</b>
       {Object.entries(CALC_SOUMISSION).map(([k,x])=><button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>choisir(k)}>{String(x.nom).replace(/^[^A-Za-zÀ-ÿ]+/,'')}</button>)}
       <span className="muted" style={{fontSize:12}}>Réponds aux questions : la liste se calcule, sans prix.</span>
-    </div>
+    </div>}
     {def.champs(v, patch=>{ setV(x=>({...x, ...patch})); setQtes({}); })}
     <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--border2)'}}>
       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:6}}>
@@ -9545,6 +9545,16 @@ function CommandesView({cfg, toast, refreshKey}){
       if(e.id===bc.passageId){ setBc(b=>({...b, passage:{c, j, e, cmd:cvCmd(commandes, j, e)}})); return; }
     if(!loading) setBc(b=>({...b, passageId:''}));
   },[clients, loading]);
+  // v330 : liste d'un assemblage calculé (entrée électrique, borne) → dans le bon (mêmes codes = quantités additionnées)
+  const [calcBon,setCalcBon]=useState('');
+  const ajouterCalc = (lignes, ref) => {
+    setBc(x=>{ let L = x.lignes.slice();
+      lignes.forEach(l=>{ const ex = L.find(y=>!y.libre && codeNorm(y.code)===codeNorm(l.code));
+        if(ex) L = L.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+l.qte} : y);
+        else L.push({code:l.code, desc:l.desc, unite:l.unite, qte:l.qte, f:bcFournCode(l.code)||x.fournisseur, format:''}); });
+      return {...x, lignes:L, ref: x.ref || ref}; });
+    choisirOngletC('bon'); setCalcBon(''); setPick('');
+    toast && toast(lignes.length+' article'+(lignes.length>1?'s':'')+' ajouté'+(lignes.length>1?'s':'')+' au bon'); };
   // Articles
   const qteDe = code => { const l = bc.lignes.find(l=>l.code===code); return l ? (cvNum(l.qte)||0) : 0; };
   const changerQte = (p, delta, valeur)=> setBc(x=>{
@@ -9663,14 +9673,7 @@ function CommandesView({cfg, toast, refreshKey}){
       {[['bon','Bon de commande'],['rapide','Assemblage rapide'],['assemblages','Assemblages'],['modeles','Modèles'],['acommander','À commander'+(nbAFaire?' · '+nbAFaire:'')]].map(([k,l])=><button key={k} className={'btn'+(ongletC===k?' btn-p':'')} onClick={()=>choisirOngletC(k)}>{l}</button>)}
     </div>
 
-    {ongletC==='rapide' && <AssemblageRapide onAjouter={(lignes, ref)=>{
-      setBc(x=>{ let L = x.lignes.slice();
-        lignes.forEach(l=>{ const ex = L.find(y=>!y.libre && codeNorm(y.code)===codeNorm(l.code));
-          if(ex) L = L.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+l.qte} : y);
-          else L.push({code:l.code, desc:l.desc, unite:l.unite, qte:l.qte, f:bcFournCode(l.code)||x.fournisseur, format:''}); });
-        return {...x, lignes:L, ref: x.ref || ref}; });
-      choisirOngletC('bon'); window.scrollTo(0,0);
-      toast && toast(lignes.length+' article'+(lignes.length>1?'s':'')+' ajouté'+(lignes.length>1?'s':'')+' au bon — choisis la référence et le fournisseur'); }}/>}
+    {ongletC==='rapide' && <AssemblageRapide onAjouter={(lignes, ref)=>ajouterCalc(lignes, ref)}/>}
     {ongletC==='assemblages' && <AssemblagesOnglet C={C} AS={AS} toast={toast} V={V}/>}
     {ongletC==='modeles' && <ModelesOnglet AS={AS} MO={MO} toast={toast}/>}
     {ongletC==='acommander' && <>
@@ -9726,9 +9729,14 @@ function CommandesView({cfg, toast, refreshKey}){
         </span>
       </div>
       {pick && <div style={{border:'1px solid var(--border2)',borderRadius:8,padding:8,marginBottom:8,background:'var(--bg3)'}}>
-        <FiltresAs q={pq} setQ={setPq} cat={pcat} setCat={setPcat} phase={pph} setPhase={setPph} avecPhase={pick==='as'}/>
+          {pick==='as' && <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',padding:'4px 0 8px',borderBottom:'1px solid var(--border2)',marginBottom:4}}>
+            <b style={{fontSize:12.5}}>Calculés :</b>
+            {Object.entries(CALC_SOUMISSION).map(([k,x])=><button key={k} className={'btn btn-sm'+(calcBon===k?' btn-p':'')} onClick={()=>setCalcBon(calcBon===k?'':k)}>{String(x.nom).replace(/^[^A-Za-zÀ-ÿ]+/,'')}</button>)}
+            <span className="muted" style={{fontSize:11.5}}>tu réponds aux questions (mât, panneau, longueurs…), la liste se calcule</span></div>}
+          {pick==='as' && calcBon && <div style={{marginBottom:8}}><AssemblageRapide key={calcBon} type0={calcBon} onAjouter={ajouterCalc}/></div>}
+        {!(pick==='as' && calcBon) && <FiltresAs q={pq} setQ={setPq} cat={pcat} setCat={setPcat} phase={pph} setPhase={setPph} avecPhase={pick==='as'}/>}
         <div style={{maxHeight:240,overflowY:'auto'}}>
-          {pick==='as' && (asFiltres.length ? asFiltres.map(a=><div key={a.row} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+          {pick==='as' && !calcBon && (asFiltres.length ? asFiltres.map(a=><div key={a.row} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
               <span style={{flex:1}}><b>{a.nom}</b> <span className="muted" style={{fontSize:11.5}}>{[a.cat, a.phase, a.lignes.length+' article'+(a.lignes.length>1?'s':'')].filter(Boolean).join(' · ')}</span></span>
               <button className="btn btn-sm btn-p" onClick={()=>ouvrirRemplirAs(a)}>Choisir{asMult>1?' × '+asMult:''}</button></div>)
             : <div className="muted" style={{fontSize:12.5}}>{AS.liste.length ? 'Aucun assemblage pour ces filtres.' : 'Aucun assemblage — crée-les dans l\'onglet Assemblages.'}</div>)}
