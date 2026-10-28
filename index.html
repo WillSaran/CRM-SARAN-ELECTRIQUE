@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v326';
+const APP_VERSION = 'v327';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9403,6 +9403,41 @@ function ModelesOnglet({AS, MO, toast}){
 }
 function bcVide(){ return {fournisseur:'Dubo', courriel:bcCourriel('Dubo'), ref:'', job:'', passage:null, employe:'', mode:'À aller chercher', pour:cvDay(new Date(Date.now()+864e5).toISOString()), lignes:[], libre:'', note:'', envoyes:[]}; }
 
+// v327 : « À commander » présenté comme l'agenda — cette semaine et la prochaine, une colonne par jour,
+// chaque passage à la couleur de son équipe, avec son état (à commander / placée) et le bouton Commander.
+function CmdSemaines({aVenir, loading, today, onCommander}){
+  const lundi = (()=>{ const d = new Date(today+'T12:00:00'); d.setDate(d.getDate()-((d.getDay()+6)%7)); return d; })();
+  const semaines = [0,1].map(w=>Array.from({length:7},(_,i)=>{ const d = new Date(lundi); d.setDate(lundi.getDate()+w*7+i); return localDateStr(d); }));
+  const parJour = {}; aVenir.forEach(x=>{ (parJour[x.e.day] = parJour[x.e.day] || []).push(x); });
+  const heure = e => e.allDay || !e.start || String(e.start).length<=10 ? '' : new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'}).replace(' h ','h');
+  const couleur = e => { const k = e.couleurId || e.colorId; return k && GCAL_COLOR_MAP[k] ? GCAL_COLOR_MAP[k] : null; };
+  const J = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+  return <div className="card" style={{marginBottom:10}}>
+    <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',marginBottom:8}}>
+      <b>Passages à commander</b>
+      <span className="muted" style={{fontSize:12}}>{aVenir.filter(x=>!x.cmd.fait).length} à commander · des jours qui se suivent = une commande (au premier jour)</span>
+    </div>
+    {loading && <div className="muted" style={{fontSize:13}}>Lecture de l'agenda…</div>}
+    {semaines.map((sem,w)=>{ const jours = sem.filter((d,i)=>i<5 || (parJour[d]||[]).length);
+      return <div key={w} style={{marginBottom:w ? 0 : 12}}>
+        <div className="muted" style={{fontSize:12,fontWeight:700,marginBottom:4}}>{w ? 'Semaine prochaine' : 'Cette semaine'}</div>
+        <div style={{overflowX:'auto'}}><div style={{display:'grid',gridTemplateColumns:'repeat('+jours.length+', minmax(140px,1fr))',gap:4,minWidth:jours.length*140}}>
+          {jours.map(d=>{ const passe = d<today, L = (parJour[d]||[]).slice().sort((a,b)=>String(a.e.start).localeCompare(String(b.e.start)));
+            const dd = new Date(d+'T12:00:00');
+            return <div key={d} style={{background:d===today?'rgba(var(--accent-rgb),.07)':'var(--bg3)',border:'1px solid '+(d===today?'var(--accent)':'var(--border)'),borderRadius:8,padding:5,minHeight:70,opacity:passe?.5:1}}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:4}}>{J[(dd.getDay()+6)%7]} {dd.getDate()}</div>
+              {L.map((x,i)=>{ const c = couleur(x.e);
+                return <div key={i} style={{borderRadius:6,padding:'4px 6px',marginBottom:4,fontSize:12,lineHeight:1.3,background:c||'var(--bg4)',color:c?texteSur(c):'var(--text)',border:c?'none':'1px dashed var(--muted)',opacity:x.cmd.fait?.6:1}}>
+                  <div style={{fontWeight:700,wordBreak:'break-word'}}>{heure(x.e) && <span style={{fontWeight:600,opacity:.85}}>{heure(x.e)} </span>}{x.e.phase ? x.e.phase+' ' : ''}{x.c.code!=='PART'?x.c.code+' ':''}{x.j.name}</div>
+                  {(x.e.crew||[]).length>0 && <div style={{opacity:.85}}>{x.e.crew.map(n=>EQUIPE_SURNOM[n]||n.split(' ')[0]).join(', ')}</div>}
+                  {x.cmd.fait ? <div style={{fontSize:11.5,marginTop:2}}>{cvCmdTexte(x.cmd)}</div>
+                    : <button className="btn btn-sm" style={{marginTop:3,padding:'2px 8px',fontSize:11.5,background:'var(--bg2)',color:'var(--text)'}} onClick={()=>onCommander(x)}>Commander</button>}
+                </div>; })}
+            </div>; })}
+        </div></div>
+      </div>; })}
+  </div>;
+}
 // v325 : Assemblage rapide — les calculs de la Soumission rapide (entrée électrique, borne) sans faire de soumission :
 // on répond aux questions, on ajuste les quantités, et la liste va dans le bon de commande. Aucun prix.
 function AssemblageRapide({onAjouter}){
@@ -9624,17 +9659,7 @@ function CommandesView({cfg, toast, refreshKey}){
     {ongletC==='assemblages' && <AssemblagesOnglet C={C} AS={AS} toast={toast} V={V}/>}
     {ongletC==='modeles' && <ModelesOnglet AS={AS} MO={MO} toast={toast}/>}
     {ongletC==='acommander' && <>
-    <div className="card" style={{marginBottom:10}}>
-      <div style={{fontWeight:700,marginBottom:6}}>📅 Passages à commander (jusqu'au {cvFmtDay(fin)})</div>
-      {loading && <div className="muted" style={{fontSize:13}}>Lecture de l'agenda…</div>}
-      {!loading && !aVenir.length && <div className="muted" style={{fontSize:13}}>Aucun passage prévu.</div>}
-      {aVenir.map((x,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap',opacity:x.cmd.fait?.55:1}}>
-        <div style={{minWidth:0}}><b>{cvFmtDay(x.e.day)}</b> <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{x.e.phase}</span> {x.c.code!=='PART'?x.c.code+' ':''}{x.j.name}{x.j.po && <span className="muted"> · {x.j.po}</span>}
-          {(x.e.crew||[]).length>0 && <span className="muted"> · {x.e.crew.join(', ')}</span>}</div>
-        {x.cmd.fait ? <span style={{color:'var(--success)',fontSize:12}}>{cvCmdTexte(x.cmd)}</span>
-          : <button className="btn btn-sm btn-p" onClick={()=>choisirPassage(x)}>📦 Commander</button>}
-      </div>)}
-    </div>
+    <CmdSemaines aVenir={aVenir} loading={loading} today={today} onCommander={choisirPassage}/>
 
     <CmdFournisseurs cfg={cfg} refreshKey={refreshKey} clients={clients} commandes={commandes} enregistrerCommande={enregistrerCommande} toast={toast}/>
 
