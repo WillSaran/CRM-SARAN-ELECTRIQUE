@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v315';
+const APP_VERSION = 'v316';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4099,18 +4099,28 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
 
   const days = useMemo(()=>getRangeDays(viewMode, anchor), [viewMode, anchor.getTime()]);
 
+  // v316 : après un changement (déplacer, durée, créer, modifier), l'agenda se met à jour EN ARRIÈRE-PLAN :
+  // la grille reste affichée (plus d'écran « Chargement… » qui fait clignoter la page). Seul un changement de semaine/vue recharge.
+  const plageRef = useRef('');
+  const [majAg,setMajAg]=useState(false);
   useEffect(()=>{
     let cancelled=false;
-    setLoading(true); setErr('');
+    const plage = viewMode+'|'+days[0]+'|'+days[days.length-1]+'|'+(cfg.calendarIds||'');
+    const silencieux = plageRef.current===plage;
+    plageRef.current = plage;
+    if(silencieux) setMajAg(true); else setLoading(true);
+    setErr('');
     const timeMin = new Date(days[0]); timeMin.setHours(0,0,0,0);
     const timeMax = new Date(days[days.length-1]); timeMax.setHours(23,59,59,999);
     const calIds = [...new Set([...(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean), EN_ATTENTE_CAL])];   // v267 : En attente aussi (hachuré)
     listCalendarEventsRange(calIds, timeMin.toISOString(), timeMax.toISOString())
       .then(evs=>{ if(!cancelled) setEvents(evs); })
       .catch(e=>{ if(!cancelled) setErr(apiErrMsg(e)||'Erreur de chargement du calendrier.'); })
-      .finally(()=>{ if(!cancelled) setLoading(false); });
+      .finally(()=>{ if(!cancelled){ setLoading(false); setMajAg(false); } });
     return ()=>{ cancelled=true; };
   },[viewMode, anchor.getTime(), cfg.calendarIds, reloadKey, refreshKey]);
+  // v316 : la job bouge tout de suite à l'écran (avant même la réponse de Google)
+  const majLocale = (ev, debut, fin) => setEvents(l=>l.map(x=>x.id===ev.id && x.calendarId===ev.calendarId ? {...x, start:debut, end:fin} : x));
 
   // v267 : panneau En attente — toutes les jobs de l'agenda En Attente (60 jours passés → 1 an)
   useEffect(()=>{ let ok = true; const a = new Date(); a.setDate(a.getDate()-60); const b = new Date(); b.setDate(b.getDate()+365);
@@ -4243,9 +4253,10 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         newStartMs = target.getTime();
       }
       const newEndMs = newStartMs + info.durationMs;
+      majLocale(info.ev, new Date(newStartMs).toISOString(), new Date(newEndMs).toISOString());
       patchEventTimes(info.ev.calendarId, info.ev.id, new Date(newStartMs).toISOString(), new Date(newEndMs).toISOString())
         .then(()=>{ toast('Job déplacée.','ok'); setReloadKey(k=>k+1); })
-        .catch(err=>toast('Erreur: '+apiErrMsg(err),'err'));
+        .catch(err=>{ toast('Erreur: '+apiErrMsg(err),'err'); setReloadKey(k=>k+1); });
     }
     dragInfoRef.current=null; draggedElRef.current=null;
   }
@@ -4275,6 +4286,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
     info.blockEl.style.zIndex=''; info.blockEl.style.boxShadow='0 1px 3px rgba(0,0,0,.25)';
     const deltaMin = Math.round((dy/PX_H*60)/15)*15; // arrondi au 1/4h
     let newEndMs = Math.max(info.startMs+15*60000, info.origEndMs + deltaMin*60000);
+    majLocale(info.ev, new Date(info.startMs).toISOString(), new Date(newEndMs).toISOString());
     patchEventTimes(info.ev.calendarId, info.ev.id, new Date(info.startMs).toISOString(), new Date(newEndMs).toISOString())
       .then(()=>{ toast('Durée mise à jour.','ok'); setReloadKey(k=>k+1); })
       .catch(err=>{ toast('Erreur: '+apiErrMsg(err),'err'); info.blockEl.style.height=info.origHeight+'px'; });
@@ -4318,6 +4330,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
     </div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {ongletAg==='agenda' && <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1fr) '+(grandPanneau?'420px':'280px'):'minmax(0,1fr)',gap:12,alignItems:'start'}}><div style={{minWidth:0}}>
+    {majAg && !loading && <div className="muted" style={{position:'fixed',right:16,bottom:16,zIndex:60,fontSize:12,background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,padding:'4px 10px'}}>Mise à jour…</div>}
     {loading ? <div className="muted">Chargement...</div> :
 
     viewMode==='mois' ?
