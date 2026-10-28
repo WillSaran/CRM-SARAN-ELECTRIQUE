@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v325';
+const APP_VERSION = 'v326';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4143,6 +4143,7 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
       <span style={{fontSize:12.5,flex:'1 1 160px'}}><b>{(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}</b>{job.j.po ? <span className="muted"> · {job.j.po}</span> : null}</span>
       {dossierJob ? <a className="btn btn-p btn-sm" href={'https://drive.google.com/drive/folders/'+dossierJob} target="_blank" rel="noopener" style={{textDecoration:'none'}}>Ouvrir le dossier ↗</a>
         : <span className="muted" style={{fontSize:12}}>{job.j.po ? 'Pas de dossier rattaché à '+job.j.po : 'Pas de dossier (aucun PO)'}</span>}
+      <button type="button" className="btn btn-sm" title="Ouvre le bon de commande pour ce passage (référence, qui va chercher, date)" onClick={()=>{ onClose(); BC_PREFILL = {id:event.id, day:String(event.start||'').slice(0,10), title:event.title}; CRM_ALLER && CRM_ALLER('commandes', {}); }}>Commander le matériel</button>
       <button type="button" className="btn btn-sm" onClick={()=>{ onClose(); CRM_ALLER && CRM_ALLER('projets', {jobIds:[job.j.id], ouvrir:job.c.code+job.j.id, nom:(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}); }}>Voir la job dans Projets</button>
     </div>}
     <div className="field"><label>Titre</label><input value={titre} onChange={e=>setTitre(e.target.value)}/></div>
@@ -9461,7 +9462,9 @@ function CommandesView({cfg, toast, refreshKey}){
   const [pick,setPick]=useState('');   // '' | 'as' | 'mo' : sélecteur ouvert dans le bon
   const [pq,setPq]=useState(''), [pcat,setPcat]=useState(''), [pph,setPph]=useState('');
   const [remplir,setRemplir]=useState(null);   // v278 : {titre, lignes} — assemblage / modèle à remplir avant d'aller dans le bon
-  const [bc,setBc]=useState(bcVide());
+  // v326 : le bon en cours est gardé (on peut aller dans l'agenda et revenir) ; le passage est retrouvé par son id
+  const [bc,setBc]=useState(()=>{ if(BC_PREFILL) return bcVide(); try{ const x = JSON.parse(localStorage.getItem('bc_brouillon')||'null'); return x && x.lignes ? {...bcVide(), ...x, passage:null} : bcVide(); }catch(e){ return bcVide(); } });
+  useEffect(()=>{ try{ localStorage.setItem('bc_brouillon', JSON.stringify({...bc, passage:null, passageId: bc.passage ? bc.passage.e.id : (bc.passageId||'')})); }catch(e){} },[bc]);
   const courrielDe = f => (K.map[f] && K.map[f].courriel) || bcCourriel(f);
   useEffect(()=>{ if(K.lu && K.map[bc.fournisseur] && K.map[bc.fournisseur].courriel && bc.courriel===bcCourriel(bc.fournisseur)) setBc(x=>({...x, courriel:K.map[x.fournisseur].courriel})); },[K.lu, K.map]);
   const [q,setQ]=useState('');
@@ -9476,7 +9479,7 @@ function CommandesView({cfg, toast, refreshKey}){
     .sort((a,b)=>a.e.day.localeCompare(b.e.day)),[clients, commandes, today, fin]);
   const refDe = x => bcRefTitre(x.e) || [x.c.code!=='PART'?x.c.code:'', x.e.phase||'', x.j.name, x.j.po||''].filter(Boolean).join(' ').toUpperCase();
   const choisirPassage = x => { choisirOngletC('bon'); setBc(b=>({...b, ref:refDe(x), job:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name, passage:x, employe:(x.e.crew||[])[0]||b.employe, pour:x.e.day>today ? cvDay(new Date(new Date(x.e.day+'T12:00:00').getTime()-864e5).toISOString()) : today })); window.scrollTo(0,0); };
-  const choisirDest = d => setBc(b=>({...b, ref:CV_DEST_REF[d]||d.toUpperCase(), job:d, passage:null}));
+  const choisirDest = d => setBc(b=>({...b, ref:CV_DEST_REF[d]||d.toUpperCase(), job:d, passage:null, passageId:''}));
   // v304 : arrivé d'une soumission / d'un ordre de travail (« Matériel à commander ») : le bon est rempli avec ses articles
   useEffect(()=>{ const p = BC_PREFILL; if(!p || !p.lignes) return; BC_PREFILL = null; choisirOngletC('bon');
     setBc(b=>({...b, ref:p.ref||b.ref, job:p.job||b.job, passage:null, lignes:p.lignes.map(l=>({code:l.code, desc:l.desc, unite:l.unite, qte:l.qte, f:bcFournCode(l.code)||b.fournisseur, format:''}))}));
@@ -9486,6 +9489,11 @@ function CommandesView({cfg, toast, refreshKey}){
     for(const c of Object.values(clients)) for(const j of c.jobs) for(const e of j.events)
       if(p.id ? e.id===p.id : (e.day===p.day && e.title===p.title)){ BC_PREFILL = null; choisirPassage({c, j, e, cmd:cvCmd(commandes, j, e)}); return; }
     if(!loading){ BC_PREFILL = null; toast && toast('Passage introuvable dans l\'agenda — choisis-le dans la liste'); }
+  },[clients, loading]);
+  useEffect(()=>{ if(!bc.passageId || bc.passage || !Object.keys(clients).length) return;
+    for(const c of Object.values(clients)) for(const j of c.jobs) for(const e of j.events)
+      if(e.id===bc.passageId){ setBc(b=>({...b, passage:{c, j, e, cmd:cvCmd(commandes, j, e)}})); return; }
+    if(!loading) setBc(b=>({...b, passageId:''}));
   },[clients, loading]);
   // Articles
   const qteDe = code => { const l = bc.lignes.find(l=>l.code===code); return l ? (cvNum(l.qte)||0) : 0; };
@@ -9662,7 +9670,7 @@ function CommandesView({cfg, toast, refreshKey}){
         <label style={{fontSize:12}}>{bc.mode==='À aller chercher'?'Pour le':'Livraison le'}<input type="date" value={bc.pour} onChange={e=>maj({pour:e.target.value})} style={{width:'100%',boxSizing:'border-box'}}/></label>
         <label style={{fontSize:12}}>Mode<select value={bc.mode} onChange={e=>maj({mode:e.target.value})} style={{width:'100%'}}><option>À aller chercher</option><option>Livraison</option></select></label>
       </div>
-      {bc.passage ? <div style={{fontSize:12.5,marginTop:6,color:'var(--accent)'}}>📅 Pour le passage {cvFmtDay(bc.passage.e.day)} {bc.passage.e.phase} · {bc.job} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>maj({passage:null})}>✕</button></div>
+      {bc.passage ? <div style={{fontSize:12.5,marginTop:6,color:'var(--accent)'}}>📅 Pour le passage {cvFmtDay(bc.passage.e.day)} {bc.passage.e.phase} · {bc.job} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>maj({passage:null, passageId:''})}>✕</button></div>
         : <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:6,alignItems:'center'}}><span className="muted" style={{fontSize:12}}>Ou pour :</span>{CV_DESTS.map(d=><button key={d} className={'btn btn-sm'+(bc.job===d?' btn-p':'')} onClick={()=>choisirDest(d)}>{d}</button>)}</div>}
     </div>
 
