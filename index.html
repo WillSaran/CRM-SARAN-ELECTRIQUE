@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v336';
+const APP_VERSION = 'v337';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7894,7 +7894,7 @@ const CALC_SOUMISSION = {
     tarifs:[['ENTREE-200A','Entrée 200A de base ($) — mât, base de compteur, panneau, mise à la terre, raccordement'],
       ['ENTREE-PVC-PI','Tuyau PVC compteur → panneau, au-delà de 10 pi ($/pi)'],['ENTREE-MUR','Entrée en PVC (2 étages / grenier), en plus ($)'],
       ['ENTREE-PRISE-TEMP','Prise temporaire de chantier ($ ch.)'],['ENTREE-HYDRO','Connecteurs Hydro fournis ($)']],
-    defaut:{mat:'toit', longMat:'12', kit:'AM', dist:'10', filInt:'5', lb:'1', coudes:'0', panneau:'HOM84', terre:'plaque', longTerre:'20', prises:'2', longPrise:'25', hydro:false, note:''},
+    defaut:{mat:'toit', longMat:'12', kit:'AM', dist:'10', filInt:'5', lb:'1', coudes:'1', panneau:'HOM84', terre:'plaque', longTerre:'20', prises:'2', longPrise:'25', hydro:false, note:''},
     deviner(txt){ const t=String(txt||''), v={};
       if(/mm\s?10\b/i.test(t)) v.longMat='10';
       if(/r[ée]ducteur/i.test(t)) v.mat='reducteur'; else if(/\bpvc\b/i.test(t)) v.mat='pvc';
@@ -7912,7 +7912,7 @@ const CALC_SOUMISSION = {
           {pvc ? <>tuyau de {n('longMat')} pi</> : <>mât {sel(v.longMat==='10' ? '10' : '12', x=>maj({longMat:x}), [['12','12 pi (MM12)'],['10','10 pi (MM10)']])}</>}</div>
         {!pvc && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:12}}>Kit {r('kit',[['AM','KIT-200AM'],['MH','KIT-200MH'],['DEUX','Les deux (au cas)']])}</div>}
         <div className="muted" style={{fontSize:12,paddingLeft:12}}>Compteur à la hauteur des yeux ou plus bas ; le mât dépasse le toit d'au moins 3 pi (vérifier le livre bleu d'Hydro).</div>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>2. Compteur → panneau</b> BQ2-V, puis tuyau PVC de {n('dist')} pi <span className="muted">(10 pi minimum)</span> · LB {n('lb',44)} · coudes 90° {n('coudes',44)}</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>2. Compteur → panneau</b> BQ2-V, puis tuyau PVC de {n('dist')} pi <span className="muted">(10 pi minimum)</span> · LB {n('lb',44)} · coudes 90° {n('coudes',44)} <span className="muted">(1 minimum pour entrer)</span></div>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:12}}>Fil 250 MCM et #2 : 1 m au-dessus de la tête + le {v.mat==='pvc' ? 'tuyau' : 'mât'} + 1 pi dans l'embase + 1 pi de l'autre bord + {n('filInt',50)} pi à l'intérieur (du haut de l'embase au panneau, 5 pi standard) · {c('commanderFil','Commander le fil (sinon : à vérifier à la shop / dans le camion)')}</div>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>3. Panneau 200A</b> {r('panneau',[['HOM84','Square D Homeline 84 circuits'],['QO60','Square D QO 60 circuits (jumelés possibles)'],['SIE84','Siemens 84 circuits']])}</div>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>4. Mise à la terre</b> {sel(v.terre==='eau' ? 'eau' : 'plaque', x=>maj({terre:x}), [['plaque','Plaque 10 × 16 (1016BTB)'],['eau','Collier sur l\'entrée d\'eau']])} · fil #6 nu {n('longTerre')} pi <span className="muted">(à vérifier à la shop / dans le camion)</span></div>
@@ -7926,7 +7926,7 @@ const CALC_SOUMISSION = {
       const L = []; const ajout = (code, desc, qte, unite, verifier) => { if(qte>0){ const ex = L.find(l=>l.code===code); if(ex) ex.qte = String(+ex.qte + qte); else L.push({code, desc, unite:unite||'un', qte:String(qte), prix:'', ...(verifier ? {verifier:true} : {}), ...(verifier==='outil' ? {outil:true} : {}), ...(verifier==='shop' ? {shop:true} : {})}); } };
       const mat = v.mat==='reducteur' || v.mat==='pvc' ? v.mat : 'toit', pvc = mat==='pvc';
       const lm = pvc ? N(v.longMat, 16) : (String(v.longMat)==='10' ? 10 : 12);
-      const D = Math.max(10, N(v.dist, 10)), nLB = Math.round(N(v.lb, 1)), nCoude = Math.round(N(v.coudes, 0)), nP = Math.round(N(v.prises, 0));
+      const D = Math.max(10, N(v.dist, 10)), nLB = Math.round(N(v.lb, 1)), nCoude = Math.max(1, Math.round(N(v.coudes, 1))), nP = Math.round(N(v.prises, 0));
       let ecrous = 2;
       // Entrée
       if(pvc){ ajout('REF35','Tête de branchement PVC 2 po', 1); ajout('MM602','Entretoise / support de tuyau au mur', Math.max(2, Math.ceil(lm/4))); }
@@ -9434,7 +9434,7 @@ function textesAVerifier(lignes){
   const out = lignes.filter(l=>l.verifier && !l.shop && q(l)>0).map(l=>'À vérifier à la shop / dans le camion : '+l.desc+(u(l) ? ' — '+q(l)+u(l) : q(l)>1 ? ' × '+q(l) : ''));
   const sh = lignes.filter(l=>l.shop && q(l)>0);
   if(sh.length){ const pr = sh.find(l=>/DDFT|prise/i.test(l.desc)), dj = sh.find(l=>/disjoncteur/i.test(l.desc));
-    out.push('À prendre à la shop : '+(pr ? q(pr)+' prise'+(q(pr)>1?'s':'')+' temporaire'+(q(pr)>1?'s':'')+' préfaite'+(q(pr)>1?'s':'') : 'prises temporaires préfaites')+(dj ? ' + '+q(dj)+' '+dj.desc.replace(/^Disjoncteur/,'disjoncteur'+(q(dj)>1?'s':'')) : '')); }
+    out.push('À vérifier à la shop / dans le camion : '+(pr ? q(pr)+' prise'+(q(pr)>1?'s':'')+' temporaire'+(q(pr)>1?'s':'')+' préfaite'+(q(pr)>1?'s':'') : 'prises temporaires préfaites')+(dj ? ' + '+q(dj)+' '+dj.desc.replace(/^Disjoncteur/,'disjoncteur'+(q(dj)>1?'s':'')) : '')); }
   return out; }
 // v327 : « À commander » présenté comme l'agenda — cette semaine et la prochaine, une colonne par jour,
 // chaque passage à la couleur de son équipe, avec son état (à commander / placée) et le bouton Commander.
@@ -9499,12 +9499,17 @@ function AssemblageRapide({onAjouter, type0}){
           {Object.keys(qtes).length>0 && <button className="btn btn-sm" onClick={()=>setQtes({})}>Revenir au calcul</button>}
         </span>
       </div>
-      <div style={{display:'grid',gap:2}}>
-        {lignes.map(l=><div key={l.code} style={{display:'flex',gap:8,alignItems:'center',fontSize:13,padding:'3px 0',borderBottom:'1px solid var(--border)',opacity:l.qte>0?1:.45}}>
+      {(()=>{ const ligne = l => <div key={l.code} style={{display:'flex',gap:8,alignItems:'center',fontSize:13,padding:'3px 0',borderBottom:'1px solid var(--border)',opacity:l.qte>0?1:.45}}>
           <input value={l.qteTxt} inputMode="decimal" onChange={e=>setQtes(q=>({...q, [l.code]:e.target.value}))} style={{width:64,textAlign:'right'}}/>
           <span className="muted" style={{width:24,fontSize:12}}>{l.unite}</span>
-          <b style={{minWidth:120}}>{l.code}</b><span style={{flex:1,minWidth:0}}>{l.desc}{l.verifier && <span style={{color:'var(--warning)',fontSize:12}}>{l.shop ? ' — à prendre à la shop (préfait), pas commandé' : ' — à vérifier à la shop / dans le camion, pas commandé'}</span>}</span></div>)}
-      </div>
+          <b style={{minWidth:120}}>{l.code}</b><span style={{flex:1,minWidth:0}}>{l.desc}</span></div>;
+        const pc = lignes.filter(l=>l.verifier);
+        return <>
+          <div style={{display:'grid',gap:2}}>{lignes.filter(l=>!l.verifier).map(ligne)}</div>
+          {pc.length>0 && <div style={{marginTop:10,padding:'6px 8px',border:'1px dashed var(--warning)',borderRadius:8}}>
+            <div style={{fontWeight:700,color:'var(--warning)',fontSize:13,marginBottom:2}}>Pas commandé — à vérifier à la shop / dans le camion</div>
+            <div style={{display:'grid',gap:2}}>{pc.map(ligne)}</div></div>}
+        </>; })()}
       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:10}}>
         <span className="muted" style={{fontSize:12}}>Les articles s'ajoutent à ce qui est déjà dans le bon (mêmes codes = quantités additionnées).</span>
         <button className="btn btn-p" style={{marginLeft:'auto'}} disabled={!garder.length} onClick={()=>onAjouter(garder.map(l=>({code:l.code, desc:l.desc, unite:l.unite, qte:l.qte})), (r.titre||'').toUpperCase(), textesAVerifier(aVerifier))}>Ajouter au bon de commande</button>
