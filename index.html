@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v321';
+const APP_VERSION = 'v322';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3071,6 +3071,14 @@ function DashboardRappelsCard({data, onNavigate}){
 // (avec ville et code postal) est mise dans le champ. Places API (New) d'abord, sinon l'ancienne API Places.
 // Si aucune n'est activée sur la clé Google, le champ reste un champ texte normal (avec un petit avis).
 const ADR = {mode:'', panne:''};
+// v322 : la vraie raison quand Google refuse (clé, API pas activée, facturation…) au lieu d'un message générique
+window.gm_authFailure = () => { ADR.panne = 'la clé Google Maps est refusée pour ce site (restriction de site web ou facturation)'; };
+function adrRaison(e){ const m = String((e && e.message) || e || '');
+  if(/not been used|disabled|SERVICE_DISABLED|ApiNotActivated/i.test(m)) return 'l\'API « Places API (New) » n\'est pas activée dans Google Cloud';
+  if(/referer|RefererNotAllowed/i.test(m)) return 'le site saranelectrique.net n\'est pas autorisé sur la clé Google';
+  if(/billing|BillingNotEnabled/i.test(m)) return 'la facturation n\'est pas activée dans Google Cloud';
+  if(/API_KEY_SERVICE_BLOCKED|blocked|PERMISSION_DENIED|REQUEST_DENIED/i.test(m)) return 'la clé Google ne permet pas Places (restriction d\'API sur la clé)';
+  return m || 'erreur inconnue'; }
 const ADR_BIAS = {center:{lat:45.307, lng:-73.262}, radius:50000};   // autour de Saint-Jean-sur-Richelieu
 function adrNettoyer(s){ return String(s||'').replace(/,\s*Canada$/i,'').trim(); }
 async function adrGoogle(){
@@ -3104,10 +3112,10 @@ async function adrSuggestions(texte, session){
   if(!g) throw new Error('Google Maps ne s\'est pas chargé');
   if(ADR.mode!=='old'){
     try{ const r = await adrNouvelle(g, texte, session); ADR.mode='new'; return r; }
-    catch(e){ if(ADR.mode==='new') throw e; console.warn('[adresses] Places API (New) :', e); }
+    catch(e){ if(ADR.mode==='new') throw e; ADR.erreurNew = e; console.warn('[adresses] Places API (New) :', e); }
   }
   try{ const r = await adrAncienne(g, texte); ADR.mode='old'; return r; }
-  catch(e){ ADR.panne = String(e.message||e); throw e; }
+  catch(e){ ADR.panne = ADR.panne || adrRaison(ADR.erreurNew || e); throw e; }
 }
 function ChampAdresse({value, onChange, placeholder, style, inputStyle}){
   const [sugg,setSugg]=useState([]);
@@ -3118,11 +3126,11 @@ function ChampAdresse({value, onChange, placeholder, style, inputStyle}){
     tape.current=false;
     const t = String(value||'').trim();
     clearTimeout(minuterie.current);
-    if(t.length<4 || ADR.panne){ setSugg([]); if(ADR.panne) setMsg('Suggestions Google pas activées — écris l\'adresse à la main.'); return; }
+    if(t.length<4 || ADR.panne){ setSugg([]); if(ADR.panne) setMsg('Suggestions Google indisponibles : '+ADR.panne+'. Écris l\'adresse à la main.'); return; }
     minuterie.current = setTimeout(async()=>{
       dernier.current = t;
       try{ const r = await adrSuggestions(t, session.current); if(dernier.current===t){ setSugg(r); setMsg(''); } }
-      catch(e){ setSugg([]); setMsg('Suggestions Google pas activées — écris l\'adresse à la main.'); }
+      catch(e){ setSugg([]); setMsg('Suggestions Google indisponibles : '+(ADR.panne || adrRaison(e))+'. Écris l\'adresse à la main.'); }
     }, 300);
   },[value]);
   useEffect(()=>()=>clearTimeout(minuterie.current),[]);
