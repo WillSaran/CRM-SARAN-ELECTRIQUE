@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v337';
+const APP_VERSION = 'v338';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9535,7 +9535,8 @@ function CommandesView({cfg, toast, refreshKey}){
   const choisirOngletC = k => { setOngletC(k); try{ localStorage.setItem('cmd_onglet', k); }catch(e){} };
   const [pick,setPick]=useState('');   // '' | 'as' | 'mo' : sélecteur ouvert dans le bon
   const [pq,setPq]=useState(''), [pcat,setPcat]=useState(''), [pph,setPph]=useState('');
-  const [remplir,setRemplir]=useState(null);   // v278 : {titre, lignes} — assemblage / modèle à remplir avant d'aller dans le bon
+  const [remplir,setRemplir]=useState(null);
+  const [bonOuvert,setBonOuvert]=useState('');   // v338 : voir les articles d'un bon envoyé   // v278 : {titre, lignes} — assemblage / modèle à remplir avant d'aller dans le bon
   // v326 : le bon en cours est gardé (on peut aller dans l'agenda et revenir) ; le passage est retrouvé par son id
   const [bc,setBc]=useState(()=>{ if(BC_PREFILL) return bcVide(); try{ const x = JSON.parse(localStorage.getItem('bc_brouillon')||'null'); return x && x.lignes ? {...bcVide(), ...x, passage:null} : bcVide(); }catch(e){ return bcVide(); } });
   useEffect(()=>{ try{ localStorage.setItem('bc_brouillon', JSON.stringify({...bc, passage:null, passageId: bc.passage ? bc.passage.e.id : (bc.passageId||'')})); }catch(e){} },[bc]);
@@ -9710,9 +9711,14 @@ function CommandesView({cfg, toast, refreshKey}){
 
     {B.bons.length>0 && <div className="card">
       <div style={{fontWeight:700,marginBottom:6}}>Bons envoyés</div>
-      {B.bons.slice(0,30).map(b=>{ let n=0; try{ n=JSON.parse(b.articles||'[]').length; }catch(e){}
+      {B.bons.slice().reverse().slice(0,30).map(b=>{ let A=[]; try{ A=JSON.parse(b.articles||'[]'); }catch(e){} const n = A.length, ouvert = bonOuvert===b.numero;
         return <div key={b.numero} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
-          <div><b>{b.numero}</b> · {b.fournisseur} · <b>{b.ref}</b> <span className="muted">· {n} article{n>1?'s':''}{b.employe?' · '+b.employe:''} · pour le {cvFmtDay(b.pour)}</span></div>
+          <div style={{cursor:'pointer',flex:'1 1 300px'}} onClick={()=>setBonOuvert(ouvert ? '' : b.numero)} title="Voir les articles"><b>{b.numero}</b> · {b.fournisseur} · <b>{b.ref}</b> <span className="muted">· {cvFmtDay(b.date)} · {n} article{n>1?'s':''}{b.employe?' · '+b.employe:''} · pour le {cvFmtDay(b.pour)}</span> <span style={{color:'var(--accent)',fontSize:12}}>{ouvert ? 'Fermer' : 'Voir'}</span>
+            {ouvert && <div style={{marginTop:6,padding:'6px 8px',background:'var(--bg3)',borderRadius:6,cursor:'default'}} onClick={e=>e.stopPropagation()}>
+              {A.map((a,i)=><div key={i} style={{display:'flex',gap:8,padding:'2px 0',fontSize:12.5}}><b style={{minWidth:60,textAlign:'right'}}>{a.qte!=null ? a.qte : ''}{a.unite && a.unite!=='un' ? ' '+a.unite : ''}</b>{a.code && <span style={{minWidth:120}}>{a.code}</span>}<span>{a.desc||''}</span></div>)}
+              {b.note && <div className="muted" style={{fontSize:12,marginTop:4}}>Note : {b.note}</div>}
+              {b.courriel && <div className="muted" style={{fontSize:12,marginTop:2}}>Envoyé à {b.courriel} · <a href={'https://mail.google.com/mail/?authuser=info@saranelectrique.com#search/'+encodeURIComponent('"'+b.numero+'"')} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>ouvrir le courriel ↗</a></div>}
+            </div>}</div>
           <span style={{display:'flex',gap:4}}>{b.statut==='Ramassée' ? <span style={{color:'var(--success)',fontSize:12}}>✓ Ramassée</span>
             : <button className="btn btn-sm" onClick={()=>B.statut(b,'Ramassée').catch(e=>toast&&toast('Erreur : '+apiErrMsg(e)))}>✓ Ramassée</button>}</span>
         </div>; })}
