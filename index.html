@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v333';
+const APP_VERSION = 'v334';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7917,13 +7917,13 @@ const CALC_SOUMISSION = {
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>3. Panneau 200A</b> {r('panneau',[['HOM84','Square D Homeline 84 circuits'],['QO60','Square D QO 60 circuits (jumelés possibles)'],['SIE84','Siemens 84 circuits']])}</div>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>4. Mise à la terre</b> {sel(v.terre==='eau' ? 'eau' : 'plaque', x=>maj({terre:x}), [['plaque','Plaque 10 × 16 (1016BTB)'],['eau','Collier sur l\'entrée d\'eau']])} · fil #6 nu {n('longTerre')} pi <span className="muted">(à vérifier dans le camion)</span></div>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>5. Prises temporaires</b> {n('prises',44)} prise(s) DDFT 20A (une par étage d'habitude) · {n('longPrise')} pi de NMD 12-2 chacune</div>
-        <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}>{c('hydro','Connecteurs Hydro × 2 (TTD-2610XFBTA) — souvent pour un changement d\'entrée, pas obligé pour une neuve')}</div>
+        <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}>{c('hydro','Connecteurs Hydro × 2 (TTD-2610XFBTA) + WR159 — souvent pour un changement d\'entrée, pas obligé pour une neuve')}</div>
         <input value={v.note} onChange={e=>maj({note:e.target.value})} placeholder="Note (ex. panneau arrière à gauche, ligne de rue côté nord)" style={{width:'100%',boxSizing:'border-box'}}/>
       </div>; },
     calculer(v, t){
       const N = (x, d0) => { const y = cvNum(x); return y==null ? (d0||0) : Math.max(0,y); };
       const manque = []; const T = key => { const x = t(key); if(x==null) manque.push(key); return x||0; };
-      const L = []; const ajout = (code, desc, qte, unite, verifier) => { if(qte>0){ const ex = L.find(l=>l.code===code); if(ex) ex.qte = String(+ex.qte + qte); else L.push({code, desc, unite:unite||'un', qte:String(qte), prix:'', ...(verifier ? {verifier:true} : {}), ...(verifier==='outil' ? {outil:true} : {})}); } };
+      const L = []; const ajout = (code, desc, qte, unite, verifier) => { if(qte>0){ const ex = L.find(l=>l.code===code); if(ex) ex.qte = String(+ex.qte + qte); else L.push({code, desc, unite:unite||'un', qte:String(qte), prix:'', ...(verifier ? {verifier:true} : {}), ...(verifier==='outil' ? {outil:true} : {}), ...(verifier==='shop' ? {shop:true} : {})}); } };
       const mat = v.mat==='reducteur' || v.mat==='pvc' ? v.mat : 'toit', pvc = mat==='pvc';
       const lm = pvc ? N(v.longMat, 16) : (String(v.longMat)==='10' ? 10 : 12);
       const D = Math.max(10, N(v.dist, 10)), nLB = Math.round(N(v.lb, 1)), nCoude = Math.round(N(v.coudes, 0)), nP = Math.round(N(v.prises, 0));
@@ -7952,8 +7952,7 @@ const CALC_SOUMISSION = {
       ajout('RW250BLKALU','Fil RW90 250 MCM alu noir (2 phases)', 2*fil, 'pi', !v.commanderFil);
       ajout('RW2WHTALU','Fil RW90 #2 alu blanc (neutre)', fil, 'pi', !v.commanderFil);
       ajout('CI1716','Contre-écrou 2 po', ecrous);
-      ajout('WR159','Connecteur en H (H-tap)', 1);
-      if(v.hydro) ajout('TTD-2610XFBTA','Connecteur Hydro', 2);
+      if(v.hydro){ ajout('TTD-2610XFBTA','Connecteur Hydro', 2); ajout('WR159','Connecteur en H (H-tap)', 1); }   // v334 : le WR159 va avec les connecteurs Hydro
       // À vérifier dans le camion avant d'aller chez Dubo (pas commandé)
       ajout('PINCE-HTAP','Pince à sertir pour H-tap (outil)', 1, 'un', 'outil');
       ajout('RUBAN-BLANC','Ruban électrique blanc', 1, 'un', 'outil');
@@ -7967,7 +7966,8 @@ const CALC_SOUMISSION = {
       if(v.terre==='eau') ajout('CI3110-U','Collier de mise à la terre (entrée d\'eau)', 1); else ajout('1016BTB','Plaque de mise à la terre 10 × 16 po avec connecteur', 1);
       ajout('BARE6','Fil de cuivre nu #6 (mise à la terre)', Math.ceil(N(v.longTerre, 20)), 'pi', true);
       // Prises temporaires
-      if(nP){ ajout(P[2], P[3], nP); ajout('GFTR2-W','Prise DDFT 20A', nP); ajout('BC1304-LHTQ','Boîte', nP); ajout('PJ26-W','Plaque', nP); ajout('NMD2C12','Fil NMD 12-2', nP*Math.ceil(N(v.longPrise, 25)), 'pi'); }
+      // v334 : les prises temporaires sont préfaites à la shop (boîtes) — à prendre à la shop avec leurs disjoncteurs, pas commandées
+      if(nP){ ajout(P[2], P[3], nP, 'un', 'shop'); ajout('GFTR2-W','Prise DDFT 20A', nP, 'un', 'shop'); ajout('BC1304-LHTQ','Boîte', nP, 'un', 'shop'); ajout('PJ26-W','Plaque', nP, 'un', 'shop'); ajout('NMD2C12','Fil NMD 12-2', nP*Math.ceil(N(v.longPrise, 25)), 'pi', 'shop'); }
       // Prix (mode Tarifs)
       let px = T('ENTREE-200A');
       if(D>10) px += (D-10)*T('ENTREE-PVC-PI');
@@ -8572,7 +8572,7 @@ function MaterielACommander({d, lignes:tout, toast, onNavigate}){
   const texte = (ref ? 'Réf. : '+ref+'\n\n' : '')+lignes.map(l=>(cvNum(l.qte)||0)+unite(l.unite)+'  '+l.code+'  '+(l.desc||'')).join('\n');
   const copier = async () => { try{ await navigator.clipboard.writeText(texte); toast && toast('Liste copiée'); }catch(e){ toast && toast('Copie impossible : sélectionne la liste à la main'); } };
   const versBon = () => { BC_PREFILL = {lignes: lignes.map(l=>({code:l.code, desc:l.desc, unite:l.unite, qte:cvNum(l.qte)||0})), ref, job:d.nom||'',
-    verifier: aVerif.map(l=>l.desc+(l.unite && l.unite!=='un' ? ' — '+(cvNum(l.qte)||0)+unite(l.unite) : ''))}; onNavigate && onNavigate('commandes'); };
+    verifier: textesAVerifier(aVerif)}; onNavigate && onNavigate('commandes'); };
   return <div style={{margin:'0 0 10px',padding:10,border:'1px dashed var(--accent)',borderRadius:8,background:'var(--bg3)'}}>
     <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginBottom:6}}>
       <b style={{fontSize:13}}>À commander</b><span className="muted" style={{fontSize:12}}>quantités exactes, sans prix{ref ? ' · réf. '+ref : ''}</span>
@@ -8587,7 +8587,7 @@ function MaterielACommander({d, lignes:tout, toast, onNavigate}){
         <td style={{padding:'4px 6px',whiteSpace:'nowrap'}}>{l.code}</td>
         <td style={{padding:'4px 6px'}}>{l.desc}</td></tr>)}
     </tbody></table>
-    {aVerif.length>0 && <div style={{fontSize:12.5,marginTop:6,color:'var(--warning)'}}>À vérifier dans le camion (pas commandé) : {aVerif.map(l=>l.desc+' '+(cvNum(l.qte)||0)+unite(l.unite)).join(', ')}</div>}
+    {aVerif.length>0 && <div style={{fontSize:12.5,marginTop:6,color:'var(--warning)'}}>Pas commandé : {textesAVerifier(aVerif).join(' · ')}</div>}
   </div>;
 }
 function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, onNavigate}){
@@ -9428,6 +9428,14 @@ function ModelesOnglet({AS, MO, toast}){
 }
 function bcVide(){ return {fournisseur:'Dubo', courriel:bcCourriel('Dubo'), ref:'', job:'', passage:null, employe:'', mode:'À aller chercher', pour:cvDay(new Date(Date.now()+864e5).toISOString()), lignes:[], libre:'', note:'', envoyes:[]}; }
 
+// v334 : textes « à vérifier / à prendre à la shop » d'une liste calculée (les prises temporaires préfaites = une seule ligne)
+function textesAVerifier(lignes){
+  const q = l => cvNum(l.qte)||0, u = l => l.unite && l.unite!=='un' ? ' '+l.unite : '';
+  const out = lignes.filter(l=>l.verifier && !l.shop && q(l)>0).map(l=>'À vérifier dans le camion : '+l.desc+(u(l) ? ' — '+q(l)+u(l) : q(l)>1 ? ' × '+q(l) : ''));
+  const sh = lignes.filter(l=>l.shop && q(l)>0);
+  if(sh.length){ const pr = sh.find(l=>/DDFT|prise/i.test(l.desc)), dj = sh.find(l=>/disjoncteur/i.test(l.desc));
+    out.push('À prendre à la shop : '+(pr ? q(pr)+' prise'+(q(pr)>1?'s':'')+' temporaire'+(q(pr)>1?'s':'')+' préfaite'+(q(pr)>1?'s':'') : 'prises temporaires préfaites')+(dj ? ' + '+q(dj)+' '+dj.desc.replace(/^Disjoncteur/,'disjoncteur'+(q(dj)>1?'s':'')) : '')); }
+  return out; }
 // v327 : « À commander » présenté comme l'agenda — cette semaine et la prochaine, une colonne par jour,
 // chaque passage à la couleur de son équipe, avec son état (à commander / placée) et le bouton Commander.
 function CmdSemaines({aVenir, loading, today, onCommander}){
@@ -9495,11 +9503,11 @@ function AssemblageRapide({onAjouter, type0}){
         {lignes.map(l=><div key={l.code} style={{display:'flex',gap:8,alignItems:'center',fontSize:13,padding:'3px 0',borderBottom:'1px solid var(--border)',opacity:l.qte>0?1:.45}}>
           <input value={l.qteTxt} inputMode="decimal" onChange={e=>setQtes(q=>({...q, [l.code]:e.target.value}))} style={{width:64,textAlign:'right'}}/>
           <span className="muted" style={{width:24,fontSize:12}}>{l.unite}</span>
-          <b style={{minWidth:120}}>{l.code}</b><span style={{flex:1,minWidth:0}}>{l.desc}{l.verifier && <span style={{color:'var(--warning)',fontSize:12}}> — à vérifier dans le camion, pas commandé</span>}</span></div>)}
+          <b style={{minWidth:120}}>{l.code}</b><span style={{flex:1,minWidth:0}}>{l.desc}{l.verifier && <span style={{color:'var(--warning)',fontSize:12}}>{l.shop ? ' — à prendre à la shop (préfait), pas commandé' : ' — à vérifier dans le camion, pas commandé'}</span>}</span></div>)}
       </div>
       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:10}}>
         <span className="muted" style={{fontSize:12}}>Les articles s'ajoutent à ce qui est déjà dans le bon (mêmes codes = quantités additionnées).</span>
-        <button className="btn btn-p" style={{marginLeft:'auto'}} disabled={!garder.length} onClick={()=>onAjouter(garder.map(l=>({code:l.code, desc:l.desc, unite:l.unite, qte:l.qte})), (r.titre||'').toUpperCase(), aVerifier.map(texteVerif))}>Ajouter au bon de commande</button>
+        <button className="btn btn-p" style={{marginLeft:'auto'}} disabled={!garder.length} onClick={()=>onAjouter(garder.map(l=>({code:l.code, desc:l.desc, unite:l.unite, qte:l.qte})), (r.titre||'').toUpperCase(), textesAVerifier(aVerifier))}>Ajouter au bon de commande</button>
       </div>
     </div>
   </div>;
@@ -9667,7 +9675,7 @@ function CommandesView({cfg, toast, refreshKey}){
       const envoyes = [...(bc.envoyes||[]), {numero, f, texte:numero+' — '+f+(bc.employe?' (va chercher : '+bc.employe+')':'')+'\n'+articles.replace(/^- /gm,'')}];
       // Le passage : commande ✅ Placée (+ les listes dans l'événement, juste avant les infos du client)
       if(x) await enregistrerCommande(x.cmd.cle, {day:x.e.day, job:bc.job+(x.e.phase?' '+x.e.phase:''), ot:'', eventId:x.e.id, calId:x.e.calId, ...cvClientInfo(x.j)}, 'Placée',
-        envoyes.map(e=>e.texte).join('\n\n')+((bc.verifier||[]).length ? '\n\nÀ vérifier dans le camion (pas commandé) :\n'+bc.verifier.map(t=>'- '+t).join('\n') : ''), {fournisseur:[...new Set(envoyes.map(e=>e.f))].join(' + '), mode:bc.mode});
+        envoyes.map(e=>e.texte).join('\n\n')+((bc.verifier||[]).length ? '\n\nPas commandé — à vérifier avant de partir :\n'+bc.verifier.map(t=>'- '+t).join('\n') : ''), {fournisseur:[...new Set(envoyes.map(e=>e.f))].join(' + '), mode:bc.mode});
       const restent = fournsBon.filter(y=>y!==f);
       toast && toast(numero+' prêt dans Gmail'+(x?' · passage marqué ✅ Placée':'')+(restent.length ? ' — reste à envoyer chez '+restent.join(', ') : ''));
       if(restent.length) setBc(b=>({...b, lignes:b.lignes.filter(l=>(l.f||b.fournisseur)!==f), libre: f===b.fournisseur ? '' : b.libre, envoyes}));
@@ -9776,7 +9784,7 @@ function CommandesView({cfg, toast, refreshKey}){
       {bc.libre.trim() && <textarea value={bc.libre} onChange={e=>maj({libre:e.target.value})} rows={2} style={{width:'100%',boxSizing:'border-box',fontFamily:'inherit',marginBottom:6}}/>}
       <input value={bc.note} onChange={e=>maj({note:e.target.value})} placeholder="Note au comptoir (optionnel)" style={{width:'100%',boxSizing:'border-box',marginTop:6}}/>
       {(bc.verifier||[]).length>0 && <div style={{marginTop:8,padding:8,border:'1px dashed var(--warning)',borderRadius:8,fontSize:12.5}}>
-        <b>À vérifier dans le camion avant de partir</b> <span className="muted">(pas commandé, pas envoyé au fournisseur — écrit dans l'événement du passage)</span>
+        <b>Avant de partir : camion et shop</b> <span className="muted">(pas commandé, pas envoyé au fournisseur — écrit dans l'événement du passage)</span>
         {bc.verifier.map((t,i)=><div key={i} style={{display:'flex',gap:6,alignItems:'center',marginTop:3}}><span style={{flex:1}}>{t}</span>
           <button className="btn btn-sm" onClick={()=>maj({verifier:bc.verifier.filter((y,k)=>k!==i)})}>✕</button></div>)}
       </div>}
