@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v327';
+const APP_VERSION = 'v328';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4216,7 +4216,15 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   const cdClients = useMemo(()=>cvBuildClients(cd.events, cd.registry, cd.factures),[cd.events, cd.registry, cd.factures]);
   const [commandes, basculerCommande] = useCommandes(cfg);
   // v318 : job (et dossier Drive de La mémoire) d'un événement — visible seulement dans le CRM, rien n'est écrit dans l'événement
-  const jobParEv = useMemo(()=>{ const m = {}; Object.values(cdClients).forEach(c=>(c.jobs||[]).forEach(j=>(j.events||[]).forEach(e=>{ if(e.id){ m[e.id] = {c, j}; m[e.id.split('_')[0]] = m[e.id.split('_')[0]] || {c, j}; } }))); return m; },[cdClients]);
+  const jobParEv = useMemo(()=>{ const m = {}; Object.values(cdClients).forEach(c=>(c.jobs||[]).forEach(j=>(j.events||[]).forEach(e=>{ if(e.id){ m[e.id] = {c, j, e}; m[e.id.split('_')[0]] = m[e.id.split('_')[0]] || {c, j, e}; } }))); return m; },[cdClients]);
+  // v328 : petite flèche quand la commande du passage est placée — bleue = Dubo, rouge = Lumen
+  const flechesDe = ev => { const x = ev && ev.id ? (jobParEv[ev.id] || null) : null; if(!x || !x.e) return null;
+    let cmd; try{ cmd = cvCmd(commandes, x.j, x.e); }catch(er){ return null; }
+    if(!cmd || cmd.statut!=='Placée') return null; const f = String(cmd.fournisseur||'');
+    const L = [/dubo/i.test(f) && ['#1a73e8','Dubo'], /lumen/i.test(f) && ['#d93025','Lumen']].filter(Boolean);
+    if(!L.length) L.push(['#5f6368', f || 'Placée']);
+    return <span title={'Commande placée : '+L.map(z=>z[1]).join(' + ')} style={{display:'inline-flex',gap:1,background:'rgba(255,255,255,.92)',borderRadius:6,padding:'0 2px',marginRight:3,verticalAlign:'middle',lineHeight:1}}>
+      {L.map(([c])=><svg key={c} width="9" height="9" viewBox="0 0 10 10" style={{display:'block'}}><path d="M5 1v6M2 5l3 3 3-3" stroke={c} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>)}</span>; };
   const jobDeEvenement = e => e && e.id ? (jobParEv[e.id] || jobParEv[String(e.id).split('_')[0]] || null) : null;
   const [manuelsAg] = useEtapesManuelles(cfg);
   const [loading,setLoading]=useState(true);
@@ -4429,9 +4437,16 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         newStartMs = target.getTime();
       }
       const newEndMs = newStartMs + info.durationMs;
+      // v328 : déposé dans le couloir d'une autre équipe (vue par équipe) → l'événement prend la couleur de cette équipe
+      let pCouleur = Promise.resolve();
+      if(targetDayIdx!==null && enCouloirs){ const rect = dayColRefs.current[targetDayIdx].getBoundingClientRect();
+        const k = couloirs[Math.max(0, Math.min(couloirs.length-1, Math.floor((e.clientX-rect.left)/rect.width*couloirs.length)))];
+        if(k && k!=='autres' && k!==couloirDe(info.ev) && CREW_COLORS[k]){ const ev0 = info.ev;
+          setEvents(l=>l.map(x=>x.id===ev0.id && x.calendarId===ev0.calendarId ? {...x, colorId:k, couleurId:k, labelId:''} : x));
+          pCouleur = attitrerCouleur(ev0.calendarId, ev0.id, k, ev0.labelId).then(()=>toast('Attitrée à '+equipeNom(k)+'.','ok')).catch(err=>toast('Couleur : '+apiErrMsg(err),'err')); } }
       majLocale(info.ev, new Date(newStartMs).toISOString(), new Date(newEndMs).toISOString());
       patchEventTimes(info.ev.calendarId, info.ev.id, new Date(newStartMs).toISOString(), new Date(newEndMs).toISOString())
-        .then(()=>{ toast('Job déplacée.','ok'); setReloadKey(k=>k+1); })
+        .then(()=>pCouleur).then(()=>{ toast('Job déplacée.','ok'); setReloadKey(k=>k+1); })
         .catch(err=>{ toast('Erreur: '+apiErrMsg(err),'err'); setReloadKey(k=>k+1); });
     }
     dragInfoRef.current=null; draggedElRef.current=null;
@@ -4526,7 +4541,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
             style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+2, minWidth:0, minHeight:isDesktop?170:90,border:dStr===todayStr?'2px solid var(--accent)':'1px solid var(--border)',boxShadow:dStr===todayStr?'0 0 0 3px rgba(var(--accent-rgb),.25)':undefined,borderRadius:6,padding:replie?3:(isDesktop?8:4),opacity:inMonth?1:.45,background:dStr===todayStr?'rgba(var(--accent-rgb),.12)':'transparent',cursor:replie?'pointer':undefined}}>
             <div onClick={ev=>{ if(replie) return; ev.stopPropagation(); setViewMode('jour'); setAnchor(new Date(d)); }} title={replie?'':'Voir la journée'} style={{fontSize:isDesktop?15:11,fontWeight:800,marginBottom:5,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,...(dStr===todayStr?{background:'var(--accent)',color:'#fff',borderRadius:999,padding:'1px 9px'}:{})}}>{d.getDate()}{dStr===todayStr && !replie && isDesktop && <span style={{fontSize:11,fontWeight:700}}>Aujourd'hui</span>}</div>
             {replie ? (dayEvents.length>0 && <div title={dayEvents.map(e=>e.title).join('\n')} style={{fontSize:11,fontWeight:700,textAlign:'center',background:'var(--bg3)',borderRadius:4,padding:'2px 0'}}>{dayEvents.length}</div>)
-              : dayEvents.map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',...agendaStyle(e),fontSize:isDesktop?12.5:10,lineHeight:1.25,padding:isDesktop?'4px 7px':'2px 4px',borderRadius:4,marginBottom:4,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',wordBreak:'break-word'}}>{agendaGroupe(e)==='attente'?'⏳ ':''}{!e.allDay && <b style={{fontWeight:600,opacity:.85}}>{new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'}).replace(' h ','h')} </b>}{e.title}</div>)}
+              : dayEvents.map(e=><div key={e.id} title={e.title} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }} style={{cursor:'pointer',...agendaStyle(e),fontSize:isDesktop?12.5:10,lineHeight:1.25,padding:isDesktop?'4px 7px':'2px 4px',borderRadius:4,marginBottom:4,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',wordBreak:'break-word'}}>{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{!e.allDay && <b style={{fontWeight:600,opacity:.85}}>{new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'}).replace(' h ','h')} </b>}{e.title}</div>)}
           </div>;
         })}
       </div>
@@ -4556,7 +4571,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
           return <div key={'a'+i} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, true)} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
             {adEvents.map(e=><div key={e.id} title={e.title+(isDesktop ? ' — glisse-le à une heure pour le céduler' : '')} onClick={()=>setEditEvent(e)}
               draggable={isDesktop} onDragStart={ev=>{ panneauDragRef.current = e; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }} onDragEnd={()=>{ panneauDragRef.current = null; }}
-              style={{cursor:isDesktop?'grab':'pointer',...agendaStyle(e),fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>)}
+              style={{cursor:isDesktop?'grab':'pointer',...agendaStyle(e),fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>)}
           </div>;
         })}
 
@@ -4590,7 +4605,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
                 onPointerUp={handleEventPointerUp}
                 style={{position:'absolute',top,height,left:'calc('+leftPct+'% + 2px)',width:'calc('+widthPct+'% - 4px)',...agendaStyle(e),fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'visible',boxShadow:'0 1px 3px rgba(0,0,0,.25)',cursor:'grab',touchAction:'none',userSelect:'none'}}>
                 <div style={{overflow:'hidden',height:'100%'}}>
-                  <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>
+                  <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>
                   <div style={{opacity:.85}}>{start.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}–{end.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}</div>
                 </div>
                 <div onPointerDown={ev2=>handleResizePointerDown(ev2,e)} onPointerMove={handleResizePointerMove} onPointerUp={handleResizePointerUp}
