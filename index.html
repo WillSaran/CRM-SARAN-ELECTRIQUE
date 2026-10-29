@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v343';
+const APP_VERSION = 'v344';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4291,12 +4291,22 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
 
   // v340 : glisser un événement de la grille dans le panneau En attente → il passe dans l'agenda En Attente (samedi qui vient, toute la journée)
   const panneauAttRef = useRef(null);
+  const dragGrilleRef = useRef(false);   // v344 : le glisser vient de la grille (pas du panneau lui-même)
   const [survolAtt,setSurvolAtt]=useState(false);
   const surPanneauAtt = (x, y) => { const el = panneauAttRef.current; if(!el) return false; const r = el.getBoundingClientRect(); return x>=r.left && x<=r.right && y>=r.top && y<=r.bottom; };
   async function mettreEnAttente(ev){
-    if(!ev || ev.calendarId===EN_ATTENTE_CAL) return;
-    if(ev.calendarId!==CREW_CAL){ toast('Seules les jobs de The Crew vont En attente.','err'); return; }
+    if(!ev) return;
     const d = cvSamediProchain(), x = new Date(d+'T12:00:00'); x.setDate(x.getDate()+1);
+    // v344 : déjà dans En Attente mais placée à une heure dans la semaine → on la remet « toute la journée » au samedi provisoire
+    if(ev.calendarId===EN_ATTENTE_CAL){
+      if(ev.allDay && String(ev.start).slice(0,10)===d){ toast('Déjà en attente.','ok'); return; }
+      setEvents(l=>l.filter(y=>!(y.id===ev.id && y.calendarId===ev.calendarId)));
+      try{ await window.gapi.client.calendar.events.patch({calendarId:ev.calendarId, eventId:ev.id, resource:{start:{date:d, dateTime:null, timeZone:null}, end:{date:localDateStr(x), dateTime:null, timeZone:null}}});
+        toast('« '+ev.title+' » remis en attente (samedi '+cvFmtDay(d)+', toute la journée).','ok'); }
+      catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
+      setReloadKey(k=>k+1); return;
+    }
+    if(ev.calendarId!==CREW_CAL){ toast('Seules les jobs de The Crew vont En attente.','err'); return; }
     setEvents(l=>l.filter(y=>!(y.id===ev.id && y.calendarId===ev.calendarId)));
     try{
       await window.gapi.client.calendar.events.patch({calendarId:ev.calendarId, eventId:ev.id, resource:{start:{date:d, dateTime:null, timeZone:null}, end:{date:localDateStr(x), dateTime:null, timeZone:null}}});
@@ -4614,7 +4624,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
             <div onClick={ev=>{ if(replie) return; ev.stopPropagation(); setViewMode('jour'); setAnchor(new Date(d)); }} title={replie?'':'Voir la journée'} style={{fontSize:isDesktop?15:11,fontWeight:800,marginBottom:5,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,...(dStr===todayStr?{background:'var(--accent)',color:'#fff',borderRadius:999,padding:'1px 9px'}:{})}}>{d.getDate()}{dStr===todayStr && !replie && isDesktop && <span style={{fontSize:11,fontWeight:700}}>Aujourd'hui</span>}</div>
             {replie ? (dayEvents.length>0 && <div title={dayEvents.map(e=>e.title).join('\n')} style={{fontSize:11,fontWeight:700,textAlign:'center',background:'var(--bg3)',borderRadius:4,padding:'2px 0'}}>{dayEvents.length}</div>)
               : dayEvents.map(e=><div key={e.id} title={e.title+(isDesktop ? ' — glisse-le sur un autre jour' : '')} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }}
-                draggable={isDesktop} onDragStart={ev=>{ ev.stopPropagation(); panneauDragRef.current = e; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }} onDragEnd={()=>{ panneauDragRef.current = null; }}
+                draggable={isDesktop} onDragStart={ev=>{ ev.stopPropagation(); panneauDragRef.current = e; dragGrilleRef.current = true; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }} onDragEnd={()=>{ panneauDragRef.current = null; }}
                 style={{cursor:isDesktop?'grab':'pointer',...agendaStyle(e),fontSize:isDesktop?12.5:10,lineHeight:1.25,padding:isDesktop?'4px 7px':'2px 4px',borderRadius:4,marginBottom:4,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',wordBreak:'break-word'}}>{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{!e.allDay && <b style={{fontWeight:600,opacity:.85}}>{new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'}).replace(' h ','h')} </b>}{e.title}</div>)}
           </div>;
         })}
@@ -4644,7 +4654,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
           if(ferme(d)) return <div key={'a'+i} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, true)} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',background:'var(--bg3)',minHeight:22}}></div>;
           return <div key={'a'+i} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, true)} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
             {adEvents.map(e=><div key={e.id} title={e.title+(isDesktop ? ' — glisse-le à une heure pour le céduler' : '')} onClick={()=>setEditEvent(e)}
-              draggable={isDesktop} onDragStart={ev=>{ panneauDragRef.current = e; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }} onDragEnd={()=>{ panneauDragRef.current = null; }}
+              draggable={isDesktop} onDragStart={ev=>{ panneauDragRef.current = e; dragGrilleRef.current = true; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }} onDragEnd={()=>{ panneauDragRef.current = null; }}
               style={{cursor:isDesktop?'grab':'pointer',...agendaStyle(e),fontSize:10.5,padding:'2px 5px',borderRadius:4,marginBottom:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>)}
           </div>;
         })}
@@ -4695,9 +4705,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
     </div>}
     </div>
     {!panneauFerme && <div ref={panneauAttRef} className="card"
-      onDragOver={ev=>{ const src = panneauDragRef.current; if(src && src.calendarId!==EN_ATTENTE_CAL){ ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; if(!survolAtt) setSurvolAtt(true); } }}
+      onDragOver={ev=>{ const src = panneauDragRef.current; if(src && (src.calendarId!==EN_ATTENTE_CAL || dragGrilleRef.current)){ ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; if(!survolAtt) setSurvolAtt(true); } }}
       onDragLeave={()=>setSurvolAtt(false)}
-      onDrop={ev=>{ const src = panneauDragRef.current; setSurvolAtt(false); if(!src || src.calendarId===EN_ATTENTE_CAL) return; ev.preventDefault(); panneauDragRef.current = null; mettreEnAttente(src); }}
+      onDrop={ev=>{ const src = panneauDragRef.current; setSurvolAtt(false); if(!src || (src.calendarId===EN_ATTENTE_CAL && !dragGrilleRef.current)) return; ev.preventDefault(); panneauDragRef.current = null; mettreEnAttente(src); }}
       style={{padding:10,position:isDesktop?'sticky':undefined,top:isDesktop?70:undefined,maxHeight:isDesktop?'calc(100vh - 90px)':undefined,overflowY:'auto',outline:survolAtt?'2px dashed var(--accent)':undefined,outlineOffset:2}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,marginBottom:4}}>
         <div className="fh" style={{fontSize:14}}>⏳ En attente {attListe && attListe.length>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{attListe.length}</span>}</div>
@@ -4711,7 +4721,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         {attListe===null ? <div className="muted" style={{fontSize:12.5}}>Lecture…</div>
           : !attListe.length ? <div className="muted" style={{fontSize:12.5}}>Rien en attente.</div>
           : attListe.filter(e=>{ const q = chercheAtt.trim().toLowerCase(); return !q || (e.title+' '+(e.location||'')+' '+texteDescription(e.description)).toLowerCase().includes(q); }).map(e=>{ const d0 = String(e.start).slice(0,10), passe = d0 && d0 < todayStr, txt = texteDescription(e.description);
-            return <div key={e.id} draggable={isDesktop} onDragStart={ev=>{ panneauDragRef.current = e; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }}
+            return <div key={e.id} draggable={isDesktop} onDragStart={ev=>{ panneauDragRef.current = e; dragGrilleRef.current = false; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }}
               onDragEnd={()=>{ panneauDragRef.current = null; }} onClick={()=>setEditEvent(e)}
               style={{padding:'8px 10px',marginBottom:8,borderRadius:8,border:'1px dashed var(--border2)',borderLeft:'5px solid '+(e.colorId && GCAL_COLOR_MAP[e.colorId] || 'var(--muted)'),cursor:isDesktop?'grab':'pointer',fontSize:13,background:'var(--bg3)',userSelect:'none'}}>
               <div style={{fontWeight:700,fontSize:13.5,overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
