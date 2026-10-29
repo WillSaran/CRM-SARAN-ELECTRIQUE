@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v339';
+const APP_VERSION = 'v340';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -508,7 +508,7 @@ function layoutDayEvents(dayEvents){
 // v267 : groupe d'un événement dans l'Agenda — l'équipe (couleur choisie), « À attitrer » (The Crew sans couleur d'équipe),
 // « En attente » (agenda En Attente) ou « Suivi » (autres agendas).
 function agendaGroupe(e){ if(e.calendarId===EN_ATTENTE_CAL) return 'attente'; if(e.calendarId && e.calendarId!==CREW_CAL) return 'suivi'; return equipeDe(e); }
-function agendaGroupeNom(k){ return k==='attente' ? 'En attente' : k==='suivi' ? 'Suivi' : equipeNom(k); }
+function agendaGroupeNom(k){ return k==='attente' ? 'En attente' : k==='suivi' ? 'Mon agenda (Suivi)' : equipeNom(k); }
 function agendaGroupeCouleur(k){ return k==='attente' ? 'var(--muted)' : k==='suivi' ? '#039be5' : equipeCouleur(k); }
 const AGENDA_GROUPES_ORDRE = [...EQUIPES_ORDRE_AG(), 'autre', 'attente', 'suivi'];
 function EQUIPES_ORDRE_AG(){ return ['4','9','3','5']; }
@@ -4289,6 +4289,22 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   // v316 : la job bouge tout de suite à l'écran (avant même la réponse de Google)
   const majLocale = (ev, debut, fin) => setEvents(l=>l.map(x=>x.id===ev.id && x.calendarId===ev.calendarId ? {...x, start:debut, end:fin} : x));
 
+  // v340 : glisser un événement de la grille dans le panneau En attente → il passe dans l'agenda En Attente (samedi qui vient, toute la journée)
+  const panneauAttRef = useRef(null);
+  const [survolAtt,setSurvolAtt]=useState(false);
+  const surPanneauAtt = (x, y) => { const el = panneauAttRef.current; if(!el) return false; const r = el.getBoundingClientRect(); return x>=r.left && x<=r.right && y>=r.top && y<=r.bottom; };
+  async function mettreEnAttente(ev){
+    if(!ev || ev.calendarId===EN_ATTENTE_CAL) return;
+    if(ev.calendarId!==CREW_CAL){ toast('Seules les jobs de The Crew vont En attente.','err'); return; }
+    const d = cvSamediProchain(), x = new Date(d+'T12:00:00'); x.setDate(x.getDate()+1);
+    setEvents(l=>l.filter(y=>!(y.id===ev.id && y.calendarId===ev.calendarId)));
+    try{
+      await window.gapi.client.calendar.events.patch({calendarId:ev.calendarId, eventId:ev.id, resource:{start:{date:d, dateTime:null, timeZone:null}, end:{date:localDateStr(x), dateTime:null, timeZone:null}}});
+      await window.gapi.client.calendar.events.move({calendarId:ev.calendarId, eventId:ev.id, destination:EN_ATTENTE_CAL});
+      toast('« '+ev.title+' » mis En attente (samedi '+cvFmtDay(d)+').','ok');
+    }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
+    setReloadKey(k=>k+1);
+  }
   // v267 : panneau En attente — toutes les jobs de l'agenda En Attente (60 jours passés → 1 an)
   useEffect(()=>{ let ok = true; const a = new Date(); a.setDate(a.getDate()-60); const b = new Date(); b.setDate(b.getDate()+365);
     listCalendarEventsRange([EN_ATTENTE_CAL], a.toISOString(), b.toISOString()).then(l=>{ if(ok) setAttListe(l); }).catch(()=>{ if(ok) setAttListe([]); });
@@ -4420,6 +4436,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
     if(el){ el.style.transform=''; el.style.zIndex=''; el.style.opacity=''; el.style.boxShadow='0 1px 3px rgba(0,0,0,.25)'; }
     if(!info.moved){
       setEditEvent(info.ev);
+    } else if(surPanneauAtt(e.clientX, e.clientY)){
+      mettreEnAttente(info.ev);
     } else {
       let targetDayIdx=null;
       for(let i=0;i<dayColRefs.current.length;i++){
@@ -4620,7 +4638,11 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       </div>
     </div>}
     </div>
-    {!panneauFerme && <div className="card" style={{padding:10,position:isDesktop?'sticky':undefined,top:isDesktop?70:undefined,maxHeight:isDesktop?'calc(100vh - 90px)':undefined,overflowY:'auto'}}>
+    {!panneauFerme && <div ref={panneauAttRef} className="card"
+      onDragOver={ev=>{ const src = panneauDragRef.current; if(src && src.calendarId!==EN_ATTENTE_CAL){ ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; if(!survolAtt) setSurvolAtt(true); } }}
+      onDragLeave={()=>setSurvolAtt(false)}
+      onDrop={ev=>{ const src = panneauDragRef.current; setSurvolAtt(false); if(!src || src.calendarId===EN_ATTENTE_CAL) return; ev.preventDefault(); panneauDragRef.current = null; mettreEnAttente(src); }}
+      style={{padding:10,position:isDesktop?'sticky':undefined,top:isDesktop?70:undefined,maxHeight:isDesktop?'calc(100vh - 90px)':undefined,overflowY:'auto',outline:survolAtt?'2px dashed var(--accent)':undefined,outlineOffset:2}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,marginBottom:4}}>
         <div className="fh" style={{fontSize:14}}>⏳ En attente {attListe && attListe.length>0 && <span className="badge" style={{background:'var(--bg3)',color:'var(--muted)'}}>{attListe.length}</span>}</div>
         {!isDesktop ? <button className="btn btn-sm" onClick={()=>setVoirPanneau(v=>!v)}>{voirPanneau?'Cacher':'Voir'}</button>
@@ -4629,7 +4651,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       </div>
       {voirPanneau && attListe && attListe.length>4 && <input value={chercheAtt} onChange={e=>setChercheAtt(e.target.value)} placeholder="Chercher (client, adresse, mot)…" style={{padding:'6px 10px',fontSize:13,marginBottom:8}}/>}
       {voirPanneau && <>
-        <div className="muted" style={{fontSize:11.5,marginBottom:8}}>{isDesktop ? 'Glisse une job sur un jour pour la céduler. Clique pour la modifier.' : 'Touche une job pour la modifier ou changer sa date.'}</div>
+        <div className="muted" style={{fontSize:11.5,marginBottom:8}}>{isDesktop ? 'Glisse une job sur un jour pour la céduler, ou une job de l\'agenda ici pour la mettre en attente. Clique pour la modifier.' : 'Touche une job pour la modifier ou changer sa date.'}</div>
         {attListe===null ? <div className="muted" style={{fontSize:12.5}}>Lecture…</div>
           : !attListe.length ? <div className="muted" style={{fontSize:12.5}}>Rien en attente.</div>
           : attListe.filter(e=>{ const q = chercheAtt.trim().toLowerCase(); return !q || (e.title+' '+(e.location||'')+' '+texteDescription(e.description)).toLowerCase().includes(q); }).map(e=>{ const d0 = String(e.start).slice(0,10), passe = d0 && d0 < todayStr, txt = texteDescription(e.description);
