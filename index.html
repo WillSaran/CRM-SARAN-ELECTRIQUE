@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v342';
+const APP_VERSION = 'v343';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -396,7 +396,7 @@ async function attitrerCouleur(calId, eventId, k, labelActuel){
   await window.gapi.client.calendar.events.patch({calendarId:calId, eventId, resource:{colorId:k}});
 }
 // ── Lecture SEULE du Calendar PunchPro (jobs) ─────────────────────────────
-async function listCalendarEventsRange(calendarIds, timeMinISO, timeMaxISO){
+async function listCalendarEventsRange(calendarIds, timeMinISO, timeMaxISO, q){   // v343 : q = recherche (titre, description, lieu)
   const all=[];
   const calCouleurs = await couleursAgendas();
   // Les calendriers sont lus en parallèle (avant : un après l'autre, ce qui rendait l'onglet Clients lent).
@@ -406,7 +406,7 @@ async function listCalendarEventsRange(calendarIds, timeMinISO, timeMaxISO){
       do{
         const resp = await window.gapi.client.calendar.events.list({
           calendarId:calId.trim(), timeMin:timeMinISO, timeMax:timeMaxISO,
-          singleEvents:true, orderBy:'startTime', maxResults:2500, pageToken,
+          singleEvents:true, orderBy:'startTime', maxResults:2500, pageToken, ...(q ? {q} : {}),
           fields:'nextPageToken,items(id,summary,start,end,location,description,colorId,attachments,htmlLink)'
         });
         (resp.result.items||[]).forEach(e=>{
@@ -4312,6 +4312,18 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   function goPrev(){ const d=new Date(anchor); if(viewMode==='jour') d.setDate(d.getDate()-1); else if(viewMode==='mois'){ d.setDate(1); d.setMonth(d.getMonth()-1); } else d.setDate(d.getDate()-7); setAnchor(d); }
   function goNext(){ const d=new Date(anchor); if(viewMode==='jour') d.setDate(d.getDate()+1); else if(viewMode==='mois'){ d.setDate(1); d.setMonth(d.getMonth()+1); } else d.setDate(d.getDate()+7); setAnchor(d); }
   function goToday(){ setAnchor(new Date()); }
+  // v343 : recherche dans tous les événements (The Crew, En attente, mon agenda) — 1 an en arrière, 1 an en avant
+  const [rech,setRech]=useState(''), [rechRes,setRechRes]=useState(null);
+  const rechRef = useRef(null);
+  useEffect(()=>{ const q = rech.trim(); if(q.length<2){ setRechRes(null); return; } let ok = true;
+    const t = setTimeout(()=>{ setRechRes('…');
+      const a = new Date(); a.setFullYear(a.getFullYear()-1); const b = new Date(); b.setFullYear(b.getFullYear()+1);
+      const calIds = [...new Set([...(cfg.calendarIds||'').split(',').map(s=>s.trim()).filter(Boolean), EN_ATTENTE_CAL])];
+      listCalendarEventsRange(calIds, a.toISOString(), b.toISOString(), q)
+        .then(l=>{ if(ok) setRechRes(l.sort((x,y)=>String(y.start).localeCompare(String(x.start)))); }).catch(e=>{ if(ok) setRechRes([]); });
+    }, 400);
+    return ()=>{ ok = false; clearTimeout(t); }; },[rech, cfg.calendarIds, reloadKey]);
+  const allerA = e => { setRech(''); setRechRes(null); setViewMode('semaine'); setAnchor(new Date(String(e.start).length<=10 ? e.start+'T12:00:00' : e.start)); setEditEvent(e); };
   // v342 : en glissant un événement, rester sur ← ou → change de semaine / de mois (pour le déposer plus loin)
   const flecheRef = useRef(null);
   const survolFleche = (ev, sens) => {
@@ -4331,6 +4343,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       if(document.querySelector('.modal-bg, .modal, [role=dialog]')) return;
       if(ongletAg!=='agenda') return;
       const k = e.key.toLowerCase();
+      if(e.key==='/'){ e.preventDefault(); rechRef.current && rechRef.current.focus(); return; }
       if(k==='m') setViewMode('mois'); else if(k==='w') setViewMode('semaine'); else if(k==='d') setViewMode('jour');
       else if(k==='t') goRef.current.goToday();
       else if(k==='j' || k==='n' || e.key==='ArrowRight') goRef.current.goNext();
@@ -4546,6 +4559,18 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       <div style={{fontWeight:700,textTransform:'capitalize',minWidth:160}}>{rangeLabel()}</div>
       <button className="btn btn-sm" onClick={goNext} onDragOver={ev=>survolFleche(ev, 1)} onDragLeave={()=>survolFleche(null)} title="Suivant (J ou →) — glisse un événement ici pour avancer">→</button>
       <button className="btn btn-sm" onClick={goToday}>Aujourd'hui</button>
+      {ongletAg==='agenda' && <div style={{position:'relative',flex:'1 1 200px',maxWidth:340}}>
+        <input ref={rechRef} value={rech} onChange={e=>setRech(e.target.value)} onKeyDown={e=>{ if(e.key==='Escape'){ setRech(''); e.target.blur(); } }}
+          placeholder="Chercher un événement (nom, adresse, mot)… ( / )" style={{width:'100%',boxSizing:'border-box',padding:'6px 10px',fontSize:13}}/>
+        {rechRes!==null && <div className="card" style={{position:'absolute',top:'100%',left:0,right:0,zIndex:50,marginTop:4,padding:4,maxHeight:'60vh',overflowY:'auto',boxShadow:'0 8px 24px rgba(0,0,0,.35)',minWidth:300}}>
+          {rechRes==='…' ? <div className="muted" style={{fontSize:12.5,padding:6}}>Recherche…</div>
+            : !rechRes.length ? <div className="muted" style={{fontSize:12.5,padding:6}}>Rien trouvé (1 an en arrière, 1 an en avant).</div>
+            : rechRes.slice(0,60).map(e=>{ const d0 = String(e.start).slice(0,10); return <div key={e.calendarId+e.id} onClick={()=>allerA(e)} style={{display:'flex',gap:8,alignItems:'center',padding:'6px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}>
+              <span style={{width:10,height:10,borderRadius:'50%',flexShrink:0,...agendaStyle(e)}}></span>
+              <span style={{minWidth:78,fontVariantNumeric:'tabular-nums',color:d0<todayISO()?'var(--muted)':'var(--text)'}}>{cvFmtDay(d0)} {d0.slice(0,4)!==String(new Date().getFullYear()) ? d0.slice(0,4) : ''}</span>
+              <span style={{flex:1,minWidth:0}}><b>{e.title}</b>{e.location ? <span className="muted" style={{fontSize:11.5}}> · {e.location.split(',')[0]}</span> : null}{agendaGroupe(e)==='attente' ? <span className="muted" style={{fontSize:11.5}}> · en attente</span> : null}</span></div>; })}
+        </div>}
+      </div>}
       <div style={{display:'inline-flex',border:'1px solid var(--border2)',borderRadius:10,overflow:'hidden',background:'var(--bg3)'}}>
         {[['jour','Jour'],['semaine','Semaine'],['mois','Mois']].map(([id,label],i)=>
           <button key={id} onClick={()=>setViewMode(id)} style={{border:'none',borderLeft:i?'1px solid var(--border2)':'none',padding:'7px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',
