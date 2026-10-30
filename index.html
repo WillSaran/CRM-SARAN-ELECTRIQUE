@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v351';
+const APP_VERSION = 'v352';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4915,7 +4915,9 @@ const PAI_DEBUT = '2026-06-01';   // v190 : début de l'année financière — t
 const PAI_MOTS_VIDES = new Set(['inc','ltee','ltd','limited','quebec','qc','canada','et','and','de','du','la','le','les','des','property','properties','gestion','construction','constructions','compagnie','cie','enr','senc','corp','corporation']);
 // v231 : un numéro civique (« 2311 rue du docteur Primeau ») n'est pas un numéro de facture
 const PAI_RUE = '\\s*,?\\s*(rue|av\\.?|avenue|boul\\.?|boulevard|ch\\.?|chemin|rang|mont[ée]e|place|croissant|terrasse|route|rte)\\b';
-function paiNums(s){ return [...new Set(String(s||'').replace(new RegExp('\\b\\d{3,5}'+PAI_RUE,'gi'),' ').replace(/\b(19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.](19|20)\d{2}\b/g,' ').match(/\b\d{4}\b/g)||[])]; }
+// v352 : un montant dans le message (« reste 1000.00 », « 1 000,00 $ », « 500$ ») n'est pas un numéro de facture
+const PAI_MONTANT_RE = /\$\s*\d[\d \u00a0]*(?:[.,]\d{1,2})?|\b\d+(?:[ \u00a0]\d{3})*[.,]\d{1,2}\b|\b\d+\s*(?:\$|dollars?\b)/gi;
+function paiNums(s){ return [...new Set(String(s||'').replace(PAI_MONTANT_RE,' ').replace(new RegExp('\\b\\d{3,5}'+PAI_RUE,'gi'),' ').replace(/\b(19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.](19|20)\d{2}\b/g,' ').match(/\b\d{4}\b/g)||[])]; }
 // v255 : montant tapé ou collé du relevé : « 56 912,64 $ » (espaces insécables), « 56,912.64 », « 56912.64 »
 function paiMontant(v){ let x = String(v||'').replace(/[^\d,.\-]/g,''); if(!x) return null;
   const v1 = x.lastIndexOf(','), p1 = x.lastIndexOf('.');
@@ -5114,7 +5116,7 @@ async function paiAnnulerFacture(id, factures, f){
 }
 function paiLirePaiements(rows){
   return rows.slice(1).map((r,i)=>({row:i+2, id:String(r[0]||''), date:String(r[1]||''), de:String(r[2]||''), montant:cvNum(r[3])||0, message:String(r[4]||''), ref:String(r[5]||''),
-    lues:paiNums(r[6]).filter(n=>!new RegExp('\\b'+n+'[-/.]\\d{1,2}[-/.]\\d{1,2}\\b').test(String(r[4]||'')) && !new RegExp('\\b'+n+PAI_RUE,'i').test(String(r[4]||''))), lien:String(r[7]||''), source:String(r[8]||'Interac'), confirmees:paiNums(r[9]), statut:String(r[10]||'').trim(), note:String(r[11]||'')}))
+    lues:paiNums(r[6]).filter(n=>!new RegExp('\\b'+n+'[-/.]\\d{1,2}[-/.]\\d{1,2}\\b').test(String(r[4]||'')) && !new RegExp('\\b'+n+PAI_RUE,'i').test(String(r[4]||'')) && !new RegExp('\\b'+n+'(?:[.,]\\d{1,2}\\b|\\s*\\$)|\\$\\s*'+n+'\\b').test(String(r[4]||''))), lien:String(r[7]||''), source:String(r[8]||'Interac'), confirmees:paiNums(r[9]), statut:String(r[10]||'').trim(), note:String(r[11]||'')}))
     .filter(p=>(p.id || p.montant) && !(String(p.date).slice(0,10) < PAI_DEBUT));   // v190 : paiements d'avant le 1er juin = pas dans le CRM
 }
 // Nom affiché du client d'une facture : contracteur (code) ou nom écrit sur la facture, sinon le courriel.
