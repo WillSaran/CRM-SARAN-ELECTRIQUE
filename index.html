@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v346';
+const APP_VERSION = 'v347';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8061,9 +8061,9 @@ const CALC_SOUMISSION = {
       ajout('RUBAN-BLANC','Ruban électrique blanc', 1, 'un', 'outil');
       ajout('RUBAN-VERT','Ruban électrique vert', 1, 'un', 'outil');
       // Panneau
-      const P = {HOM84:['CHOM4284M200GC','Panneau Square D Homeline 200A 84 circuits, disjoncteur principal','HOM120','Disjoncteur Homeline 1P 20A'],
+      const P = {HOM84:['CHOM4284M200GC','Panneau Square D Homeline 200A 84 circuits, disjoncteur principal','CHOM120','Disjoncteur Homeline 1P 20A'],
         QO60:['CQO160M200PC','Panneau Square D QO 200A 60 circuits, disjoncteur principal','QO120','Disjoncteur QO 1P 20A'],
-        SIE84:['SIE-200A-84C','Panneau Siemens 200A 84 circuits, disjoncteur principal (code à confirmer)','Q120','Disjoncteur Siemens 1P 20A']}[v.panneau] || [];
+        SIE84:['SIE-200A-84C','Panneau Siemens 200A 84 circuits, disjoncteur principal (code à confirmer)','SIEQ120','Disjoncteur Siemens 1P 20A']}[v.panneau] || [];
       ajout(P[0], P[1], 1);
       // Mise à la terre : plaque OU collier sur l'entrée d'eau ; le fil #6 nu est à vérifier dans le camion (pas commandé)
       if(v.terre==='eau') ajout('CI3110-U','Collier de mise à la terre (entrée d\'eau)', 1); else ajout('1016BTB','Plaque de mise à la terre 10 × 16 po avec connecteur', 1);
@@ -8089,6 +8089,97 @@ const CALC_SOUMISSION = {
         titre:'Entrée électrique 200A', travaux:txt.join('\n'), remarques:'', lignes:L, heures:h};
     }
   },
+  // v347 : mise à niveau du panneau 200A → 200A (même entrée, nouveau panneau). Codes de disjoncteurs tirés des factures.
+  panneau200: {
+    nom:'Mise à niveau panneau 200A → 200A', typeProjet:'Panneau / entrée électrique', gars:2,
+    tarifs:[['PANNEAU-200-BASE','Remplacement du panneau 200A, base ($) — dépose, pose, raccordement, mise en service'],
+      ['PANNEAU-CIRCUIT','Par circuit reconnecté ($)'],['PANNEAU-AGRANDIR','Agrandir l\'ouverture / adapter la boîte ($)'],
+      ['PANNEAU-FIL','Repasser le fil d\'entrée jusqu\'au nouveau principal ($)']],
+    defaut:{panneau:'HOM84', circuits:'30', filOk:true, filLong:'10', commanderFil:false, reutiliser:false, agrandir:false, terre:'aucune', hydro:true, note:'', disj:{}},
+    deviner(txt){ const t=String(txt||''), v={};
+      if(/\bqo\b/i.test(t)) v.panneau='QO60'; else if(/siemens/i.test(t)) v.panneau='SIE84'; else if(/homeline|\bhom\b/i.test(t)) v.panneau='HOM84';
+      return v; },
+    champs(v, maj){
+      const sel = (val, on, opts) => <select value={val} onChange={e=>on(e.target.value)}>{opts.map(([a,b])=><option key={a} value={a}>{b}</option>)}</select>;
+      const r = (k, opts) => sel(v[k], x=>maj({[k]:x}), opts);
+      const c = (k, l) => <label style={{display:'flex',gap:4,alignItems:'center',fontSize:13}}><input type="checkbox" checked={!!v[k]} onChange={e=>maj({[k]:e.target.checked})}/> {l}</label>;
+      const n = (k, w) => <input value={v[k]} inputMode="decimal" onChange={e=>maj({[k]:e.target.value})} style={{width:w||60}}/>;
+      const codes = PANNEAU_DISJ[v.panneau] || {}, D = v.disj || {};
+      return <div style={{display:'grid',gap:8,fontSize:13}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>1. Nouveau panneau 200A</b> {r('panneau',[['HOM84','Square D Homeline 84 circuits'],['QO60','Square D QO 60 circuits (jumelés possibles)'],['SIE84','Siemens 84 circuits']])} · circuits à reconnecter {n('circuits',50)}</div>
+        <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}><b>2. Fil d'entrée</b> {c('filOk','Assez long pour le nouveau disjoncteur principal')}
+          {!v.filOk && <>repasser {n('filLong',50)} pi de 250 MCM et #2 · {c('commanderFil','Commander le fil (sinon : à vérifier à la shop / dans le camion)')}</>}</div>
+        <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}><b>3. Boîte</b> {c('agrandir','Agrandir l\'ouverture / adapter le mur pour la nouvelle boîte')}</div>
+        <div style={{display:'grid',gap:6}}><div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}><b>4. Disjoncteurs</b> {c('reutiliser','Réutiliser les disjoncteurs existants (même marque, en bon état)')}</div>
+          {!v.reutiliser && <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(190px,1fr))',gap:'4px 12px',paddingLeft:12}}>
+            {PANNEAU_DISJ_TYPES.map(([k,l])=>{ const code = codes[k]; return <label key={k} style={{display:'flex',gap:6,alignItems:'center',opacity:code?1:.4}} title={code ? code[0] : 'Pas offert pour ce panneau'}>
+              <input value={code ? (D[k]||'') : ''} disabled={!code} inputMode="numeric" placeholder="0" onChange={e=>maj({disj:{...D, [k]:e.target.value}})} style={{width:44,textAlign:'right'}}/>
+              <span style={{fontSize:12.5}}>{l}{code ? '' : ' (—)'}</span></label>; })}
+          </div>}</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>5. Mise à la terre</b> {r('terre',[['aucune','Garder l\'existante (vérifier)'],['plaque','Ajouter une plaque 10 × 16 (1016BTB)'],['eau','Collier sur l\'entrée d\'eau']])}</div>
+        <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}>{c('hydro','Coupure Hydro-Québec à demander (note dans la soumission)')}</div>
+        <input value={v.note} onChange={e=>maj({note:e.target.value})} placeholder="Note (ex. panneau au sous-sol, ancien Federal Pioneer, garage)" style={{width:'100%',boxSizing:'border-box'}}/>
+      </div>; },
+    calculer(v, t){
+      const N = (x, d0) => { const y = cvNum(x); return y==null ? (d0||0) : Math.max(0,y); };
+      const manque = []; const T = key => { const x = t(key); if(x==null) manque.push(key); return x||0; };
+      const L = []; const ajout = (code, desc, qte, unite, verifier) => { if(qte>0){ const ex = L.find(l=>l.code===code); if(ex) ex.qte = String(+ex.qte + qte); else L.push({code, desc, unite:unite||'un', qte:String(qte), prix:'', ...(verifier ? {verifier:true} : {}), ...(verifier==='outil' ? {outil:true} : {})}); } };
+      const P = {HOM84:['CHOM4284M200GC','Panneau Square D Homeline 200A 84 circuits, disjoncteur principal'],
+        QO60:['CQO160M200PC','Panneau Square D QO 200A 60 circuits, disjoncteur principal'],
+        SIE84:['SIE-200A-84C','Panneau Siemens 200A 84 circuits, disjoncteur principal (code à confirmer)']}[v.panneau] || [];
+      ajout(P[0], P[1], 1);
+      const nC = Math.round(N(v.circuits, 0));
+      // Disjoncteurs : la quantité entrée pour chaque type, au code de la marque du panneau
+      const codes = PANNEAU_DISJ[v.panneau] || {}; let nDisj = 0;
+      if(!v.reutiliser) PANNEAU_DISJ_TYPES.forEach(([k,l])=>{ const q = Math.round(N((v.disj||{})[k], 0)), c = codes[k]; if(q && c){ ajout(c[0], c[1], q); nDisj += q; } });
+      // Fil d'entrée à repasser (250 MCM × 2 + #2 alu) — à vérifier à la shop / dans le camion, sauf si on le commande
+      if(!v.filOk){ const f = Math.ceil(N(v.filLong, 10));
+        ajout('RW250BLKALU','Fil RW90 250 MCM alu noir (2 phases)', 2*f, 'pi', !v.commanderFil);
+        ajout('RW2WHTALU','Fil RW90 #2 alu blanc (neutre)', f, 'pi', !v.commanderFil); }
+      if(v.terre==='plaque') ajout('1016BTB','Plaque de mise à la terre 10 × 16 po avec connecteur', 1);
+      if(v.terre==='eau') ajout('CI3110-U','Collier de mise à la terre (entrée d\'eau)', 1);
+      if(v.terre!=='aucune') ajout('BARE6','Fil de cuivre nu #6 (mise à la terre)', 20, 'pi', true);
+      ajout('RUBAN-NOIR','Ruban électrique noir + couleurs (identifier les circuits)', 1, 'un', 'outil');
+      ajout('MARQUEUR','Étiquettes / marqueur pour l\'index des circuits', 1, 'un', 'outil');
+      // Prix (mode Tarifs)
+      let px = T('PANNEAU-200-BASE') + nC*T('PANNEAU-CIRCUIT');
+      if(v.agrandir) px += T('PANNEAU-AGRANDIR');
+      if(!v.filOk) px += T('PANNEAU-FIL');
+      const h = Math.round((3 + nC*0.12 + (v.agrandir ? 1.5 : 0) + (!v.filOk ? 1 : 0) + (v.terre!=='aucune' ? 0.5 : 0))*2)/2;
+      const nomP = {HOM84:'Square D Homeline 84 circuits', QO60:'Square D QO 60 circuits', SIE84:'Siemens 84 circuits'}[v.panneau]||'';
+      const txt = ['Remplacement du panneau électrique existant 200A par un nouveau panneau 200A '+nomP+', disjoncteur principal inclus.',
+        'Reconnexion de '+(nC ? nC+' circuits' : 'tous les circuits existants')+(v.reutiliser ? ' (disjoncteurs existants réutilisés)' : nDisj ? ' avec '+nDisj+' disjoncteurs neufs' : '')+' et identification des circuits.'];
+      if(!v.filOk) txt.push('Prolongement du fil d\'entrée jusqu\'au nouveau disjoncteur principal.');
+      if(v.agrandir) txt.push('Adaptation de l\'ouverture pour la nouvelle boîte de panneau.');
+      if(v.terre==='plaque') txt.push('Ajout d\'une plaque de mise à la terre.'); else if(v.terre==='eau') txt.push('Mise à la terre sur l\'entrée d\'eau.');
+      if(v.note) txt.push(v.note+'.');
+      if(v.hydro) txt.push('Coupure et rebranchement par Hydro-Québec : demande faite par Saran Électrique, selon les délais d\'Hydro-Québec.');
+      return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(px), installation:arr5(px), borne:0,
+        titre:'Mise à niveau du panneau 200A', travaux:txt.join('\n'), remarques:'', lignes:L, heures:h};
+    }
+  },
+};
+
+// v347 : disjoncteurs par marque de panneau (codes des factures ; « à confirmer » = pas encore vu sur une facture)
+const PANNEAU_DISJ_TYPES = [['1P15','1P 15A'],['1P20','1P 20A'],['AF15','1P 15A AFCI'],['DF20','1P 20A DDFT'],
+  ['2P15','2P 15A'],['2P20','2P 20A'],['2P25','2P 25A'],['2P30','2P 30A'],['2P40','2P 40A'],['2P50','2P 50A'],['2P60','2P 60A'],['2P100','2P 100A'],
+  ['T1515','Jumelé 15/15'],['T2020','Jumelé 20/20'],['T1520','Jumelé 15/20'],
+  ['Q215','Quad 15/15 + 2P 15A'],['Q220','Quad 15/15 + 2P 20A'],['Q230','Quad 15/15 + 2P 30A'],['Q240','Quad 15/15 + 2P 40A']];
+const PANNEAU_DISJ = {
+  QO60:{'1P15':['QO115','Disjoncteur QO 1P 15A'],'1P20':['QO120','Disjoncteur QO 1P 20A'],'AF15':['QO115PCAFI','Disjoncteur QO 1P 15A AFCI combiné'],'DF20':['QO120GFI','Disjoncteur QO 1P 20A DDFT'],
+    '2P15':['QO215','Disjoncteur QO 2P 15A'],'2P20':['QO220','Disjoncteur QO 2P 20A'],'2P25':['QO225','Disjoncteur QO 2P 25A'],'2P30':['QO230','Disjoncteur QO 2P 30A'],'2P40':['QO240','Disjoncteur QO 2P 40A'],
+    '2P50':['QO250','Disjoncteur QO 2P 50A'],'2P60':['QO260','Disjoncteur QO 2P 60A'],'2P100':['QO2100','Disjoncteur QO 2P 100A'],
+    'T1515':['QO1515','Disjoncteur QO jumelé 15/15'],'T2020':['QO2020','Disjoncteur QO jumelé 20/20'],'T1520':['QO1520','Disjoncteur QO jumelé 15/20']},
+  HOM84:{'1P15':['CHOM115','Disjoncteur Homeline 1P 15A'],'1P20':['CHOM120','Disjoncteur Homeline 1P 20A'],'AF15':['CHOM115PCAFI','Disjoncteur Homeline 1P 15A AFCI combiné'],'DF20':['CHOM120GFI','Disjoncteur Homeline 1P 20A DDFT (code à confirmer)'],
+    '2P15':['CHOM215','Disjoncteur Homeline 2P 15A'],'2P20':['CHOM220','Disjoncteur Homeline 2P 20A'],'2P25':['CHOM225','Disjoncteur Homeline 2P 25A'],'2P30':['CHOM230','Disjoncteur Homeline 2P 30A'],'2P40':['CHOM240','Disjoncteur Homeline 2P 40A'],
+    '2P50':['CHOM250','Disjoncteur Homeline 2P 50A'],'2P60':['CHOM260','Disjoncteur Homeline 2P 60A'],'2P100':['CHOM2100','Disjoncteur Homeline 2P 100A'],
+    'T1515':['CHOMT1515','Disjoncteur Homeline jumelé 15/15'],'T2020':['CHOMT2020','Disjoncteur Homeline jumelé 20/20 (code à confirmer)'],'T1520':['CHOMT1520','Disjoncteur Homeline jumelé 15/20 (code à confirmer)'],
+    'Q215':['CHOMT1515215','Disjoncteur Homeline quad 15/15 + 2P 15A'],'Q220':['CHOMT1515220','Disjoncteur Homeline quad 15/15 + 2P 20A'],'Q230':['CHOMT1515230','Disjoncteur Homeline quad 15/15 + 2P 30A'],'Q240':['CHOMT1515240','Disjoncteur Homeline quad 15/15 + 2P 40A']},
+  SIE84:{'1P15':['SIEQ115','Disjoncteur Siemens Q 1P 15A'],'1P20':['SIEQ120','Disjoncteur Siemens Q 1P 20A'],'AF15':['SIEQA115AFCCSA','Disjoncteur Siemens 1P 15A AFCI'],
+    '2P15':['SIEQ215','Disjoncteur Siemens Q 2P 15A'],'2P20':['SIEQ220','Disjoncteur Siemens Q 2P 20A'],'2P30':['SIEQ230','Disjoncteur Siemens Q 2P 30A'],'2P40':['SIEQ240','Disjoncteur Siemens Q 2P 40A'],
+    '2P50':['SIEQ250','Disjoncteur Siemens Q 2P 50A'],'2P60':['SIEQ260','Disjoncteur Siemens Q 2P 60A'],
+    'T1515':['SIEQ1515','Disjoncteur Siemens jumelé 15/15'],'T2020':['SIEQ2020','Disjoncteur Siemens jumelé 20/20'],
+    'Q215':['Q21515CTNC','Disjoncteur Siemens quad 15/15 + 2P 15A']}
 };
 
 // ===== v111 : agenda Google « Soumission » =====
