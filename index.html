@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v348';
+const APP_VERSION = 'v349';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8906,13 +8906,39 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
     }catch(e){ toast && toast('Courriel pas envoyé : '+apiErrMsg(e)); }
     finally{ setOccupe(''); }
   };
+  // v349 : le courriel au client devient un BROUILLON Gmail avec le PDF joint (avant : fenêtre Gmail sans pièce jointe).
+  // Texte dans ton style (prix, merci de nous faire confiance), tu/vous, « désolé du délai » au besoin ; modifiable avant.
+  const [courrielEdit,setCourrielEdit]=useState(null);
+  const texteCourriel = (doc, o) => { const tu = o.tu, pr = String(doc.nom||'').trim().split(/\s+/)[0] || '';
+    const quoi = doc.type==='Soumission' ? 'notre soumission' : doc.type==='Facture' ? (tu ? 'ta facture' : 'votre facture') : 'l\'ordre de travail';
+    const L = ['Bonjour'+(pr ? ' '+pr : '')+','];
+    if(o.delai) L.push('', tu ? 'Désolé pour le délai, merci de ta patience.' : 'Désolé pour le délai, merci de votre patience.');
+    L.push('', 'Voici '+quoi+' '+doc.numero+(doc.titre ? ' pour '+doc.titre.charAt(0).toLowerCase()+doc.titre.slice(1) : '')+(doc.adresse ? ' au '+String(doc.adresse).split(',')[0] : '')+'.');
+    if(prix) L.push('', 'Prix : '+cvMoney(calc.st)+' avant taxes ('+cvMoney(calc.total)+' taxes incluses).');
+    L.push('', 'Le détail est dans le document en pièce jointe. '+(tu ? 'N\'hésite pas si tu as des questions' : 'N\'hésitez pas si vous avez des questions')+', ça me fera plaisir d\'en discuter.');
+    L.push('', 'Merci de nous faire confiance, on aime travailler avec '+(tu ? 'toi' : 'vous')+' !', '', 'Bonne journée,', '', 'William Saran', '', 'Cordialement,', '', 'Saran Électrique inc.', 'William Saran, Président', '(438)-490-3412', 'info@saranelectrique.com', 'Saint-Jean-sur-Richelieu, J3B 4J6');
+    return L.join('\n'); };
   const courriel = async ()=>{
     const doc = d.numero ? d : await enregistrer(); if(!doc) return;
-    const sujet = doc.type+' '+doc.numero+(doc.titre?' — '+doc.titre:'')+' : Saran Électrique Inc.';
-    const corps = 'Bonjour'+(doc.nom?' '+doc.nom.split(' ')[0]:'')+',\n\nVoici '+(doc.type==='Soumission'?'notre soumission':doc.type==='Facture'?'votre facture':'l\'ordre de travail')+' '+doc.numero+(doc.titre?' pour '+doc.titre:'')+'.'+
-      (prix ? '\n\nMontant avant taxes : '+cvMoney(calc.st)+'\nTotal avec taxes : '+cvMoney(calc.total) : '')+
-      '\n\nLe document est en pièce jointe. N\'hésitez pas si vous avez des questions.\n\nCordialement,\n\nSaran Électrique inc.\nWilliam Saran, Président\n(438) 490-3412\ninfo@saranelectrique.com';
-    window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com&view=cm&fs=1&to='+encodeURIComponent(doc.courriel||'')+'&su='+encodeURIComponent(sujet)+'&body='+encodeURIComponent(corps), '_blank');
+    const o = {tu:false, delai:false};
+    setCourrielEdit({doc, ...o, to:doc.courriel||'', sujet:doc.type+' '+doc.numero+(doc.titre?' — '+doc.titre:'')+' : Saran Électrique Inc.', corps:texteCourriel(doc, o), modifie:false});
+  };
+  const creerBrouillon = async ()=>{
+    const ce = courrielEdit; if(!ce) return; const doc = ce.doc, sujet = ce.sujet;
+    setOccupe('courriel');
+    try{
+      if(!peutLireCourriels()){ await requestToken('consent', SCOPE_GMAIL_LIRE); if(!peutLireCourriels()){ toast && toast('Permission Gmail refusée : le brouillon n\'est pas créé.'); return; } }
+      let pj = null; try{ pj = {nom:doc.type+'-'+doc.numero+'.pdf', type:'application/pdf', base64: await docPdfBase64(docHtml(doc, docCalcul(doc, C.prixDe), await planPourImpression(doc), false))}; }catch(e){}
+      const b = 'saran'+Date.now(), u8 = x => btoa(unescape(encodeURIComponent(x))), lignes = x => x.replace(/.{76}/g, '$&\r\n');
+      let mime = 'To: '+ce.to+'\r\nSubject: =?UTF-8?B?'+u8(sujet)+'?=\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="'+b+'"\r\n\r\n'+
+        '--'+b+'\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n'+lignes(u8(ce.corps))+'\r\n';
+      if(pj) mime += '--'+b+'\r\nContent-Type: '+pj.type+'; name="'+pj.nom+'"\r\nContent-Disposition: attachment; filename="'+pj.nom+'"\r\nContent-Transfer-Encoding: base64\r\n\r\n'+lignes(pj.base64)+'\r\n';
+      mime += '--'+b+'--';
+      const r = await window.gapi.client.request({path:'https://gmail.googleapis.com/gmail/v1/users/me/drafts', method:'POST', body:{message:{raw:btoa(mime).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}}});
+      const mid = r.result && r.result.message && r.result.message.id;
+      window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com#drafts'+(mid ? '?compose='+mid : ''), '_blank');
+      toast && toast('Brouillon créé dans Gmail'+(pj ? ' avec le PDF joint' : ' — le PDF n\'a pas pu être joint, ajoute-le à la main'));
+      setCourrielEdit(null);
     // Une soumission envoyée va dans Soumissions › Envoyées (à classer)
     if(doc.type==='Soumission'){
       try{
@@ -8921,6 +8947,8 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       }catch(e){}
       onEnvoye && onEnvoye(doc);
     }
+    }catch(e){ toast && toast('Brouillon pas créé : '+apiErrMsg(e)); }
+    finally{ setOccupe(''); }
   };
   // Modèle : remplit le titre / travaux (si vides), les heures, déplacement, quincaillerie, forfait et le matériel.
   const appliquerModele = m => {
@@ -9075,6 +9103,20 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
         <button className="btn btn-sm" onClick={()=>apercu ? setApercu(false) : voirApercu()}>{apercu ? '🙈 Cacher l\'aperçu' : '👁 Aperçu PDF'}</button>
         <button className="btn btn-sm" disabled={!!occupe} onClick={imprimer}>🖨️ PDF / Imprimer</button>
         <button className="btn btn-sm" disabled={!!occupe} onClick={courriel}>📧 Courriel (Gmail)</button>
+        {courrielEdit && <Modal title="Courriel au client (brouillon Gmail, PDF joint)" onClose={()=>setCourrielEdit(null)} wide>
+          <div className="field"><label>À</label><input value={courrielEdit.to} onChange={e=>setCourrielEdit(x=>({...x, to:e.target.value}))}/></div>
+          <div className="field"><label>Objet</label><input value={courrielEdit.sujet} onChange={e=>setCourrielEdit(x=>({...x, sujet:e.target.value}))}/></div>
+          <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'center',marginBottom:8,fontSize:13}}>
+            {[['tu','Tutoyer'],['delai','« Désolé du délai »']].map(([k,l])=><label key={k} style={{display:'flex',gap:4,alignItems:'center'}}><input type="checkbox" checked={!!courrielEdit[k]} style={{width:'auto'}}
+              onChange={e=>setCourrielEdit(x=>{ const n = {...x, [k]:e.target.checked}; if(x.modifie && !confirm('Refaire le texte ? Tes changements seront perdus.')) return x; return {...n, corps:texteCourriel(x.doc, n), modifie:false}; })}/> {l}</label>)}
+          </div>
+          <div className="field"><label>Message</label><textarea value={courrielEdit.corps} onChange={e=>setCourrielEdit(x=>({...x, corps:e.target.value, modifie:true}))} rows={14} style={{fontFamily:'var(--font-body)',lineHeight:1.4}}/></div>
+          <div className="muted" style={{fontSize:12,marginBottom:10}}>Le PDF est fait comme l'aperçu et joint au brouillon. Rien n'est envoyé : tu vérifies et tu envoies dans Gmail.</div>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+            <button className="btn btn-s" onClick={()=>setCourrielEdit(null)}>Annuler</button>
+            <button className="btn btn-p" disabled={!!occupe || !courrielEdit.to.trim()} onClick={creerBrouillon}>{occupe==='courriel' ? 'Préparation du PDF…' : 'Créer le brouillon dans Gmail'}</button>
+          </div>
+        </Modal>}
       </div>
       {d.type==='Facture' && !soumMode && <div style={{display:'flex',justifyContent:'flex-end',marginTop:8}}>
         <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={envoyerAFaire} title="Courriel de info@ à info@ : « Facture à faire », avec le brouillon en PDF">{occupe==='envoi' ? 'Envoi…' : '📧 Envoyer la facture à faire'}</button></div>}
