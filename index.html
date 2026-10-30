@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v349';
+const APP_VERSION = 'v350';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6442,8 +6442,11 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     </div>;
   };
 
+  // v350 : rouvrir la soumission faite dans le CRM (PDF, courriel, modifier) depuis « Envoyées »
+  const docCrmDe = s => DC.docs.find(x=>'CRM-'+x.numero===s.cle || (s.no && (x.numero===s.no || x.numero==='E-'+String(s.no).replace(/^E-/,''))));
+  const rouvrir = doc => { DOC_OUVRIR = doc; DOC_PREFILL = null; setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); };
   const CarteEnvoyee = ({s})=>{
-    const st = etatEnv(s);
+    const st = etatEnv(s), docCrm = docCrmDe(s);
     return <div style={{padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
         <div style={{minWidth:0,flex:'1 1 220px'}}>
@@ -6452,6 +6455,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
           <div className="muted" style={{fontSize:11.5}}>Envoyée le {cvFmtDay(s.date)}{s.courriel && <> · {s.courriel}</>}{(st==='attente'||st==='aclasser') && soumJours(s.date)>0 && <> · il y a {soumJours(s.date)} jours</>}</div>
         </div>
         <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
+          {docCrm && <button className="btn btn-sm" onClick={()=>rouvrir(docCrm)} title="Rouvrir la soumission dans le CRM : PDF, courriel, modifier">Ouvrir {docCrm.numero}</button>}
           {lienPdf(s.pdf)}{lienGmail(s)}
           {st==='aclasser' && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'En attente')} title="Envoyée, j'attends la réponse du client">⏳ En attente</button>}
           {(st==='aclasser' || st==='attente') ? <>
