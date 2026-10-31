@@ -2329,6 +2329,23 @@ function pjServiceTexte(type, job){
 }
 const PJ_TYPES_BLOCAGE = ['SERV supplémentaire demandée','Matériel manquant','Retour au chantier','Problème d\'accès','Problème découvert pendant les travaux'];
 const PJ_BLOC_ENTETE = ['Id','Job','Étape','Type','Description','Date','Statut','Réglé le','Pièces jointes','Créé le'];
+// v366 : blocages signalés par les gars dans PunchPro — onglet « Blocages » de la feuille PunchPro (les gars n'ont pas accès à La mémoire).
+// Colonnes : Id | Créé le | Employé | Event ID | Calendrier | Job (titre) | Date du passage | Cause | Description | Pièces jointes | Statut | Réglé le | Réglé par
+const PP_SHEET_ID = '1uj7S1uHsE0BZwbNSJdtAEjpy_9YWqfh6mXoJwwLJ9UA';
+// Étape de la barre où va un blocage PunchPro : selon le passage choisi par le gars (rough, finition, entrée, service)
+function pjEtapeDeEv(j, e){ if(!e) return '';
+  if(PJ_ENTREE_RE.test(e.title||'') || (j.client==='PART' && /\bENTR[EÉ]E\b/i.test(e.title||''))) return 'Entrée électrique — Entrée électrique faite';
+  if(e.phase==='ROUGH') return 'Rough — Rough fait';
+  if(e.phase==='FINITION') return 'Finition — Finition faite';
+  return j.client==='PART' ? 'Service — Service fait' : 'Wrap-up — Services et corrections terminés'; }
+// Blocages par job : ceux du CRM (déjà rattachés à la job) + ceux de PunchPro (rattachés par le passage de l'agenda)
+function blocsParJob(liste, clients){ const evJ = {};
+  Object.values(clients||{}).forEach(c=>(c.jobs||[]).forEach(j=>(j.events||[]).forEach(e=>{ if(e.id){ evJ[e.id] = {j, e}; const b = e.id.split('_')[0]; if(!evJ[b]) evJ[b] = {j, e}; } })));
+  const m = {};
+  (liste||[]).forEach(b=>{ if(b.source!=='punchpro'){ if(b.job) (m[b.job] = m[b.job] || []).push(b); return; }
+    const x = evJ[b.eventId] || evJ[String(b.eventId||'').split('_')[0]]; if(!x) return;
+    (m[x.j.id] = m[x.j.id] || []).push({...b, job:x.j.id, etape:pjEtapeDeEv(x.j, x.e)}); });
+  return m; }
 // Les étapes d'une job, rangées par phase. État : ok / manuel (coché à la main) / manque (devrait être fait) / futur (pas encore rendu là) / na (ne s'applique pas)
 // v253 : texte d'une visite dans la barre (une visite en attente n'a pas de date : elle n'est pas encore cédulée)
 function pjPartTexte(pt){ return 'Visite '+pt.n+'/'+pt.tot+(pt.attente ? (pt.extra ? ' (extra)' : '')+' en attente — pas encore cédulée' : (pt.ok ? ' faite le ' : ' prévue le ')+cvFmtDay(pt.day)); }
@@ -2454,11 +2471,17 @@ function pjPhases(job, s, ctx){
 function useBlocages(cfg){
   const id = cfg.memoireJobsSpreadsheetId;
   const [etat,setEtat]=useState({liste:[], lu:false});
+  const ppId = cfg.punchproSpreadsheetId || PP_SHEET_ID;
   const lire = useCallback(async(force)=>{ if(!id) return;
-    try{ const r = await lireCache(id, 'Blocages!A1:J', force);
-      setEtat({lu:true, liste:(r.result.values||[]).slice(1).map((x,i)=>({row:i+2, id:x[0]||'', job:x[1]||'', etape:x[2]||'', type:x[3]||'', description:x[4]||'', date:x[5]||'', statut:x[6]||'Ouvert', regle:x[7]||'',
-        pj:(()=>{ try{ return JSON.parse(x[8]||'[]'); }catch(e){ return []; } })(), cree:x[9]||''})).filter(b=>b.id && b.job)}); }
-    catch(e){ setEtat({liste:[], lu:true}); } },[id]);
+    const jsonPJ = v => { try{ const a = JSON.parse(v||'[]'); return Array.isArray(a) ? a : []; }catch(e){ return []; } };
+    let crm = [], pp = [], existe = false;
+    try{ const r = await lireCache(id, 'Blocages!A1:J', force); existe = true;
+      crm = (r.result.values||[]).slice(1).map((x,i)=>({row:i+2, id:x[0]||'', job:x[1]||'', etape:x[2]||'', type:x[3]||'', description:x[4]||'', date:x[5]||'', statut:x[6]||'Ouvert', regle:x[7]||'',
+        pj:jsonPJ(x[8]), cree:x[9]||''})).filter(b=>b.id && b.job); }catch(e){}
+    try{ const r = await lireCache(ppId, 'Blocages!A1:M', force);   // v366 : PunchPro
+      pp = (r.result.values||[]).slice(1).map((x,i)=>({source:'punchpro', row:i+2, ppId:x[0]||'', id:'PP'+(x[0]||i), cree:x[1]||'', auteur:x[2]||'', eventId:x[3]||'', calId:x[4]||'', jobTitre:x[5]||'',
+        date:x[6]||'', type:x[7]||'', description:x[8]||'', pj:jsonPJ(x[9]), statut:x[10]||'Ouvert', regle:x[11]||'', reglePar:x[12]||'', job:'', etape:''})).filter(b=>b.ppId && b.eventId); }catch(e){}
+    setEtat({lu:true, existe, liste:[...crm, ...pp]}); },[id, ppId]);
   useEffect(()=>{ lire(); },[lire]);
   const ligne = b => [b.id, b.job, b.etape, b.type, b.description, b.date, b.statut||'Ouvert', b.regle||'', JSON.stringify(b.pj||[]), b.cree||new Date().toLocaleString('fr-CA')];
   const deposer = async (fichiers, job) => { if(!fichiers.length) return [];
@@ -2468,9 +2491,12 @@ function useBlocages(cfg){
       const r = await driveDeposer(new File([f], nom, {type:f.type||'application/octet-stream'}), d); out.push({k:'fichier', nom:f.name||nom, id:r.id, mime:f.type||''}); }
     return out; };
   const ajouter = async (b, fichiers) => { const pj = [...(b.pj||[]), ...await deposer(fichiers||[], b.job)];
-    if(!etat.liste.length) await ensureSheetsExist(id, [{name:'Blocages', headers:PJ_BLOC_ENTETE}]);
+    if(!etat.existe) await ensureSheetsExist(id, [{name:'Blocages', headers:PJ_BLOC_ENTETE}]);
     await sheetsAppendRow(id, 'Blocages', ligne({...b, pj, id:'B'+Date.now()})); await lire(true); };
-  const maj = async (b, champs, fichiers) => { const pj = [...(champs.pj || b.pj || []), ...await deposer(fichiers||[], b.job)];
+  const maj = async (b, champs, fichiers) => { const pj = [...(champs.pj || b.pj || []), ...await deposer(fichiers||[], b.job||b.jobTitre)];
+    if(b.source==='punchpro'){ const n = {...b, ...champs, pj};   // v366 : on règle / complète le blocage directement dans la feuille PunchPro
+      await sheetsUpdateRow(ppId, 'Blocages', b.row, [n.ppId, n.cree, n.auteur, n.eventId, n.calId, n.jobTitre, n.date, n.type, n.description, JSON.stringify(pj), n.statut||'Ouvert', n.regle||'', n.statut==='Réglé' ? 'Bureau (CRM)' : '']);
+      await lire(true); return; }
     await sheetsUpdateRow(id, 'Blocages', b.row, ligne({...b, ...champs, pj})); await lire(true); };
   const parJob = useMemo(()=>{ const m = {}; etat.liste.forEach(b=>{ (m[b.job] = m[b.job] || []).push(b); }); return m; },[etat.liste]);
   return {...etat, parJob, ajouter, maj, relire:()=>lire(true)};
@@ -2614,9 +2640,10 @@ function PjEtapeDetail({job, x, blocages, B, basculerEtape, toast}){
     {bs.map(b=><div key={b.id} style={{marginTop:8,paddingTop:8,borderTop:'1px solid var(--border)'}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setVoir(voir===b.id?null:b.id)}>
         <span><span style={{display:'inline-block',width:16,height:16,borderRadius:8,textAlign:'center',lineHeight:'16px',fontSize:10.5,fontWeight:900,color:b.statut==='Réglé'?'#fff':'#1b1300',background:b.statut==='Réglé'?'var(--success)':'var(--warning)'}}>{b.statut==='Réglé'?'✓':'!'}</span>
-          {' '}<b>{b.type}</b> <span className="muted">· {b.date}{b.statut==='Réglé' ? ' · réglé le '+b.regle : ' · ouvert'}{(b.pj||[]).length ? ' · '+b.pj.length+' pièce'+(b.pj.length>1?'s':'')+' jointe'+(b.pj.length>1?'s':'') : ''}</span></span>
+          {' '}<b>{b.type}</b>{b.source==='punchpro' && <span className="badge" style={{marginLeft:6,fontSize:10.5,background:'rgba(88,166,255,0.15)',color:'var(--accent)'}}>PunchPro{b.auteur ? ' · '+b.auteur : ''}</span>} <span className="muted">· {b.date}{b.statut==='Réglé' ? ' · réglé le '+b.regle : ' · ouvert'}{(b.pj||[]).length ? ' · '+b.pj.length+' pièce'+(b.pj.length>1?'s':'')+' jointe'+(b.pj.length>1?'s':'') : ''}</span></span>
         <span className="muted">{voir===b.id?'▲':'▼'}</span></div>
       {voir===b.id && <div style={{marginTop:6,display:'grid',gap:6}}>
+        {b.source==='punchpro' && <div className="muted" style={{fontSize:12}}>Signalé dans PunchPro{b.auteur ? ' par '+b.auteur : ''}{b.cree ? ' le '+b.cree : ''}{b.jobTitre ? ' · passage : '+b.jobTitre : ''}</div>}
         <div style={{whiteSpace:'pre-wrap'}}>{b.description}</div>
         {(b.pj||[]).map((p,i)=>p.k==='note' ? <div key={i} className="card" style={{padding:6,fontSize:12.5,whiteSpace:'pre-wrap',margin:0}}>🗒 {p.texte}</div>
           : <a key={i} href={lienPJ(p)} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5}}>{iconePJ(p)} {p.nom || p.url}</a>)}
@@ -2654,6 +2681,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   const [typeAutre,setTypeAutre]=useState(null);      // {k, v} : type « Autre » en train d'être écrit
   const [vocOuv,setVocOuv]=useState(null);            // v364 : job dont la liste des mémos vocaux est ouverte
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
+  const BJ = useMemo(()=>blocsParJob(B.liste, clients),[B.liste, clients]);   // v366 : blocages CRM + PunchPro, par job
   const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des jobs…</span></div>;
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les jobs : {err}</div>;
@@ -2672,7 +2700,9 @@ function ProjetsSuivi({cfg, refreshKey}){
   const codes = [...new Set(Object.values(clients).map(c=>c.code))].sort((a,b)=>(a==='PART')-(b==='PART') || a.localeCompare(b,'fr'));
   const groupes = [['cours','En cours'],['avenir','À venir'],['done','Terminées (30 derniers jours)']];
   const Ligne = ({x})=>{ const {c,j,s}=x, k=c.code+j.id, o=ouvert===k;
-    const p = pjPhases(j, s, {appels:ap, commandes, factures, manuels, archives, poEtapes, typeJob: c.code==='PART' ? (TJ.map[j.id] || pjTypeAutoComplet(j)) : '', blocages:B.parJob[j.id]||[]});   // v224 ; v239 : type du particulier
+    const p = pjPhases(j, s, {appels:ap, commandes, factures, manuels, archives, poEtapes, typeJob: c.code==='PART' ? (TJ.map[j.id] || pjTypeAutoComplet(j)) : '', blocages:BJ[j.id]||[]});   // v224 ; v239 : type du particulier
+    const derniere = (p.steps.filter(x=>x.etat!=='na').slice(-1)[0] || p.steps.slice(-1)[0] || {}).id;   // v366 : un blocage dont l'étape n'est pas dans la barre va sur la dernière étape
+    const blocsJ = (BJ[j.id]||[]).map(b=>p.steps.some(x=>x.id===b.etape) ? b : {...b, etape:derniere});
     return <div className="opp-card" style={{padding:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:10,cursor:'pointer'}} onClick={()=>setOuvert(o?null:k)}>
         <div>
@@ -2694,9 +2724,9 @@ function ProjetsSuivi({cfg, refreshKey}){
                     {pjPrincipauxAgenda(j).length>1 && <span className="muted" style={{fontSize:10.5,marginLeft:4}}>· agenda : {pjPrincipauxAgenda(j).join(' + ')}</span>}</>; })()}</span>}</div>
           <CvPhasesJob job={j} onDone={()=>setTick(t=>t+1)}/>
           <div className="a">Prochaine étape : <b>{s.etape}</b>{p.prochaine ? <span className="muted"> · à faire : {pjNomPhase(p.prochaine.phase)} › {p.prochaine.texte || p.prochaine.titre}</span> : ''} {p.attente ? <span className="muted">· en attente</span> : <span style={{fontWeight:800,color:p.pct===100?'var(--success)':'var(--text)'}}>· {p.pct} %</span>}</div>
-          <PjBarre p={p} blocages={B.parJob[j.id]||[]} sel={selEt && selEt.k===k ? selEt.id : null} onEtape={id=>setSelEt(id ? {k, id} : null)}/>
+          <PjBarre p={p} blocages={blocsJ} sel={selEt && selEt.k===k ? selEt.id : null} onEtape={id=>setSelEt(id ? {k, id} : null)}/>
           {o && <PjPhasesReglage job={j} info={p.phasesInfo||{}} basculer={basculerEtape}/>}
-          {selEt && selEt.k===k && (()=>{ const x = p.steps.find(y=>y.id===selEt.id); return x ? <PjEtapeDetail job={j} x={x} blocages={B.parJob[j.id]||[]} B={B} basculerEtape={basculerEtape} toast={m=>{ if(/^Erreur|^Micro/.test(m)) alert(m); }}/> : null; })()}
+          {selEt && selEt.k===k && (()=>{ const x = p.steps.find(y=>y.id===selEt.id); return x ? <PjEtapeDetail job={j} x={x} blocages={blocsJ} B={B} basculerEtape={basculerEtape} toast={m=>{ if(/^Erreur|^Micro/.test(m)) alert(m); }}/> : null; })()}
           <div style={{display:'none'}}>{s.G.map(g=><span key={g.k} title={g.label+' — '+(g.segments && g.segments.length ? g.segments.map(x=>(x.etat==='na'?'⏳ ':x.etat==='manque'?'✗ ':'✓ ')+x.label).join(' · ') : g.L.length ? g.L.map(x=>(x.ok?'✓ ':'✗ ')+x.titre).join(' · ') : 'pas encore rendu là')} style={{display:'inline-flex',flexDirection:'column',alignItems:'center',gap:2}}>
             {(g.segments && g.segments.length>1)
               ? <span style={{width:38,height:8,display:'flex',gap:1}}>{g.segments.map((x,i)=><span key={i} title={x.label} style={{flex:1,borderRadius:2,background: x.etat==='ok'||x.etat==='manuel' ? 'var(--success)' : x.etat==='manque' ? 'var(--warning)' : 'var(--bg4)'}}/>)}</span>
@@ -3518,6 +3548,7 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const [, setTicAttitre] = useState(0);
   const {loading, err, events, registry, factures, appels, courriels, achats, archives, lent} = useClientsData(cfg, refreshKey+'|d');
   const [commandes] = useCommandes(cfg);
+  const BLd = useBlocages(cfg);   // v366 : alerte des blocages ouverts (CRM + PunchPro)
   const [manuels] = useEtapesManuelles(cfg);
   const [adresses, deciderAdresse, nbSansAdresse] = useAdresses(cfg);
   const [reglés] = useCourrielsReglés(cfg);
@@ -3617,6 +3648,9 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
         {n:anomalies.length, l:'À vérifier', go:'verif', sub:'factures, PO, appels', niv:'oui'},
         {n:aAssocier.length, l:'Achats à associer', go:'fournisseurs', sub:cvMoney(achatsMois)+' achetés ce mois-ci', niv:'oui'},
         {n:adresses.length, l:'Adresses à confirmer', go:'dashboard', sub:'proposées par La mémoire', niv:'oui'},
+        (()=>{ const o = (BLd.liste||[]).filter(b=>b.statut!=='Réglé'), pp = o.filter(b=>b.source==='punchpro');
+          const rec = pp.filter(b=>b.cree && cvJoursDepuis(b.cree)<=2).length;
+          return {n:o.length, l:'Blocages ouverts', go:'projets', sub: pp.length ? pp.length+' signalé'+(pp.length>1?'s':'')+' dans PunchPro'+(rec ? ' · '+rec+' récent'+(rec>1?'s':'') : '') : 'dans Projets', niv: pp.length ? 'urgent' : 'oui'}; })(),
       ];
       const actifs = T.filter(t=>t.n);
       return <>
@@ -11428,10 +11462,11 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
   const [manuelsAv] = useEtapesManuelles(cfg);
   const [commandesAv] = useCommandes(cfg);
   const BLav = useBlocages(cfg), TJav = useTypesJob(cfg);
+  const BJav = useMemo(()=>blocsParJob(BLav.liste, clients),[BLav.liste, clients]);   // v366
   const [voirAv,setVoirAvS]=useState(()=>{ try{ return localStorage.getItem('crmVoirAvancement')==='1'; }catch(e){ return false; } });
   const setVoirAv = b => { setVoirAvS(b); try{ localStorage.setItem('crmVoirAvancement', b?'1':'0'); }catch(e){} };
   const avancement = j => { if(!voirAv) return null; try{ const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
-    return pjPhases(j, pjEtapes(j, ap, commandesAv, courriels, manuelsAv), {appels:ap, commandes:commandesAv, factures, manuels:manuelsAv, archives, blocages:BLav.parJob[j.id]||[],
+    return pjPhases(j, pjEtapes(j, ap, commandesAv, courriels, manuelsAv), {appels:ap, commandes:commandesAv, factures, manuels:manuelsAv, archives, blocages:BJav[j.id]||[],
       typeJob: j.client==='PART' ? (TJav.map[j.id] || pjTypeAutoComplet(j)) : ''}).pct; }catch(e){ return null; } };
   const [filter,setFilter]=useState('all');
   const [q,setQ]=useState('');
