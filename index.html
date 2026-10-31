@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v358';
+const APP_VERSION = 'v359';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7642,7 +7642,11 @@ function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
       const r = await driveDeposer(new File([f], (edit.code||'produit').replace(/[\\/]/g,'-')+'.jpg', {type:f.type||'image/jpeg'}), d);
       setEdit(e=>({...e, photo:r.id})); setOccupe(''); toast&&toast('Photo ajoutée — clique Enregistrer');
     }catch(e){ setOccupe(''); err(e); } };
-  return <div style={{display:'grid',gap:8,padding:'6px 0'}}>
+  // v359 : Entrée = Enregistrer (sauf dans une zone de texte ou dans les prix d'ami, qui ont leur propre Entrée) ; Échap = Annuler
+  const enregistrer = async()=>{ if(!edit.code.trim() || occupe) return; try{ await C.modifierFiche(p, {...edit, code:edit.code.trim()}); setEdit(null); await C.lire(true); toast&&toast('Fiche enregistrée'); }catch(e){ err(e); } };
+  const clavier = e => { const t = e.target; if(e.key==='Escape'){ setEdit(null); return; }
+    if(e.key==='Enter' && t.tagName==='INPUT' && !t.closest('label') && !(ajout!==null && t.closest('span'))){ e.preventDefault(); enregistrer(); } };
+  return <div style={{display:'grid',gap:8,padding:'6px 0'}} onKeyDown={clavier}>
     <div style={{display:'flex',gap:10,alignItems:'flex-start',flexWrap:'wrap'}}>
       <ProdPhoto src={edit.photo || photoDe(p)} taille={96}/>
       <div style={{display:'grid',gap:6,flex:'1 1 300px'}}>
@@ -7689,7 +7693,7 @@ function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
             <button className="btn btn-sm" onClick={()=>setAjout(null)}>Annuler</button></span>}
     </div>
     <div style={{display:'flex',gap:6}}>
-      <button className="btn btn-sm btn-p" disabled={!edit.code.trim() || !!occupe} onClick={async()=>{ try{ await C.modifierFiche(p, {...edit, code:edit.code.trim()}); setEdit(null); await C.lire(true); toast&&toast('Fiche enregistrée'); }catch(e){ err(e); } }}>Enregistrer</button>
+      <button className="btn btn-sm btn-p" disabled={!edit.code.trim() || !!occupe} onClick={enregistrer} title="Entrée">Enregistrer</button>
       <button className="btn btn-sm" onClick={()=>setEdit(null)}>Annuler</button>
       {p.src==='punch' && codeNorm(edit.code)!==codeNorm(p.code) && <span className="muted" style={{fontSize:11.5}}>Le code change aussi dans STOCK PUNCH PRO (PunchPro).</span>}
     </div>
