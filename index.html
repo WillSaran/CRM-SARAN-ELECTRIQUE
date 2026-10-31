@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v371';
+const APP_VERSION = 'v372';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6798,7 +6798,7 @@ const sousDoublons = (cat, produits) => { const d = DOUBLONS[cat]; return d ? Ob
 // v357 : sous-catégories à DEUX niveaux quand elles contiennent « · » (CONDUIT : PVC / EMT, puis Tuyau, Coude, LB…).
 // Niveau 1 trié selon CONDUIT_MAT (PVC en premier), niveau 2 selon CONDUIT_TYPES ; le reste en dernier.
 function niveauxSous(cat, sousCats){
-  const O1 = [...CONDUIT_MAT, ...DISJ_MARQUES], O2 = [...CONDUIT_TYPES, ...DISJ_TYPES];   // v365
+  const O1 = [...CONDUIT_MAT, ...DISJ_MARQUES, ...CHAUF_N1], O2 = [...CONDUIT_TYPES, ...DISJ_TYPES, ...Object.values(CHAUF_N2).flat()];   // v365, v372
   const rang1 = x => { const i = O1.indexOf(x); return i<0 ? 50 : i; }, rang2 = x => { const i = O2.indexOf(x); return i<0 ? 50 : i; };
   const n1 = [...new Set(sousCats.map(x=>sousConduit(x)[0]))].sort((a,b)=>rang1(a)-rang1(b) || a.localeCompare(b));
   const n2 = {}; sousCats.forEach(x=>{ const [a,b] = sousConduit(x); if(b){ (n2[a] = n2[a]||[]); if(!n2[a].includes(b)) n2[a].push(b); } });
@@ -6815,6 +6815,50 @@ function sousOk(cat, sous, type, p){
 }
 const DISJ_MARQUES = ['QO (Square D)','Homeline (CHOM)','BR (Eaton)','Siemens Q (SIEQ)','Siemens B (SIEB)','GE','Stab-Lok (Federal)','Autres'];
 const DISJ_TYPES = ['Standard','CAFI','PAF','GFI','PDF','Tandem / quad','Accessoires'];
+// v372 : CHAUFFAGE = type · gamme (demande de William). Plinthes (Brava, Prima, Bella…), Convecteurs (Mirage, Orléans, SHC, Oasis…),
+// Aéro-convecteurs (salle de bain, garage / plafond — Dragon, Spider), Radiants, Plancher chauffant, Thermostats, Accessoires.
+const CHAUF_N1 = ['Plinthes','Convecteurs','Aéro-convecteurs','Radiants','Plancher chauffant','Thermostats','Accessoires'];
+const CHAUF_N2 = {
+  'Plinthes':['Brava','Prima','Bella','Porte-patio','Autres'],
+  'Convecteurs':['Mirage','Orléans','SHC','Oasis (salle de bain)','Convectair','Autres'],
+  'Aéro-convecteurs':['Salle de bain','Coup de pied','Garage / plafond','Mural','Autres'],
+  'Radiants':['Cove','Infrarouge','Autres'],
+  'Plancher chauffant':['Câbles','Trames','Autres'],
+  'Thermostats':['Intelligent','Électronique','Mécanique','Relais et accessoires'],
+  'Accessoires':['Boîtiers','Autres']};
+function sousChauffage(T){
+  const C = T.split(' ')[0];
+  // thermostats et relais
+  if(/RELAIS|RC840|TRANSFO/.test(T)) return 'Thermostats · Relais et accessoires';
+  if(/THERMOST|\bTH\d{3,4}|^STERWFT|^STERWF$|^SIBT|SIBTE|\bST252|SWT1|RJ32|FLK\d|FLP\d|KIT-O[CDF]|TB6|TB26/.test(T) && !/CONV|PLINTHE|CHAUF (MURAL|PLAF)/.test(T)){
+    if(/ZIGBEE|\bZB\b|WI-?FI|\bWF\b|INTELLIGENT|SMART|CONNECT|SINOPE|TH1[1-4]\d{2}|STERWFT/.test(T)) return 'Thermostats · Intelligent';
+    if(/ELECTRONIQ|PROGRAMMABLE|TH450|ST252|SIBTE|FLK|FLP|CONCERTO|DIGITAL/.test(T)) return 'Thermostats · Électronique';
+    return 'Thermostats · Mécanique'; }
+  // plancher chauffant
+  if(/C[ÂA]BLE CHAUFF|CABLE 3W|CABLE VERT|^FLE|SCU2W|TRAME|PLANCHER|FLEXTHERM|HEATING CABLE/.test(T)) return /TRAME/.test(T) ? 'Plancher chauffant · Trames' : 'Plancher chauffant · Câbles';
+  // radiants
+  if(/COVE|RADIANT|\bORC\d|INFRAROUGE|INFRARED|\bDIR\d/.test(T)) return /INFRA/.test(T) ? 'Radiants · Infrarouge' : 'Radiants · Cove';
+  // aéro-convecteurs (ventilateur)
+  if(/DRAGON|\bDRI\d|SPIDER|\bSGH\d|CHAUF PLAF|PLAFOND|GARAGE|UNIT HEATER|AEROTHERME|A[ÉE]ROTHERME|AIR FORCE|\bWF\d{4}/.test(T)) return 'Aéro-convecteurs · Garage / plafond';
+  if(/COUP DE PIED|COUP PIED|KICK|\bSKS\d|^STESK\b|SOUS-ARMOIRE/.test(T)) return 'Aéro-convecteurs · Coup de pied';
+  if(/\bRWF\d|STERWF\d|STERWF CHAUF|WALL FAN|\bOVS\d|AERO MUR|A[ÉE]RO|FAN HEATER|VENTILO/.test(T)) return 'Aéro-convecteurs · Salle de bain';
+  if(/RWFSAW|BOITIER SURFACE|BO[IÎ]TIER/.test(T)) return 'Accessoires · Boîtiers';
+  // convecteurs
+  if(/MIRAGE|\bMIR\d|STEMIR/.test(T)) return 'Convecteurs · Mirage';
+  if(/ORLEAN|\bSOR[HL]?\d|STESOR/.test(T)) return 'Convecteurs · Orléans';
+  if(/\bSHC\d|STESHC/.test(T)) return 'Convecteurs · SHC';
+  if(/OASIS|\bSOA\d|STESOA|CONV SALLE BAIN|CONVECTEUR DE SALLE DE BAIN/.test(T)) return 'Convecteurs · Oasis (salle de bain)';
+  if(/CONVECTAIR|^CON\d|APERO|AP[ÉE]RO|CONVECT AIR/.test(T)) return 'Convecteurs · Convectair';
+  if(/CONV|\bCON\b/.test(T)) return 'Convecteurs · Autres';
+  // plinthes
+  if(/PORTE.?PATIO|\bPDH\d/.test(T)) return 'Plinthes · Porte-patio';
+  if(/BELLA|STEBA|\bBA\d{4}/.test(T)) return 'Plinthes · Bella';
+  if(/BRAVA|STEB\d|^STEB|\bB\d{4}(W|BK)\b/.test(T)) return 'Plinthes · Brava';
+  if(/PRIMA|STEPR|STESPR|\bSPRM?\d/.test(T)) return 'Plinthes · Prima';
+  if(/PLINTHE|BASEBOARD|\bOFM\d|RADIATEUR DE COURONNE|\bSCR\d/.test(T)) return 'Plinthes · Autres';
+  if(/CHAUF MURAL|CHAUFFAGE MURAL|MURAL/.test(T)) return 'Aéro-convecteurs · Mural';
+  return '';
+}
 const SOUS_SUGG = {
   'FIL':['NMD','NMWU','AC90 / BX','ACWU','TECK','RW90','T90','LVT','SOOW','Réseau','Télécom'],
   'CONNECTEURS':['NMD (Loomex)','AC90 / BX','TECK','ACWU','Cordon souple (SOOW)','Autres'],   // v358 : par type de câble ; les connecteurs PVC / EMT / flex sont dans CONDUIT mais aussi visibles ici (doublon)
@@ -6824,7 +6868,8 @@ const SOUS_SUGG = {
   'PANNEAUX':['QO (Square D)','Homeline (CHOM)','BR (Eaton)','Siemens','GE','Stab-Lok (Federal)','Autres'],
   'DISJONCTEURS':DISJ_MARQUES.flatMap(m=>DISJ_TYPES.map(t=>m+' · '+t)),   // v365 : Marque · Type (Standard, CAFI, PAF, GFI, PDF, Tandem / quad, Accessoires)
   'CONNEXIONS / MALT':['MALT','Raccordement'],
-  'DÉCORA':['Prises','Interrupteurs','Gradateurs','Intelligent','Plaques','Minuteries et détecteurs','Fiches','Carillons']};
+  'DÉCORA':['Prises','Interrupteurs','Gradateurs','Intelligent','Plaques','Minuteries et détecteurs','Fiches','Carillons'],
+  'CHAUFFAGE':CHAUF_N1.flatMap(a=>CHAUF_N2[a].map(b=>a+' · '+b))};
 // v131 : Décora par sous-catégorie (on ne change pas la catégorie, seulement la sous-catégorie)
 function sousDecora(T){
   if(/CASETA|PICO\b|^PICO|WI-?FI|SMART|INTELLIGENT|ZIGBEE|Z-?WAVE|\bRA2\b|MYQ|HOMEKIT|KIT PICO|KSC2V|\bKSC/.test(T)) return 'Intelligent';
@@ -6870,6 +6915,7 @@ function classerProduit(code, desc, catActuelle){
   if(/^D[ÉE]CORA/i.test(cat)){
     if(/BREAKER|DISJ|\bBRK\b|PLUG-IN|TWIN \d|SIEMENS TWIN/.test(T) || (sigDisj(code, desc) && !/PRISE|RECEPT|PLUG|FICHE/.test(T))) return {cat:'DISJONCTEURS', sous:marqueDisj(T)};   // disjoncteur rangé dans Décora par erreur
     const sd = sousDecora(T); return sd ? {cat, sous:sd} : null; }
+  if(/^CHAUFFAGE/i.test(cat)){ const sc = sousChauffage(T); return sc ? {cat, sous:sc} : null; }   // v372
   if(CAT_FIXES.test(cat)) return null;
   // entrée électrique (pas les panneaux : ils ont leur catégorie)
   if(/DISCONNECT|SECTIONNEUR|DISCONNECTEUR|^DIS \d|\bDIS \d+A|SAFETY SWITCH|NON-?FUS/.test(T)) return {cat:'ENTRÉE ÉLECTRIQUE', sous:'Sectionneur'};
