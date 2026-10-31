@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v356';
+const APP_VERSION = 'v357';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6710,6 +6710,23 @@ const DOUBLONS = {
   'CONNECTEURS': {'PVC': p=>p.cat==='CONDUIT' && p.sous==='PVC · Connecteur', 'EMT': p=>p.cat==='CONDUIT' && p.sous==='EMT · Connecteur'}};
 const estDoublon = (cat, sous, p) => { const d = DOUBLONS[cat]; if(!d) return false; return sous ? !!(d[sous] && d[sous](p)) : Object.values(d).some(f=>f(p)); };
 const sousDoublons = (cat, produits) => { const d = DOUBLONS[cat]; return d ? Object.keys(d).filter(k=>produits.some(d[k])) : []; };
+// v357 : sous-catégories à DEUX niveaux quand elles contiennent « · » (CONDUIT : PVC / EMT, puis Tuyau, Coude, LB…).
+// Niveau 1 trié selon CONDUIT_MAT (PVC en premier), niveau 2 selon CONDUIT_TYPES ; le reste en dernier.
+function niveauxSous(cat, sousCats){
+  const rang1 = x => { const i = CONDUIT_MAT.indexOf(x); return i<0 ? 50 : i; }, rang2 = x => { const i = CONDUIT_TYPES.indexOf(x); return i<0 ? 50 : i; };
+  const n1 = [...new Set(sousCats.map(x=>sousConduit(x)[0]))].sort((a,b)=>rang1(a)-rang1(b) || a.localeCompare(b));
+  const n2 = {}; sousCats.forEach(x=>{ const [a,b] = sousConduit(x); if(b){ (n2[a] = n2[a]||[]); if(!n2[a].includes(b)) n2[a].push(b); } });
+  Object.values(n2).forEach(l=>l.sort((a,b)=>rang2(a)-rang2(b) || a.localeCompare(b)));
+  return {n1, n2, deuxNiveaux: Object.keys(n2).length>0};
+}
+// p passe le filtre sous (niveau 1) + type (niveau 2) ?
+function sousOk(cat, sous, type, p){
+  if(!sous) return true;
+  const ps = p.sous||'';
+  if(estDoublon(cat, sous, p)) return !type;
+  if(type) return ps===sous+' · '+type;
+  return ps===sous || ps.startsWith(sous+' · ');
+}
 const SOUS_SUGG = {
   'FIL':['NMD','NMWU','AC90 / BX','ACWU','TECK','RW90','T90','LVT','SOOW','Réseau','Télécom'],
   'CONNECTEURS':['NMD (Loomex)','AC90 / BX','TECK','ACWU','Cordon souple (SOOW)','Liquidtight','Autres'],   // v355 : par type de câble ; les connecteurs PVC / EMT sont dans CONDUIT mais aussi visibles ici (doublon)
@@ -7259,7 +7276,7 @@ function ProduitsView({cfg, toast}){
   const C = useCatalogue(cfg);
   const [vue,setVue]=useState('catalogue');
   const [cat,setCat]=useState('');
-  const [sous,setSous]=useState('');
+  const [sous,setSous]=useState(''), [type,setType]=useState('');   // v357 : type = 2e niveau (CONDUIT · PVC → Coude, LB…)
   const [q,setQ]=useState('');
   const [nouveau,setNouveau]=useState(null);
   const [edit,setEdit]=useState(null);
@@ -7270,7 +7287,7 @@ function ProduitsView({cfg, toast}){
   const err = e => toast && toast('Erreur : '+apiErrMsg(e));
   const fourn = C.fournisseurs;
   const cherche = p => !q || rechercheOk(texteProduit(p)+' '+(p.notes||'')+' '+C.offresDe(p.code).map(o=>o.codeF+' '+o.desc).join(' '), q);
-  const dansCat = p => (!cat || p.cat===cat || estDoublon(cat, '', p)) && (!sous || (p.sous||'')===sous || estDoublon(cat, sous, p));   // v355 : doublons (boîtes PVC sous BOÎTES, connecteurs PVC / EMT sous CONNECTEURS)
+  const dansCat = p => (!cat || p.cat===cat || estDoublon(cat, '', p)) && sousOk(cat, sous, type, p);   // v357 : sous-catégorie à 2 niveaux + doublons
   const liste0 = C.produits.filter(p=>(q || dansCat(p)) && cherche(p));
   // v133 : FIL rangé par type (NMD, AC90 / BX…), puis par calibre (14, 12, 10… 1/0… 250 MCM), puis 2, 3, 4 conducteurs — avec une séparation à chaque calibre
   const vueFil = cat==='FIL' && !q;
@@ -7286,6 +7303,7 @@ function ProduitsView({cfg, toast}){
     if(z.g!==za.g && calTxt(z.g)) return <tr key={'c'+i}><td colSpan={nbCol} style={{padding:'3px 12px',borderTop:'2px solid var(--border2)',fontSize:11.5,fontWeight:700,color:'var(--muted)'}}>{calTxt(z.g) || 'Autres'}</td></tr>;
     return null; };
   const sousCats = cat ? [...new Set([...C.produits.filter(p=>p.cat===cat && p.sous).map(p=>p.sous), ...sousDoublons(cat, C.produits)])].sort() : [];
+  const niv = niveauxSous(cat, sousCats);   // v357
   const aConf = C.aConfirmer.filter(a=>!q || cvNorm(a.code+' '+a.desc).includes(cvNorm(q)));
   const libres = C.offresLibres.filter(o=>!q || cvNorm(o.f+' '+o.codeF+' '+o.desc+' '+o.fab).includes(cvNorm(q)));
   const comp = C.comparaison.filter(x=>!q || cherche(x.p));
@@ -7366,12 +7384,16 @@ function ProduitsView({cfg, toast}){
 
     {vue==='catalogue' && <>
       {!q && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
-        <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>{ setCat(''); setSous(''); setLim(150); }}>Tous</button>
-        {C.toutesCats.filter(c=>nbCat(c)).map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>{ setCat(c); setSous(''); setLim(150); }}>{c} ({nbCat(c)})</button>)}
+        <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>{ setCat(''); setSous(''); setType(''); setLim(150); }}>Tous</button>
+        {C.toutesCats.filter(c=>nbCat(c)).map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>{ setCat(c); setSous(''); setType(''); setLim(150); }}>{c} ({nbCat(c)})</button>)}
       </div>}
-      {!q && sousCats.length>1 && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:8}}>
-        <button className={'btn btn-sm'+(!sous?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>setSous('')}>Tout {cat}</button>
-        {sousCats.map(s=><button key={s} className={'btn btn-sm'+(sous===s?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>setSous(s)}>{s}</button>)}
+      {!q && niv.n1.length>1 && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:(sous && (niv.n2[sous]||[]).length) ? 4 : 8}}>
+        <button className={'btn btn-sm'+(!sous?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>{ setSous(''); setType(''); }}>Tout {cat}</button>
+        {niv.n1.map(s=><button key={s} className={'btn btn-sm'+(sous===s?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>{ setSous(s); setType(''); }}>{s}</button>)}
+      </div>}
+      {!q && sous && (niv.n2[sous]||[]).length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:8,paddingLeft:10,borderLeft:'3px solid var(--accent)'}}>
+        <button className={'btn btn-sm'+(!type?' btn-p':'')} style={{fontSize:11,padding:'1px 7px'}} onClick={()=>setType('')}>Tout {sous}</button>
+        {niv.n2[sous].map(t=><button key={t} className={'btn btn-sm'+(type===t?' btn-p':'')} style={{fontSize:11,padding:'1px 7px'}} onClick={()=>setType(t)}>{t}</button>)}
       </div>}
       {q && <div className="muted" style={{fontSize:12,marginBottom:6}}>Recherche dans tout le catalogue : {liste.length} produit{liste.length>1?'s':''}</div>}
       <div className="card" style={{padding:0,overflowX:'auto'}}>
@@ -9442,17 +9464,22 @@ function bcQteTexte(l){ const f = l.format||'', q = l.qte;
   return q+' '+(l.unite && l.unite!=='un' ? l.unite+' ' : '')+'×'; }
 // Liste du catalogue (catégories + recherche) — pour le bon et pour les assemblages
 function ChoixArticles({C, qteDe, onAjouter, hauteur, estDans, onLibre}){
-  const [q,setQ]=useState(''), [cat,setCat]=useState(''), [sous,setSous]=useState('');
+  const [q,setQ]=useState(''), [cat,setCat]=useState(''), [sous,setSous]=useState(''), [type,setType]=useState('');
   const sousCats = cat ? [...new Set([...C.produits.filter(p=>p.cat===cat && p.sous).map(p=>p.sous), ...sousDoublons(cat, C.produits)])].sort() : [];
-  const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat || estDoublon(cat, '', p)) && (!sous || p.sous===sous || estDoublon(cat, sous, p)) && (!q || rechercheOk(texteProduit(p), q)));   // v355 : doublons
+  const niv = niveauxSous(cat, sousCats);   // v357 : 2 niveaux (CONDUIT : PVC / EMT → type)
+  const produits = C.produits.filter(p=>p.cat!=='DIVERS' && (!cat || p.cat===cat || estDoublon(cat, '', p)) && sousOk(cat, sous, type, p) && (!q || rechercheOk(texteProduit(p), q)));
   return <div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
-      <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>{ setCat(''); setSous(''); }}>Tous</button>
-      {C.cats.filter(c=>c!=='DIVERS').map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>{ setCat(c); setSous(''); }}>{c}</button>)}
+      <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>{ setCat(''); setSous(''); setType(''); }}>Tous</button>
+      {C.cats.filter(c=>c!=='DIVERS').map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>{ setCat(c); setSous(''); setType(''); }}>{c}</button>)}
     </div>
-    {sousCats.length>1 && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:6,paddingLeft:8,borderLeft:'3px solid var(--accent)'}}>
-      <button className={'btn btn-sm'+(!sous?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>setSous('')}>Tout {cat}</button>
-      {sousCats.map(x=><button key={x} className={'btn btn-sm'+(sous===x?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>setSous(x)}>{x}</button>)}
+    {niv.n1.length>1 && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:6,paddingLeft:8,borderLeft:'3px solid var(--accent)'}}>
+      <button className={'btn btn-sm'+(!sous?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>{ setSous(''); setType(''); }}>Tout {cat}</button>
+      {niv.n1.map(x=><button key={x} className={'btn btn-sm'+(sous===x?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>{ setSous(x); setType(''); }}>{x}</button>)}
+    </div>}
+    {sous && (niv.n2[sous]||[]).length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:6,paddingLeft:16,borderLeft:'3px solid var(--border2)'}}>
+      <button className={'btn btn-sm'+(!type?' btn-p':'')} style={{fontSize:11,padding:'1px 7px'}} onClick={()=>setType('')}>Tout {sous}</button>
+      {niv.n2[sous].map(t=><button key={t} className={'btn btn-sm'+(type===t?' btn-p':'')} style={{fontSize:11,padding:'1px 7px'}} onClick={()=>setType(t)}>{t}</button>)}
     </div>}
     <div style={{display:'flex',gap:6,marginBottom:6}}>
       <input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter' && onLibre && q.trim() && !produits.length){ onLibre(q.trim()); setQ(''); } }} placeholder={onLibre ? 'Chercher un article… (pas trouvé ? + l\'ajoute tel quel)' : 'Chercher un article…'} style={{flex:1,minWidth:0}}/>
