@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v372';
+const APP_VERSION = 'v373';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -13242,7 +13242,16 @@ function EvenementClient({c, adresse, tel, courriel, onFermer}){
   const auto = [evNomTitre(c), c.commerce ? '' : evAdrTitre(adresse), type, type==='SERV' ? serv : ''].filter(Boolean).join(' ');
   const [titre,setTitre]=useState(null);           // null = suit le choix ; sinon modifié à la main
   const t = titre!=null ? titre : auto;
-  const date = cvSamediProchain();
+  // v373 : En attente (samedi qui vient, toute la journée) ou directement dans l'agenda (The Crew) à une date, avec l'équipe
+  const [ou,setOu]=useState('attente');
+  const [jour,setJour]=useState(localDateStr(new Date()));
+  const [journee,setJournee]=useState(false);
+  const [debut,setDebut]=useState('07:00');
+  const [fin,setFin]=useState('15:30');
+  const [qui,setQui]=useState('');
+  const attente = ou==='attente';
+  const date = attente ? cvSamediProchain() : jour;
+  const membre = cvEquipe().find(m=>m.colorId===qui);
   const [occupe,setOccupe]=useState(false);
   const [fait,setFait]=useState(null);
   const nomComplet = String((c.fiche && c.fiche.nom) || c.nom || '').trim();
@@ -13253,12 +13262,16 @@ function EvenementClient({c, adresse, tel, courriel, onFermer}){
     setOccupe(true);
     try{
       const lendemain = (()=>{ const d = new Date(date+'T12:00:00'); d.setDate(d.getDate()+1); return localDateStr(d); })();
-      const r = await window.gapi.client.calendar.events.insert({calendarId:EN_ATTENTE_CAL, resource:{summary:t.trim(), location:adresse||'', description, start:{date}, end:{date:lendemain}}});
+      if(!attente && !journee && !(fin>debut)){ alert('L\'heure de fin doit être après l\'heure de début.'); setOccupe(false); return; }
+      const quand = (attente || journee) ? {start:{date}, end:{date:lendemain}}
+        : {start:{dateTime:date+'T'+debut+':00', timeZone:'America/Toronto'}, end:{dateTime:date+'T'+fin+':00', timeZone:'America/Toronto'}};
+      const r = await window.gapi.client.calendar.events.insert({calendarId: attente ? EN_ATTENTE_CAL : CREW_CAL,
+        resource:{summary:t.trim(), location:adresse||'', description, ...quand, ...(!attente && membre ? {colorId:membre.colorId} : {})}});
       setFait({titre:t.trim(), lien:(r.result||{}).htmlLink||''});
     }catch(e){ alert('Agenda : '+apiErrMsg(e)); }
     setOccupe(false); };
   if(fait) return <div className="card" style={{marginTop:10,border:'1px solid var(--success)',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:13}}>
-    <span>« <b>{fait.titre}</b> » ajouté dans En Attente, le samedi {cvFmtDay(date)} (toute la journée).</span>
+    <span>« <b>{fait.titre}</b> » ajouté {attente ? <>dans En Attente, le samedi {cvFmtDay(date)} (toute la journée)</> : <>dans l'agenda, le {cvFmtDay(date)} {date.slice(0,4)}{journee ? ' (toute la journée)' : ', '+debut.replace(':',' h ')+' à '+fin.replace(':',' h ')}{membre ? ' — '+membre.nom : ''}</>}.</span>
     {fait.lien && <a href={fait.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>Ouvrir dans l'agenda ↗</a>}
     <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={onFermer}>Fermer</button></div>;
   return <div style={{marginTop:10,padding:12,border:'1px solid var(--accent)',borderRadius:10,display:'grid',gap:8,fontSize:13}}>
@@ -13270,8 +13283,23 @@ function EvenementClient({c, adresse, tel, courriel, onFermer}){
     <div style={{display:'flex',gap:6,alignItems:'center'}}><span className="muted" style={{width:70,flex:'0 0 70px'}}>Titre</span>
       <input value={t} onChange={e=>setTitre(e.target.value)} style={{flex:1,minWidth:0,fontWeight:700}}/></div>
     <textarea value={travaux} onChange={e=>setTravaux(e.target.value)} rows={3} placeholder="Travaux demandés (ex. remplacer 6 luminaires encastrés au salon, ajouter une prise extérieure)" style={{resize:'vertical',fontFamily:'inherit'}}/>
+    <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}><span className="muted" style={{width:70}}>Où</span>
+      <button className={'btn btn-sm'+(attente?' btn-p':'')} onClick={()=>setOu('attente')}>En attente</button>
+      <button className={'btn btn-sm'+(!attente?' btn-p':'')} onClick={()=>setOu('agenda')}>Agenda (The Crew)</button></div>
+    {!attente && <>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><span className="muted" style={{width:70}}>Quand</span>
+        <input type="date" value={jour} onChange={e=>setJour(e.target.value)} style={{width:'auto',padding:'4px 8px'}}/>
+        {!journee && <><input type="time" value={debut} onChange={e=>setDebut(e.target.value)} style={{width:'auto',padding:'4px 8px'}}/><span className="muted">à</span>
+          <input type="time" value={fin} onChange={e=>setFin(e.target.value)} style={{width:'auto',padding:'4px 8px'}}/></>}
+        <label style={{display:'flex',gap:4,alignItems:'center'}}><input type="checkbox" checked={journee} onChange={e=>setJournee(e.target.checked)}/> Toute la journée</label></div>
+      <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}><span className="muted" style={{width:70}}>Équipe</span>
+        <button className={'btn btn-sm'+(!qui?' btn-p':'')} onClick={()=>setQui('')}>Plus tard</button>
+        {cvEquipe().map(m=><button key={m.colorId} className="btn btn-sm" onClick={()=>setQui(m.colorId)}
+          style={qui===m.colorId ? {background:GCAL_COLOR_MAP[m.colorId], color:texteSur(GCAL_COLOR_MAP[m.colorId]), border:'none', fontWeight:700} : {borderColor:GCAL_COLOR_MAP[m.colorId]}}>{m.nom}</button>)}</div>
+    </>}
     <div className="muted" style={{fontSize:12,whiteSpace:'pre-wrap',background:'var(--bg3)',borderRadius:8,padding:8}}>
-      {'Agenda : En Attente · samedi '+cvFmtDay(date)+', toute la journée'+(adresse ? '\nLieu : '+adresse : '')+'\n\n'+description}</div>
+      {(attente ? 'Agenda : En Attente · samedi '+cvFmtDay(date)+', toute la journée'
+        : 'Agenda : The Crew · '+cvFmtDay(date)+' '+date.slice(0,4)+(journee ? ', toute la journée' : ', '+debut.replace(':',' h ')+' à '+fin.replace(':',' h '))+(membre ? ' · '+membre.nom : ''))+(adresse ? '\nLieu : '+adresse : '')+'\n\n'+description}</div>
     <div style={{display:'flex',gap:6,justifyContent:'flex-end'}}>
       <button className="btn btn-sm" onClick={onFermer}>Annuler</button>
       <button className="btn btn-sm btn-p" disabled={occupe || !t.trim()} onClick={creer}>{occupe ? 'Création…' : 'Créer dans l\'agenda'}</button></div>
