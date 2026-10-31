@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v359';
+const APP_VERSION = 'v360';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7411,7 +7411,9 @@ function ProduitsView({cfg, toast}){
               return <tr key={k} style={{cursor:'pointer'}} title="Cliquer pour modifier" onClick={e=>{ if(e.target.closest('input,button,a,select,label,textarea')) return; ouvrir(); }}>
                 <td style={{width:46}}><ProdPhoto src={photoDe(p)}/></td>
                 <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}{codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>PunchPro : {codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).join(' · ')}</div>}
-                  {(p.membres||[]).filter(m=>m.src!=='punch').length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400,whiteSpace:'normal',maxWidth:170}}>Aussi : {(p.membres||[]).filter(m=>m.src!=='punch').map(m=>m.code).join(' · ')}</div>}{(!cat || q) && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>{p.cat}{p.sous ? ' · '+p.sous : ''}</div>}</td>
+                  {(p.membres||[]).filter(m=>m.src!=='punch').length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400,whiteSpace:'normal',maxWidth:170}}>Aussi : {(p.membres||[]).filter(m=>m.src!=='punch').map(m=>m.code).join(' · ')}</div>}<div style={{fontSize:10.5,fontWeight:400,marginTop:2}}>{(!cat || q) && <span className="muted">{p.cat} · </span>}{p.sous
+                    ? <span style={{background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:10,padding:'0 7px',fontWeight:600}}>{p.sous}</span>
+                    : <span style={{background:'rgba(230,140,0,.15)',color:'#b86a00',border:'1px solid rgba(230,140,0,.45)',borderRadius:10,padding:'0 7px',fontWeight:600}} title="Pas de sous-catégorie — à classer">à classer</span>}</div></td>
                 <td>{p.desc}<span className="muted" style={{fontSize:11}}> · {p.unite}{p.src==='punch' ? ' · PunchPro' : ''}</span>
                   {resumeLongueur(p)}
                   {couts.length>0 && <div className="muted" style={{fontSize:10.5}}>Acheté : {couts.map(c=>c.fournisseur+' '+cvMoney(c.cout)+' ('+cvFmtDay(c.date)+')').join(' · ')}</div>}</td>
@@ -7631,6 +7633,9 @@ function RegrouperVue({C, toast, err, q}){
 function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
   const [occupe,setOccupe]=useState('');
   const ref = useRef(null);
+  const boite = useRef(null);   // v360 : un clic à côté de la fiche la ferme (sauf pendant un enregistrement)
+  useEffect(()=>{ const h = e => { if(occupe) return; if(boite.current && !boite.current.contains(e.target)) setEdit(null); };
+    const t = setTimeout(()=>document.addEventListener('mousedown', h), 50); return ()=>{ clearTimeout(t); document.removeEventListener('mousedown', h); }; },[occupe, setEdit]);
   const offres = C.offresDe(p.code);
   const photoFourn = offres.filter(o=>o.photo);
   const [ajout,setAjout]=useState(null);   // v201 : {f, prix} — prix d'ami chez un fournisseur qui n'a pas encore de prix pour ce produit
@@ -7646,7 +7651,7 @@ function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
   const enregistrer = async()=>{ if(!edit.code.trim() || occupe) return; try{ await C.modifierFiche(p, {...edit, code:edit.code.trim()}); setEdit(null); await C.lire(true); toast&&toast('Fiche enregistrée'); }catch(e){ err(e); } };
   const clavier = e => { const t = e.target; if(e.key==='Escape'){ setEdit(null); return; }
     if(e.key==='Enter' && t.tagName==='INPUT' && !t.closest('label') && !(ajout!==null && t.closest('span'))){ e.preventDefault(); enregistrer(); } };
-  return <div style={{display:'grid',gap:8,padding:'6px 0'}} onKeyDown={clavier}>
+  return <div ref={boite} style={{display:'grid',gap:8,padding:'6px 0'}} onKeyDown={clavier}>
     <div style={{display:'flex',gap:10,alignItems:'flex-start',flexWrap:'wrap'}}>
       <ProdPhoto src={edit.photo || photoDe(p)} taille={96}/>
       <div style={{display:'grid',gap:6,flex:'1 1 300px'}}>
