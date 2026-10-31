@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v360';
+const APP_VERSION = 'v361';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -944,6 +944,13 @@ async function sheetsUpdateRow(spreadsheetId, sheetName, rowIndex1Based, rowArra
     spreadsheetId, range: sheetName+'!A'+rowIndex1Based+':'+lastCol+rowIndex1Based, valueInputOption:'RAW',
     resource:{values:[rowArray]}
   });
+}
+// v361 : supprimer une ligne (la feuille se referme ; relire ensuite, les numéros de ligne changent)
+async function sheetsDeleteRow(spreadsheetId, sheetName, rowIndex1Based){
+  if(typeof suivreEcritures==='function') suivreEcritures();
+  const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId});
+  const sh = (meta.result.sheets||[]).find(x=>x.properties.title===sheetName); if(!sh) throw new Error('Onglet introuvable : '+sheetName);
+  return window.gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId, resource:{requests:[{deleteDimension:{range:{sheetId:sh.properties.sheetId, dimension:'ROWS', startIndex:rowIndex1Based-1, endIndex:rowIndex1Based}}}]}});
 }
 async function ensureSheetsExist(spreadsheetId, sheetsSpec){
   const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId});
@@ -7185,6 +7192,12 @@ function useCatalogue(cfg){
     if(f && f.row) await sheetsUpdateRow(idJ, 'Produits', f.row, ligne);
     else { await ensureOnglet('Produits', PROD_ENTETE); await sheetsAppendRow(idJ, 'Produits', ligne); }
   };
+  // v361 : supprimer un produit — sa fiche (La mémoire — Jobs › Produits) et, si c'est un produit PunchPro, sa ligne dans STOCK PUNCH PRO (les gars ne le verront plus)
+  const supprimerFiche = async (p)=>{
+    if(p.src==='punch' && p.row && p.onglet) await sheetsDeleteRow(cfg.stockSpreadsheetId, p.onglet, p.row);
+    if(p.punch && p.punch.row && p.punch.cat) await sheetsDeleteRow(cfg.stockSpreadsheetId, p.punch.cat, p.punch.row);
+    if(p.fiche && p.fiche.row) await sheetsDeleteRow(idJ, 'Produits', p.fiche.row);
+  };
   // v121 : propositions de regroupement (tu confirmes chaque groupe) — fils par signature, autres par code
   const propositions = useMemo(()=>{
     const N = codeNorm, mot1 = d => N(String(d||'').trim().split(/\s+/)[0]);
@@ -7263,7 +7276,7 @@ function useCatalogue(cfg){
   const pasPareil = async membres=>{ await assurerColL(); for(const p of membres) await marquer(p, '≠'); };
   const retirerDuGroupe = async p=>{ await marquer(p, ''); };
   return {...etat, lire, coutDe, coutsDe, factureDe, suggereDe, prixDe, produitDe, aConfirmer, majPrix, majPrixAmi, ajouterPrixAmi, majProfil, ajouterProduit, lier, modifierProduit,
-    offresDe, meilleureOffre, monPrix, codeMaitre, offresLibres:liensOffres.libres, fournisseurs, comparaison, importerProduits, importerOffres, ajouterFiche, modifierFiche,
+    offresDe, meilleureOffre, monPrix, codeMaitre, offresLibres:liensOffres.libres, fournisseurs, comparaison, importerProduits, importerOffres, ajouterFiche, modifierFiche, supprimerFiche,
     propositions, trouverProduit, regrouper, pasPareil, retirerDuGroupe, aClasser, classerEnLot, lierEnLot, ajouterFichesEnLot};
 }
 
@@ -7639,6 +7652,7 @@ function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
   const offres = C.offresDe(p.code);
   const photoFourn = offres.filter(o=>o.photo);
   const [ajout,setAjout]=useState(null);   // v201 : {f, prix} — prix d'ami chez un fournisseur qui n'a pas encore de prix pour ce produit
+  const [confSup,setConfSup]=useState(false);   // v361 : suppression en deux clics
   const sauverAmi = async (o, v)=>{ if(String(v).trim().replace(',','.')===String(o.ami>0 ? o.ami : '')) return;
     try{ setOccupe('Enregistrement du prix…'); await C.majPrixAmi(o, v); setOccupe(''); toast&&toast(String(v).trim() ? "Prix d'ami enregistré : "+o.f+' '+o.codeF : 'Prix du site remis : '+o.f+' '+o.codeF); }catch(e){ setOccupe(''); err(e); } };
   const deposer = async f => { if(!f) return;
@@ -7701,6 +7715,13 @@ function FicheEdit({p, edit, setEdit, C, toast, err, photoDe}){
       <button className="btn btn-sm btn-p" disabled={!edit.code.trim() || !!occupe} onClick={enregistrer} title="Entrée">Enregistrer</button>
       <button className="btn btn-sm" onClick={()=>setEdit(null)}>Annuler</button>
       {p.src==='punch' && codeNorm(edit.code)!==codeNorm(p.code) && <span className="muted" style={{fontSize:11.5}}>Le code change aussi dans STOCK PUNCH PRO (PunchPro).</span>}
+      <span style={{flex:1}}></span>
+      {!confSup ? <button className="btn btn-sm" style={{color:'var(--muted)'}} disabled={!!occupe} onClick={()=>setConfSup(true)}>🗑 Supprimer</button>
+        : <span style={{display:'inline-flex',gap:6,alignItems:'center',fontSize:12}}>
+            <span style={{color:'#b86a00'}}>{(p.src==='punch' || p.punch) ? 'Disparaît aussi de PunchPro (STOCK PUNCH PRO). ' : ''}Supprimer {p.code} ?</span>
+            <button className="btn btn-sm" style={{background:'#c0392b',color:'#fff',borderColor:'#c0392b'}} disabled={!!occupe} onClick={async()=>{ try{ setOccupe('Suppression…'); await C.supprimerFiche(p); setOccupe(''); setEdit(null); await C.lire(true); toast&&toast('Supprimé : '+p.code); }catch(e){ setOccupe(''); err(e); } }}>Oui, supprimer</button>
+            <button className="btn btn-sm" onClick={()=>setConfSup(false)}>Non</button>
+          </span>}
     </div>
   </div>;
 }
