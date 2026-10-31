@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v374';
+const APP_VERSION = 'v375';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5193,7 +5193,8 @@ async function paiAnnulerFacture(id, factures, f){
 function paiLirePaiements(rows){
   return rows.slice(1).map((r,i)=>({row:i+2, id:String(r[0]||''), date:String(r[1]||''), de:String(r[2]||''), montant:cvNum(r[3])||0, message:String(r[4]||''), ref:String(r[5]||''),
     lues:paiNums(r[6]).filter(n=>!new RegExp('\\b'+n+'[-/.]\\d{1,2}[-/.]\\d{1,2}\\b').test(String(r[4]||'')) && !new RegExp('\\b'+n+PAI_RUE,'i').test(String(r[4]||'')) && !new RegExp('\\b'+n+'(?:[.,]\\d{1,2}\\b|\\s*\\$)|\\$\\s*'+n+'\\b').test(String(r[4]||''))), lien:String(r[7]||''), source:String(r[8]||'Interac'), confirmees:paiNums(r[9]), statut:String(r[10]||'').trim(), note:String(r[11]||'')}))
-    .filter(p=>(p.id || p.montant) && !(String(p.date).slice(0,10) < PAI_DEBUT));   // v190 : paiements d'avant le 1er juillet = pas dans le CRM
+    .filter(p=>(p.id || p.montant) && (!(String(p.date).slice(0,10) < PAI_DEBUT) || /^confirm/i.test(p.statut)))   // v190 : paiements d'avant le 1er juillet = pas dans le CRM…
+    .map(p=>String(p.date).slice(0,10) < PAI_DEBUT ? {...p, avantDebut:true} : p);   // v375 : …sauf ceux déjà confirmés : ils paient encore des factures envoyées après le 1er juillet (ex. Payne #2258 payée le 12 juin, envoyée le 8 juillet)
 }
 // Nom affiché du client d'une facture : contracteur (code) ou nom écrit sur la facture, sinon le courriel.
 function paiClientNom(f){ const c = String(f.client||'').trim(); const code = c.toUpperCase();
@@ -5678,7 +5679,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
   const groupesV = A.groupes.filter(g=>g.membres.some(filtreP));
   const datePaie = f => (f.paiements||[]).map(x=>String(x.date||'').slice(0,10)).sort().pop() || '';   // v313 : dernier paiement reçu
   const payees = Object.values(A.F).filter(f=>(f.etat==='payee') && filtreF(f)).sort((a,b)=>datePaie(b).localeCompare(datePaie(a)) || String(b.num).localeCompare(String(a.num)));
-  const tous = data.paiements.filter(p=>filtreP(p) || p.confirmees.some(n=>A.F[n] && filtreF(A.F[n]))).filter(p=>voirArch || !p.archive).sort((a,b)=>b.date.localeCompare(a.date));
+  const tous = data.paiements.filter(p=>filtreP(p) || p.confirmees.some(n=>A.F[n] && filtreF(A.F[n]))).filter(p=>voirArch || !(p.archive || p.avantDebut)).sort((a,b)=>b.date.localeCompare(a.date));
   // v314 : « Reçus » remplace « Payées » et « Tous les paiements » (même argent vu deux fois)
   const estConf = p => /^confirm/i.test(p.statut), estIgn = p => /^(ignor|annul)/i.test(p.statut), estAConf = p => !p.statut && !p.archive;
   const tousF = tous.filter(p=>recuF==='tous' || (recuF==='confirmes' ? estConf(p) : recuF==='ignores' ? estIgn(p) : estAConf(p)));
