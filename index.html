@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v364';
+const APP_VERSION = 'v365';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2270,6 +2270,21 @@ function usePOEtapes(cfg){
   return map;
 }
 const PJ_TYPES_PART = ['Piscine','Spa','Éclairage','Prise','Pièce','Mise à niveau','Borne','Chauffage','Dépannage'];
+// v365 : particulier — type principal (Entrée / Rough / Finition / SERV), et le sous-type seulement pour un SERV.
+// Valeur gardée dans « Types de job » : « Rough », « Finition », « Entrée », « SERV » ou « SERV · Éclairage ». Une ancienne valeur seule (« Éclairage ») = SERV · Éclairage.
+const PJ_TYPES_PRINC = ['Entrée','Rough','Finition','SERV'];
+const PJ_PRINC_PHASE = {'Entrée':'Entrée électrique', 'Rough':'Rough', 'Finition':'Finition'};
+function pjTypeParse(v){ v = String(v||'').trim(); if(!v) return {principal:'', sous:''};
+  const m = v.match(/^SERV\b\s*(?:·\s*(.*))?$/i); if(m) return {principal:'SERV', sous:(m[1]||'').trim()};
+  if(PJ_TYPES_PRINC.includes(v)) return {principal:v, sous:''};
+  return {principal:'SERV', sous:v}; }
+function pjPrincipauxAgenda(job){ const ev = (job && job.events) || [], out = [];
+  if(ev.some(e=>PJ_ENTREE_RE.test(e.title||'') || (job.client==='PART' && /\bENTR[EÉ]E\b/i.test(e.title||'')))) out.push('Entrée');   // particulier : « SARAN 696CANNERIE ENTRÉE »
+  if(ev.some(e=>e.phase==='ROUGH')) out.push('Rough');
+  if(ev.some(e=>e.phase==='FINITION')) out.push('Finition');
+  return out; }
+function pjTypeAutoComplet(job){ const a = pjPrincipauxAgenda(job); if(a.length) return a[0]; const t = pjTypeAuto(job); return t ? 'SERV · '+t : ''; }
+const pjCodeDe = t => (Object.entries(PJ_TYPE_CODES).find(([, v])=>v===t)||[''])[0];
 // v226-227 : type de job trouvé dans le titre (nomenclature imprimée pour les gars : « NOM SERV CODE … INITIALES »).
 // 1) un CODE écrit dans le titre gagne (le premier dans le titre) ; 2) sinon les autres mots reconnus, dans l'ordre de la liste.
 // Un type choisi à la main (onglet « Types de job ») a toujours priorité.
@@ -2319,6 +2334,11 @@ const PJ_BLOC_ENTETE = ['Id','Job','Étape','Type','Description','Date','Statut'
 function pjPartTexte(pt){ return 'Visite '+pt.n+'/'+pt.tot+(pt.attente ? (pt.extra ? ' (extra)' : '')+' en attente — pas encore cédulée' : (pt.ok ? ' faite le ' : ' prévue le ')+cvFmtDay(pt.day)); }
 function pjPhases(job, s, ctx){
   const today = cvDay(new Date().toISOString()), pro = job.client!=='PART';
+  // v365 : particulier dont le type choisi est Entrée / Rough / Finition, mais aucun mot d'étape dans les titres de l'agenda → ses passages comptent pour cette étape
+  if(!pro && (job.events||[]).some(e=>/\bENTR[EÉ]E\b/i.test(e.title||'') && !PJ_ENTREE_RE.test(e.title||''))) job = {...job, events:job.events.map(e=>/\bENTR[EÉ]E\b/i.test(e.title||'') ? {...e, entreeType:true} : e)};
+  if(!pro){ const Tp = pjTypeParse(ctx.typeJob).principal;
+    if(PJ_PRINC_PHASE[Tp] && !pjPrincipauxAgenda(job).length){ const P = Tp==='Entrée' ? '' : Tp.toUpperCase();
+      job = {...job, events:(job.events||[]).map(e=>(e.phase==='RAPUP') ? e : (Tp==='Entrée' ? {...e, entreeType:true} : {...e, phase:P}))}; } }
   const ev = job.events.filter(e=>!e.attente), att = job.events.filter(e=>e.attente);
   const passe = e => e.day < today, avenir = ev.filter(e=>!passe(e));
   const plans = ev.some(e=>e.attachments.some(a=>/plan|tout le dossier/i.test(a.title||'')));
@@ -2344,7 +2364,7 @@ function pjPhases(job, s, ctx){
   const FAIT = {ENTREE:['Entrée électrique faite','Entrée électrique non faite'], ROUGH:['Rough fait','Rough non fait'], FINITION:['Finition faite','Finition non faite']};
   const PO_CLE = {ENTREE:'entree', ROUGH:'rough', FINITION:'finition'};
   const phase = (P, nom) => {
-    const estP = e => P==='ENTREE' ? PJ_ENTREE_RE.test(e.title||'') : e.phase===P;
+    const estP = e => P==='ENTREE' ? (PJ_ENTREE_RE.test(e.title||'') || !!e.entreeType) : e.phase===P;
     const L = ev.filter(estP), faits = L.filter(passe), futurs = L.filter(e=>!passe(e));
     // v253 : un retour de la même phase dans l'agenda En Attente (ex. « CRS FINITION EXTRA CURPAS ») = une visite de plus, pas encore cédulée
     const attP = L.length ? att.filter(estP) : [];
@@ -2353,6 +2373,7 @@ function pjPhases(job, s, ctx){
     if(L.length){ actif = true; source = 'dans l\'agenda'; }
     else if(plus){ actif = true; source = 'ajoutée à la main'; }
     else if(moins){ actif = false; source = 'retirée à la main'; }
+    else if(!pro && PJ_PRINC_PHASE[pjTypeParse(ctx.typeJob).principal]===nom){ actif = true; source = 'type de job choisi'; }   // v365
     else if(!pro){ actif = false; source = 'pas à l\'agenda'; }   // v239 : particulier — on se fie à l'agenda
     else if(dit==='oui' || dit==='non'){ actif = dit==='oui'; source = dit==='oui' ? 'selon le PO' : po.type==='Service' ? 'PO de service' : 'pas dans le PO'; }
     else if(P==='ENTREE'){ actif = false; source = ''; }
@@ -2383,10 +2404,10 @@ function pjPhases(job, s, ctx){
   phase('ENTREE','Entrée électrique'); phase('ROUGH','Rough'); phase('FINITION','Finition');
   // v239 : particulier — les passages SERV forment une phase au nom du type de job (« Faire l'éclairage », « Faire le garage »…)
   if(!pro){
-    const estServ = e => !['ROUGH','FINITION','RAPUP'].includes(e.phase) && !PJ_ENTREE_RE.test(e.title||'');
+    const estServ = e => !['ROUGH','FINITION','RAPUP'].includes(e.phase) && !PJ_ENTREE_RE.test(e.title||'') && !e.entreeType;
     const L = ev.filter(estServ);
     if(L.length){
-      const [nomS, faire, fait] = pjServiceTexte(ctx.typeJob || '', job);
+      const [nomS, faire, fait] = pjServiceTexte(pjTypeParse(ctx.typeJob).sous, job);
       const faits = L.filter(passe), futurs = L.filter(e=>!passe(e)), apres = futurs.length ? 'Retour prévu le '+cvFmtDay(futurs[0].day) : '';
       const vs = visites.filter(v=>v.faite && v.events.some(estServ)), nonFac = vs.filter(v=>!v.facturee), sansAp = faits.filter(e=>!(e.as || e.fac));
       add(nomS, 'Service fait', {idPhase:'Service', oui:fait, non:faire, parts:partsDe(estServ), ok: faits.length>0 && !futurs.length, du: false, info: futurs.length ? 'Prévu le '+cvFmtDay(futurs[0].day) : 'Pas encore cédulé'});
@@ -2462,8 +2483,9 @@ function cvNomClientJob(j){ const e = ((j && j.events)||[]).find(x=>x.client && 
 // Sans nom complet dans la description : le titre sans les mots de type de job (« Alain Boucher Lumiere » → « Alain Boucher »)
 function cvNomSansType(nom){ const g = repMots(nom).garde.filter(w=>{ const u = pjMaj(w); return !PJ_TYPE_CODES[u] && !PJ_TYPE_MOTS.some(([, re])=>re.test(u)); }); return g.length ? cvTitleCase(g.join(' ')) : nom; }
 function cvTypeJob(j){ if(!j) return ''; const ids = [j.id, ...(j.ids ? [...j.ids] : [])].filter(Boolean);
-  for(const i of ids) if(PJ_TYPES_CACHE[i]) return PJ_TYPES_CACHE[i];
-  return pjTypeAuto({name:j.name||j.nom||'', events:j.events||[]}); }
+  for(const i of ids) if(PJ_TYPES_CACHE[i]){ const t = pjTypeParse(PJ_TYPES_CACHE[i]); return t.principal==='SERV' ? (t.sous || 'Service') : t.principal; }
+  const jj = {name:j.name||j.nom||'', events:j.events||[], client:j.client}, a = pjPrincipauxAgenda(jj);   // v365 : « Rough + Finition » quand l'agenda a les deux
+  return a.length ? a.join(' + ') : pjTypeAuto(jj); }
 function cvDateLongue(d){ return d ? cvFmtDay(d)+' '+String(d).slice(0,4) : ''; }
 function cvProjetJob(j){ const ev = (j && j.events) || [], reels = ev.filter(e=>!e.attente);
   const d = reels.length ? (reels.map(e=>e.day).sort()[0] || '') : (ev.length ? '' : (j && j.first) || '');
@@ -2650,21 +2672,26 @@ function ProjetsSuivi({cfg, refreshKey}){
   const codes = [...new Set(Object.values(clients).map(c=>c.code))].sort((a,b)=>(a==='PART')-(b==='PART') || a.localeCompare(b,'fr'));
   const groupes = [['cours','En cours'],['avenir','À venir'],['done','Terminées (30 derniers jours)']];
   const Ligne = ({x})=>{ const {c,j,s}=x, k=c.code+j.id, o=ouvert===k;
-    const p = pjPhases(j, s, {appels:ap, commandes, factures, manuels, archives, poEtapes, typeJob: c.code==='PART' ? (TJ.map[j.id] || pjTypeAuto(j)) : '', blocages:B.parJob[j.id]||[]});   // v224 ; v239 : type du particulier
+    const p = pjPhases(j, s, {appels:ap, commandes, factures, manuels, archives, poEtapes, typeJob: c.code==='PART' ? (TJ.map[j.id] || pjTypeAutoComplet(j)) : '', blocages:B.parJob[j.id]||[]});   // v224 ; v239 : type du particulier
     return <div className="opp-card" style={{padding:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:10,cursor:'pointer'}} onClick={()=>setOuvert(o?null:k)}>
         <div>
           <div className="t" style={{fontSize:14.5}}>{c.code!=='PART' && <span style={{color:'var(--accent)'}}>{c.code} </span>}{c.code==='PART' && cvNomClientJob(j) ? <span onClick={e=>ouvrirFicheClient(cvNomClientJob(j), e)} title="Ouvrir sa fiche du Répertoire" style={{textDecoration:'underline',textDecorationStyle:'dotted',cursor:'pointer'}}>{cvTitreJob(j)}</span> : cvTitreJob(j)}{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}
             {c.code==='PART' && <span onClick={e=>e.stopPropagation()} style={{marginLeft:8,fontSize:12}}>
               {typeAutre && typeAutre.k===k
-                ? <span style={{display:'inline-flex',gap:4}}><input autoFocus value={typeAutre.v} onChange={e=>setTypeAutre({k, v:e.target.value})} placeholder="Type de job" style={{padding:'1px 6px',width:130,fontSize:12}}/>
-                    <button className="btn btn-sm" style={{padding:'0 6px',fontSize:11}} disabled={!typeAutre.v.trim()} onClick={()=>{ TJ.changer(j.id, typeAutre.v.trim()); setTypeAutre(null); }}>OK</button></span>
-                : (()=>{ const auto = TJ.map[j.id] ? '' : pjTypeAuto(j), val = TJ.map[j.id] || auto;
-                  return <><select value={val} onChange={e=>{ if(e.target.value==='__autre') setTypeAutre({k, v:''}); else TJ.changer(j.id, e.target.value); }}
-                    title={auto ? 'Trouvé automatiquement dans le titre — choisis un autre type pour corriger' : undefined}
-                    style={{width:'auto',padding:'1px 6px',fontSize:12,fontWeight:600,color:val?'var(--accent)':'var(--muted)'}}>
-                    <option value="">Type de job…</option>{[...new Set([...PJ_TYPES_PART, ...(val ? [val] : [])])].map(t=><option key={t} value={t}>{t}</option>)}<option value="__autre">Autre…</option></select>
-                    {auto && <span className="muted" style={{fontSize:10.5,marginLeft:4}}>auto</span>}</>; })()}</span>}</div>
+                ? <span style={{display:'inline-flex',gap:4}}><input autoFocus value={typeAutre.v} onChange={e=>setTypeAutre({k, v:e.target.value})} placeholder="Sous-type du SERV" style={{padding:'1px 6px',width:130,fontSize:12}}/>
+                    <button className="btn btn-sm" style={{padding:'0 6px',fontSize:11}} disabled={!typeAutre.v.trim()} onClick={()=>{ TJ.changer(j.id, 'SERV · '+typeAutre.v.trim()); setTypeAutre(null); }}>OK</button></span>
+                : (()=>{ const auto = TJ.map[j.id] ? '' : pjTypeAutoComplet(j), val = TJ.map[j.id] || auto, T = pjTypeParse(val);   // v365 : type principal + sous-type (SERV)
+                  const st = {width:'auto',padding:'1px 6px',fontSize:12,fontWeight:600};
+                  return <><select value={T.principal} onChange={e=>{ const v = e.target.value; TJ.changer(j.id, v==='SERV' ? 'SERV'+(T.sous ? ' · '+T.sous : '') : v); }}
+                    title={auto ? 'Trouvé automatiquement dans l\'agenda ou le titre — choisis un autre type pour corriger' : 'Type de job'}
+                    style={{...st, color:T.principal?'var(--accent)':'var(--muted)'}}>
+                    <option value="">Type de job…</option>{PJ_TYPES_PRINC.map(t=><option key={t} value={t}>{t}</option>)}</select>
+                    {T.principal==='SERV' && <select value={T.sous} onChange={e=>{ if(e.target.value==='__autre') setTypeAutre({k, v:''}); else TJ.changer(j.id, 'SERV'+(e.target.value ? ' · '+e.target.value : '')); }}
+                      style={{...st, marginLeft:4, color:T.sous?'var(--accent)':'var(--muted)'}}>
+                      <option value="">Sous-type…</option>{[...new Set([...PJ_TYPES_PART, ...(T.sous ? [T.sous] : [])])].map(t=><option key={t} value={t}>{t}{pjCodeDe(t) ? ' ('+pjCodeDe(t)+')' : ''}</option>)}<option value="__autre">Autre…</option></select>}
+                    {auto && <span className="muted" style={{fontSize:10.5,marginLeft:4}}>auto</span>}
+                    {pjPrincipauxAgenda(j).length>1 && <span className="muted" style={{fontSize:10.5,marginLeft:4}}>· agenda : {pjPrincipauxAgenda(j).join(' + ')}</span>}</>; })()}</span>}</div>
           <CvPhasesJob job={j} onDone={()=>setTick(t=>t+1)}/>
           <div className="a">Prochaine étape : <b>{s.etape}</b>{p.prochaine ? <span className="muted"> · à faire : {pjNomPhase(p.prochaine.phase)} › {p.prochaine.texte || p.prochaine.titre}</span> : ''} {p.attente ? <span className="muted">· en attente</span> : <span style={{fontWeight:800,color:p.pct===100?'var(--success)':'var(--text)'}}>· {p.pct} %</span>}</div>
           <PjBarre p={p} blocages={B.parJob[j.id]||[]} sel={selEt && selEt.k===k ? selEt.id : null} onEtape={id=>setSelEt(id ? {k, id} : null)}/>
@@ -11384,7 +11411,7 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
   const setVoirAv = b => { setVoirAvS(b); try{ localStorage.setItem('crmVoirAvancement', b?'1':'0'); }catch(e){} };
   const avancement = j => { if(!voirAv) return null; try{ const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
     return pjPhases(j, pjEtapes(j, ap, commandesAv, courriels, manuelsAv), {appels:ap, commandes:commandesAv, factures, manuels:manuelsAv, archives, blocages:BLav.parJob[j.id]||[],
-      typeJob: j.client==='PART' ? (TJav.map[j.id] || pjTypeAuto(j)) : ''}).pct; }catch(e){ return null; } };
+      typeJob: j.client==='PART' ? (TJav.map[j.id] || pjTypeAutoComplet(j)) : ''}).pct; }catch(e){ return null; } };
   const [filter,setFilter]=useState('all');
   const [q,setQ]=useState('');
   const [sel,setSel]=useState(null);
