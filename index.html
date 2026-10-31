@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v370';
+const APP_VERSION = 'v371';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6783,7 +6783,7 @@ function matiereConduit(T){
 const sousConduit = s => String(s||'').split(' · ');   // ['PVC','Coude']
 // v370 : grosseur nominale (po) lue dans un code ou une description — « 1/2 », « 3/4 », « 1 », « 1-1/4 », « 1"1/4 », « 1 1/2 », « 2 PO 1/2 », « 2-1/2 », « 3 » — pour trier du plus petit au plus gros
 function tailleConduit(txt){
-  const t = String(txt||'').toUpperCase().replace(/PO\b|POUCES?|\bIN\b|"|''/g,'"').replace(/\s+/g,' ');
+  const t = String(txt||'').toUpperCase().replace(/PO\b|POUCES?|IN\b|"|''/g,'"').replace(/\s+/g,' ');
   let m = t.match(/(\d)\s*["\-]?\s*(\d)\/(\d)/); if(m) return +m[1] + (+m[2])/(+m[3]);          // 1-1/4, 1"1/4, 1 1/4, 2 PO 1/2
   m = t.match(/(?:^|[^\d\/])(\d)\/(\d)(?![\d])/); if(m) return (+m[1])/(+m[2]);                     // 1/2, 3/4, 3/8
   m = t.match(/(?:^|[^\d.\/])(\d)(?:["\s]|$|\b)/); if(m) return +m[1];                              // 1, 2, 3
@@ -7071,6 +7071,8 @@ function useCatalogue(cfg){
         Object.keys(parK).forEach(x=>{ if(parK[x]===n) parK[x]=m; }); });
       // v126 : le fil est TOUJOURS en mètres dans le CRM (prix, soumissions). STOCK PUNCH PRO garde son unité (on ne l'écrase pas).
       produits.forEach(p=>{ const u = uniteNorm(p.unite); if(estFil(p.code, p.desc, p.cat) && (u==='pi' || u==='m' || !u)){ if(u!=='m') p.unitePunch = p.unite || 'pi'; p.unite = 'm'; } });
+      // v371 : le tuyau (conduit) est TOUJOURS en pieds dans le CRM ; PunchPro garde son unité (« barre 10pi », « longueur »…). Le prix s'affiche aussi par 10 pi.
+      produits.forEach(p=>{ if(p.cat==='CONDUIT' && /Tuyau/.test(p.sous||'')){ const u = uniteNorm(p.unite); if(u!=='pi'){ p.unitePunch = p.unite || ''; p.unite = 'pi'; } } });
       let offres = [];
       try{ const op = await att(pOffres);
         offres = (op.result.values||[]).slice(1).map((r,i)=>({row:i+2, f:r[0]||'', codeF:r[1]||'', fab:r[2]||'', marque:r[3]||'', desc:r[4]||'', cat:r[5]||'', unite:r[6]||'', prixSite:cvNum(r[7]), ami:cvNum(r[17]), prix:cvNum(r[17])>0 ? cvNum(r[17]) : cvNum(r[7]),
