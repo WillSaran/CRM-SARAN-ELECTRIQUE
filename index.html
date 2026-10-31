@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v373';
+const APP_VERSION = 'v374';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4987,7 +4987,7 @@ function SuiviTableur({rows, id, onChanged}){
 //   | G Factures lues | H Lien Gmail | I Source | J Factures confirmées | K Statut | L Note.  Le CRM écrit seulement J à L
 //   (ou une nouvelle ligne pour un paiement entré à la main). Rien n'est associé sans que tu confirmes (mode essai).
 const PAI_ENTETE = ['Id courriel','Date','Envoyé par','Montant','Message','Référence','Factures lues dans le message','Lien Gmail','Source','Factures confirmées','Statut','Note'];
-const PAI_DEBUT = '2026-06-01';   // v190 : début de l'année financière — tout ce qui est avant n'apparaît plus dans le CRM (factures et paiements)
+const PAI_DEBUT = '2026-07-01';   // v374 : 1er juillet (comme le grand livre ; avant : 1er juillet) — v190 : début de l'année financière — tout ce qui est avant n'apparaît plus dans le CRM (factures et paiements)
 const PAI_MOTS_VIDES = new Set(['inc','ltee','ltd','limited','quebec','qc','canada','et','and','de','du','la','le','les','des','property','properties','gestion','construction','constructions','compagnie','cie','enr','senc','corp','corporation']);
 // v231 : un numéro civique (« 2311 rue du docteur Primeau ») n'est pas un numéro de facture
 const PAI_RUE = '\\s*,?\\s*(rue|av\\.?|avenue|boul\\.?|boulevard|ch\\.?|chemin|rang|mont[ée]e|place|croissant|terrasse|route|rte)\\b';
@@ -5147,7 +5147,7 @@ async function auxCharger(){
   try{ localStorage.setItem('aux_cache', JSON.stringify({id:f.id, mt:f.modifiedTime, r:lu})); }catch(e){}
   return {...lu, fichier:f.name};
 }
-// v287 : les factures d'avant le 1er juin encore dues à l'auxiliaire s'ajoutent aux comptes à recevoir (solde de l'auxiliaire ; les paiements reçus après sa date les ferment)
+// v287 : les factures d'avant le 1er juillet encore dues à l'auxiliaire s'ajoutent aux comptes à recevoir (solde de l'auxiliaire ; les paiements reçus après sa date les ferment)
 function auxFusionner(factures, aux){
   if(!factures || !aux || !aux.date || !(aux.factures||[]).length) return factures;
   const out = Object.create(Object.getPrototypeOf(factures), Object.getOwnPropertyDescriptors(factures)), V = factures.__vieilles || {};
@@ -5172,9 +5172,9 @@ function paiLireFactures(rows){
   const fx={num:fc(/^facture/),date:fc(/^date/),cli:fc(/^client/),po:fc(/^po$/),nom:fc(/^nom/),desc:fc(/^description/),ht:fc(/^montant/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/),st:fc(/^statut/),esc:fc(/^escompte/),plog:fc(/^payelogiciel/)};   // v230 : Escompte (lu dans le PDF par le script)
   const g=(r,k)=> fx[k]>=0 ? String(r[fx[k]]||'').trim() : '';
   const out={}, tous=new Set(), vieilles={}; Object.defineProperty(out,'__cols',{value:fx, enumerable:false}); Object.defineProperty(out,'__tous',{value:tous, enumerable:false});
-  Object.defineProperty(out,'__vieilles',{value:vieilles, enumerable:false});   // v229 : factures d'avant le 1er juin, gardées à part (payées par un virement d'après le 1er juin qui les nomme)
+  Object.defineProperty(out,'__vieilles',{value:vieilles, enumerable:false});   // v229 : factures d'avant le 1er juillet, gardées à part (payées par un virement d'après le 1er juillet qui les nomme)
   rows.slice(1).forEach((r,i)=>{ const n=g(r,'num'); if(!n) return; tous.add(n);
-    const d = g(r,'date'), env = g(r,'env'), dest = (d && d.slice(0,10) < PAI_DEBUT && !(env && env.slice(0,10) >= PAI_DEBUT)) ? vieilles : out;   // v190-191 : facture datée ET envoyée avant le 1er juin = pas dans le CRM
+    const d = g(r,'date'), env = g(r,'env'), dest = (d && d.slice(0,10) < PAI_DEBUT && !(env && env.slice(0,10) >= PAI_DEBUT)) ? vieilles : out;   // v190-191 : facture datée ET envoyée avant le 1er juillet = pas dans le CRM
     dest[n]={num:n, row:i+2, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, escompte:Math.max(0, cvNum(g(r,'esc'))||0), payeLog:Math.max(0, cvNum(g(r,'plog'))||0), envoi:g(r,'env'), pdf:g(r,'pdf'), annulee:/^annul/.test(cvNorm(g(r,'st'))), statut:g(r,'st'),
       ouverte:/^ouverte/i.test(g(r,'st')) && !g(r,'pdf') && !g(r,'env'), estime:/^montant calcul/i.test(g(r,'st')) && !g(r,'pdf'),
       // v250 : importée du logiciel (export 2000-2673) sans preuve = pas encore une vraie facture pour le CRM (ni à recevoir, ni dans les totaux)
@@ -5193,7 +5193,7 @@ async function paiAnnulerFacture(id, factures, f){
 function paiLirePaiements(rows){
   return rows.slice(1).map((r,i)=>({row:i+2, id:String(r[0]||''), date:String(r[1]||''), de:String(r[2]||''), montant:cvNum(r[3])||0, message:String(r[4]||''), ref:String(r[5]||''),
     lues:paiNums(r[6]).filter(n=>!new RegExp('\\b'+n+'[-/.]\\d{1,2}[-/.]\\d{1,2}\\b').test(String(r[4]||'')) && !new RegExp('\\b'+n+PAI_RUE,'i').test(String(r[4]||'')) && !new RegExp('\\b'+n+'(?:[.,]\\d{1,2}\\b|\\s*\\$)|\\$\\s*'+n+'\\b').test(String(r[4]||''))), lien:String(r[7]||''), source:String(r[8]||'Interac'), confirmees:paiNums(r[9]), statut:String(r[10]||'').trim(), note:String(r[11]||'')}))
-    .filter(p=>(p.id || p.montant) && !(String(p.date).slice(0,10) < PAI_DEBUT));   // v190 : paiements d'avant le 1er juin = pas dans le CRM
+    .filter(p=>(p.id || p.montant) && !(String(p.date).slice(0,10) < PAI_DEBUT));   // v190 : paiements d'avant le 1er juillet = pas dans le CRM
 }
 // Nom affiché du client d'une facture : contracteur (code) ou nom écrit sur la facture, sinon le courriel.
 function paiClientNom(f){ const c = String(f.client||'').trim(); const code = c.toUpperCase();
@@ -5245,8 +5245,8 @@ function paiSommes(liste, montant, maxN){
 function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   // v233 : même client selon le Répertoire (particulier ↔ son commerce, « Aussi écrit ») — ex. Maxime Vincent = Les Entretiens MV
   const cleG = f => (adr && adr.groupe && adr.groupe(f)) || paiClientCle(f);
-  // v229 : une facture d'avant le 1er juin nommée dans un virement reçu depuis le 1er juin (ex. CRS « factures 2281-2282-2296-… ») est prise en compte,
-  // pour que le virement balance et se confirme. Elle ne devient pas « à recevoir » (seulement les factures depuis le 1er juin le sont).
+  // v229 : une facture d'avant le 1er juillet nommée dans un virement reçu depuis le 1er juillet (ex. CRS « factures 2281-2282-2296-… ») est prise en compte,
+  // pour que le virement balance et se confirme. Elle ne devient pas « à recevoir » (seulement les factures depuis le 1er juillet le sont).
   const V = factures.__vieilles || {}, nommees = new Set(paiements.filter(p=>String(p.date).slice(0,10) >= PAI_DEBUT).flatMap(p=>[...p.lues, ...paiNums(p.message), ...(p.confirmees||[])]));
   const F = {}; [...Object.values(factures), ...Object.values(V).filter(f=>nommees.has(f.num) && !factures[f.num])].forEach(f=>{ F[f.num] = {...f, paye:0, paiements:[]};
     const c = String(f.client||'').trim().toLowerCase(); if(nomDe && c.includes('@')){ const r = nomDe(c); if(r) F[f.num].nomRep = r.nom; else F[f.num].sansFiche = c; } });
@@ -5306,7 +5306,7 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   paiements.forEach(p=>{ const ns = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>!F[n]);
     const connus = [...new Set([...p.lues, ...paiNums(p.message)])].filter(n=>F[n]);
     p.archive = !p.statut && String(p.date).slice(0,10) < PAI_DEBUT;   // avant l'année financière
-    p.horsRegistre = !p.statut && !p.archive && !connus.length && ns.length>0 && ns.every(n=>+n<minNum || (factures.__tous && factures.__tous.has(n))) ? ns : null; });   // factures d'avant le 1er juin (ou plus vieilles que le registre)
+    p.horsRegistre = !p.statut && !p.archive && !connus.length && ns.length>0 && ns.every(n=>+n<minNum || (factures.__tous && factures.__tous.has(n))) ? ns : null; });   // factures d'avant le 1er juillet (ou plus vieilles que le registre)
   const attente = paiements.filter(p=>!p.statut && !p.archive && !p.horsRegistre);
   const anciens = paiements.filter(p=>p.horsRegistre);
   const archives = paiements.filter(p=>p.archive);
@@ -5498,14 +5498,14 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
         let ignores = []; try{ ignores = JSON.parse(localStorage.getItem('crm_factpdf_ignores')||'[]'); }catch(e){}
         const cands = (await factPdfListe()).filter(f=>{ if(liees.has(f.id) || ignores.indexOf(f.id)>=0) return false;
           const n = (String(f.name).match(/\b(\d{4,5})\b/)||[])[1];
-          if(n && V[n]) return false;                 // facture d'avant juin : le CRM ne la suit pas
+          if(n && V[n]) return false;                 // facture d'avant juillet : le CRM ne la suit pas
           if(n && F[n] && F[n].pdf) return false;     // la facture a déjà son PDF (copie en double dans le dossier)
           return true; });
         if(vivant) setFp(cands.length ? {cands, etape:'liste'} : null); }
       catch(e){ /* pas de permission Drive : rien à montrer */ } })();
     return ()=>{ vivant = false; }; },[data]);
   // v184 : les paiements « Sûr » (une seule proposition sûre) sont confirmés tout seuls ; ↩ dans « Tous les paiements » pour annuler
-  // v287 : factures d'avant le 1er juin encore dues selon le dernier auxiliaire des comptes à recevoir (dossier Factures PDF)
+  // v287 : factures d'avant le 1er juillet encore dues selon le dernier auxiliaire des comptes à recevoir (dossier Factures PDF)
   const [aux,setAux]=useState(null);
   useEffect(()=>{ let ok = true; auxCharger().then(r=>{ if(ok) setAux(r); }).catch(()=>{}); return ()=>{ ok = false; }; },[refreshKey]);
   const facturesX = useMemo(()=>data ? auxFusionner(data.factures, aux) : null,[data, aux]);
@@ -5579,7 +5579,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
   const annuler = async p => { if(!confirm('Remettre ce paiement « à confirmer » ?')) return; setBusy('p'+p.row);
     try{ if(/^manuel-/.test(p.id)) await paiEcrireStatut(id, p.row, p.confirmees, 'Annulé', 'Annulé dans le CRM le '+paiAujourdhui()); else await paiEcrireStatut(id, p.row, [], '', ''); setTick(t=>t+1); }
     catch(e){ alert('Impossible : '+apiErrMsg(e)); } setBusy(''); };
-  const annulerFacture = async f => { if(!f.row){ alert('La facture #'+f.num+' vient de l\'auxiliaire des comptes à recevoir (avant le 1er juin) : elle se ferme quand un paiement la nomme, ou au prochain auxiliaire déposé dans Factures PDF.'); setAnnule(''); return; } setBusy('a'+f.num);
+  const annulerFacture = async f => { if(!f.row){ alert('La facture #'+f.num+' vient de l\'auxiliaire des comptes à recevoir (avant le 1er juillet) : elle se ferme quand un paiement la nomme, ou au prochain auxiliaire déposé dans Factures PDF.'); setAnnule(''); return; } setBusy('a'+f.num);
     try{ await paiAnnulerFacture(id, data.factures, f); setAnnule(''); setTick(t=>t+1); }
     catch(e){ alert('Impossible d\'annuler : '+apiErrMsg(e)); } setBusy(''); };
   // v285 : note et rappel de relance d'un client (onglet « Suivi comptes »)
@@ -5667,8 +5667,8 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
   // v250 : factures de l'import du logiciel sans PDF ni courriel (ni paiement) — à déposer dans « Factures PDF »
   const aDeposer = Object.values(A.F).filter(f=>f.etat==='adeposer' && filtreF(f)).sort((a,b)=>(+b.num)-(+a.num));
   const totalDu = aRecevoir.reduce((s,f)=>s+f.solde,0);
-  // v199 : argent reçu depuis le 1er juin (virements, dépôts, chèques, comptant) — sauf les paiements marqués « Ignoré » (argent personnel, remboursement…)
-  // v235 : un paiement confirmé seulement pour des factures d'avant le 1er juin (année fiscale précédente) n'est pas compté dans le total
+  // v199 : argent reçu depuis le 1er juillet (virements, dépôts, chèques, comptant) — sauf les paiements marqués « Ignoré » (argent personnel, remboursement…)
+  // v235 : un paiement confirmé seulement pour des factures d'avant le 1er juillet (année fiscale précédente) n'est pas compté dans le total
   const V = data.factures.__vieilles || {}, anneePrec = p => p.confirmees.length>0 && p.confirmees.every(n=>V[n]);
   const recus = data.paiements.filter(p=>!p.archive && p.statut!=='Ignoré' && !/^escompte/i.test(p.source) && String(p.date).slice(0,10)>=PAI_DEBUT && !(/^confirm/i.test(p.statut) && anneePrec(p)));
   const totalRecu = recus.reduce((s,p)=>s+(p.montant||0),0);
@@ -5683,8 +5683,8 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
   const estConf = p => /^confirm/i.test(p.statut), estIgn = p => /^(ignor|annul)/i.test(p.statut), estAConf = p => !p.statut && !p.archive;
   const tousF = tous.filter(p=>recuF==='tous' || (recuF==='confirmes' ? estConf(p) : recuF==='ignores' ? estIgn(p) : estAConf(p)));
   const sansVirement = payees.filter(f=>!(f.paiements||[]).length);
-  const descF = n => { const f = A.F[n]; const v = !f && data.factures.__vieilles && data.factures.__vieilles[n];   // v234 : facture d'avant le 1er juin
-    if(v) return '#'+n+' '+(v.nom || paiClientNom(v))+' ('+(v.estime?'≈ ':'')+cvMoney(v.ttc)+', d\'avant le 1er juin)';
+  const descF = n => { const f = A.F[n]; const v = !f && data.factures.__vieilles && data.factures.__vieilles[n];   // v234 : facture d'avant le 1er juillet
+    if(v) return '#'+n+' '+(v.nom || paiClientNom(v))+' ('+(v.estime?'≈ ':'')+cvMoney(v.ttc)+', d\'avant le 1er juillet)';
     return f ? '#'+n+' '+f.nomAffiche+(f.nom && f.nomAffiche!==f.nom ? ' — '+f.nom : '')+' ('+(f.estime?'≈ ':'')+cvMoney(f.etat==='payee'?f.ttc:f.solde)+(f.escompte>0 ? ', escompte de '+cvMoney(f.escompte) : '')+')' : '#'+n+' (pas dans le registre)'; };
   const couleur = {sur:'var(--success)', probable:'var(--warning)', verifier:'var(--muted)'};
   const etiquette = {sur:'Sûr', probable:'Probable', verifier:'À vérifier'};
@@ -5710,7 +5710,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
     </div>}
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:10,marginBottom:10}}>
       <Tuile v={attente.length} l="paiements reçus à confirmer" c={attente.length?'var(--warning)':'var(--success)'} onClick={()=>setSous('confirmer')}/>
-      <Tuile v={'+ '+cvMoney(totalRecu)} l={'reçus depuis le 1er juin · '+recus.length+' paiement'+(recus.length>1?'s':'')+(nbPrec ? ' (sans '+nbPrec+' pour des factures d\'avant juin)' : '')} c="var(--success)" onClick={()=>setSous('recus')}/>
+      <Tuile v={'+ '+cvMoney(totalRecu)} l={'reçus depuis le 1er juillet · '+recus.length+' paiement'+(recus.length>1?'s':'')+(nbPrec ? ' (sans '+nbPrec+' pour des factures d\'avant juillet)' : '')} c="var(--success)" onClick={()=>setSous('recus')}/>
       {(()=>{ const nf = aRecevoir.filter(f=>f.etat!=='credit').length, nc = aRecevoir.length - nf;
         return <Tuile v={cvMoney(totalDu)} l={'En attente de paiement / en souffrance · '+nf+' facture'+(nf>1?'s':'')+(nc ? ' − '+nc+' crédit'+(nc>1?'s':'') : '')} c="var(--accent)" onClick={()=>setSous('recevoir')}/>; })()}
     </div>
@@ -5825,7 +5825,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
     </div></div>}
 
     {sous==='confirmer' && <div className="card">
-      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Virements reçus pas encore associés à une facture. Rien n'est associé tant que tu ne confirmes pas.{A.anciens.length>0 && <> {A.anciens.length} paiement{A.anciens.length>1?'s':''} pour des factures d'avant le 1er juin {A.anciens.length>1?'sont rangés':'est rangé'} dans « Reçus ».</>}{A.archives.length>0 && <> Les paiements d'avant le 1er juin 2026 sont archivés.</>}</div>
+      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Virements reçus pas encore associés à une facture. Rien n'est associé tant que tu ne confirmes pas.{A.anciens.length>0 && <> {A.anciens.length} paiement{A.anciens.length>1?'s':''} pour des factures d'avant le 1er juillet {A.anciens.length>1?'sont rangés':'est rangé'} dans « Reçus ».</>}{A.archives.length>0 && <> Les paiements d'avant le 1er juillet 2026 sont archivés.</>}</div>
       {!attente.length && <div className="muted" style={{padding:'8px 0'}}>Rien à confirmer.</div>}
       {groupesV.map(g=>{ const b = busy===g.id;
         return <div key={g.id} style={{padding:'10px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
@@ -5885,7 +5885,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
     </div>}
 
     {sous==='recevoir' && <div className="card">
-      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Factures en attente de paiement (ou payées en partie), par client, la plus vieille en premier. Les notes de crédit pas encore utilisées sont déduites du total du client, comme sur son état de compte.{aux ? ' Les factures d\'avant le 1er juin encore dues viennent de l\'auxiliaire des comptes à recevoir au '+cvFmtDay(aux.date)+' ('+aux.fichier+') ; un paiement reçu depuis les ferme.' : ''}</div>
+      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Factures en attente de paiement (ou payées en partie), par client, la plus vieille en premier. Les notes de crédit pas encore utilisées sont déduites du total du client, comme sur son état de compte.{aux ? ' Les factures d\'avant le 1er juillet encore dues viennent de l\'auxiliaire des comptes à recevoir au '+cvFmtDay(aux.date)+' ('+aux.fichier+') ; un paiement reçu depuis les ferme.' : ''}</div>
       {(()=>{ const b = [[30,'Plus de 30 jours'],[60,'Plus de 60 jours'],[120,'Plus de 120 jours']].map(([n,l])=>{ const fs = aRecevoir.filter(f=>f.etat!=='credit' && f.ageFac>n);
           return {l, n:fs.length, v:Math.round(fs.reduce((t,f)=>t+f.solde,0)*100)/100, st:paiAgeCouleur(n+1)}; }).filter(x=>x.n>0);
         return b.length ? <div style={{display:'flex',gap:8,flexWrap:'wrap',fontSize:12,marginBottom:8}}>{b.map(x=><span key={x.l} style={{padding:'2px 9px',borderRadius:8,color:x.st.c,background:x.st.bg,fontWeight:x.st.fw}}>{x.l} : {cvMoney(x.v)} · {x.n} facture{x.n>1?'s':''}</span>)}</div> : null; })()}
@@ -5920,7 +5920,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
                 {du && <button className="btn btn-sm" style={{fontSize:11.5,padding:'1px 8px'}} disabled={busy==='n'+cleG} onClick={()=>sauverSuivi({...sv, nom:k, prochaine:suiviCptPlus30()})}>Relancé · prochain rappel dans 30 j</button>}
               </div>; })()}
             {(()=>{ const ligneF = f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'3px 0'}}>
-              <span>🧾 {f.pdf ? <a href={repPdf(f.pdf)} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} title="Ouvrir le PDF de la facture" style={{color:'inherit'}}><b>#{f.num}</b></a> : <b>#{f.num}</b>} <span className="muted">· {f.date}</span> <PaiAge f={f}/>{f.avantJuin && <span className="muted" style={{fontSize:11.5}}> · avant juin (auxiliaire)</span>}{f.nom && f.nom!==k ? ' · '+f.nom : ''}{f.nomAffiche && f.nomAffiche!==k && f.nomAffiche!==f.nom ? <span className="muted"> · {f.nomAffiche}</span> : ''}{f.desc ? <span className="muted"> · {f.desc}</span> : ''}
+              <span>🧾 {f.pdf ? <a href={repPdf(f.pdf)} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} title="Ouvrir le PDF de la facture" style={{color:'inherit'}}><b>#{f.num}</b></a> : <b>#{f.num}</b>} <span className="muted">· {f.date}</span> <PaiAge f={f}/>{f.avantJuin && <span className="muted" style={{fontSize:11.5}}> · avant juillet (auxiliaire)</span>}{f.nom && f.nom!==k ? ' · '+f.nom : ''}{f.nomAffiche && f.nomAffiche!==k && f.nomAffiche!==f.nom ? <span className="muted"> · {f.nomAffiche}</span> : ''}{f.desc ? <span className="muted"> · {f.desc}</span> : ''}
                 {f.etat==='partielle' && <span style={{color:'var(--warning)',fontWeight:700}}> · partielle (reçu {cvMoney(f.paye)})</span>}
                 {f.etat==='credit' && <span style={{color:'var(--success)',fontWeight:700}}> · note de crédit (déduite)</span>}</span>
               <span style={{display:'flex',gap:8,alignItems:'center'}}>
@@ -5970,12 +5970,12 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
           <button key={k} className={'btn btn-sm'+(recuF===k?' btn-p':'')} onClick={()=>setRecuF(k)}>{l} ({n})</button>)}
         <span className="muted" style={{fontSize:12}}>une ligne par paiement reçu, le plus récent en haut</span>
       </div>
-      {A.archives.length>0 && <div style={{marginBottom:6}}><button className="btn btn-sm" onClick={()=>setVoirArch(!voirArch)}>{voirArch ? 'Cacher' : 'Voir'} les archives d'avant le 1er juin 2026 ({A.archives.length})</button></div>}
+      {A.archives.length>0 && <div style={{marginBottom:6}}><button className="btn btn-sm" onClick={()=>setVoirArch(!voirArch)}>{voirArch ? 'Cacher' : 'Voir'} les archives d'avant le 1er juillet 2026 ({A.archives.length})</button></div>}
       {!tousF.length && <div className="muted" style={{padding:'8px 0'}}>Aucun paiement.</div>}
       {tousF.map(p=><div key={p.row} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'5px 0',borderBottom:'1px dashed var(--border)',opacity:/^(ignor|annul)/i.test(p.statut)?.55:1}}>
         <span><b>{String(p.date).slice(0,10)}</b> · {p.de||'—'} · <b>{cvMoney(p.montant)}</b> <span className="muted">· {p.source}</span>{p.message ? <span className="muted"> · « {p.message} »</span> : ''}</span>
         <span style={{display:'flex',gap:8,alignItems:'center'}}>
-          {/^confirm/i.test(p.statut) ? <span style={{color:'var(--success)'}}>→ {p.confirmees.map((n,i)=><React.Fragment key={n}>{i>0 && ', '}{A.F[n] && A.F[n].pdf ? <a href={repPdf(A.F[n].pdf)} target="_blank" rel="noopener" title={descF(n)} style={{color:'inherit',textDecoration:'underline'}}>#{n}</a> : <span title={descF(n)}>#{n}</span>}</React.Fragment>)}</span> : p.statut ? <span className="muted">{p.statut}</span> : p.archive ? <span className="muted">archivé (avant le 1er juin)</span> : p.horsRegistre ? <span className="muted">facture{p.horsRegistre.length>1?'s':''} {p.horsRegistre.join(', ')} d'avant le 1er juin</span> : <span style={{color:'var(--warning)'}}>à confirmer</span>}
+          {/^confirm/i.test(p.statut) ? <span style={{color:'var(--success)'}}>→ {p.confirmees.map((n,i)=><React.Fragment key={n}>{i>0 && ', '}{A.F[n] && A.F[n].pdf ? <a href={repPdf(A.F[n].pdf)} target="_blank" rel="noopener" title={descF(n)} style={{color:'inherit',textDecoration:'underline'}}>#{n}</a> : <span title={descF(n)}>#{n}</span>}</React.Fragment>)}</span> : p.statut ? <span className="muted">{p.statut}</span> : p.archive ? <span className="muted">archivé (avant le 1er juillet)</span> : p.horsRegistre ? <span className="muted">facture{p.horsRegistre.length>1?'s':''} {p.horsRegistre.join(', ')} d'avant le 1er juillet</span> : <span style={{color:'var(--warning)'}}>à confirmer</span>}
           {p.statut && !/^annul/i.test(p.statut) && <button className="btn btn-sm" disabled={busy==='p'+p.row} onClick={()=>annuler(p)}>↩</button>}
           {p.lien && <a href={p.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>↗</a>}
         </span>
@@ -10900,7 +10900,7 @@ function useClientsData(cfg, refreshKey){
         const fg=(r,k)=> fx[k]>=0 ? (r[fx[k]]||'').trim() : '';
         const factures={};
         facRows.slice(1).forEach((r,i)=>{ const n=fg(r,'num'); if(!n) return; const st=cvNorm(fg(r,'st'));
-          if(fg(r,'date') && fg(r,'date').slice(0,10) < PAI_DEBUT && !(fg(r,'env') && fg(r,'env').slice(0,10) >= PAI_DEBUT)) return;   // v190-191 : datée ET envoyée avant le 1er juin = pas dans le CRM
+          if(fg(r,'date') && fg(r,'date').slice(0,10) < PAI_DEBUT && !(fg(r,'env') && fg(r,'env').slice(0,10) >= PAI_DEBUT)) return;   // v190-191 : datée ET envoyée avant le 1er juillet = pas dans le CRM
           factures[n]={num:n, row:i+2, escompte:Math.max(0, cvNum(fg(r,'esc'))||0), payeLog:Math.max(0, cvNum(fg(r,'plog'))||0), date:fg(r,'date'), client:fg(r,'cli'), po:fg(r,'po'), nom:fg(r,'nom'), desc:fg(r,'desc'), ht:cvNum(fg(r,'ht')), ttc:cvNum(fg(r,'ttc')), envoi:fg(r,'env'), pdf:fg(r,'pdf'),
             statut:fg(r,'st'), annulee:/^annul/.test(st), ok:/^(ok|correct|verifie)/.test(st)}; });
         // Colonne « Statut » du registre (créée par le CRM au premier clic si elle n'existe pas encore).
@@ -12641,7 +12641,7 @@ function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.se
 
 // v202 : Comptabilité — comptes fournisseurs, factures clients (et paiements reçus), appels de service, à vérifier. Les pages gardent toutes leurs fonctions.
 const CPT_NAV = {factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
-const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Comptes clients'],['factures','Bons de travail'],['paiements','Paiements']];   // v272   // v240
+const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Comptes clients'],['factures','Bons de travail'],['paiements','Paiements'],['taxes','TPS/TVQ']];   // v374 : TPS/TVQ   // v272   // v240
 // v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
 function PaiementsOnglet({cfg, cfgRep, refreshKey, contacts, compact}){
   const [q,setQ]=useState(()=>(navFocus('paiements')||{}).q || '');
@@ -12653,6 +12653,281 @@ function PaiementsOnglet({cfg, cfgRep, refreshKey, contacts, compact}){
       {q && <button className="btn btn-sm" onClick={()=>setQ('')}>✕</button>}
     </div>
     <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={q} contacts={contacts}/>
+  </div>;
+}
+// ══ v374 : TPS / TVQ — perçues (factures clients) et payées (factures fournisseurs + dépenses déposées) ══
+// Année fiscale du 1er juillet au 30 juin (comme le grand livre) ; trimestres T1 juil.-sept., T2 oct.-déc., T3 janv.-mars, T4 avr.-juin.
+// Taxes d'une facture = total − sous-total ; TPS = 5 % du sous-total, TVQ = le reste (arrondis du document respectés).
+const TX_TPS = 0.05, TX_TVQ = 0.09975;
+const DEP_ONGLET = 'Dépenses';
+const DEP_ENTETE = ['Id','Date','Fournisseur','Description','Sous-total','TPS','TVQ','Total','Source','Fichier (id)','Estimé','Créé le'];
+function txNum(v){ if(typeof v==='number') return v; let s = String(v==null?'':v).replace(/[\s $]/g,'').replace(/CR$/i,'');
+  if(!s) return 0; const neg = /^\(.*\)$/.test(s) || /^-/.test(s); s = s.replace(/[()\-]/g,'');
+  if(/,\d{1,2}$/.test(s)) s = s.replace(/\./g,'').replace(',', '.'); else s = s.replace(/,/g,'');
+  const n = parseFloat(s); return isNaN(n) ? 0 : (neg ? -n : n); }
+const txR = n => Math.round(n*100)/100;
+function txDate(v){ const s = String(v||'').trim(); let m;
+  if((m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) return m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0');
+  if((m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/))) return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
+  return ''; }
+// Taxes à partir du sous-total et du total
+function txTaxes(ht, ttc){ ht = txNum(ht); ttc = txNum(ttc);
+  if(!ht && ttc) ht = txR(ttc/(1+TX_TPS+TX_TVQ));
+  if(!ttc && ht) ttc = txR(ht*(1+TX_TPS+TX_TVQ));
+  const tax = txR(ttc-ht); if(Math.abs(tax) < 0.005) return {ht, ttc, tps:0, tvq:0};
+  const tps = txR(ht*TX_TPS); return {ht, ttc, tps, tvq:txR(tax-tps)}; }
+// Taxes comprises dans un montant (relevé de carte : estimation)
+function txInclus(ttc){ ttc = txNum(ttc); const ht = txR(ttc/(1+TX_TPS+TX_TVQ)); const tps = txR(ht*TX_TPS); return {ht, ttc, tps, tvq:txR(ttc-ht-tps)}; }
+// Périodes
+function txAnneeFisc(d){ const y = +d.slice(0,4), m = +d.slice(5,7); return m>=7 ? y : y-1; }   // 2026 = 1er juil. 2026 → 30 juin 2027
+function txTrim(d){ const m = +d.slice(5,7); return m>=7 ? (m<=9 ? 1 : 2) : (m<=3 ? 3 : 4); }
+function txPeriode(mode, d){ const fy = txAnneeFisc(d);
+  if(mode==='mois') return d.slice(0,7);
+  if(mode==='trim') return fy+'-T'+txTrim(d);
+  return String(fy); }
+function txBornes(mode, cle){ const pad = n => String(n).padStart(2,'0');
+  if(mode==='mois'){ const [y,m] = cle.split('-').map(Number); const fin = new Date(y, m, 0).getDate(); return [cle+'-01', cle+'-'+pad(fin)]; }
+  if(mode==='trim'){ const [fy, t] = [+cle.slice(0,4), +cle.slice(-1)]; const dm = {1:[fy,7,9], 2:[fy,10,12], 3:[fy+1,1,3], 4:[fy+1,4,6]}[t];
+    return [dm[0]+'-'+pad(dm[1])+'-01', dm[0]+'-'+pad(dm[2])+'-'+pad(new Date(dm[0], dm[2], 0).getDate())]; }
+  const fy = +cle; return [fy+'-07-01', (fy+1)+'-06-30']; }
+function txDecaler(mode, cle, n){ const pad = x => String(x).padStart(2,'0');
+  if(mode==='mois'){ const [y,m] = cle.split('-').map(Number); const d = new Date(y, m-1+n, 1); return d.getFullYear()+'-'+pad(d.getMonth()+1); }
+  if(mode==='trim'){ let fy = +cle.slice(0,4), t = +cle.slice(-1)+n; while(t>4){ t-=4; fy++; } while(t<1){ t+=4; fy--; } return fy+'-T'+t; }
+  return String(+cle+n); }
+const TX_MOIS = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+function txLibelle(mode, cle){ const [a,b] = txBornes(mode, cle);
+  if(mode==='mois') return TX_MOIS[+cle.slice(5,7)-1]+' '+cle.slice(0,4);
+  if(mode==='trim') return 'T'+cle.slice(-1)+' '+cle.slice(0,4)+'-'+(+cle.slice(0,4)+1)+' ('+cvFmtDay(a)+' au '+cvFmtDay(b)+' '+b.slice(0,4)+')';
+  return 'Année '+cle+'-'+(+cle+1)+' (1er juil. '+cle+' au 30 juin '+(+cle+1)+')'; }
+
+// ── Lecture automatique d'un PDF ou d'une photo : Google Drive le convertit en texte (même pour une photo) ──
+async function driveTexte(fileId){
+  const doc = await driveFetch('https://www.googleapis.com/drive/v3/files/'+fileId+'/copy?ocrLanguage=fr&fields=id', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:'Lecture temporaire CRM', mimeType:'application/vnd.google-apps.document'})});
+  try{ const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+    const r = await fetch('https://www.googleapis.com/drive/v3/files/'+doc.id+'/export?mimeType=text/plain', {headers:{Authorization:'Bearer '+tok}});
+    if(!r.ok) throw new Error('Lecture du document impossible ('+r.status+')');
+    return await r.text(); }
+  finally{ try{ const tok = window.gapi.client.getToken().access_token; await fetch('https://www.googleapis.com/drive/v3/files/'+doc.id, {method:'DELETE', headers:{Authorization:'Bearer '+tok}}); }catch(e){} } }
+const TX_MONTANT = /-?\$?\s?\d{1,3}(?:[  ,]\d{3})*[.,]\d{2}(?!\d)|-?\$?\s?\d+[.,]\d{2}(?!\d)/g;
+const TX_MOIS_RE = {jan:1, janv:1, fev:2, 'fév':2, feb:2, mar:3, mars:3, avr:4, apr:4, mai:5, may:5, jun:6, juin:6, jul:7, juil:7, jui:7, aou:8, 'aoû':8, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12, 'déc':12};
+function txDateTexte(t){ let m;
+  if((m = t.match(/\b(20\d{2})[-\/.](\d{1,2})[-\/.](\d{1,2})\b/))) return m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0');
+  if((m = t.match(/\b(\d{1,2})[-\/.](\d{1,2})[-\/.](20\d{2})\b/))) return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
+  const mois = 'janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre';
+  if((m = t.match(new RegExp('\\b(\\d{1,2})(?:er)?\\s+('+mois+')\\s+(20\\d{2})\\b','i')))){ const k = m[2].toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+    const n = ['janvier','fevrier','mars','avril','mai','juin','juillet','aout','septembre','octobre','novembre','decembre'].indexOf(k)+1; return m[3]+'-'+String(n).padStart(2,'0')+'-'+m[1].padStart(2,'0'); }
+  return ''; }
+// Une facture : fournisseur (1re ligne utile), date, sous-total, TPS, TVQ, total
+function txLireFacture(txt){
+  const L = String(txt||'').split(/\r?\n/).map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean);
+  const montants = l => (l.match(TX_MONTANT)||[]).map(txNum);
+  const surLigne = (re, exclure) => { for(let i=0;i<L.length;i++){ if(!re.test(L[i]) || (exclure && exclure.test(L[i]))) continue;
+      const a = montants(L[i]).filter(x=>x!==0); if(a.length) return a[a.length-1];
+      const b = L[i+1] ? montants(L[i+1]).filter(x=>x!==0) : []; if(b.length) return b[0]; } return null; };
+  const tps = surLigne(/\b(TPS|GST|T\.P\.S)\b/i, /\b(no|n°|num[ée]ro|#|inscription|reg)\b.*\d{5,}/i);
+  const tvq = surLigne(/\b(TVQ|QST|T\.V\.Q)\b/i, /\b(no|n°|num[ée]ro|#|inscription|reg)\b.*\d{5,}/i);
+  const sous = surLigne(/sous[- ]?total|subtotal|montant avant taxes|total avant taxes/i);
+  let total = null; L.forEach(l=>{ if(/total/i.test(l) && !/sous[- ]?total|subtotal|avant taxes/i.test(l)){ const a = montants(l); if(a.length){ const v = Math.max(...a); if(total==null || v>total) total = v; } } });
+  if(total==null){ const tous = L.flatMap(montants); if(tous.length) total = Math.max(...tous); }
+  let ht = sous;
+  if(ht==null && total!=null && tps!=null && tvq!=null) ht = txR(total-tps-tvq);
+  const fournisseur = (L.find(l=>/[A-Za-zÀ-ÿ]{3,}/.test(l) && !/factur|invoice|re[çc]u|date|page|^tel|^t[ée]l/i.test(l)) || '').slice(0,60);
+  const date = txDateTexte(L.join(' '));
+  let r = {fournisseur, date, ht:ht!=null ? ht : '', tps:tps!=null ? tps : '', tvq:tvq!=null ? tvq : '', ttc:total!=null ? total : ''};
+  if(r.ttc!=='' && (r.tps==='' || r.tvq==='')){ const c = r.ht!=='' ? txTaxes(r.ht, r.ttc) : txInclus(r.ttc); r = {...r, ht:c.ht, tps:r.tps!=='' ? r.tps : c.tps, tvq:r.tvq!=='' ? r.tvq : c.tvq, calcule:true}; }
+  r.coherent = r.ht!=='' && r.ttc!=='' && Math.abs(txNum(r.ht)+txNum(r.tps)+txNum(r.tvq)-txNum(r.ttc)) < 0.05;
+  return r; }
+// Un relevé de carte : les achats (date, description, montant). Les paiements et les intérêts sont repérés à part.
+function txLireReleve(txt){
+  const T = String(txt||'').replace(/\r/g,'').replace(/[ \t ]+/g,' ');
+  const an = (()=>{ const a = (T.match(/\b20\d{2}\b/g)||[]).map(Number).filter(y=>y>=2020 && y<=2035); return a.length ? Math.max(...a) : new Date().getFullYear(); })();
+  const moisDu = s => TX_MOIS_RE[s.toLowerCase().replace(/\.$/,'')] || TX_MOIS_RE[s.toLowerCase().slice(0,3)] || 0;
+  const MOIS = '(jan|janv|f[ée]v|feb|mar|mars|avr|apr|mai|may|jun|juin|jul|juil|ao[uû]|aug|sep|sept|oct|nov|d[ée]c)\\.?';
+  const re = new RegExp('\\b'+MOIS+'\\s+(\\d{1,2})\\b(?:\\s+'+MOIS+'\\s+\\d{1,2}\\b)?\\s+([\\s\\S]{3,160}?)\\s(-?\\d{1,3}(?:[ ,]\\d{3})*[.,]\\d{2})(\\s?CR)?(?=\\s|$)','gi');
+  const out = []; let m;
+  const dernierMois = (()=>{ const a = [...T.matchAll(new RegExp('\\b'+MOIS+'\\s+(\\d{1,2})\\b','gi'))].map(x=>moisDu(x[1])).filter(Boolean); return a.length ? Math.max(...a) : 12; })();
+  while((m = re.exec(T))){ const mo = moisDu(m[1]); if(!mo) continue;
+    const y = (mo > dernierMois && dernierMois<=2 && mo>=11) ? an-1 : an;
+    const desc = m[4].replace(/\s+/g,' ').trim(), montant = txNum(m[5]) * (m[6] ? -1 : 1);
+    const paiement = !!m[6] || montant<0 || /paiement|payment|merci|thank you|cr[ée]dit|remise|pr[ée]l[èe]vement/i.test(desc);
+    const interet = /int[ée]r[êe]ts?|achats r[ée]guliers|frais (annuels|de crédit|d'int)|taux d/i.test(desc);
+    const etranger = /\b(USD|US\$|DOLLAR AM[ÉE]RICAIN|SINGAPORE|STOCKHOLM)\b|ANTHROPIC|OPENAI|CHATGPT|LOVABLE|MANUS/i.test(desc) || /\s(SE|SG|DE|US|GB|IE|NL)(\s|$)/.test(desc);   // pays en MAJUSCULES seulement (pas « de »)
+    out.push({date:y+'-'+String(mo).padStart(2,'0')+'-'+m[2].padStart(2,'0'), desc:desc.slice(0,90), montant, paiement, interet, etranger,
+      coche: !paiement && !interet && !etranger && montant>0}); }
+  return out; }
+
+// ── Données : factures clients, achats fournisseurs, dépenses déposées ──
+function useTaxes(cfg, cle){
+  const [d,setD]=useState({lu:false, err:'', ventes:[], achats:[], depenses:[], depExiste:false});
+  const lire = useCallback(async force=>{
+    try{
+      const [fr, ar, dr] = await Promise.all([
+        cfg.memoireFacturesSpreadsheetId ? lireCache(cfg.memoireFacturesSpreadsheetId, 'A1:Z', force).then(r=>r.result.values||[], ()=>[]) : [],
+        cfg.memoireAchatsSpreadsheetId ? lireCache(cfg.memoireAchatsSpreadsheetId, 'A1:L', force).then(r=>r.result.values||[], ()=>[]) : [],
+        cfg.memoireAchatsSpreadsheetId ? lireCache(cfg.memoireAchatsSpreadsheetId, qSheet(DEP_ONGLET)+'!A1:L', force).then(r=>({ok:true, v:r.result.values||[]}), ()=>({ok:false, v:[]})) : {ok:false, v:[]}]);
+      const col = (h, re) => h.findIndex(x=>re.test(cvNorm(x||'')));
+      const fh = fr[0]||[], fx = {num:col(fh,/^facture/), date:col(fh,/^date/), cli:col(fh,/^client/), nom:col(fh,/^nom/), ht:col(fh,/^montant/), ttc:col(fh,/^total/), pdf:col(fh,/^pdf/), st:col(fh,/^statut/)};
+      const ventes = fr.slice(1).filter(r=>r[fx.num] && !/annul/i.test(r[fx.st]||'')).map(r=>{ const t = txTaxes(r[fx.ht], r[fx.ttc]);
+        return {type:'vente', num:r[fx.num], date:txDate(r[fx.date]), qui:[r[fx.cli], r[fx.nom]].filter((x,i,a)=>x && a.indexOf(x)===i).join(' · '), pdf:r[fx.pdf]||'', ...t}; }).filter(x=>x.date);
+      const ah = ar[0]||[], ax = {f:col(ah,/^fournisseur/), num:col(ah,/^facture/), date:col(ah,/^date/), ref:col(ah,/^reference/), ht:col(ah,/^sous-?total/), ttc:col(ah,/^total/), pdf:col(ah,/^pdf/), st:col(ah,/^statut/)};
+      const achats = ar.slice(1).filter(r=>r[ax.num] && !/ignor|doublon|annul|retir/i.test(r[ax.st]||'')).map(r=>{ const t = txTaxes(r[ax.ht], r[ax.ttc]);
+        return {type:'achat', num:r[ax.num], date:txDate(r[ax.date]), qui:r[ax.f]||'', ref:r[ax.ref]||'', pdf:r[ax.pdf]||'', ...t}; }).filter(x=>x.date);
+      const depenses = dr.v.slice(1).filter(r=>r[0]).map((r,i)=>({type:'depense', row:i+2, id:r[0], date:txDate(r[1]), qui:r[2]||'', ref:r[3]||'', ht:txNum(r[4]), tps:txNum(r[5]), tvq:txNum(r[6]), ttc:txNum(r[7]),
+        source:r[8]||'', pdf:r[9]||'', estime:/^oui/i.test(r[10]||'')})).filter(x=>x.date);
+      setD({lu:true, err:'', ventes, achats, depenses, depExiste:dr.ok});
+    }catch(e){ setD(s=>({...s, lu:true, err:apiErrMsg(e)})); } },[cfg.memoireFacturesSpreadsheetId, cfg.memoireAchatsSpreadsheetId]);
+  useEffect(()=>{ lire(false); },[lire, cle]);
+  return {...d, relire:()=>lire(true)};
+}
+async function depAjouter(cfg, existe, lignes){
+  if(!existe) await ensureSheetsExist(cfg.memoireAchatsSpreadsheetId, [{name:DEP_ONGLET, headers:DEP_ENTETE}]);
+  if(typeof suivreEcritures==='function') suivreEcritures();
+  return window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:cfg.memoireAchatsSpreadsheetId, range:qSheet(DEP_ONGLET)+'!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS',
+    resource:{values:lignes.map((x,i)=>['D'+Date.now()+'-'+i, x.date, x.qui, x.ref||'', String(txR(txNum(x.ht))), String(txR(txNum(x.tps))), String(txR(txNum(x.tvq))), String(txR(txNum(x.ttc))), x.source, x.pdf||'', x.estime ? 'oui' : 'non', new Date().toLocaleString('fr-CA')])}}); }
+async function depFichier(fichier){
+  if(!peutDeposer()){ await requestToken('consent'); if(!peutDeposer()) throw new Error('Permission Drive refusée (coche « fichiers Drive »)'); }
+  const dossier = await driveDossier('Saran CRM — Dépenses');
+  const r = await driveDeposer(fichier, dossier);
+  let texte = ''; try{ texte = await driveTexte(r.id); }catch(e){ texte = ''; }
+  return {id:r.id, texte}; }
+
+// Déposer une facture de dépense : lue toute seule, à vérifier, puis enregistrée
+function DepotFacture({cfg, existe, onFait, onFermer}){
+  const [etat,setEtat]=useState('');
+  const [f,setF]=useState(null);   // {fournisseur, date, ht, tps, tvq, ttc, ref, pdf, lu}
+  const choisir = async fichier => { if(!fichier) return; setEtat('Lecture de la facture…');
+    try{ const {id, texte} = await depFichier(fichier); const x = texte ? txLireFacture(texte) : {};
+      setF({fournisseur:x.fournisseur||'', date:x.date||localDateStr(new Date()), ht:x.ht!==undefined ? String(x.ht) : '', tps:x.tps!==undefined ? String(x.tps) : '', tvq:x.tvq!==undefined ? String(x.tvq) : '',
+        ttc:x.ttc!==undefined ? String(x.ttc) : '', ref:fichier.name||'', pdf:id, lu:!!texte, coherent:!!x.coherent, calcule:!!x.calcule}); setEtat(''); }
+    catch(e){ setEtat('Erreur : '+(e.message||e)); } };
+  const recalcul = () => { const c = f.ht ? txTaxes(f.ht, f.ttc) : txInclus(f.ttc); setF({...f, ht:String(c.ht), tps:String(c.tps), tvq:String(c.tvq), ttc:String(c.ttc)}); };
+  const ecart = f ? txR(txNum(f.ht)+txNum(f.tps)+txNum(f.tvq)-txNum(f.ttc)) : 0;
+  const sauver = async () => { setEtat('Enregistrement…');
+    try{ await depAjouter(cfg, existe, [{date:f.date, qui:f.fournisseur.trim(), ref:f.ref, ht:f.ht, tps:f.tps, tvq:f.tvq, ttc:f.ttc, source:'Facture', pdf:f.pdf, estime:false}]); setEtat(''); onFait('Facture de '+(f.fournisseur||'dépense')+' ajoutée.'); }
+    catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
+  const champ = (k, l, w) => <label style={{display:'grid',gap:2,fontSize:12}}><span className="muted">{l}</span><input value={f[k]} onChange={e=>setF({...f, [k]:e.target.value})} style={{width:w||110,padding:'5px 8px'}}/></label>;
+  return <div className="card" style={{border:'1px solid var(--accent)',marginBottom:12}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}><b>Déposer une facture (dépense)</b><button className="btn btn-sm" onClick={onFermer}>Fermer</button></div>
+    {!f && <label className="btn btn-p" style={{cursor:'pointer',display:'inline-block'}}>{etat || '📄 Choisir le PDF ou la photo'}<input type="file" accept="application/pdf,image/*" style={{display:'none'}} disabled={!!etat} onChange={e=>{ const x = e.target.files[0]; e.target.value=''; choisir(x); }}/></label>}
+    {!f && <div className="muted" style={{fontSize:12,marginTop:6}}>Le fichier va dans Drive (« Saran CRM — Dépenses ») ; le fournisseur, la date, le sous-total, la TPS, la TVQ et le total sont lus tout seuls. Tu vérifies, puis tu enregistres.</div>}
+    {f && <div style={{display:'grid',gap:8}}>
+      <div className="muted" style={{fontSize:12}}>{f.lu ? (f.coherent ? '✓ Lue automatiquement — les montants balancent.' : f.calcule ? 'Lue automatiquement — taxes calculées à partir du total (pas écrites sur la facture). Vérifie.' : 'Lue automatiquement — vérifie les montants.') : 'Le texte n\'a pas pu être lu : entre les montants.'}
+        {f.pdf && <> · <a href={'https://drive.google.com/file/d/'+f.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>voir le fichier ↗</a></>}</div>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{champ('fournisseur','Fournisseur',200)}<label style={{display:'grid',gap:2,fontSize:12}}><span className="muted">Date</span><input type="date" value={f.date} onChange={e=>setF({...f, date:e.target.value})} style={{width:'auto',padding:'4px 8px'}}/></label></div>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'end'}}>{champ('ht','Sous-total')}{champ('tps','TPS')}{champ('tvq','TVQ')}{champ('ttc','Total')}
+        <button className="btn btn-sm" title="Calcule la TPS et la TVQ à partir du total (et du sous-total s'il est là)" onClick={recalcul}>Calculer les taxes</button></div>
+      {Math.abs(ecart)>=0.05 && <div style={{color:'var(--warning)',fontSize:12.5}}>Sous-total + TPS + TVQ ≠ total (écart de {cvMoney(ecart)}).</div>}
+      <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={!!etat || !f.date || !txNum(f.ttc)} onClick={sauver}>{etat || 'Enregistrer la dépense'}</button>
+        <button className="btn btn-sm" onClick={()=>setF(null)}>Recommencer</button></div>
+    </div>}
+  </div>;
+}
+// Déposer un relevé de carte : les achats sont lus, tu coches les dépenses de l'entreprise (taxes estimées)
+function DepotReleve({cfg, existe, depenses, onFait, onFermer}){
+  const [etat,setEtat]=useState('');
+  const [rel,setRel]=useState(null);   // {pdf, nom, lignes:[...]}
+  const [ajout,setAjout]=useState({date:localDateStr(new Date()), desc:'', montant:''});
+  const deja = x => depenses.some(d=>d.date===x.date && Math.abs(d.ttc-x.montant)<0.01 && cvNorm(d.qui).slice(0,12)===cvNorm(x.desc).slice(0,12));
+  const choisir = async fichier => { if(!fichier) return; setEtat('Lecture du relevé…');
+    try{ const {id, texte} = await depFichier(fichier); const lignes = txLireReleve(texte).map(x=>({...x, deja:deja(x), coche:x.coche && !deja(x)}));
+      setRel({pdf:id, nom:fichier.name||'Relevé', lignes, lu:!!texte}); setEtat(''); }
+    catch(e){ setEtat('Erreur : '+(e.message||e)); } };
+  const maj = (i, o) => setRel(r=>({...r, lignes:r.lignes.map((x,k)=>k===i ? {...x, ...o} : x)}));
+  const coches = rel ? rel.lignes.filter(x=>x.coche) : [];
+  const tot = coches.reduce((a,x)=>{ const t = txInclus(x.montant); return {ttc:a.ttc+t.ttc, tps:a.tps+t.tps, tvq:a.tvq+t.tvq}; },{ttc:0,tps:0,tvq:0});
+  const sauver = async () => { setEtat('Enregistrement…');
+    try{ await depAjouter(cfg, existe, coches.map(x=>{ const t = txInclus(x.montant); return {date:x.date, qui:x.desc, ref:'Relevé : '+rel.nom, ...t, source:'Relevé de carte', pdf:rel.pdf, estime:true}; }));
+      setEtat(''); onFait(coches.length+' dépense'+(coches.length>1?'s':'')+' du relevé ajoutée'+(coches.length>1?'s':'')+'.'); }
+    catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
+  return <div className="card" style={{border:'1px solid var(--accent)',marginBottom:12}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}><b>Déposer un relevé de carte</b><button className="btn btn-sm" onClick={onFermer}>Fermer</button></div>
+    {!rel && <label className="btn btn-p" style={{cursor:'pointer',display:'inline-block'}}>{etat || '💳 Choisir le relevé (PDF)'}<input type="file" accept="application/pdf,image/*" style={{display:'none'}} disabled={!!etat} onChange={e=>{ const x = e.target.files[0]; e.target.value=''; choisir(x); }}/></label>}
+    {!rel && <div className="muted" style={{fontSize:12,marginTop:6}}>Les achats du relevé sont lus tout seuls. Un relevé n'indique pas les taxes : elles sont estimées (TPS 5 % et TVQ 9,975 % comprises dans le montant). Les paiements, les intérêts et les achats à l'étranger ou sans taxes sont décochés d'avance.</div>}
+    {rel && <div style={{display:'grid',gap:6}}>
+      <div className="muted" style={{fontSize:12}}>{rel.lignes.length ? rel.lignes.length+' ligne'+(rel.lignes.length>1?'s':'')+' lue'+(rel.lignes.length>1?'s':'')+' dans « '+rel.nom+' ». Coche les dépenses de l\'entreprise avec taxes.' : 'Aucun achat n\'a pu être lu dans ce relevé : ajoute les lignes à la main ci-dessous.'}
+        {' '}<a href={'https://drive.google.com/file/d/'+rel.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>voir le relevé ↗</a></div>
+      <div style={{maxHeight:360,overflow:'auto',border:'1px solid var(--border)',borderRadius:8}}>
+        {rel.lignes.map((x,i)=>{ const t = txInclus(x.montant); return <label key={i} style={{display:'grid',gridTemplateColumns:'22px 82px 1fr 90px 120px',gap:6,alignItems:'center',padding:'4px 8px',borderBottom:'1px solid var(--border)',fontSize:12.5,opacity:x.deja ? .5 : 1}}>
+          <input type="checkbox" checked={!!x.coche} disabled={x.deja} onChange={e=>maj(i, {coche:e.target.checked})}/>
+          <span style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(x.date)}</span>
+          <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={x.desc}>{x.desc}{x.deja ? ' · déjà inscrit' : x.paiement ? ' · paiement' : x.interet ? ' · intérêts' : x.etranger ? ' · étranger / sans taxes ?' : ''}</span>
+          <span style={{textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{cvMoney(x.montant)}</span>
+          <span className="muted" style={{textAlign:'right',fontSize:11.5}}>{x.coche ? 'TPS '+cvMoney(t.tps)+' · TVQ '+cvMoney(t.tvq) : ''}</span></label>; })}
+      </div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',fontSize:12.5}}><span className="muted">Ajouter une ligne :</span>
+        <input type="date" value={ajout.date} onChange={e=>setAjout({...ajout, date:e.target.value})} style={{width:'auto',padding:'3px 6px'}}/>
+        <input value={ajout.desc} onChange={e=>setAjout({...ajout, desc:e.target.value})} placeholder="Commerçant" style={{width:170,padding:'3px 6px'}}/>
+        <input value={ajout.montant} onChange={e=>setAjout({...ajout, montant:e.target.value})} placeholder="Montant" style={{width:90,padding:'3px 6px'}}/>
+        <button className="btn btn-sm" disabled={!ajout.desc.trim() || !txNum(ajout.montant)} onClick={()=>{ setRel(r=>({...r, lignes:[...r.lignes, {date:ajout.date, desc:ajout.desc.trim(), montant:txNum(ajout.montant), coche:true}]})); setAjout({...ajout, desc:'', montant:''}); }}>+ Ajouter</button></div>
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <button className="btn btn-sm btn-p" disabled={!!etat || !coches.length} onClick={sauver}>{etat || 'Enregistrer '+coches.length+' dépense'+(coches.length>1?'s':'')}</button>
+        <span className="muted" style={{fontSize:12.5}}>{cvMoney(tot.ttc)} · TPS ≈ {cvMoney(tot.tps)} · TVQ ≈ {cvMoney(tot.tvq)}</span>
+        <button className="btn btn-sm" onClick={()=>setRel(null)}>Recommencer</button></div>
+    </div>}
+  </div>;
+}
+function TaxesView({cfg}){
+  const [cle,setCle]=useState(0);
+  const T = useTaxes(cfg, cle);
+  const auj = localDateStr(new Date());
+  const [mode,setModeS]=useState(()=>{ try{ return localStorage.getItem('crm_tx_mode') || 'trim'; }catch(e){ return 'trim'; } });
+  const [per,setPer]=useState(()=>txPeriode('trim', auj));
+  const setMode = m => { setModeS(m); setPer(txPeriode(m, auj)); try{ localStorage.setItem('crm_tx_mode', m); }catch(e){} };
+  useEffect(()=>{ setPer(txPeriode(mode, auj)); },[]);   // eslint-disable-line
+  const [depot,setDepot]=useState('');
+  const [msg,setMsg]=useState('');
+  const [ouv,setOuv]=useState({});
+  const [a,b] = txBornes(mode, per);
+  const dans = x => x.date>=a && x.date<=b;
+  const V = T.ventes.filter(dans).sort((x,y)=>x.date.localeCompare(y.date)), A = T.achats.filter(dans).sort((x,y)=>x.date.localeCompare(y.date)), D = T.depenses.filter(dans).sort((x,y)=>x.date.localeCompare(y.date));
+  const som = (L, k) => txR(L.reduce((s,x)=>s+(+x[k]||0),0));
+  const tpsP = som(V,'tps'), tvqP = som(V,'tvq'), tpsA = txR(som(A,'tps')+som(D,'tps')), tvqA = txR(som(A,'tvq')+som(D,'tvq'));
+  const fait = m => { setDepot(''); setMsg(m); setCle(c=>c+1); T.relire(); };
+  if(!T.lu) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des factures…</span></div>;
+  const Tuile = ({l, v, c, s}) => <div className="card" style={{padding:'10px 12px',margin:0}}><div className="muted" style={{fontSize:11.5}}>{l}</div><div style={{fontSize:19,fontWeight:800,color:c||'var(--text)',fontVariantNumeric:'tabular-nums'}}>{cvMoney(v)}</div>{s && <div className="muted" style={{fontSize:11}}>{s}</div>}</div>;
+  const Liste = ({k, titre, L}) => <div className="card" style={{marginBottom:10,padding:10}}>
+    <div style={{display:'flex',justifyContent:'space-between',cursor:'pointer'}} onClick={()=>setOuv(o=>({...o, [k]:!o[k]}))}>
+      <b>{titre} <span className="muted" style={{fontWeight:400}}>({L.length})</span></b>
+      <span className="muted" style={{fontSize:12.5}}>TPS {cvMoney(som(L,'tps'))} · TVQ {cvMoney(som(L,'tvq'))} {ouv[k] ? '▲' : '▼'}</span></div>
+    {ouv[k] && <div style={{marginTop:6,overflowX:'auto'}}><table style={{width:'100%',fontSize:12.5,borderCollapse:'collapse'}}>
+      <thead><tr className="muted" style={{textAlign:'right'}}><th style={{textAlign:'left'}}>Date</th><th style={{textAlign:'left'}}>{k==='v' ? 'Facture / client' : 'Fournisseur'}</th><th>Sous-total</th><th>TPS</th><th>TVQ</th><th>Total</th></tr></thead>
+      <tbody>{L.map((x,i)=><tr key={i} style={{borderTop:'1px solid var(--border)',textAlign:'right',fontVariantNumeric:'tabular-nums'}}>
+        <td style={{textAlign:'left',whiteSpace:'nowrap'}}>{cvFmtDay(x.date)}</td>
+        <td style={{textAlign:'left'}}>{x.pdf ? <a href={'https://drive.google.com/file/d/'+x.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>{x.num ? '#'+x.num+' ' : ''}{x.qui || '—'}</a> : <>{x.num ? '#'+x.num+' ' : ''}{x.qui || '—'}</>}
+          {x.estime && <span className="muted" style={{fontSize:11}}> · estimé</span>}{x.source && <span className="muted" style={{fontSize:11}}> · {x.source}</span>}</td>
+        <td>{cvMoney(x.ht)}</td><td>{cvMoney(x.tps)}</td><td>{cvMoney(x.tvq)}</td><td>{cvMoney(x.ttc)}</td></tr>)}</tbody></table></div>}
+  </div>;
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 8px',fontSize:20}}>TPS / TVQ</h2>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+      {[['mois','Mois'],['trim','Trimestre'],['annee','Année fiscale']].map(([k,l])=><button key={k} className={'btn btn-sm'+(mode===k?' btn-p':'')} onClick={()=>setMode(k)}>{l}</button>)}
+      <span style={{flex:1}}/>
+      <button className="btn btn-sm" onClick={()=>setPer(p=>txDecaler(mode, p, -1))}>‹</button>
+      <b style={{fontSize:13.5}}>{txLibelle(mode, per)}</b>
+      <button className="btn btn-sm" onClick={()=>setPer(p=>txDecaler(mode, p, 1))}>›</button>
+      {per!==txPeriode(mode, auj) && <button className="btn btn-sm" onClick={()=>setPer(txPeriode(mode, auj))}>Aujourd'hui</button>}
+    </div>
+    {T.err && <div className="card" style={{color:'var(--danger)'}}>Erreur : {T.err}</div>}
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:12}}>
+      <Tuile l="TPS perçue" v={tpsP} s={V.length+' facture'+(V.length>1?'s':'')+' clients'}/>
+      <Tuile l="TVQ perçue" v={tvqP}/>
+      <Tuile l="TPS payée" v={tpsA} s={(A.length+D.length)+' facture'+(A.length+D.length>1?'s':'')+' / dépenses'}/>
+      <Tuile l="TVQ payée" v={tvqA}/>
+      <Tuile l={tpsP-tpsA>=0 ? 'TPS à remettre' : 'TPS à recevoir'} v={Math.abs(txR(tpsP-tpsA))} c={tpsP-tpsA>=0 ? 'var(--warning)' : 'var(--success)'}/>
+      <Tuile l={tvqP-tvqA>=0 ? 'TVQ à remettre' : 'TVQ à recevoir'} v={Math.abs(txR(tvqP-tvqA))} c={tvqP-tvqA>=0 ? 'var(--warning)' : 'var(--success)'}/>
+    </div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+      <button className={'btn btn-sm'+(depot==='facture'?' btn-p':'')} onClick={()=>{ setDepot(depot==='facture'?'':'facture'); setMsg(''); }}>+ Déposer une facture</button>
+      <button className={'btn btn-sm'+(depot==='releve'?' btn-p':'')} onClick={()=>{ setDepot(depot==='releve'?'':'releve'); setMsg(''); }}>+ Déposer un relevé de carte</button>
+      {msg && <span style={{color:'var(--success)',fontSize:12.5}}>✓ {msg}</span>}
+    </div>
+    {depot==='facture' && <DepotFacture cfg={cfg} existe={T.depExiste} onFait={fait} onFermer={()=>setDepot('')}/>}
+    {depot==='releve' && <DepotReleve cfg={cfg} existe={T.depExiste} depenses={T.depenses} onFait={fait} onFermer={()=>setDepot('')}/>}
+    <Liste k="v" titre="Factures clients (taxes perçues)" L={V}/>
+    <Liste k="a" titre="Factures fournisseurs (Dubo, Lumen, Gagnon…)" L={A}/>
+    <Liste k="d" titre="Dépenses déposées (factures et relevés de cartes)" L={D}/>
+    <div className="muted" style={{fontSize:12}}>Selon la date des factures. Taxes = total − sous-total (TPS 5 % du sous-total, TVQ le reste). Les dépenses de relevés de cartes sont estimées. Les notes de crédit viennent en moins. Année fiscale du 1er juillet au 30 juin.</div>
   </div>;
 }
 // v291 : code pour ouvrir Comptabilité. L'empreinte du code (SHA-256, jamais le code) est dans l'onglet « Accès » du Sheet CRM.
@@ -12718,6 +12993,7 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
       <div className="muted" style={{fontSize:13,marginBottom:10}}>Tous tes clients : contracteurs et particuliers. Clique un client pour voir ses jobs (en cours, terminées), puis une job pour ses factures, achats, PO et dossier.</div>
       <RepertoireView key={'c'+(cles.clients||0)} mode="factures" cfg={cfgRep} refreshKey={refreshKey} toast={toast} isDesktop={isDesktop} contacts={contacts}/></>}
     {onglet==='paiements' && <PaiementsOnglet key={'p'+(cles.paiements||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
+    {onglet==='taxes' && <TaxesView key={'t'+(cles.taxes||0)} cfg={cfgRep}/>}
     {onglet==='factures' && <FacturesView key={'x'+(cles.factures||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='verif' && <>
       <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>À vérifier</h2>
