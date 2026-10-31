@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v361';
+const APP_VERSION = 'v362';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6701,14 +6701,14 @@ function typeConduit(T){
   if(/COUPL|MANCHON|\bUNION\b|RACCORD DROIT/.test(T)) return 'Coupling';
   if(/ADAPT|\bRTA\b|^RTA|\bFA\b|\bTA\b|TERMINAL|FEMELLE|FEMALE|\bMA\b|\bMALE\b/.test(T)) return 'Adaptateur (RTA / FA)';
   if(/\bCONN\b|CONN |CONNECT|SET ?SCREW|COMPRESS|VIS DE PRESSION/.test(T)) return 'Connecteur';
-  if(/STRAP|BRIDE|\bCLIP|CLAMP|SERRE|SUPPORT|HANGER|MINERALLAC|MINNIE|\bCROCHET|ATTACHE/.test(T)) return 'Clip / strap';
+  if(/STRAP|BRIDE|\bCLIP|CLAMP|SERRE|MINERALLAC|MINNIE|SANGLE|COURROIE|COURR\b/.test(T)) return 'Clip / strap';
   if(/CONDUIT|TUYAU|^RC ?4\d{3}|\bRC ?400|\bRC4\b|\bEMT\b|TUBING|\bENT\b|\bDB2\b|10 ?PI\b|X ?10\b|LONGUEUR|LIQUIDTIGHT \d|\bFLEX \d|\d+ ?PI\b|ROULEAU|\bFT\b/.test(T)) return 'Tuyau';
   return '';
 }
 function matiereConduit(T){
-  if(/LIQUID|\bLT\b|SEALTITE|SEAL-?TITE|\bFLEX|FMC|GREENFIELD|\bLFMC|\bLFNC|CARFLEX|ULTRATITE/.test(T)) return 'Flex / autre';
-  if(/\bEMT\b|ELECTRICAL METALLIC|\bACIER\b|\bSTEEL\b|GALVA|\bIMC\b|\bRMC\b|\bRIGID\b|METAL/.test(T)) return 'EMT';
-  if(/PVC|^RC ?4|\bRC ?400|\bRC4\b|RIGIDE|\bDB2\b|\bENT\b|PLAST|SCH ?40|SCH ?80|SCEPTER|\bIPEX\b|CARLON|KRALOY/.test(T)) return 'PVC';
+  if(/LIQUID|\bLT\b|SEALTITE|SEAL-?TITE|CON-?SEAL|\bFLEX|FMC|GREENFIELD|\bLFMC|\bLFNC|CARFLEX|ULTRATITE/.test(T)) return 'Flex / autre';
+  if(/PVC|\bCPV\b|^RC ?4|\bRC ?400|\bRC4\b|\bDB2\b|\bENT\b|PLAST|SCH ?40|SCH ?80|SCEPTER|\bIPEX\b|CARLON|KRALOY|^SCE/.test(T)) return 'PVC';   // v362 : PVC avant EMT (« Rigid PVC »)
+  if(/\bEMT\b|ELECTRICAL METALLIC|GALVA|\bIMC\b|\bRMC\b/.test(T)) return 'EMT';
   return '';
 }
 const sousConduit = s => String(s||'').split(' · ');   // ['PVC','Coude']
@@ -6748,8 +6748,8 @@ const SOUS_SUGG = {
 // v131 : Décora par sous-catégorie (on ne change pas la catégorie, seulement la sous-catégorie)
 function sousDecora(T){
   if(/CASETA|PICO\b|^PICO|WI-?FI|SMART|INTELLIGENT|ZIGBEE|Z-?WAVE|\bRA2\b|MYQ|HOMEKIT|KIT PICO|KSC2V|\bKSC/.test(T)) return 'Intelligent';
-  if(/GRADATEUR|DIMMER|VARIATEUR|DVCL|\bDIVA\b|^DV|MACL|CTCL|\bMA-?\d|LUTDV/.test(T)) return 'Gradateurs';
-  if(/MINUTERIE|TIMER|\bTI\d|OCCUPANCY|VACANCY|MOUVEMENT|MOTION|HUMIDIT|DETECTEUR DE PRESENCE|\bDHS|ODS|\bPIR\b/.test(T)) return 'Minuteries et détecteurs';
+  if(/GRADATEUR|DIMMER|VARIATEUR|DVCL|\bDIVA\b|^DV|MACL|CTCL|\bMA-?\d|LUTDV|\bGRAD\b|SKYLARK|\bSCL-?\d|\bDVRF/.test(T)) return 'Gradateurs';
+  if(/MINUTERIE|TIMER|\bTI\d|OCCUPANCY|VACANCY|MOUVEMENT|MOTION|HUMIDIT|DETECT|\bDHS|ODS|\bPIR\b|MS-?OPS/.test(T)) return 'Minuteries et détecteurs';
   if(/PLAQUE|PLATE|WALLPLATE|\dGPJ|\dGSW|VIERGE|COUVERCLE|COUV\b|\bWP\d|INTEMP|80714/.test(T)) return 'Plaques';
   if(/PRISE|RECEPT|OUTLET|\bGFI|GFCI|DDFT|\bUSB|^T5\d{3}|GFTR|SECHEUSE|POELE|14-30|14-50|10-30|DUPLEX|RECPT|5-15|5-20/.test(T)) return 'Prises';
   if(/PLUG\b(?!-IN)|\bFICHE/.test(T)) return 'Fiches';
@@ -6788,7 +6788,7 @@ function classerProduit(code, desc, catActuelle){
   // Les connecteurs de câble (NMD, BX, TECK, ACWU, liquidtight, flex) ne sont PAS du conduit et restent dans CONNECTEURS.
   // v358 : quincaillerie — contre-écrous et embouts (bushings) plastiques, peu importe la grosseur ou la matière
   if(/LOCKNUT|LOCK ?NUT|CONTRE[- ]?[ÉE]CROU|CONTRE-?ECROU/.test(T) && !/BO[IÎ]TE|\bBOX\b/.test(T)) return {cat:'QUINCAILLERIE', sous:'Contre-écrous'};
-  if(/BUSHING|EMBOUT|\bBUSH\b/.test(T) && !/BO[IÎ]TE|\bBOX\b|REDUC|R[ÉE]DUCTEUR/.test(T)) return {cat:'QUINCAILLERIE', sous:'Bushing'};
+  if(/BUSHING|EMBOUT|\bBUSH\b/.test(T) && !/BO[IÎ]TE|\bBOX\b|REDUC|R[ÉE]DUCTEUR|COMPRESS|\bCONN|CONNECT/.test(T)) return {cat:'QUINCAILLERIE', sous:'Bushing'};
   if(!/NMD|LOOMEX|ROMEX|\bNM\b|TECK|ACWU|\bBX\b|AC90|ARMOU?R|C-CLIP|PASSE ?FIL|C[ÂA]BLE|CABLE|\bFIL\b|ANCRAGE|ANCHOR|\bHYDRO\b|MARRETTE|COSSE|\bLUGS?\b/.test(T)){
     const typ = typeConduit(T), mat = matiereConduit(T);
     const dejaConduit = /^CONDUIT|^TUYAU/i.test(cat);
