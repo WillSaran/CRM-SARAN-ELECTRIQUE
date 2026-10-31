@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v362';
+const APP_VERSION = 'v363';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6696,9 +6696,9 @@ const CONDUIT_MAT = ['PVC','EMT','Flex / autre'];   // v358 : flex, liquidtight,
 const CONDUIT_TYPES = ['Tuyau','Coude','LB / LL / LR / T','Coupling','Adaptateur (RTA / FA)','Connecteur','Clip / strap','Boîte'];
 function typeConduit(T){
   if(/BO[IÎ]TE|\bBOX\b|\bFS[CDSTX]?\b|\bFD[CDSTX]?\b|JUNCTION|JONCTION|\bJB\b/.test(T)) return 'Boîte';
-  if(/\bLB\d*\b|\bLL\d*\b|\bLR\d*\b|\bTB\d*\b|CONDUIT ?BOD|CORPS DE CONDUIT|BO[IÎ]TE DE TIRAGE|\bTETE\b/.test(T)) return 'LB / LL / LR / T';
-  if(/COUDE|ELBOW|\bBEND|\b90 ?DEG|\b45 ?DEG|\b90\b|\b45\b|\b22\.?5\b|\b30 ?DEG/.test(T)) return 'Coude';
-  if(/COUPL|MANCHON|\bUNION\b|RACCORD DROIT/.test(T)) return 'Coupling';
+  if(/\bLB\d*\b|\bLL\d*\b|\bLR\d*\b|\bTB\d*\b|RSL[BLR]|\bRST\d|CONDUIT ?BOD|CORPS DE CONDUIT|BO[IÎ]TE DE TIRAGE|\bTETE\b|^T PVC/.test(T)) return 'LB / LL / LR / T';
+  if(/COUDE|ELBOW|\bBEND|COURBE|\b90 ?DEG|\b45 ?DEG|\b90\b|\b45\b|\b22\.?5\b|\b30 ?DEG/.test(T)) return 'Coude';
+  if(/COUPL|MANCHON|\bUNION\b|RACCORD DROIT|\bRSC\d|\bREC\b|^C PVC|^LC PVC/.test(T)) return 'Coupling';
   if(/ADAPT|\bRTA\b|^RTA|\bFA\b|\bTA\b|TERMINAL|FEMELLE|FEMALE|\bMA\b|\bMALE\b/.test(T)) return 'Adaptateur (RTA / FA)';
   if(/\bCONN\b|CONN |CONNECT|SET ?SCREW|COMPRESS|VIS DE PRESSION/.test(T)) return 'Connecteur';
   if(/STRAP|BRIDE|\bCLIP|CLAMP|SERRE|MINERALLAC|MINNIE|SANGLE|COURROIE|COURR\b/.test(T)) return 'Clip / strap';
@@ -6707,8 +6707,8 @@ function typeConduit(T){
 }
 function matiereConduit(T){
   if(/LIQUID|\bLT\b|SEALTITE|SEAL-?TITE|CON-?SEAL|\bFLEX|FMC|GREENFIELD|\bLFMC|\bLFNC|CARFLEX|ULTRATITE/.test(T)) return 'Flex / autre';
-  if(/PVC|\bCPV\b|^RC ?4|\bRC ?400|\bRC4\b|\bDB2\b|\bENT\b|PLAST|SCH ?40|SCH ?80|SCEPTER|\bIPEX\b|CARLON|KRALOY|^SCE/.test(T)) return 'PVC';   // v362 : PVC avant EMT (« Rigid PVC »)
-  if(/\bEMT\b|ELECTRICAL METALLIC|GALVA|\bIMC\b|\bRMC\b/.test(T)) return 'EMT';
+  if(/PVC|\bCPV\b|^RC ?4|\bRC ?400|\bRC4\b|\bDB2\b|\bENT\b|PLAST|SCH ?40|SCH ?80|SCEPTER|\bIPEX\b|CARLON|KRALOY|^SCE|\bRTA\b|\bRSC\d|RSL[BLR]|\bRST\d|\bRPS\b|\bREC\b|\bRFA\b/.test(T)) return 'PVC';   // v363 : codes Scepter (R…) = PVC
+  if(/\bEMT\b|EMT\d|CONDEMT|ELECTRICAL METALLIC|GALVA|\bIMC\b|\bRMC\b/.test(T)) return 'EMT';
   return '';
 }
 const sousConduit = s => String(s||'').split(' · ');   // ['PVC','Coude']
@@ -6738,7 +6738,7 @@ function sousOk(cat, sous, type, p){
 const SOUS_SUGG = {
   'FIL':['NMD','NMWU','AC90 / BX','ACWU','TECK','RW90','T90','LVT','SOOW','Réseau','Télécom'],
   'CONNECTEURS':['NMD (Loomex)','AC90 / BX','TECK','ACWU','Cordon souple (SOOW)','Autres'],   // v358 : par type de câble ; les connecteurs PVC / EMT / flex sont dans CONDUIT mais aussi visibles ici (doublon)
-  'QUINCAILLERIE':['Contre-écrous','Bushing','Fixations','Vis et ancrages','Autres'],
+  'QUINCAILLERIE':['Contre-écrous','Bushing','Passe-fils','Scellant','Bouchons KO','Fixations','Vis et ancrages','Autres'],
   'CONDUIT':CONDUIT_MAT.flatMap(m=>CONDUIT_TYPES.map(t=>m+' · '+t)),   // v353 : « PVC · Coude », « EMT · Connecteur »…
   'ENTRÉE ÉLECTRIQUE':['Sectionneur','Embase de compteur','Mât et tête de service','Autres'],
   'PANNEAUX':['QO · Square D','Homeline · Schneider (CHOM)','BR · Eaton','Siemens','GE','Autres'],
@@ -6789,6 +6789,12 @@ function classerProduit(code, desc, catActuelle){
   // v358 : quincaillerie — contre-écrous et embouts (bushings) plastiques, peu importe la grosseur ou la matière
   if(/LOCKNUT|LOCK ?NUT|CONTRE[- ]?[ÉE]CROU|CONTRE-?ECROU/.test(T) && !/BO[IÎ]TE|\bBOX\b/.test(T)) return {cat:'QUINCAILLERIE', sous:'Contre-écrous'};
   if(/BUSHING|EMBOUT|\bBUSH\b/.test(T) && !/BO[IÎ]TE|\bBOX\b|REDUC|R[ÉE]DUCTEUR|COMPRESS|\bCONN|CONNECT/.test(T)) return {cat:'QUINCAILLERIE', sous:'Bushing'};
+  // v363 : autres quincailleries ; connecteurs à cordon (SOOW) → CONNECTEURS
+  if(/PASSE[- ]?FIL|GROMMET/.test(T) && !/PLAQUE|BROSSE/.test(T)) return {cat:'QUINCAILLERIE', sous:'Passe-fils'};
+  if(/DUCT ?SEAL|COMPOS[ÉE] DE JOINT|SCELLANT|\bSCELL/.test(T)) return {cat:'QUINCAILLERIE', sous:'Scellant'};
+  if(/SUPERSTRUT|\bSTRUT\b|\bCPC\d|SUPPORT DE CABLE|ATTACHE DE TYPE|\bCROCHET|MINERALLAC|MINNIE/.test(T)) return {cat:'QUINCAILLERIE', sous:'Fixations'};
+  if(/BOUCHON|KO PLUG|KNOCK ?OUT|\bKO\b/.test(T) && !/BO[IÎ]TE|\bBOX\b/.test(T)) return {cat:'QUINCAILLERIE', sous:'Bouchons KO'};
+  if(/CONN CORD|CORD ?GRIP|CORDON|STRAIN ?RELIEF|KELLEMS|SERRE-?C[ÂA]BLE/.test(T)) return {cat:'CONNECTEURS', sous:'Cordon souple (SOOW)'};
   if(!/NMD|LOOMEX|ROMEX|\bNM\b|TECK|ACWU|\bBX\b|AC90|ARMOU?R|C-CLIP|PASSE ?FIL|C[ÂA]BLE|CABLE|\bFIL\b|ANCRAGE|ANCHOR|\bHYDRO\b|MARRETTE|COSSE|\bLUGS?\b/.test(T)){
     const typ = typeConduit(T), mat = matiereConduit(T);
     const dejaConduit = /^CONDUIT|^TUYAU/i.test(cat);
