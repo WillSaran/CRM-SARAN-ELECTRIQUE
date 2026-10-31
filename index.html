@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v363';
+const APP_VERSION = 'v364';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1805,10 +1805,12 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
     : prochain ? (prochain.phase ? prochain.phase.charAt(0)+prochain.phase.slice(1).toLowerCase() : 'Passage')+' le '+cvFmtDay(prochain.day)
     : (visites.some(v=>v.faite && !v.facturee) ? 'À facturer' : (enAtt || 'Terminée'));
   // Repères rapides : 🎤 mémo vocal attaché, 📝 OT fait, AP appel de service fait.
-  const vocal = ev.some(e=>e.attachments.some(a=>/^audio\//.test(a.mimeType||'') || /\.(m4a|mp3|wav|aac|ogg|caf)$/i.test(a.title||'') || /m[ée]mo vocal|vocal|voice/i.test(a.title||'')));
+  const estVocal = a=>/^audio\//.test(a.mimeType||'') || /\.(m4a|mp3|wav|aac|ogg|caf|webm)$/i.test(a.title||'') || /m[ée]mo vocal|vocal|voice/i.test(a.title||'');
+  const vocaux = ev.flatMap(e=>(e.attachments||[]).filter(a=>a.fileUrl && estVocal(a)).map(a=>({url:a.fileUrl, titre:a.title||'Mémo vocal', jour:e.day||'', ev:e.summary||e.titre||''})));   // v364 : liste pour ouvrir le mémo
+  const vocal = vocaux.length>0;
   const otFait = ots.length>0 || ev.some(e=>e.ot);
   const apFait = ev.some(e=>e.as) || (pro && (appels.liste||[]).some(a=>a.as && a.po && a.po===job.po));
-  return {E:actifs, G, manquants, etape, prochain, total:actifs.length, faits:actifs.length-manquants.length, vocal, otFait, apFait};
+  return {E:actifs, G, manquants, etape, prochain, total:actifs.length, faits:actifs.length-manquants.length, vocal, vocaux, otFait, apFait};
 }
 
 // Fils de courriels d'une job : dates, qui a écrit en dernier, ce qui se passe.
@@ -2628,6 +2630,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   const poEtapes = usePOEtapes(cfg);                   // v237 : Rough / Finition / Entrée électrique selon le PO
   const [selEt,setSelEt]=useState(null);              // {k, id} : étape choisie sur la barre d'une job
   const [typeAutre,setTypeAutre]=useState(null);      // {k, v} : type « Autre » en train d'être écrit
+  const [vocOuv,setVocOuv]=useState(null);            // v364 : job dont la liste des mémos vocaux est ouverte
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
   if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des jobs…</span></div>;
@@ -2678,7 +2681,12 @@ function ProjetsSuivi({cfg, refreshKey}){
         </div>
         <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
           <span style={{marginRight:8,fontSize:14}}>
-            {s.vocal && <span title="Mémo vocal attaché" style={{marginLeft:4}}>🎤</span>}
+            {s.vocal && <span style={{marginLeft:4,position:'relative'}} onClick={e=>{ e.stopPropagation(); if(s.vocaux.length===1) window.open(s.vocaux[0].url,'_blank','noopener'); else setVocOuv(vocOuv===k?null:k); }}>
+              <span title={s.vocaux.length===1 ? 'Écouter le mémo vocal' : 'Écouter un des '+s.vocaux.length+' mémos vocaux'} style={{cursor:'pointer'}}>🎤{s.vocaux.length>1 && <sup style={{fontSize:10}}>{s.vocaux.length}</sup>}</span>
+              {vocOuv===k && s.vocaux.length>1 && <div style={{position:'absolute',right:0,top:'120%',zIndex:20,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8,padding:6,minWidth:240,textAlign:'left',boxShadow:'0 4px 14px rgba(0,0,0,.35)'}}>
+                {s.vocaux.map((v,i)=><a key={i} href={v.url} target="_blank" rel="noopener" onClick={()=>setVocOuv(null)} style={{display:'block',padding:'4px 6px',fontSize:12.5,color:'var(--accent)',whiteSpace:'normal'}}>{v.jour ? cvFmtDay(v.jour)+' · ' : ''}{v.titre}</a>)}
+              </div>}
+            </span>}
             {s.otFait && <span title="OT fait" style={{marginLeft:4}}>📝</span>}
             {s.apFait && <span title="Appel de service fait" style={{marginLeft:4,fontSize:11,fontWeight:800,padding:'1px 4px',borderRadius:4,background:'rgba(88,166,255,0.15)',color:'var(--accent)'}}>AP</span>}
           </span>
