@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v353';
+const APP_VERSION = 'v354';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6710,7 +6710,7 @@ const SOUS_SUGG = {
   'CONDUIT':CONDUIT_MAT.flatMap(m=>CONDUIT_TYPES.map(t=>m+' · '+t)),   // v353 : « PVC · Coude », « EMT · Connecteur »…
   'ENTRÉE ÉLECTRIQUE':['Sectionneur','Embase de compteur','Mât et tête de service','Autres'],
   'PANNEAUX':['QO · Square D','Homeline · Schneider (CHOM)','BR · Eaton','Siemens','GE','Autres'],
-  'DISJONCTEURS':['QO · Square D','Homeline · Schneider (CHOM)','BR · Eaton','Siemens','GE','Autres'],
+  'DISJONCTEURS':['QO · Square D','Homeline · Schneider (CHOM)','BR · Eaton','Siemens · Q (SIEQ)','Siemens · B (SIEB)','GE','Autres'],   // v354 : Siemens en deux familles — Q (QP, enfichable) et B (BL/BQ, boulonné)
   'CONNEXIONS / MALT':['MALT','Raccordement'],
   'DÉCORA':['Prises','Interrupteurs','Gradateurs','Intelligent','Plaques','Minuteries et détecteurs','Fiches','Carillons']};
 // v131 : Décora par sous-catégorie (on ne change pas la catégorie, seulement la sous-catégorie)
@@ -6726,6 +6726,12 @@ function sousDecora(T){
   return '';
 }
 const FIL_SOUS = {NMD:'NMD', NMWU:'NMWU', AC90:'AC90 / BX', ACWU:'ACWU', TECK:'TECK', RW90:'RW90', T90:'T90', LVT:'LVT', SOOW:'SOOW', SJOOW:'SOOW', CAT6:'Réseau', CAT6A:'Réseau'};
+// v354 : disjoncteurs Siemens — famille Q (SIEQ…, QP, Q115…) ou B (SIEB…, BL, BQ, B115…)
+function marqueDisj(T){
+  const m = marquePanneau(T); if(m!=='Siemens') return m;
+  if(/\bSIEB|^SIEB|\bBL\d|\bBQ\d|\bB\d{3,4}\b|BOLT[- ]?ON|BOULONN/.test(T)) return 'Siemens · B (SIEB)';
+  return 'Siemens · Q (SIEQ)';
+}
 function marquePanneau(T){
   if(/SIEMENS|^SIE|\bSIEQ|^Q\d{3}|^B\d{3,4}\b|\bQP\b/.test(T)) return 'Siemens';
   if(/CHOM|HOMELINE|\bHOM\d|^HOM/.test(T)) return 'Homeline · Schneider (CHOM)';
@@ -6739,7 +6745,7 @@ function classerProduit(code, desc, catActuelle){
   const sansAcc = x => String(x||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
   const C = sansAcc(code), D = sansAcc(desc), T = C+' '+D, cat = String(catActuelle||'');
   if(/^D[ÉE]CORA/i.test(cat)){
-    if(/BREAKER|DISJ|\bBRK\b|PLUG-IN|TWIN \d|SIEMENS TWIN/.test(T) || (sigDisj(code, desc) && !/PRISE|RECEPT|PLUG|FICHE/.test(T))) return {cat:'DISJONCTEURS', sous:marquePanneau(T)};   // disjoncteur rangé dans Décora par erreur
+    if(/BREAKER|DISJ|\bBRK\b|PLUG-IN|TWIN \d|SIEMENS TWIN/.test(T) || (sigDisj(code, desc) && !/PRISE|RECEPT|PLUG|FICHE/.test(T))) return {cat:'DISJONCTEURS', sous:marqueDisj(T)};   // disjoncteur rangé dans Décora par erreur
     const sd = sousDecora(T); return sd ? {cat, sous:sd} : null; }
   if(CAT_FIXES.test(cat)) return null;
   // entrée électrique (pas les panneaux : ils ont leur catégorie)
@@ -6761,7 +6767,7 @@ function classerProduit(code, desc, catActuelle){
   // disjoncteurs et panneaux
   const panneau = /PANNEAU|LOAD ?CENTRE|LOAD ?CENTER|LOADCENTER|LOAD CTR|PANELBOARD|^CQO|^CQ0|^QO C|^CHOM \d{4}|^SIEQ \d|^SIESEQ/.test(T) && !/PASSE ?FIL|COUVERCLE|COVER|\bTRIM\b|SERRURE|LOCK|PLASTIQUE|PICTO/.test(T);
   const disj = /BREAKER|\bBRK\b|DISJONCTEUR|DIJONCT|\bDISJ\b|^BR\/STAB|^QOB?\d|^HOM\d|^CHOM\d|^BR ?\d|^QBH|^Q\d{3}|^SIEQ?\d{3}|^SIEB\d|^DNPL|PCAFI|\bPDF\b|^DOUBLE \d{4}|^GE\d{3}/.test(T);
-  if(disj && !panneau) return {cat:'DISJONCTEURS', sous:marquePanneau(T)};
+  if(disj && !panneau) return {cat:'DISJONCTEURS', sous:marqueDisj(T)};
   if(panneau) return {cat:'PANNEAUX', sous:marquePanneau(T)};
   // raccordement et mise à la terre
   const malt = /GROUND|\bMALT\b|MISE A LA TERRE|\bGND\b|TIGE DE|ACORN|BONDING|\bMASSE\b/.test(T);
