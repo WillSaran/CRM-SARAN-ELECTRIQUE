@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v357';
+const APP_VERSION = 'v358';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6685,7 +6685,7 @@ function formatDe(o){
 // v127 : catégories PROPOSÉES (tu confirmes dans « 🏷 Classer ») — entrée électrique, panneaux et disjoncteurs par marque,
 // connecteurs par type de fil (ou tuyau), raccordement / MALT, fil par type (NMD, TECK…) + réseau / télécom.
 // v353 : CONDUIT = matière (PVC / EMT) · type — tout ce qui sert à monter du tuyau, incluant les boîtes PVC (aussi visibles sous BOÎTES).
-const CONDUIT_MAT = ['PVC','EMT'];
+const CONDUIT_MAT = ['PVC','EMT','Flex / autre'];   // v358 : flex, liquidtight, FMC… en 3e
 const CONDUIT_TYPES = ['Tuyau','Coude','LB / LL / LR / T','Coupling','Adaptateur (RTA / FA)','Connecteur','Clip / strap','Boîte'];
 function typeConduit(T){
   if(/BO[IÎ]TE|\bBOX\b|\bFS[CDSTX]?\b|\bFD[CDSTX]?\b|JUNCTION|JONCTION|\bJB\b/.test(T)) return 'Boîte';
@@ -6695,10 +6695,11 @@ function typeConduit(T){
   if(/ADAPT|\bRTA\b|^RTA|\bFA\b|\bTA\b|TERMINAL|FEMELLE|FEMALE|\bMA\b|\bMALE\b/.test(T)) return 'Adaptateur (RTA / FA)';
   if(/\bCONN\b|CONN |CONNECT|SET ?SCREW|COMPRESS|VIS DE PRESSION/.test(T)) return 'Connecteur';
   if(/STRAP|BRIDE|\bCLIP|CLAMP|SERRE|SUPPORT|HANGER|MINERALLAC|MINNIE|\bCROCHET|ATTACHE/.test(T)) return 'Clip / strap';
-  if(/CONDUIT|TUYAU|^RC ?4\d{3}|\bRC ?400|\bRC4\b|\bEMT\b|TUBING|\bENT\b|\bDB2\b|10 ?PI\b|X ?10\b|LONGUEUR/.test(T)) return 'Tuyau';
+  if(/CONDUIT|TUYAU|^RC ?4\d{3}|\bRC ?400|\bRC4\b|\bEMT\b|TUBING|\bENT\b|\bDB2\b|10 ?PI\b|X ?10\b|LONGUEUR|LIQUIDTIGHT \d|\bFLEX \d|\d+ ?PI\b|ROULEAU|\bFT\b/.test(T)) return 'Tuyau';
   return '';
 }
 function matiereConduit(T){
+  if(/LIQUID|\bLT\b|SEALTITE|SEAL-?TITE|\bFLEX|FMC|GREENFIELD|\bLFMC|\bLFNC|CARFLEX|ULTRATITE/.test(T)) return 'Flex / autre';
   if(/\bEMT\b|ELECTRICAL METALLIC|\bACIER\b|\bSTEEL\b|GALVA|\bIMC\b|\bRMC\b|\bRIGID\b|METAL/.test(T)) return 'EMT';
   if(/PVC|^RC ?4|\bRC ?400|\bRC4\b|RIGIDE|\bDB2\b|\bENT\b|PLAST|SCH ?40|SCH ?80|SCEPTER|\bIPEX\b|CARLON|KRALOY/.test(T)) return 'PVC';
   return '';
@@ -6707,7 +6708,7 @@ const sousConduit = s => String(s||'').split(' · ');   // ['PVC','Coude']
 // v355 : produits d'une autre catégorie montrés AUSSI ici, sous une sous-catégorie virtuelle (boîtes PVC sous BOÎTES, connecteurs PVC / EMT sous CONNECTEURS)
 const DOUBLONS = {
   'BOÎTES':      {'PVC': p=>p.cat==='CONDUIT' && p.sous==='PVC · Boîte'},
-  'CONNECTEURS': {'PVC': p=>p.cat==='CONDUIT' && p.sous==='PVC · Connecteur', 'EMT': p=>p.cat==='CONDUIT' && p.sous==='EMT · Connecteur'}};
+  'CONNECTEURS': {'PVC': p=>p.cat==='CONDUIT' && p.sous==='PVC · Connecteur', 'EMT': p=>p.cat==='CONDUIT' && p.sous==='EMT · Connecteur', 'Flex / liquidtight': p=>p.cat==='CONDUIT' && p.sous==='Flex / autre · Connecteur'}};
 const estDoublon = (cat, sous, p) => { const d = DOUBLONS[cat]; if(!d) return false; return sous ? !!(d[sous] && d[sous](p)) : Object.values(d).some(f=>f(p)); };
 const sousDoublons = (cat, produits) => { const d = DOUBLONS[cat]; return d ? Object.keys(d).filter(k=>produits.some(d[k])) : []; };
 // v357 : sous-catégories à DEUX niveaux quand elles contiennent « · » (CONDUIT : PVC / EMT, puis Tuyau, Coude, LB…).
@@ -6729,7 +6730,8 @@ function sousOk(cat, sous, type, p){
 }
 const SOUS_SUGG = {
   'FIL':['NMD','NMWU','AC90 / BX','ACWU','TECK','RW90','T90','LVT','SOOW','Réseau','Télécom'],
-  'CONNECTEURS':['NMD (Loomex)','AC90 / BX','TECK','ACWU','Cordon souple (SOOW)','Liquidtight','Autres'],   // v355 : par type de câble ; les connecteurs PVC / EMT sont dans CONDUIT mais aussi visibles ici (doublon)
+  'CONNECTEURS':['NMD (Loomex)','AC90 / BX','TECK','ACWU','Cordon souple (SOOW)','Autres'],   // v358 : par type de câble ; les connecteurs PVC / EMT / flex sont dans CONDUIT mais aussi visibles ici (doublon)
+  'QUINCAILLERIE':['Contre-écrous','Bushing','Fixations','Vis et ancrages','Autres'],
   'CONDUIT':CONDUIT_MAT.flatMap(m=>CONDUIT_TYPES.map(t=>m+' · '+t)),   // v353 : « PVC · Coude », « EMT · Connecteur »…
   'ENTRÉE ÉLECTRIQUE':['Sectionneur','Embase de compteur','Mât et tête de service','Autres'],
   'PANNEAUX':['QO · Square D','Homeline · Schneider (CHOM)','BR · Eaton','Siemens','GE','Autres'],
@@ -6777,7 +6779,10 @@ function classerProduit(code, desc, catActuelle){
   if(/\bMAST\b|\bMAT DE|SERVICE ?HEAD|TETE DE SERVICE|WEATHER ?HEAD|ENTRANCE CAP|CHAPEAU DE MAT/.test(T)) return {cat:'ENTRÉE ÉLECTRIQUE', sous:'Mât et tête de service'};
   // v353 : conduit — matière (PVC / EMT) · type. RC400… = conduit PVC rigide (RC4002010 = 2 po × 10 pi).
   // Les connecteurs de câble (NMD, BX, TECK, ACWU, liquidtight, flex) ne sont PAS du conduit et restent dans CONNECTEURS.
-  if(!/NMD|LOOMEX|ROMEX|\bNM\b|TECK|ACWU|\bBX\b|AC90|FLEX|ARMOU?R|LIQUID|SEALTITE|C-CLIP|PASSE ?FIL|C[ÂA]BLE|CABLE|\bFIL\b|ANCRAGE|ANCHOR|\bHYDRO\b|MARRETTE|COSSE|\bLUGS?\b/.test(T)){
+  // v358 : quincaillerie — contre-écrous et embouts (bushings) plastiques, peu importe la grosseur ou la matière
+  if(/LOCKNUT|LOCK ?NUT|CONTRE[- ]?[ÉE]CROU|CONTRE-?ECROU/.test(T) && !/BO[IÎ]TE|\bBOX\b/.test(T)) return {cat:'QUINCAILLERIE', sous:'Contre-écrous'};
+  if(/BUSHING|EMBOUT|\bBUSH\b/.test(T) && !/BO[IÎ]TE|\bBOX\b|REDUC|R[ÉE]DUCTEUR/.test(T)) return {cat:'QUINCAILLERIE', sous:'Bushing'};
+  if(!/NMD|LOOMEX|ROMEX|\bNM\b|TECK|ACWU|\bBX\b|AC90|ARMOU?R|C-CLIP|PASSE ?FIL|C[ÂA]BLE|CABLE|\bFIL\b|ANCRAGE|ANCHOR|\bHYDRO\b|MARRETTE|COSSE|\bLUGS?\b/.test(T)){
     const typ = typeConduit(T), mat = matiereConduit(T);
     const dejaConduit = /^CONDUIT|^TUYAU/i.test(cat);
     const boitePvc = typ==='Boîte' && mat==='PVC';
@@ -6799,10 +6804,9 @@ function classerProduit(code, desc, catActuelle){
   if(malt) return {cat:'CONNEXIONS / MALT', sous:'MALT'};
   if(racc) return {cat:'CONNEXIONS / MALT', sous:'Raccordement'};
   // connecteurs (fil ou tuyau)
-  if(/\bCONN\b|CONN |CONNECTOR|CONNECTEUR|^CI ?\d|^RTA\b|COUPLING|COUPLAGE|^REC\b|BUSHING|EMBOUT .*PO|LOCKNUT|CONTRE-ECROU|C-CLIP/.test(T)){
+  if(/\bCONN\b|CONN |CONNECTOR|CONNECTEUR|^CI ?\d|^RTA\b|COUPLING|COUPLAGE|^REC\b|C-CLIP/.test(T)){
     const s = /NMD|LOOMEX|ROMEX|\bNM\b|C-CLIP/.test(T) ? 'NMD (Loomex)' : /TECK/.test(T) ? 'TECK' : /ACWU/.test(T) ? 'ACWU' : /\bBX\b|BX\/|AC90|FLEX|ARMOU?R/.test(T) ? 'AC90 / BX'
-      : /CORD ?GRIP|CORDON|SOOW|SJOOW|KELLEMS|STRAIN ?RELIEF|SERRE-?C[ÂA]BLE|\bSO\b|\bSJ\b/.test(T) ? 'Cordon souple (SOOW)'
-      : /LIQUID|\bLT\b|SEALTITE/.test(T) ? 'Liquidtight' : '';   // v355 : PVC / EMT → CONDUIT (plus haut)
+      : /CORD ?GRIP|CORDON|SOOW|SJOOW|KELLEMS|STRAIN ?RELIEF|SERRE-?C[ÂA]BLE|\bSO\b|\bSJ\b/.test(T) ? 'Cordon souple (SOOW)' : '';   // v358 : PVC / EMT / flex-liquidtight → CONDUIT (plus haut)
     return {cat:'CONNECTEURS', sous:s};
   }
   // fil : par type ; sinon réseau / télécom
@@ -6844,6 +6848,7 @@ function descFil(s, couleurUtile){
 // STOCK PUNCH PRO (ce que les gars voient) n'est pas touché par l'import.
 const PROD_ENTETE = ['Code','Description','Catégorie','Sous-catégorie','Unité','Photo','Code fabricant','Notes','Source','Mis à jour','Code PunchPro','Regroupé sous'];
 const OFFRE_ENTETE = ['Fournisseur','Code fournisseur','Code fabricant','Marque','Description','Catégorie','Unité','Mon prix','Prix de liste','Stock','Succursale','URL','Photo','Vendu par','Code CRM','Correspondance','Date',"Prix d'ami"];   // v201 : colonne R = ton vrai prix payé (prix d'ami), jamais écrasée par les imports
+const CAT_TOUJOURS = ['FIL','CONDUIT','CONNECTEURS','BOÎTES','QUINCAILLERIE'];   // v358 : boutons toujours visibles dans le catalogue, même à 0
 const CAT_ORDRE = ['FIL','CONDUIT','CONNECTEURS','BOÎTES','DÉCORA','ENTRÉE ÉLECTRIQUE','PANNEAUX','DISJONCTEURS','CHAUFFAGE','ÉCLAIRAGE','BORNES','CONNEXIONS / MALT','CONTRÔLE','DÉTECTION','QUINCAILLERIE','DIVERS','Stock personnalisé','SERVICES','À CLASSER','ADMINISTRATIF'];
 const FOURN_ORDRE = ['Dubo','Lumen','Gagnon'];
 function catSimple(c){
@@ -7385,7 +7390,7 @@ function ProduitsView({cfg, toast}){
     {vue==='catalogue' && <>
       {!q && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
         <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>{ setCat(''); setSous(''); setType(''); setLim(150); }}>Tous</button>
-        {C.toutesCats.filter(c=>nbCat(c)).map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>{ setCat(c); setSous(''); setType(''); setLim(150); }}>{c} ({nbCat(c)})</button>)}
+        {C.toutesCats.filter(c=>nbCat(c) || CAT_TOUJOURS.includes(c)).map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} style={nbCat(c)?null:{opacity:.55}} onClick={()=>{ setCat(c); setSous(''); setType(''); setLim(150); }}>{c} ({nbCat(c)})</button>)}
       </div>}
       {!q && niv.n1.length>1 && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:(sous && (niv.n2[sous]||[]).length) ? 4 : 8}}>
         <button className={'btn btn-sm'+(!sous?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>{ setSous(''); setType(''); }}>Tout {cat}</button>
