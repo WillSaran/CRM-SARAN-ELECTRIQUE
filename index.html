@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v375';
+const APP_VERSION = 'v376';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -323,7 +323,7 @@ function mapPointageRows(rows){
   return rows.map(r=>({
     nom:r[0]||'', type:r[1]||'', datetime:r[2]||'', date:r[3]||'', heure:r[4]||'',
     semaine:r[5]||'', mois:r[6]||'', job:r[7]||'', jobColor:r[8]||'',
-    deplacement:safeFloat(r[9]), heures:safeFloat(r[10]), note:r[11]||''
+    deplacement:safeFloat(r[9]), heures:safeFloat(r[10]), note:r[11]||'', fichiers:r[12]||'', coequipiers:r[13]||''   // v376 : fichiers et coéquipiers (détail de la journée)
   })).filter(p=>p.nom);
 }
 // Employés + Pointages en UN SEUL appel batchGet (au lieu de deux) — ce sont
@@ -339,6 +339,31 @@ async function getPunchProDataBatched(sid){
 //  - un punch IN compte avec le punch OUT qui le suit le même jour (heures du OUT, sinon la durée) ;
 //  - un OUT resté seul (ex. ancienne ligne après une modification : le IN est devenu « confirm ») ne compte PAS.
 // Avant, le CRM additionnait tous les OUT et confirm : une job modifiée comptait deux fois (ex. 57,5 h au lieu de 47 h).
+// v376 : détail d'une semaine pour UN employé — mêmes règles que heuresParEmployeSemaine, mais chaque job est gardée
+// {date: [{job, heures, compte, type, debut, fin, deplacement, note, fichiers:[{url,nom}], coequipiers}]}
+function detailEmployeSemaine(pointages, weekLabel, nom){
+  const dateStrs = weekDatesArr(weekLabel).map(localDateStr);
+  const t = p => new Date(p.datetime).getTime() || 0;
+  const quart = h => Math.round((h||0)*4)/4;
+  const hhmm = p => { const d = new Date(p.datetime); return isNaN(d) ? (p.heure||'') : d.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'}); };
+  const fichiers = p => String(p.fichiers||'').split(/\s*\|\s*(?=https?:)/).map(x=>x.trim()).filter(Boolean).map(x=>{ const [url, ...n] = x.split('|'); return {url:url.trim(), nom:(n.join('|')||'').trim() || 'Fichier'}; });
+  const tri = pointages.map((p,i)=>({...p, _i:i})).filter(p=>p.nom===nom && dateStrs.includes(p.date)).sort((a,b)=>t(a)-t(b));
+  const fait = new Set(), out = {};
+  const ajoute = (d, x) => { (out[d] = out[d] || []).push(x); };
+  const base = p => ({job:p.job||'(sans job)', deplacement:p.deplacement||0, note:p.note||'', fichiers:fichiers(p), coequipiers:p.coequipiers||''});
+  tri.forEach(p=>{ if(fait.has(p._i)) return;
+    if(p.type==='confirm'){ fait.add(p._i);
+      const inn = tri.find(o=>o.type==='in' && !fait.has(o._i) && o.date===p.date && t(o)<t(p)); if(inn) fait.add(inn._i);
+      ajoute(p.date, {...base(p), heures:quart(p.heures), compte:true, type:'Confirmée', debut:inn ? hhmm(inn) : '', fin:''}); }
+    else if(p.type==='in'){ fait.add(p._i);
+      const o = tri.find(x=>x.type==='out' && !fait.has(x._i) && x.date===p.date && t(x)>t(p));
+      if(o){ fait.add(o._i); const b = base(o.job ? o : p); ajoute(p.date, {...b, job:p.job || o.job || '(sans job)', note:[p.note, o.note].filter(Boolean).join(' · '), fichiers:[...fichiers(p), ...fichiers(o)],
+        heures:o.heures>0 ? quart(o.heures) : quart((t(o)-t(p))/36e5), compte:true, type:'Punch', debut:hhmm(p), fin:hhmm(o)}); }
+      else ajoute(p.date, {...base(p), heures:0, compte:false, type:'Punch IN sans OUT', debut:hhmm(p), fin:''}); }
+  });
+  tri.forEach(p=>{ if(!fait.has(p._i) && p.type==='out') ajoute(p.date, {...base(p), heures:quart(p.heures), compte:false, type:'Ancienne ligne (OUT seul)', debut:'', fin:hhmm(p)}); });
+  return out;
+}
 function heuresParEmployeSemaine(pointages, weekLabel){
   const dateStrs = weekDatesArr(weekLabel).map(localDateStr);
   const map = {}, parNom = {};
@@ -3847,6 +3872,24 @@ function HeuresView({cfg, refreshKey}){
   const dateStrs = dates.map(localDateStr);
   const table = useMemo(()=>heuresParEmployeSemaine(pts, week), [pts, week]);
   const joursLabel = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+  const [detail,setDetail]=useState(null);   // v376 : {nom, jour} — jour vide = toute la semaine
+  useEffect(()=>{ setDetail(null); },[week]);
+  const basculer = (nom, jour) => setDetail(d=>d && d.nom===nom && (d.jour||'')===(jour||'') ? null : {nom, jour:jour||''});
+  const joursLong = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'];
+  const Detail = ({nom, jour}) => { const D = detailEmployeSemaine(pts, week, nom); const jours = dateStrs.filter(d=>(!jour || d===jour) && D[d]);
+    return <div style={{padding:'8px 12px 12px',background:'var(--bg3)',display:'grid',gap:10}}>
+      {!jours.length && <div className="muted" style={{fontSize:12.5}}>Aucun pointage{jour ? ' cette journée' : ' cette semaine'}.</div>}
+      {jours.map(d=>{ const L = D[d], tot = L.filter(x=>x.compte).reduce((a,x)=>a+x.heures,0), i = dateStrs.indexOf(d);
+        return <div key={d}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>{joursLong[i]} {dates[i].getDate()} {cvFmtDay(d).split(' ')[1]||''} — <span style={{color:'var(--accent)'}}>{fmtH(tot)}</span></div>
+          {L.map((x,k)=><div key={k} style={{display:'grid',gridTemplateColumns:'64px 1fr',gap:8,padding:'4px 0',borderTop:k?'1px solid var(--border)':'none',fontSize:12.5,opacity:x.compte?1:.55}}>
+            <div style={{fontWeight:800,fontVariantNumeric:'tabular-nums',color:x.compte?'var(--text)':'var(--muted)'}}>{x.compte ? fmtH(x.heures) : 'ne compte pas'}</div>
+            <div><b>{x.job}</b> <span className="muted">· {x.type}{x.debut||x.fin ? ' · '+[x.debut, x.fin].filter(Boolean).join(' → ') : ''}{x.deplacement ? ' · déplacement '+x.deplacement+' min' : ''}{x.coequipiers ? ' · avec '+x.coequipiers : ''}</span>
+              {x.note && <div style={{whiteSpace:'pre-wrap'}}>📝 {x.note}</div>}
+              {x.fichiers.length>0 && <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{x.fichiers.map((f,j)=><a key={j} href={f.url} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>{/^VOCAL_/.test(f.nom) ? '🎤' : /^(AP|OT)_/.test(f.nom) ? '📋' : '📎'} {f.nom}</a>)}</div>}
+            </div></div>)}
+        </div>; })}
+    </div>; };
   function prevWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()-7); setWeek(getWeek(d)); }
   function nextWeek(){ const d=mondayOfWeek(week); d.setDate(d.getDate()+7); setWeek(getWeek(d)); }
   function thisWeek(){ setWeek(semaineHeures(new Date())); }
@@ -3881,12 +3924,14 @@ function HeuresView({cfg, refreshKey}){
             {empsSorted.map(e=>{
               const row = table[e.nom]||{};
               const total = dateStrs.reduce((s,d)=>s+(row[d]||0),0);
-              return <tr key={e.nom}>
-                <td><span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:e.couleur,marginRight:6}}></span>{e.nom}</td>
-                {dateStrs.map((d,i)=><td key={i}>{row[d]?fmtH(row[d]):'—'}</td>)}
+              const ouvert = detail && detail.nom===e.nom;
+              return <React.Fragment key={e.nom}><tr>
+                <td style={{cursor:'pointer'}} title="Voir sa semaine jour par jour" onClick={()=>basculer(e.nom, '')}><span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:e.couleur,marginRight:6}}></span><span style={{textDecoration:'underline',textDecorationStyle:'dotted'}}>{e.nom}</span> <span className="muted" style={{fontSize:11}}>{ouvert && !detail.jour ? '▲' : '▼'}</span></td>
+                {dateStrs.map((d,i)=><td key={i} style={{cursor:row[d]?'pointer':'default',fontWeight:ouvert && detail.jour===d ? 800 : undefined,color:ouvert && detail.jour===d ? 'var(--accent)' : undefined}} title={row[d] ? 'Voir les jobs de cette journée' : undefined} onClick={()=>row[d] && basculer(e.nom, d)}>{row[d]?fmtH(row[d]):'—'}</td>)}
                 <td style={{fontWeight:700,color:'var(--accent)'}}>{fmtH(total)}</td>
                 <td>{conf.pret ? <ConfirmerMain conf={conf} week={week} nom={e.nom} total={total}/> : ''}</td>
-              </tr>;
+              </tr>
+              {ouvert && <tr><td colSpan="10" style={{padding:0}}><Detail nom={e.nom} jour={detail.jour}/></td></tr>}</React.Fragment>;
             })}
             {empsSorted.length===0 && <tr><td colSpan="10" className="muted" style={{padding:16}}>Aucun employé trouvé dans le Sheet PunchPro.</td></tr>}
           </tbody>
