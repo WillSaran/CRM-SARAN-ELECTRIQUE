@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v392';
+const APP_VERSION = 'v393';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3049,12 +3049,11 @@ function ProjetsSuivi({cfg, refreshKey}){
         <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/><CvArchiver cfg={cfg} job={j} archives={archives} onChanged={()=>setTick(t=>t+1)}/></div>
         {c.code!=='PART' && <div style={{fontSize:12.5,margin:'6px 0'}}>👤 Contracteur : <b>{CLIENT_CODES[c.code]||c.code}</b>{CLIENT_CONTACT[c.code] ? ' — '+CLIENT_CONTACT[c.code] : ''}
           {(()=>{ const gens=[...new Set(((j.po && (courriels||{})[j.po])||[]).map(f=>f.de).filter(n=>n && !/saran|william/i.test(n)))]; return gens.length ? <div className="muted" style={{fontSize:12}}>Dans les courriels de cette job : {gens.join(', ')}</div> : null; })()}</div>}
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,margin:'8px 0 4px',flexWrap:'wrap'}}><div className="fh" style={{fontSize:13}}>Passages</div><CvAjouterPassage job={j} onDone={()=>setTick(t=>t+1)}/></div>
-        {j.events.map((e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
+        <PjPassages events={j.events} today={today} ajouter={<CvAjouterPassage job={j} onDone={()=>setTick(t=>t+1)}/>} ligne={(e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
           {e.attente ? <b style={{color:'var(--warning)'}}>En attente</b> : <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b>} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span>
           {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac==='**' ? <span className="muted"> · pas à facturer</span> : e.fac ? <>{' · facture '+e.fac}{e.facEnvoyee===false && <span style={{color:'var(--warning)'}}> (pas envoyée)</span>}</> : (e.day<today && !e.attente ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
           {e.day<=today && <CvInscrirePassage cfg={cfg} e={e} onDone={()=>setTick(t=>t+1)}/>}
-        </div>)}
+        </div>}/>
         <div style={{marginTop:10,paddingTop:8,borderTop:'1px solid var(--border)'}}>   {/* v388 : à la fin, sous les passages — les étapes d'abord */}
         <PjAppels liste={cvJobAppels(j, ap)} factures={factures}/>
         <PjFacturesMateriel job={j} factures={factures} achats={achats} clients={clients} cfg={cfg} onChanged={()=>setTick(t=>t+1)} appelsJob={cvJobAppels(j, ap)}/>
@@ -11446,6 +11445,26 @@ function CvAppelsLiens({liste, factures}){
   return <>{liste.map((a,k)=><span key={k} style={{marginRight:12,display:'inline-block'}}>
     {a.url ? <a href={a.url} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>AP {a.as} ↗</a> : <b>AP {a.as}</b>}
     <span className="muted" style={{fontSize:11.5}}>{a.jour ? ' · '+cvFmtDay(a.jour) : ''}{a.factures.length ? ' · facture '+a.factures.map(n=>n+(factures && factures[n] && (factures[n].envoi || factures[n].pdf) ? '' : factures ? ' (pas envoyée)' : '')).join(', ') : ''}{!a.url ? ' · document pas trouvé' : ''}</span></span>)}</>; }
+// v393 : passages d'un projet — repliés (total des visites), flèche pour voir la liste
+function PjPassages({events, today, ajouter, ligne}){
+  const [ouv,setOuv]=useState(false);
+  const ev = events||[], faits = ev.filter(e=>!e.attente && e.day<=today), avenir = ev.filter(e=>!e.attente && e.day>today), att = ev.filter(e=>e.attente);
+  const rien = faits.filter(e=>!e.fac && e.day<today).length, pasEnv = ev.filter(e=>e.fac && e.fac!=='**' && e.facEnvoyee===false).length;
+  const dern = faits.map(e=>e.day).sort().pop(), proch = avenir.map(e=>e.day).sort()[0];
+  return <div onClick={e=>e.stopPropagation()}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,margin:'8px 0 4px',flexWrap:'wrap'}}>
+      <div onClick={()=>setOuv(!ouv)} style={{cursor:'pointer',userSelect:'none',fontSize:13}}>
+        <span className="fh" style={{fontSize:13}}><span style={{display:'inline-block',width:14,fontSize:11,color:'var(--muted)'}}>{ouv?'▼':'▶'}</span>Passages</span>
+        <span> · {faits.length} visite{faits.length>1?'s':''} faite{faits.length>1?'s':''}</span>
+        {dern && <span className="muted"> (dernière {cvFmtDay(dern)})</span>}
+        {avenir.length>0 && <span style={{color:'var(--accent)'}}> · {avenir.length} à venir{proch ? ' (prochaine '+cvFmtDay(proch)+')' : ''}</span>}
+        {att.length>0 && <span style={{color:'var(--warning)'}}> · {att.length} en attente</span>}
+        {rien>0 && <b style={{color:'var(--danger)'}}> · {rien} rien d'inscrit</b>}
+        {pasEnv>0 && <span style={{color:'var(--warning)'}}> · {pasEnv} facture{pasEnv>1?'s':''} pas envoyée{pasEnv>1?'s':''}</span>}</div>
+      {ajouter}</div>
+    {ouv && ev.map(ligne)}
+  </div>;
+}
 // v391 : appels de service d'un projet — repliés (une ligne de résumé), ouverts = une ligne par appel
 function PjAppels({liste, factures}){
   const [ouv,setOuv]=useState(false);
