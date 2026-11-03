@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v376';
+const APP_VERSION = 'v377';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2770,7 +2770,11 @@ function ProjetsSuivi({cfg, refreshKey}){
               </div>}
             </span>}
             {s.otFait && <span title="OT fait" style={{marginLeft:4}}>📝</span>}
-            {s.apFait && <span title="Appel de service fait" style={{marginLeft:4,fontSize:11,fontWeight:800,padding:'1px 4px',borderRadius:4,background:'rgba(88,166,255,0.15)',color:'var(--accent)'}}>AP</span>}
+            {s.apFait && (()=>{ const L = cvJobAppels(j, ap).filter(a=>a.url); return <span style={{marginLeft:4,position:'relative'}} onClick={e=>{ if(!L.length) return; e.stopPropagation(); if(L.length===1) window.open(L[0].url,'_blank','noopener'); else setVocOuv(vocOuv==='ap'+k?null:'ap'+k); }}>
+              <span title={L.length ? (L.length===1 ? 'Ouvrir l\'appel de service '+L[0].as : 'Ouvrir un des '+L.length+' appels de service') : 'Appel de service fait'} style={{cursor:L.length?'pointer':'default',fontSize:11,fontWeight:800,padding:'1px 4px',borderRadius:4,background:'rgba(88,166,255,0.15)',color:'var(--accent)'}}>AP{L.length>1 && <sup style={{fontSize:9}}>{L.length}</sup>}</span>
+              {vocOuv==='ap'+k && L.length>1 && <div style={{position:'absolute',right:0,top:'120%',zIndex:20,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8,padding:6,minWidth:200,textAlign:'left',boxShadow:'0 4px 14px rgba(0,0,0,.35)'}}>
+                {L.map((a,i)=><a key={i} href={a.url} target="_blank" rel="noopener" onClick={()=>setVocOuv(null)} style={{display:'block',padding:'4px 6px',fontSize:12.5,color:'var(--accent)'}}>AP {a.as}{a.jour ? ' · '+cvFmtDay(a.jour) : ''}</a>)}</div>}
+            </span>; })()}
           </span>
           {p.ouverts.length>0 && <span className="badge" style={{background:'rgba(210,153,34,0.15)',color:'var(--warning)',marginRight:6}}>! {p.ouverts.length} blocage{p.ouverts.length>1?'s':''}</span>}
           {s.manquants.length ? <span className="badge" style={{background:'rgba(248,81,73,0.15)',color:'var(--danger)'}}>{s.manquants.length} à compléter</span>
@@ -2779,6 +2783,7 @@ function ProjetsSuivi({cfg, refreshKey}){
         </div>
       </div>
       {o && <div style={{marginTop:10,borderTop:'1px solid var(--border)',paddingTop:8}}>
+        <div style={{fontSize:13,marginBottom:6}} onClick={e=>e.stopPropagation()}><span style={{fontSize:12,fontWeight:800,letterSpacing:'.04em',textTransform:'uppercase',color:'var(--muted)',marginRight:8}}>Appels de service</span><CvAppelsLiens liste={cvJobAppels(j, ap)} factures={factures}/></div>
         {s.G.map(g=><React.Fragment key={g.k}>
         <div style={{fontSize:12,fontWeight:800,letterSpacing:'.04em',textTransform:'uppercase',color:'var(--muted)',margin:'8px 0 2px'}}>{g.label}{!g.L.length && <span style={{fontWeight:400,textTransform:'none',letterSpacing:0}}> — pas encore rendu là</span>}</div>
         {g.L.map((e,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'22px 1fr auto',gap:6,padding:'5px 0',fontSize:13,alignItems:'start'}}>
@@ -2807,7 +2812,7 @@ function ProjetsSuivi({cfg, refreshKey}){
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,margin:'8px 0 4px',flexWrap:'wrap'}}><div className="fh" style={{fontSize:13}}>Passages</div><CvAjouterPassage job={j} onDone={()=>setTick(t=>t+1)}/></div>
         {j.events.map((e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
           {e.attente ? <b style={{color:'var(--warning)'}}>En attente</b> : <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b>} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span>
-          {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac==='**' ? <span className="muted"> · pas à facturer</span> : e.fac ? ' · facture '+e.fac : (e.day<today && !e.attente ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
+          {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac==='**' ? <span className="muted"> · pas à facturer</span> : e.fac ? <>{' · facture '+e.fac}{e.facEnvoyee===false && <span style={{color:'var(--warning)'}}> (pas envoyée)</span>}</> : (e.day<today && !e.attente ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
           {e.day<=today && <CvInscrirePassage cfg={cfg} e={e} onDone={()=>setTick(t=>t+1)}/>}
         </div>)}
         <CvCourriels liste={j.po ? (courriels||{})[j.po] : null}/>
@@ -11058,6 +11063,10 @@ function cvBuildClients(events, registry, factures){
     j.billed = j.factures.reduce((t,f)=>t+((factures[f]&&!factures[f].annulee&&factures[f].ht)||0),0);
     j.crew = [...new Set(j.events.flatMap(e=>e.crew))];
     j.address = (j.reg && [j.reg.adresse,j.reg.ville].filter(Boolean).join(', ')) || (j.events.find(e=>e.location)||{}).location || '';
+    // v377 : la facture inscrite sur le passage a-t-elle été envoyée ? (registre lu seulement — sans registre, on ne juge pas)
+    if(Object.keys(factures).length) j.events.forEach(e=>{ if(!e.fac || e.fac==='**') return;
+      const ns = String(e.fac).split(/[\s,–-]+/).filter(t=>/^\d{3,}$/.test(t)); if(!ns.length) return;
+      e.facEnvoyee = ns.some(n=>{ const f = factures[n]; return f ? !f.annulee && !!(f.envoi || f.pdf || f.payeLog>0) : e.day < PAI_DEBUT; }); });
     j.missing = cvVisites(j).filter(v=>v.faite && !v.facturee).length;   // une facture par visite
     // Facture sur deux jobs : seulement si les jobs n'ont AUCUN mot de nom en commun
     // (« CRS ROUGH AUBIN » et « CRS aubin », c'est la même job, écrite autrement).
@@ -11096,10 +11105,49 @@ function cvVisites(job){
   });
   const today = cvDay(new Date().toISOString());
   out.forEach(v=>{ v.debut=v.events[0].day; v.fin=v.events[v.events.length-1].day; v.faite = v.debut < today;
-    v.fac = v.events.map(e=>e.fac).filter(Boolean); v.facturee = v.fac.length>0;
+    v.fac = v.events.map(e=>e.fac).filter(Boolean);
+    // v377 : une visite est facturée seulement si la facture a été ENVOYÉE au client (dans le registre avec date d'envoi ou PDF) ;
+    // un numéro trouvé dans le titre ou le bloc Suivi ne suffit pas. « ** » = pas à facturer.
+    v.facturee = v.events.some(e=>e.fac && (e.fac==='**' || e.facEnvoyee!==false));
+    v.facNonEnvoyee = v.events.some(e=>e.fac && e.fac!=='**' && e.facEnvoyee===false);
     v.label = v.phase.charAt(0)+v.phase.slice(1).toLowerCase()+' ('+cvFmtDay(v.debut)+(v.fin!==v.debut?'–'+cvFmtDay(v.fin):'')+')'; });
   return out;
 }
+// v377 : appels de service d'une job — numéro du bloc Suivi des passages, registre « La mémoire — Appels de service » (numéro, PO, facture)
+// et fichiers AP_… attachés aux événements de l'agenda. [{as, url, nom, jour, factures}]
+function cvJobAppels(job, appels){
+  const A = appels || {parNumero:{}, parFacture:{}, liste:[]}, out = {};
+  const lien = a => a && a.id ? 'https://drive.google.com/file/d/'+a.id+'/view' : '';
+  const ajoute = (n, o) => { const k = String(n||'').trim(); if(!k || k==='**') return; const x = out[k] = out[k] || {as:k, url:'', nom:'', jour:'', factures:[]};
+    if(o.url && !x.url) x.url = o.url; if(o.nom && !x.nom) x.nom = o.nom; if(o.jour && (!x.jour || o.jour < x.jour)) x.jour = o.jour; (o.factures||[]).forEach(f=>{ if(!x.factures.includes(f)) x.factures.push(f); }); };
+  (job.events||[]).forEach(e=>{
+    String(e.as||'').split(/[\s,;/–-]+/).filter(t=>/^\d{3,}$/.test(t)).forEach(n=>{ const a = A.parNumero[n]; ajoute(n, {url:lien(a), nom:a && a.nom, jour:e.day, factures:String(e.fac||'').split(/[\s,–-]+/).filter(t=>/^\d{3,}$/.test(t))}); });
+    (e.attachments||[]).forEach(f=>{ const m = String(f.title||'').match(/^AP_(\d{3,})/i); if(m) ajoute(m[1], {url:f.fileUrl, nom:f.title, jour:e.day}); }); });
+  (A.liste||[]).filter(a=>a.as && ((job.po && a.po===job.po) || (a.factures||[]).some(f=>(job.factures||[]).includes(f)))).forEach(a=>ajoute(a.as, {url:lien(a), nom:a.nom, factures:a.factures}));
+  return Object.values(out).sort((a,b)=>String(a.jour).localeCompare(String(b.jour)) || +a.as - +b.as); }
+function CvAppelsLiens({liste, factures}){
+  if(!liste.length) return <span className="muted">aucun appel de service trouvé</span>;
+  return <>{liste.map((a,k)=><span key={k} style={{marginRight:12,display:'inline-block'}}>
+    {a.url ? <a href={a.url} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>AP {a.as} ↗</a> : <b>AP {a.as}</b>}
+    <span className="muted" style={{fontSize:11.5}}>{a.jour ? ' · '+cvFmtDay(a.jour) : ''}{a.factures.length ? ' · facture '+a.factures.map(n=>n+(factures && factures[n] && (factures[n].envoi || factures[n].pdf) ? '' : factures ? ' (pas envoyée)' : '')).join(', ') : ''}{!a.url ? ' · document pas trouvé' : ''}</span></span>)}</>; }
+// Section « Appels de service » d'une fiche du Répertoire : les jobs du client et leurs appels de service
+function AppelsClientView({cfg, refreshKey}){
+  const [focus]=useState(()=>navFocus('appels'));
+  const {loading, err, events, registry, factures, appels} = useClientsData(cfg, refreshKey+'|ap');
+  const clients = useMemo(()=>cvBuildClients(events||[], registry||[], factures||{}),[events, registry, factures]);
+  if(loading) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des appels de service…</span></div>;
+  if(err) return <div className="card" style={{color:'var(--danger)'}}>{err}</div>;
+  let jobs = Object.values(clients).flatMap(c=>c.jobs);
+  if(focus && focus.jobIds) jobs = jobs.filter(j=>focus.jobIds.includes(j.id)); else if(focus && focus.code) jobs = jobs.filter(j=>j.client===focus.code);
+  const L = jobs.map(j=>({j, a:cvJobAppels(j, appels)})).filter(x=>x.a.length).sort((x,y)=>String(y.j.last||'').localeCompare(String(x.j.last||'')));
+  return <div>
+    <h3 className="fh" style={{margin:'0 0 8px',fontSize:17}}>Appels de service</h3>
+    {!L.length && <div className="muted" style={{fontSize:13}}>Aucun appel de service trouvé pour {focus && focus.nom ? focus.nom : 'ce client'}.</div>}
+    {L.map(({j,a})=><div key={j.id} className="card" style={{padding:'8px 10px',marginBottom:8,fontSize:13}}>
+      <div style={{fontWeight:700}}>{j.client!=='PART' ? j.client+' ' : ''}{cvTitreJobComplet(j)}{j.po ? <span className="muted" style={{fontWeight:400}}> · {j.po}</span> : ''}{j.address ? <span className="muted" style={{fontWeight:400}}> · 📍 {j.address}</span> : ''}</div>
+      <div style={{marginTop:4}}><CvAppelsLiens liste={a} factures={factures}/></div>
+    </div>)}
+  </div>; }
 // Ordres de travail d'une job : feuilles OT du registre (papier ou logiciel) rattachées à son PO,
 // plus les numéros d'OT inscrits dans le bloc Suivi de ses événements.
 function cvJobOTs(job, appels){
@@ -13749,16 +13797,17 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
       </div>
       {pers && evOuvert && <EvenementClient c={c} adresse={adrToutes[0]||''} tel={telsTous[0]||''} courriel={courrielsTous[0]||''} onFermer={()=>setEvOuvert(false)}/>}
       {onAller && (()=>{ const q = pers ? c.nom : c.code;   // v202 : sections de ce client, déjà filtrées ; v273 : affichées ici, sous la fiche
-        const filtres = {factures: pers ? {vue:'toutes', q:c.nom} : {vue:'toutes', code:c.code}, paiements:{q}, projets: pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code}, soumissions:{q:c.nom}};
+        const filtres = {factures: pers ? {vue:'toutes', q:c.nom} : {vue:'toutes', code:c.code}, paiements:{q}, projets: pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code}, soumissions:{q:c.nom},
+          appels: pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code}};   // v377
         const montrer = cible => { if(!rendreSection){ onAller(cible, {...filtres[cible], nom:c.nom}); return; }
           if(section && section.cible===cible){ setSection(null); return; }
           NAV_FOCUS = {...filtres[cible], nom:c.nom, cible, t:Date.now()}; setSection({cible, k:Date.now()}); };
         return <>
           <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
-            {[['factures','Factures'],['paiements','Paiements'],['projets','Projets'],['soumissions','Soumissions']].map(([k,l])=>
+            {[['factures','Factures'],['paiements','Paiements'],['projets','Projets'],['appels','Appels de service'],['soumissions','Soumissions']].map(([k,l])=>
               <button key={k} className={'btn btn-sm'+(section && section.cible===k ? ' btn-p' : '')} onClick={()=>montrer(k)}>{l}</button>)}
             {section && <span style={{marginLeft:'auto',display:'flex',gap:10,alignItems:'center',fontSize:12.5}}>
-              <span style={{color:'var(--accent)',cursor:'pointer'}} onClick={()=>onAller(section.cible, {...filtres[section.cible], nom:c.nom})}>Ouvrir en grand ›</span>
+              {section.cible!=='appels' && <span style={{color:'var(--accent)',cursor:'pointer'}} onClick={()=>onAller(section.cible, {...filtres[section.cible], nom:c.nom})}>Ouvrir en grand ›</span>}
               <span className="muted" style={{cursor:'pointer'}} onClick={()=>setSection(null)}>✕ Fermer</span></span>}
           </div>
           {section && rendreSection && <div key={section.k} style={{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border)'}}>{rendreSection(section.cible)}</div>}
@@ -13958,7 +14007,8 @@ function App(){
           rendreSection={cible => cible==='projets' ? <ProjetsView data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>
             : cible==='factures' ? <VerrouCompta cfg={effectiveCfg}><FacturesView cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} compact/></VerrouCompta>
             : cible==='paiements' ? <VerrouCompta cfg={effectiveCfg}><PaiementsOnglet cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} compact/></VerrouCompta>
-            : cible==='soumissions' ? <SoumissionsView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/> : null}/>}
+            : cible==='soumissions' ? <SoumissionsView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>
+            : cible==='appels' ? <AppelsClientView cfg={effectiveCfg} refreshKey={refreshKey}/> : null}/>}
         {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey} toast={show}/>}
         {nav==='contacts' && <RepertoireView key={'rc'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts}/>}
         {nav==='projets' && <ProjetsView key={'p'+navKey} data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
