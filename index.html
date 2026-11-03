@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v388';
+const APP_VERSION = 'v389';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2909,6 +2909,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   const [focus,setFocus]=useState(()=>navFocus('projets'));   // v202 : projets d'un client (bouton de sa fiche)
   const [filtre,setFiltre]=useState(()=>(navFocus('projets')||{}).code || '');
   const [seulManque,setSeulManque]=useState(false);
+  const [qP,setQP]=useState('');   // v389 : recherche (nom, PO, adresse, no de facture…)
   const [ouvert,setOuvert]=useState(()=>(navFocus('projets')||{}).ouvrir || null);   // v318 : ouverte depuis l'agenda
   const B = useBlocages(cfg), TJ = useTypesJob(cfg);   // v224 : blocages et type de job
   const poEtapes = usePOEtapes(cfg);                   // v237 : Rough / Finition / Entrée électrique selon le PO
@@ -2922,7 +2923,12 @@ function ProjetsSuivi({cfg, refreshKey}){
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les jobs : {err}</div>;
   const today = cvDay(new Date().toISOString()), recent = cvDay(new Date(Date.now()-30*864e5).toISOString());
   let jobs = Object.values(clients).flatMap(c=>c.jobs.map(j=>({c, j, s:pjEtapes(j, ap, commandes, courriels, manuels)})))
-    .filter(x=>focus || x.j.status!=='done' || x.j.last>=recent || x.s.etape==='À facturer');
+    .filter(x=>focus || qP.trim() || x.j.status!=='done' || x.j.last>=recent || x.s.etape==='À facturer');
+  // v389 : chaque mot cherché doit commencer un mot du projet (« 5 » trouve « CRS … 5 rue … » ou le PO 5…, pas tous les 5 au milieu d'un nombre)
+  const motsQ = cvNorm(qP).split(/[^a-z0-9]+/).filter(Boolean);
+  if(motsQ.length) jobs = jobs.filter(x=>{ const j = x.j, c = x.c;
+    const mots = cvNorm([c.code, CLIENT_CODES[c.code]||'', cvTitreJob(j), j.name, j.po, ...(j.posLies||[]), j.address, cvNomClientJob(j), (j.reg&&j.reg.projet)||'', (j.reg&&j.reg.client)||'', ...(j.factures||[]), cvTypeJob(j)].join(' ')).split(/[^a-z0-9]+/).filter(Boolean);
+    return motsQ.every(w=>mots.some(m=>m.startsWith(w))); });
   if(focus && focus.jobIds) jobs = jobs.filter(x=>focus.jobIds.includes(x.j.id));
   const nbArch = jobs.filter(x=>(archives||{})[x.j.id]).length;
   jobs = jobs.filter(x=>voirArch ? (archives||{})[x.j.id] : !(archives||{})[x.j.id]);
@@ -2930,7 +2936,7 @@ function ProjetsSuivi({cfg, refreshKey}){
   if(seulManque) jobs = jobs.filter(x=>x.s.manquants.length);
   // Terminées cachées, sauf celles qui restent à facturer.
   const nbTerm = jobs.filter(x=>x.j.status==='done' && x.s.etape!=='À facturer').length;
-  if(!voirTerm && !focus) jobs = jobs.filter(x=>x.j.status!=='done' || x.s.etape==='À facturer');
+  if(!voirTerm && !focus && !motsQ.length) jobs = jobs.filter(x=>x.j.status!=='done' || x.s.etape==='À facturer');
   // Contracteurs en ordre alphabétique, particuliers à la fin.
   const codes = [...new Set(Object.values(clients).map(c=>c.code))].sort((a,b)=>(a==='PART')-(b==='PART') || a.localeCompare(b,'fr'));
   const groupes = [['cours','En cours'],['avenir','À venir'],['done','Terminées (30 derniers jours)']];
@@ -3037,6 +3043,11 @@ function ProjetsSuivi({cfg, refreshKey}){
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Projets</h2>
     <div className="muted" style={{fontSize:13,marginBottom:10}}>Chaque job, ses étapes et ce qui manque — et où le compléter. {totalManque ? <b style={{color:'var(--warning)'}}>{totalManque} choses à compléter.</b> : 'Tout est complet.'}</div>
+    <div style={{display:'flex',gap:6,marginBottom:8}}>
+      <input value={qP} onChange={e=>setQP(e.target.value)} placeholder="Chercher un projet (nom, PO, adresse, no de facture…) — ex. « 5 », « Poulin », « 3213 »" style={{flex:1,minWidth:0,padding:'6px 10px'}}/>
+      {qP && <button className="btn btn-sm" onClick={()=>setQP('')}>✕</button>}
+    </div>
+    {motsQ.length>0 && <div className="muted" style={{fontSize:12,marginBottom:6}}>{jobs.length} projet{jobs.length>1?'s':''} trouvé{jobs.length>1?'s':''} (terminées comprises)</div>}
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>
       {focus && <span style={{display:'inline-flex',gap:6,alignItems:'center',padding:'2px 4px 2px 10px',border:'1px solid var(--accent)',borderRadius:8,fontSize:13}}>Projets de <b>{focus.nom}</b>
         <button className="btn btn-sm" style={{padding:'1px 7px'}} onClick={()=>{ setFocus(null); setFiltre(''); }}>✕</button></span>}
@@ -3047,7 +3058,7 @@ function ProjetsSuivi({cfg, refreshKey}){
       <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13}}><input type="checkbox" checked={voirArch} onChange={e=>setVoirArch(e.target.checked)}/> Archivées{nbArch?' ('+nbArch+')':''}</label>
     </div>
     {groupes.map(([st,nom])=>{ const g=jobs.filter(x=>x.j.status===st).sort((a,b)=> st==='done' ? b.j.last.localeCompare(a.j.last) : ((a.s.prochain||{}).day||'').localeCompare((b.s.prochain||{}).day||''));
-      return g.length ? <div key={st} style={{marginBottom:14}}><div className="pipe-col-h" style={{padding:'0 2px 8px'}}>{nom} · {g.length}</div>{g.map(x=><Ligne key={x.c.code+x.j.id} x={x}/>)}</div> : null; })}
+      return g.length ? <div key={st} style={{marginBottom:14}}><div className="pipe-col-h" style={{padding:'0 2px 8px'}}>{motsQ.length && st==='done' ? 'Terminées' : nom} · {g.length}</div>{g.map(x=><Ligne key={x.c.code+x.j.id} x={x}/>)}</div> : null; })}
     {!jobs.length && <div className="card muted">Aucune job.</div>}
   </div>;
 }
