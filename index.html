@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v384';
+const APP_VERSION = 'v385';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2049,12 +2049,16 @@ function achUniformiserListe(achats, clients){
   });
   return out.sort((x,y)=>String(y.a.date||y.a.recue).localeCompare(String(x.a.date||x.a.recue)));
 }
-function AchUniformiser({cfg, achats, clients, onFait}){
+function AchUniformiser({cfg, achats, clients, R, onFait}){
   const [L,setL]=useState(null);       // null = fermé
   const [sel,setSel]=useState({});     // row → clé choisie ('' = ne pas changer)
   const [busy,setBusy]=useState(false);
   const [fini,setFini]=useState(0);
-  const ouvrir = () => { const l = achUniformiserListe(achats, clients); const s0 = {}; l.forEach(x=>{ s0[x.a.row] = x.sur ? x.choix : ''; }); setSel(s0); setL(l); setFini(0); };
+  const [autre,setAutre]=useState(null);   // v385 : ligne dont le choix complet (contracteur, PO, camion…) est ouvert
+  const [perso,setPerso]=useState({});     // row → destination choisie à la main (ex. CRS Bornes)
+  // v385 : rien n'est coché d'avance — tu choisis chaque ligne (la suggestion est en premier dans le menu)
+  const ouvrir = () => { const l = achUniformiserListe(achats, clients); const s0 = {}; l.forEach(x=>{ s0[x.a.row] = ''; }); setSel(s0); setPerso({}); setAutre(null); setL(l); setFini(0); };
+  const prendreSugg = () => setSel(s=>{ const n = {...s}; L.forEach(x=>{ if(x.sur && x.choix && !n[x.a.row]) n[x.a.row] = x.choix; }); return n; });
   const appliquer = async () => { const l = L.filter(x=>sel[x.a.row]); if(!l.length) return; setBusy(true);
     try{ suivreEcritures(); const le = 'Uniformisée '+new Date().toLocaleDateString('fr-CA');
       for(let i=0;i<l.length;i+=200) await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:cfg.memoireAchatsSpreadsheetId, resource:{valueInputOption:'RAW',
@@ -2068,21 +2072,28 @@ function AchUniformiser({cfg, achats, clients, onFait}){
   const nb = L.filter(x=>sel[x.a.row]).length;
   return <div className="card" style={{marginBottom:12,borderColor:'var(--accent)',fontSize:13}}>
     <b>Uniformiser les associations — essai</b> <span className="muted">· rien n'est écrit avant « Appliquer »</span>
-    <div className="muted" style={{fontSize:12,margin:'4px 0 8px'}}>Chaque facture de fournisseur d'un particulier passe au format « Nom — adresse » de son projet. Coché d'avance = sûr (un seul projet possible). Les autres : choisis le projet, ou laisse « ne pas changer ».</div>
+    <div className="muted" style={{fontSize:12,margin:'4px 0 8px'}}>Chaque facture de fournisseur d'un particulier passe au format « Nom — adresse » de son projet. Rien n'est coché d'avance : pour chaque facture, prends le projet suggéré (« ✓ suggéré »), un autre projet du client, ou « Autre destination » (ex. un client payé par un contracteur → le projet BORNES de CRS). « Ne pas changer » = la facture reste comme elle est.</div>
     {!L.length && <div className="muted">Rien à uniformiser.</div>}
     <div style={{maxHeight:420,overflowY:'auto'}}>{L.map(x=>{ const v = sel[x.a.row]||'';
       return <div key={x.a.row} style={{padding:'6px 0',borderBottom:'1px solid var(--border)',display:'grid',gap:3}}>
         <div><b>{x.a.fournisseur} #{x.a.num}</b> <span className="muted">· {cvFmtDay(String(x.a.date||x.a.recue).slice(0,10))} · {cvMoney(x.a.st)}</span></div>
         <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
           <span className="muted" style={{textDecoration:v?'line-through':'none'}}>« {x.avant} »</span><span>→</span>
-          <select value={v} onChange={e=>setSel(s=>({...s, [x.a.row]:e.target.value}))} style={{width:'auto',padding:'2px 6px',fontSize:12.5,fontWeight:v?700:400,color:v?'var(--accent)':'var(--muted)'}}>
+          <select value={v} onChange={e=>{ if(e.target.value==='__autre'){ setAutre(x.a.row); return; } setSel(s=>({...s, [x.a.row]:e.target.value})); }} style={{width:'auto',padding:'2px 6px',fontSize:12.5,fontWeight:v?700:400,color:v?'var(--accent)':'var(--muted)'}}>
             <option value="">ne pas changer</option>
-            {x.options.map(o=><option key={o.k} value={o.k}>{o.k} ({o.info})</option>)}</select>
+            {x.options.map(o=><option key={o.k} value={o.k}>{o.k} ({o.info}){o.k===x.choix ? ' — suggéré' : ''}</option>)}
+            {perso[x.a.row] && !x.options.some(o=>o.k===perso[x.a.row]) && <option value={perso[x.a.row]}>{perso[x.a.row]}</option>}
+            <option value="__autre">Autre destination (contracteur, PO, camion…)…</option></select>
+          {!v && x.choix && <button className="btn btn-sm" style={{padding:'0 7px',fontSize:11.5}} onClick={()=>setSel(s=>({...s, [x.a.row]:x.choix}))}>✓ suggéré</button>}
           {!x.sur && x.options.length>1 && <span style={{color:'var(--warning)',fontSize:12}}>{x.options.length} projets — à vérifier</span>}
           {!x.sur && x.options.length===1 && <span style={{color:'var(--warning)',fontSize:12}}>trouvé par le nom du client — à vérifier</span>}</div>
+        {autre===x.a.row && <div style={{paddingLeft:8}}><CvChoixJob clients={clients} R={R} date={x.a.date||x.a.recue} refAchat={x.a.ref}
+          onChoix={dest=>{ setPerso(p=>({...p, [x.a.row]:dest})); setSel(s=>({...s, [x.a.row]:dest})); setAutre(null); }}/>
+          <button className="btn btn-sm" style={{marginTop:4}} onClick={()=>setAutre(null)}>Annuler</button></div>}
       </div>; })}</div>
     <div style={{display:'flex',gap:6,marginTop:8}}>
       <button className="btn btn-sm btn-p" disabled={busy || !nb} onClick={appliquer}>{busy ? 'Écriture…' : 'Appliquer '+nb}</button>
+      <button className="btn btn-sm" disabled={busy} onClick={prendreSugg} title="Coche seulement les suggestions sûres (un seul projet possible) — tu peux décocher ensuite">Prendre les suggestions sûres</button>
       <button className="btn btn-sm" disabled={busy} onClick={()=>setL(null)}>Fermer</button></div>
   </div>;
 }
@@ -2314,7 +2325,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
     </div>; };
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Comptes fournisseurs</h2>
-    <AchUniformiser cfg={cfg} achats={A} clients={clients} onFait={m=>setFait(f=>({...f, ...m}))}/>
+    <AchUniformiser cfg={cfg} achats={A} clients={clients} R={R} onFait={m=>setFait(f=>({...f, ...m}))}/>
     <div className="muted" style={{fontSize:13,marginBottom:12}}>Tes factures d'achat lues dans tes courriels. Clique une facture pour voir ses articles ; associe-la à une job, à l'entrepôt, à un camion, à Éclairage Saran ou à un employé.</div>
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher une facture (fournisseur, #, référence, job, employé, article…)" style={{width:'100%',boxSizing:'border-box',marginBottom:12}}/>
     {q.trim().length>=2 && <div className="card" style={{marginBottom:16,borderColor:'var(--accent)'}}>
