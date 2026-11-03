@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v379';
+const APP_VERSION = 'v380';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1858,6 +1858,16 @@ function CvCourriels({liste}){
 
 // ── Fournisseurs : factures d'achat (Dubo, Lumen, Groupe Gagnon, Westburne), lien avec les jobs, stock ──
 function cvJobCle(c, j){ return (c.code!=='PART' ? c.code+' ' : '')+j.name+(j.po?' '+j.po:''); }
+// v380 : destination d'un achat pour un particulier = « Nom du client — adresse » (même forme partout, peu importe le titre de l'agenda).
+// Sans adresse connue : l'ancienne forme (titre de la job). Les contracteurs gardent « CODE nom PO ».
+const ACH_SEP = ' — ';
+function achatAdrCourte(a){ return String(a||'').split(',')[0].replace(/\s+/g,' ').trim(); }
+function achatCle(c, j){
+  if((c && c.code)!=='PART' && (j && j.client)!=='PART') return cvJobCle(c, j);
+  const nom = cvNomClientJob(j) || cvNomSansType(j.name||''), adr = achatAdrCourte(j.address);
+  return nom && adr ? nom+ACH_SEP+adr : cvJobCle({code:'PART'}, j);
+}
+function achatNomDe(dest){ const d = String(dest||''); const i = d.indexOf(ACH_SEP); return i>0 ? d.slice(0,i).trim() : d; }
 // Matériel d'une job : sous-total des achats associés à la job.
 const CV_DESTS = ['Entrepôt','Camion 7','Camion 14','Camion 25'];   // v137 : la shop = l'entrepôt
 // v138 : association automatique SEULEMENT quand c'est sûr — camion nommé, entrepôt, ou un PO qui correspond à UNE seule job.
@@ -1907,7 +1917,7 @@ function scoresAchat(ref, clients){
     if(fort) courts.forEach(t=>{ if(nt.includes(t)) sc += 1; });                       // prénom court (Guy, Luc…) seulement si le nom de famille concorde
     if(fort && ini && nt.some(m=>m[0]===n(ini))) sc += 1;
     if(c.code==='PART') sc += 0.5;
-    const cle = cvJobCle(c, j); if(!res[cle] || res[cle].sc<sc) res[cle] = {cle, sc, fort, last:j.last||''};
+    const cle = achatCle(c, j); if(!res[cle] || res[cle].sc<sc) res[cle] = {cle, sc, fort, last:j.last||''};
   }));
   return Object.values(res).sort((x,y)=>y.sc-x.sc || String(y.last).localeCompare(String(x.last)));
 }
@@ -1925,7 +1935,7 @@ function agendaAchat(date, clients, ref){
   const res = [];
   Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{
     const ev = j.events.filter(e=>!e.attente && jours.includes(e.day)).sort((a,b)=>a.day.localeCompare(b.day))[0];
-    if(ev) res.push({cle:cvJobCle(c,j), adr:j.address||ev.location||'', jour:ev.day, mm:ev.day===d0, phase:ev.phase||'', crew:(ev.crew||[]).join(' ')});
+    if(ev) res.push({cle:achatCle(c,j), adr:j.address||ev.location||'', jour:ev.day, mm:ev.day===d0, phase:ev.phase||'', crew:(ev.crew||[]).join(' ')});
   }));
   // v147 : seulement ce qui ressemble au nom de la référence (la meilleure ressemblance), rien d'autre
   const sc = {}; scoresAchat(ref, clients).forEach(x=>{ sc[x.cle] = x.sc; });
@@ -1982,7 +1992,8 @@ function cvSansInit(x){
 function cvDest(j){ return /^(inventaire|shop|atelier)$/i.test(String(j||'').trim()) ? 'Entrepôt' : cvSansInit(j||''); }   // anciennes factures « Shop » → Entrepôt
 const CV_DEST_REF = {'Entrepôt':'ENT'};   // référence écrite sur la commande au fournisseur
 function cvMateriel(job, achats){
-  const l = (achats||[]).filter(a=>a.job && !CV_DESTS.includes(a.job) && ((job.po && a.job.includes(job.po)) || cvNorm(a.job).endsWith(cvNorm(job.name))));
+  const cleN = job && job.client==='PART' ? cvNorm(achatCle({code:'PART'}, job)) : '';   // v380 : « Nom — adresse »
+  const l = (achats||[]).filter(a=>a.job && !CV_DESTS.includes(a.job) && ((job.po && a.job.includes(job.po)) || cvNorm(a.job).endsWith(cvNorm(job.name)) || (cleN && cvNorm(a.job)===cleN)));
   return {liste:l, total:l.reduce((t,a)=>t+a.st,0)};
 }
 function CvArticles({a}){
@@ -1999,6 +2010,40 @@ function CvArticles({a}){
 }
 
 // Jobs d'un client : liste en ordre alphabétique, avec recherche.
+// v380 : particuliers — on choisit le client (nom de sa fiche), puis son projet (adresse + type de job, comme dans Projets)
+function CvChoixClientProjet({jobs, onChoix}){
+  const [q,setQ]=useState('');
+  const [cli,setCli]=useState('');
+  const parClient = useMemo(()=>{ const m = {};
+    (jobs||[]).forEach(j=>{ const nom = cvTitreJob({...j, client:'PART'}) || j.name; const k = cvNorm(nom); if(!k) return;
+      const x = m[k] = m[k] || {k, nom, jobs:[], last:''}; x.jobs.push(j); if(String(j.last||'')>x.last) x.last = String(j.last||''); });
+    return Object.values(m).sort((a,b)=>b.last.localeCompare(a.last)); },[jobs]);
+  const garderFocus = e => e.preventDefault();
+  const nq = cvNorm(q);
+  const liste = (nq.length>=2 ? parClient.filter(c=>cvNorm(c.nom+' '+c.jobs.map(j=>j.address||'').join(' ')).includes(nq)) : parClient.slice(0,15));
+  const c = parClient.find(x=>x.k===cli);
+  const ligne = {padding:'7px 10px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13,display:'flex',justifyContent:'space-between',gap:8};
+  if(c) return <div style={{marginTop:5,paddingLeft:8,borderLeft:'2px solid var(--accent)'}}>
+    <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:4,fontSize:13}}><button className="btn btn-sm" onClick={()=>setCli('')}>‹ Clients</button><b>{c.nom}</b><span className="muted">— choisis le projet</span></div>
+    <div style={{border:'1px solid var(--border2)',borderRadius:8}}>
+      {c.jobs.slice().sort((a,b)=>String(b.last).localeCompare(String(a.last))).map(j=>{ const jj = {...j, client:'PART'};
+        return <div key={j.id} onClick={()=>onChoix(achatCle({code:'PART'}, jj))} style={ligne}>
+          <span>{j.address ? <>📍 {achatAdrCourte(j.address)}</> : <span className="muted">adresse inconnue</span>} <b style={{color:'var(--accent)'}}> · {cvTypeJob(jj) || 'Service'}</b></span>
+          <span className="muted" style={{fontSize:11.5,whiteSpace:'nowrap'}}>{(CV_STATUS[j.status]||[''])[0]} · {cvFmtDay(j.last)}</span></div>; })}
+    </div>
+    {c.jobs.some(j=>!j.address) && <div className="muted" style={{fontSize:11.5,marginTop:3}}>Sans adresse, c'est le titre de l'agenda qui est inscrit (ajoute l'adresse au projet dans Projets).</div>}
+  </div>;
+  return <div style={{marginTop:5,paddingLeft:8,borderLeft:'2px solid var(--accent)'}}>
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder={'Chercher un client parmi '+parClient.length+' (nom ou adresse)…'} style={{width:'100%',boxSizing:'border-box',marginBottom:4}}/>
+    <div style={{maxHeight:260,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
+      {liste.map(x=><div key={x.k} onMouseDown={garderFocus} onClick={()=>{ if(x.jobs.length===1) onChoix(achatCle({code:'PART'}, {...x.jobs[0], client:'PART'})); else setCli(x.k); }} style={ligne}>
+        <span><b>{x.nom}</b>{x.jobs.length===1 && x.jobs[0].address ? <span className="muted"> · 📍 {achatAdrCourte(x.jobs[0].address)}</span> : ''}</span>
+        <span className="muted" style={{fontSize:11.5,whiteSpace:'nowrap'}}>{x.jobs.length>1 ? x.jobs.length+' projets ›' : (cvTypeJob({...x.jobs[0], client:'PART'})||'Service')+' · '+cvFmtDay(x.last)}</span></div>)}
+    </div>
+    {!liste.length && <div className="muted" style={{fontSize:12}}>Aucun client ne correspond.</div>}
+    {nq.length<2 && parClient.length>15 && <div className="muted" style={{fontSize:11.5,marginTop:3}}>Les 15 plus récents — écris un nom pour chercher dans tous.</div>}
+  </div>;
+}
 function CvListeJobs({jobs, onChoix}){
   const [q,setQ]=useState('');
   // Ordre alphabétique des noms ; celles avec un PO d'abord, puis (après la double ligne) celles sans PO.
@@ -2094,7 +2139,8 @@ function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat
     {emp && <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,paddingLeft:8,borderLeft:'2px solid var(--accent)'}}>
       {CV_EMPLOYES.map(n=>pill(n, ()=>onChoix('Employé — '+n)))}
     </div>}
-    {g && <CvListeJobs key={g.code} jobs={g.jobs.filter(j=>j.last>=today).map(j=>({cle:cvJobCle(g,j), po:j.po, label:j.name, info:(CV_STATUS[j.status]||[''])[0]+' · '+cvFmtDay(j.last)}))} onChoix={onChoix}/>}
+    {g && g.code==='PART' && <CvChoixClientProjet jobs={g.jobs} onChoix={onChoix}/>}
+    {g && g.code!=='PART' && <CvListeJobs key={g.code} jobs={g.jobs.filter(j=>j.last>=today).map(j=>({cle:cvJobCle(g,j), po:j.po, label:j.name, info:(CV_STATUS[j.status]||[''])[0]+' · '+cvFmtDay(j.last)}))} onChoix={onChoix}/>}
     {autre!==null && <div style={{display:'flex',gap:5,marginTop:5}}>
       <input value={autre} onChange={e=>setAutre(e.target.value)} placeholder="Ex. : Outils, Bureau, Job Rejean Roy…" style={{flex:1}}/>
       <button className="btn btn-sm btn-p" disabled={!autre.trim()} onClick={()=>onChoix(autre.trim())}>OK</button>
@@ -2688,9 +2734,27 @@ function ProjetsView(props){
   return <ProjetsSuivi cfg={props.cfg} refreshKey={props.refreshKey}/>;
 }
 
+// v380 : dans un projet ouvert — ses factures clients (PDF, payée / en attente) et son matériel (factures de fournisseurs associées, PDF)
+const PJ_ETAT_PAIE = {payee:['payée','var(--success)'], partielle:['partielle','var(--warning)'], impayee:['en attente','var(--accent)'], credit:['crédit','var(--muted)'], annulee:['annulée','var(--muted)'], remplacee:['remplacée','var(--muted)']};
+function PjFacturesMateriel({job, factures, achats}){
+  const T = t => <span style={{fontSize:12,fontWeight:800,letterSpacing:'.04em',textTransform:'uppercase',color:'var(--muted)',marginRight:8}}>{t}</span>;
+  const nums = [...new Set((job.factures||[]).flatMap(n=>String(n).split(/[\s,;–-]+/)).filter(n=>/^\d{3,6}$/.test(n)))];
+  const m = cvMateriel(job, achats||[]);
+  const lien = id => 'https://drive.google.com/file/d/'+id+'/view';
+  return <div onClick={e=>e.stopPropagation()}>
+    <div style={{fontSize:13,marginBottom:6}}>{T('Factures')}{!nums.length ? <span className="muted">aucune</span> : nums.map((n,i)=>{ const f = (factures||{})[n], e = f && (f.annulee ? 'annulee' : f.etatPaie), et = PJ_ETAT_PAIE[e];
+      return <span key={n} style={{whiteSpace:'nowrap'}}>{i>0 && <span className="muted"> · </span>}{f && f.pdf ? <a href={lien(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>#{n} ↗</a> : <b>#{n}</b>}
+        {f && f.ttc!=null && <span> {cvMoney(f.ttc)}</span>}{et ? <span style={{color:et[1],fontWeight:600}}> ({et[0]})</span> : !f ? <span className="muted"> (pas dans le registre)</span> : null}</span>; })}</div>
+    <div style={{fontSize:13,marginBottom:6}}>{T('Matériel')}{!m.liste.length ? <span className="muted">aucune facture de fournisseur associée</span> : <>
+      <b>{cvMoney(m.total)}</b> <span className="muted">avant taxes</span>
+      <div style={{marginTop:3,display:'grid',gap:2}}>{m.liste.slice().sort((a,b)=>String(b.date||b.recue).localeCompare(String(a.date||a.recue))).map(a=><div key={a.row} style={{fontSize:12.5,display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+        <span>{a.fournisseur} {a.pdf ? <a href={lien(a.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>#{a.num} ↗</a> : <b>#{a.num}</b>}<span className="muted"> · {cvFmtDay(String(a.date||a.recue).slice(0,10))}{a.ref ? ' · réf. « '+a.ref+' »' : ''}</span></span>
+        <b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(a.st)}</b></div>)}</div></>}</div>
+  </div>;
+}
 function ProjetsSuivi({cfg, refreshKey}){
   const [tick,setTick]=useState(0);
-  const {loading, err, events, registry, factures, appels, courriels, archives} = useClientsData(cfg, refreshKey+'|p'+tick);
+  const {loading, err, events, registry, factures, appels, courriels, archives, achats} = useClientsData(cfg, refreshKey+'|p'+tick);
   const [voirArch,setVoirArch]=useState(false);
   const [voirTerm,setVoirTerm]=useVoirTerminees();
   const [commandes, enregistrerCommande] = useCommandes(cfg);
@@ -2784,6 +2848,7 @@ function ProjetsSuivi({cfg, refreshKey}){
       </div>
       {o && <div style={{marginTop:10,borderTop:'1px solid var(--border)',paddingTop:8}}>
         <div style={{fontSize:13,marginBottom:6}} onClick={e=>e.stopPropagation()}><span style={{fontSize:12,fontWeight:800,letterSpacing:'.04em',textTransform:'uppercase',color:'var(--muted)',marginRight:8}}>Appels de service</span><CvAppelsLiens liste={cvJobAppels(j, ap)} factures={factures}/></div>
+        <PjFacturesMateriel job={j} factures={factures} achats={achats}/>
         {s.G.map(g=><React.Fragment key={g.k}>
         <div style={{fontSize:12,fontWeight:800,letterSpacing:'.04em',textTransform:'uppercase',color:'var(--muted)',margin:'8px 0 2px'}}>{g.label}{!g.L.length && <span style={{fontWeight:400,textTransform:'none',letterSpacing:0}}> — pas encore rendu là</span>}</div>
         {g.L.map((e,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'22px 1fr auto',gap:6,padding:'5px 0',fontSize:13,alignItems:'start'}}>
@@ -5741,34 +5806,31 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees}
   const etiquette = {sur:'Sûr', probable:'Probable', verifier:'À vérifier'};
   const Tuile = ({v, l, c, onClick}) => <div className="card" style={{padding:12,cursor:onClick?'pointer':'default'}} onClick={onClick}><div style={{fontSize:20,fontWeight:800,color:c||'inherit',fontVariantNumeric:'tabular-nums'}}>{v}</div><div className="muted" style={{fontSize:12}}>{l}</div></div>;
 
-  // v379 : fiche d'un client (Répertoire) › Factures › « Envoyées » : ses factures du registre de La mémoire, avec le PDF et l'état du paiement
+  // v379-v380 : fiche d'un client (Répertoire) › Factures : ses factures envoyées (registre de La mémoire), en attente de paiement (âge) puis payées (date du paiement)
   if(compact && envoyees){ const code = String(envoyees.code||'').toUpperCase();
     const sienne = f => code ? String(f.client||'').trim().toUpperCase()===code : filtreF(f);
     const envoyee = f => !!(f.envoi || f.pdf);
     const V0 = data.factures.__vieilles || {};
-    const L = [...Object.values(A.F).filter(f=>envoyee(f) && sienne(f)), ...Object.values(V0).filter(f=>envoyee(f) && sienne(f)).map(f=>({...f, etat:'avant'}))]
-      .sort((a,b)=>(+b.num||0)-(+a.num||0));
+    const L = [...Object.values(A.F).filter(f=>envoyee(f) && sienne(f)), ...Object.values(V0).filter(f=>envoyee(f) && sienne(f)).map(f=>({...f, etat:'avant'}))];
     if(!L.length) return <div className="muted" style={{fontSize:12.5}}>Aucune facture envoyée dans le registre de La mémoire.</div>;
-    const actives = L.filter(f=>!['annulee','remplacee'].includes(f.etat));
-    const totEnv = actives.reduce((s,f)=>s+(f.ttc||0),0);
-    const du = L.filter(f=>['impayee','partielle','credit'].includes(f.etat)), totDu = du.reduce((s,f)=>s+(f.solde||0),0);
-    const etatDe = f => f.etat==='payee' ? {t:'Payée'+(datePaie(f) ? ' le '+cvFmtDay(datePaie(f)) : ''), c:'var(--success)'}
-      : f.etat==='impayee' ? {t:'En attente de paiement', c:'var(--accent)'}
-      : f.etat==='partielle' ? {t:'Partielle — reste '+cvMoney(f.solde), c:'var(--warning)'}
-      : f.etat==='credit' ? {t:'Crédit', c:'var(--muted)'}
-      : f.etat==='annulee' ? {t:'Annulée', c:'var(--muted)'}
-      : f.etat==='remplacee' ? {t:'Remplacée', c:'var(--muted)'}
-      : f.etat==='zero' ? {t:'0 $', c:'var(--muted)'}
-      : f.etat==='avant' ? {t:'Avant le 1er juillet', c:'var(--muted)'} : {t:'', c:'var(--muted)'};
+    const attenteL = L.filter(f=>['impayee','partielle','credit'].includes(f.etat)).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    const payeesL = L.filter(f=>f.etat==='payee').sort((a,b)=>datePaie(b).localeCompare(datePaie(a)) || (+b.num||0)-(+a.num||0));
+    const autresL = L.filter(f=>!attenteL.includes(f) && !payeesL.includes(f)).sort((a,b)=>(+b.num||0)-(+a.num||0));
+    const totDu = attenteL.reduce((s,f)=>s+(f.solde||0),0);
+    const titre = (t, extra) => <div style={{fontSize:12,fontWeight:800,letterSpacing:'.04em',textTransform:'uppercase',color:'var(--muted)',margin:'10px 0 2px'}}>{t}{extra}</div>;
+    const Num = ({f}) => f.pdf ? <a href={repPdf(f.pdf)} target="_blank" rel="noopener" title="Ouvrir le PDF de la facture" style={{color:'var(--accent)',fontWeight:700}}>#{f.num} ↗</a> : <b>#{f.num}</b>;
+    const info = f => <span className="muted"> · {f.date ? cvFmtDay(String(f.date).slice(0,10))+' '+String(f.date).slice(0,4) : ''}{f.po && f.po!=='AUCUN' ? ' · PO '+f.po : ''}{f.desc ? ' · '+String(f.desc).slice(0,60) : ''}</span>;
+    const ligne = (f, droite, st) => <div key={f.num+'-'+f.etat} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'5px 0',borderBottom:'1px dashed var(--border)',...(st||{})}}>
+      <span style={{minWidth:0}}><Num f={f}/>{info(f)}</span><span style={{display:'flex',gap:10,alignItems:'center',whiteSpace:'nowrap'}}>{droite}</span></div>;
+    const etatAutre = f => f.etat==='annulee' ? 'Annulée' : f.etat==='remplacee' ? 'Remplacée' : f.etat==='zero' ? '0 $' : f.etat==='avant' ? 'Avant le 1er juillet' : '';
     return <div>
-      <div style={{display:'flex',gap:14,flexWrap:'wrap',fontSize:12.5,marginBottom:6}}>
-        <span>{actives.length} facture{actives.length>1?'s':''} envoyée{actives.length>1?'s':''} · <b>{cvMoney(totEnv)}</b></span>
-        <span style={{color:du.length?'var(--accent)':'var(--success)'}}>{du.length ? 'Encore dû : '+cvMoney(totDu)+' ('+du.length+')' : 'Rien en attente de paiement'}</span></div>
-      {L.map(f=>{ const e = etatDe(f), gris = ['annulee','remplacee','avant'].includes(f.etat);
-        return <div key={f.num+'-'+f.etat} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'5px 0',borderBottom:'1px dashed var(--border)',opacity:gris?.6:1}}>
-          <span style={{minWidth:0}}>{f.pdf ? <a href={repPdf(f.pdf)} target="_blank" rel="noopener" title="Ouvrir le PDF de la facture" style={{color:'var(--accent)',fontWeight:700}}>#{f.num} ↗</a> : <b>#{f.num}</b>}
-            <span className="muted"> · {f.date ? cvFmtDay(String(f.date).slice(0,10))+' '+String(f.date).slice(0,4) : ''}{f.envoi ? ' · envoyée le '+cvFmtDay(String(f.envoi).slice(0,10)) : ''}{f.po && f.po!=='AUCUN' ? ' · PO '+f.po : ''}{f.desc ? ' · '+String(f.desc).slice(0,60) : ''}</span></span>
-          <span style={{display:'flex',gap:10,alignItems:'center',whiteSpace:'nowrap'}}><b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(f.ttc)}</b><span style={{color:e.c,fontWeight:600}}>{e.t}</span></span></div>; })}
+      {titre('En attente de paiement', <span style={{fontWeight:700,textTransform:'none',letterSpacing:0,color:attenteL.length?'var(--accent)':'var(--success)'}}> — {attenteL.length ? cvMoney(totDu)+' ('+attenteL.length+')' : 'rien'}</span>)}
+      {attenteL.map(f=>ligne(f, <><b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(f.solde)}</b>{f.etat==='partielle' && <span className="muted">sur {cvMoney(f.ttc)}</span>}{f.etat==='credit' ? <span className="muted">crédit</span> : <PaiAge f={f}/>}</>))}
+      {titre('Payées', <span style={{fontWeight:400,textTransform:'none',letterSpacing:0}}> — {payeesL.length}</span>)}
+      {!payeesL.length && <div className="muted" style={{fontSize:12.5}}>Aucune.</div>}
+      {payeesL.map(f=>ligne(f, <><b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(f.ttc)}</b><span style={{color:'var(--success)',fontWeight:600}}>{datePaie(f) ? 'payée le '+cvFmtDay(datePaie(f))+' '+datePaie(f).slice(0,4) : f.payeLogiciel ? 'payée (logiciel)' : 'payée'}</span></>))}
+      {autresL.length>0 && <details style={{marginTop:8,fontSize:12.5}}><summary className="muted" style={{cursor:'pointer'}}>Annulées, remplacées et d'avant le 1er juillet ({autresL.length})</summary>
+        {autresL.map(f=>ligne(f, <><b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(f.ttc)}</b><span className="muted">{etatAutre(f)}</span></>, {opacity:.65}))}</details>}
     </div>; }
   // v291 : dans la fiche d'un client (Répertoire) : seulement ses paiements, sans totaux
   if(compact){ const sesF = n => A.F[n] && filtreF(A.F[n]);
@@ -6262,7 +6324,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('annulees')}><div style={{fontSize:24,fontWeight:800}}>{annulees.length}</div><div className="muted" style={{fontSize:12}}>pas à facturer (**)</div></div>
       </div>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
-        {(compact ? [['toutes','Toutes'],['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['annulees','Pas à facturer ('+annulees.length+')'],['envoyees','Envoyées']]
+        {(compact ? [['toutes','Toutes'],['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['annulees','Pas à facturer ('+annulees.length+')']]
           : [['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['tableur','📊 Mode tableur'],['papiers','Papiers à traiter ('+papiers.length+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes']]).map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
         {!compact && <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (projet, adresse, no)…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>}
       </div>
@@ -6278,7 +6340,6 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
             style={actif ? {background:k==='autre'?'var(--bg4)':c, color:k==='autre'?'var(--text)':texteSur(/^#/.test(c)?c:''), border:'none', fontWeight:700} : {borderColor:c, borderLeft:'5px solid '+c}}>{quiNom(k)} · {parQui[k]}</button>; })}
       </div>}
       {vue==='paiements' ? <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={q} contacts={contacts}/> :
-      vue==='envoyees' ? <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={filterC ? '' : q} contacts={contacts} compact envoyees={{code:filterC||''}}/> :
       vue==='tableur' ? <SuiviTableur rows={rows} id={id} onChanged={()=>setTick(t=>t+1)}/> :
       vue==='papiers' ? <div className="card">
         <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Ce qui est dans le dossier partagé <a href={'https://drive.google.com/drive/folders/'+PAD_DOSSIER} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>1-PAD SERVICE À TRAITER ↗</a> : papiers déposés par les gars, pas encore traités. Ce n'est pas une erreur. Pour chacun : où il en est dans le Suivi Travaux.</div>
@@ -12465,7 +12526,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     const avecPO = Object.values(jobsMap).filter(j=>j.key[0]==='P');
     Object.values(jobsMap).filter(j=>j.key[0]==='N' || j.key[0]==='I').forEach(j=>{
       let c = avecPO.filter(p=>ficheNorm(p.nom)===ficheNorm(j.nom));
-      if(!c.length && j.key[0]==='N') c = Object.values(jobsMap).filter(p=>p!==j && (p.key[0]==='I' || p.key[0]==='F') && [...p.cles, p.nom].some(x=>ficheNorm(x)===ficheNorm(j.nom)));
+      if(!c.length && j.key[0]==='N') c = Object.values(jobsMap).filter(p=>p!==j && (p.key[0]==='I' || p.key[0]==='F' || p.key[0]==='P') && [...p.cles, p.nom].some(x=>ficheNorm(x)===ficheNorm(j.nom)));
       if(c.length>1 && j.key[0]==='N' && j.achats.length){   // même nom, deux adresses : la job dont les passages sont près de la date d'achat
         const t = new Date(String(j.achats[0].date||j.achats[0].recue)+'T12:00:00').getTime();
         const pres = c.filter(p=>p.events.some(e=>Math.abs(new Date(e.day+'T12:00:00').getTime()-t) <= 14*864e5)); if(pres.length===1) c = pres; }
@@ -12586,7 +12647,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
       const j = ajouterJob(C(code).jobs, code, {cle:d, nom:cvTitleCase(nom), po}); j.achats.push(a); return; }
     if(codeDe(d)){ C(codeDe(d)).achatsSans.push(a); return; }   // v164 : facture associée au contracteur lui-même (« SAR »)
     const jc = jobContrDe(d); if(jc){ jc.achats.push(a); jc.cles.add(d); return; }
-    const k = nNom(d); if(k) rec({nNom:k, nom:d, kind:'achat', obj:a});   // v164 : tout nom inscrit sur une facture d'achat a sa fiche
+    const k = nNom(achatNomDe(d)); if(k) rec({nNom:k, nom:achatNomDe(d), kind:'achat', obj:a});   // v380 : « Nom — adresse » → le client   // v164 : tout nom inscrit sur une facture d'achat a sa fiche
   });
   const sansRetirees = (jobsMap, code) => Object.values(jobsMap).forEach(j=>{ if(ficheJobRetiree(F, code, j.ids, [...j.cles, j.nom])) delete jobsMap[j.key]; });
   Object.values(contr).forEach(c=>{ fusionNoms(c.jobs); sansRetirees(c.jobs, c.code); c.retirees = F.retirees.filter(f=>f.code===c.code); Object.values(c.jobs).forEach(finirJob);
@@ -12615,7 +12676,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     p.masque = !fiche && [...new Set(rs.map(r=>persCle(r.nom)).filter(Boolean))].some(k=>masques.has(k));
     // Jobs du particulier
     rs.forEach(r=>{
-      if(r.kind==='job') ajouterJob(p.jobs, 'PART', {cle:cvJobCle({code:'PART'}, r.obj), nom:r.obj.name, po:r.obj.po, adresse:r.obj.address, events:r.obj.events, reg:r.obj.reg, id:r.obj.id});
+      if(r.kind==='job'){ const jj = ajouterJob(p.jobs, 'PART', {cle:cvJobCle({code:'PART'}, r.obj), nom:r.obj.name, po:r.obj.po, adresse:r.obj.address, events:r.obj.events, reg:r.obj.reg, id:r.obj.id}); jj.cles.add(achatCle({code:'PART'}, r.obj)); }
       else if(r.kind==='reg' && r.obj.po) ajouterJob(p.jobs, 'PART', {cle:r.obj.nom, nom:r.obj.nom, po:r.obj.po, adresse:r.adresse, reg:r.obj});
       else if(r.kind==='achat'){ const d = r.obj.job, po = cvPO(d); const j = ajouterJob(p.jobs, 'PART', {cle:d, nom:(po ? d.replace(po,'') : d).trim(), po}); j.achats.push(r.obj); }
       else if(r.kind==='soum') p.soum.push(r.obj);
@@ -12807,6 +12868,11 @@ function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.se
 const CPT_NAV = {factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
 const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Comptes clients'],['factures','Bons de travail'],['paiements','Paiements'],['taxes','TPS/TVQ']];   // v374 : TPS/TVQ   // v272   // v240
 // v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
+// v380 : fiche du Répertoire › Factures (factures envoyées de ce client : en attente de paiement, puis payées)
+function FacturesClient({cfg, cfgRep, refreshKey, contacts}){
+  const [f0]=useState(()=>navFocus('factures')||{});
+  return <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={f0.code ? '' : (f0.q||'')} contacts={contacts} compact envoyees={{code:f0.code||''}}/>;
+}
 function PaiementsOnglet({cfg, cfgRep, refreshKey, contacts, compact}){
   const [q,setQ]=useState(()=>(navFocus('paiements')||{}).q || '');
   if(compact) return <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={q} contacts={contacts} compact/>;   // v291 : fiche du Répertoire — ses paiements seulement
@@ -13874,10 +13940,10 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
           NAV_FOCUS = {...filtres[cible], nom:c.nom, cible, t:Date.now()}; setSection({cible, k:Date.now()}); };
         return <>
           <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
-            {[['factures','Factures'],['paiements','Paiements'],['projets','Projets'],['appels','Appels de service'],['soumissions','Soumissions']].map(([k,l])=>
+            {[['factures','Factures'],['projets','Projets'],['soumissions','Soumissions']].map(([k,l])=>
               <button key={k} className={'btn btn-sm'+(section && section.cible===k ? ' btn-p' : '')} onClick={()=>montrer(k)}>{l}</button>)}
             {section && <span style={{marginLeft:'auto',display:'flex',gap:10,alignItems:'center',fontSize:12.5}}>
-              {section.cible!=='appels' && <span style={{color:'var(--accent)',cursor:'pointer'}} onClick={()=>onAller(section.cible, {...filtres[section.cible], nom:c.nom})}>Ouvrir en grand ›</span>}
+              {section.cible!=='appels' && <span style={{color:'var(--accent)',cursor:'pointer'}} onClick={()=>section.cible==='factures' ? onAller('paiements', {...filtres.paiements, nom:c.nom}) : onAller(section.cible, {...filtres[section.cible], nom:c.nom})}>Ouvrir en grand ›</span>}
               <span className="muted" style={{cursor:'pointer'}} onClick={()=>setSection(null)}>✕ Fermer</span></span>}
           </div>
           {section && rendreSection && <div key={section.k} style={{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border)'}}>{rendreSection(section.cible)}</div>}
@@ -14075,7 +14141,7 @@ function App(){
         {nav==='dashboard' && <TableauDeBordView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {(nav==='repertoire' || nav==='clients') && <RepertoireView key={'r'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts} onAller={allerFiltre}
           rendreSection={cible => cible==='projets' ? <ProjetsView data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>
-            : cible==='factures' ? <VerrouCompta cfg={effectiveCfg}><FacturesView cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} compact/></VerrouCompta>
+            : cible==='factures' ? <VerrouCompta cfg={effectiveCfg}><FacturesClient cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/></VerrouCompta>
             : cible==='paiements' ? <VerrouCompta cfg={effectiveCfg}><PaiementsOnglet cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} compact/></VerrouCompta>
             : cible==='soumissions' ? <SoumissionsView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>
             : cible==='appels' ? <AppelsClientView cfg={effectiveCfg} refreshKey={refreshKey}/> : null}/>}
