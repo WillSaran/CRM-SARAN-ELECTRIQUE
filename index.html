@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v382';
+const APP_VERSION = 'v383';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1862,9 +1862,20 @@ function cvJobCle(c, j){ return (c.code!=='PART' ? c.code+' ' : '')+j.name+(j.po
 // Sans adresse connue : l'ancienne forme (titre de la job). Les contracteurs gardent « CODE nom PO ».
 const ACH_SEP = ' — ';
 function achatAdrCourte(a){ return String(a||'').split(',')[0].replace(/\s+/g,' ').trim(); }
+// v383 : nom du client = celui de sa fiche du Répertoire (rempli quand le Répertoire est construit), sinon « Client : » de l'agenda, sinon le titre sans « Job » ni type
+const ACH_NOMS = {};
+function achatNomClient(j){ return (j && j.id && ACH_NOMS[j.id]) || cvNomClientJob(j) || cvNomSansType(String((j && j.name)||'').replace(/^\s*job\s+/i,'')); }
+// un achat « Nom — adresse » va au projet de cette adresse si le nom concorde (un mot du nom en commun : « JC L'Écuyer » = « Jean-Christophe L'Écuyer »)
+function achatMotsNom(n){ return String(n||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3 && w!=='job'); }
+function achatSurProjet(dest, j, nomsJob){
+  const d = String(dest||''), i = d.indexOf(ACH_SEP); if(i<=0 || !j || !j.address) return false;
+  if(cvNorm(d.slice(i+ACH_SEP.length))!==cvNorm(achatAdrCourte(j.address))) return false;
+  const mots = achatMotsNom(d.slice(0,i)), ref = new Set((nomsJob || [achatNomClient(j), j.name]).flatMap(achatMotsNom));
+  return mots.some(w=>ref.has(w));
+}
 function achatCle(c, j){
   if((c && c.code)!=='PART' && (j && j.client)!=='PART') return cvJobCle(c, j);
-  const nom = cvNomClientJob(j) || cvNomSansType(j.name||''), adr = achatAdrCourte(j.address);
+  const nom = achatNomClient(j), adr = achatAdrCourte(j.address);
   return nom && adr ? nom+ACH_SEP+adr : cvJobCle({code:'PART'}, j);
 }
 function achatNomDe(dest){ const d = String(dest||''); const i = d.indexOf(ACH_SEP); return i>0 ? d.slice(0,i).trim() : d; }
@@ -1992,8 +2003,8 @@ function cvSansInit(x){
 function cvDest(j){ return /^(inventaire|shop|atelier)$/i.test(String(j||'').trim()) ? 'Entrepôt' : cvSansInit(j||''); }   // anciennes factures « Shop » → Entrepôt
 const CV_DEST_REF = {'Entrepôt':'ENT'};   // référence écrite sur la commande au fournisseur
 function cvMateriel(job, achats){
-  const cleN = job && job.client==='PART' ? cvNorm(achatCle({code:'PART'}, job)) : '';   // v380 : « Nom — adresse »
-  const l = (achats||[]).filter(a=>a.job && !CV_DESTS.includes(a.job) && ((job.po && a.job.includes(job.po)) || cvNorm(a.job).endsWith(cvNorm(job.name)) || (cleN && cvNorm(a.job)===cleN)));
+  const part = job && job.client==='PART';   // v380-383 : « Nom — adresse » (adresse du projet + un mot du nom en commun)
+  const l = (achats||[]).filter(a=>a.job && !CV_DESTS.includes(a.job) && ((job.po && a.job.includes(job.po)) || cvNorm(a.job).endsWith(cvNorm(job.name)) || (part && achatSurProjet(a.job, job, [achatNomClient(job), cvNomClientJob(job), job.name]))));
   return {liste:l, total:l.reduce((t,a)=>t+a.st,0)};
 }
 function CvArticles({a}){
@@ -2018,7 +2029,9 @@ function achUniformiserListe(achats, clients){
   const cleDe = j => achatCle({code:'PART'}, j);
   const out = [];
   (achats||[]).forEach(a=>{ const d = String(a.job||'').trim();
-    if(!d || REP_SPECIAL(d) || d.includes(ACH_SEP) || cvAutreDest(d)) return;
+    if(!d || REP_SPECIAL(d) || cvAutreDest(d)) return;
+    if(d.includes(ACH_SEP)){ const jn = part.find(j=>achatSurProjet(d, j)); const k = jn && cleDe(jn);   // v383 : déjà au nouveau format, mais pas au nom de la fiche du Répertoire
+      if(k && k!==d && k.includes(ACH_SEP)) out.push({a, avant:d, choix:k, sur:true, options:[{k, info:(cvTypeJob(jn)||'Service')+' · '+cvFmtDay(jn.last)}]}); return; }
     const t0 = d.split(/\s+/)[0].toUpperCase(); if(CLIENT_CODES[t0] || (clients||{})[t0]) return;   // contracteur
     const nd = cvNorm(d);
     let c = part.filter(j=>nd===cvNorm(j.name) || nd===cvNorm(cvJobCle({code:'PART'}, j)) || (cvNorm(j.name).length>=4 && nd.endsWith(cvNorm(j.name))) || (j.po && d.includes(j.po)));
@@ -12740,11 +12753,15 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     p.masque = !fiche && [...new Set(rs.map(r=>persCle(r.nom)).filter(Boolean))].some(k=>masques.has(k));
     // Jobs du particulier
     rs.forEach(r=>{
-      if(r.kind==='job'){ const jj = ajouterJob(p.jobs, 'PART', {cle:cvJobCle({code:'PART'}, r.obj), nom:r.obj.name, po:r.obj.po, adresse:r.obj.address, events:r.obj.events, reg:r.obj.reg, id:r.obj.id}); jj.cles.add(achatCle({code:'PART'}, r.obj)); }
+      if(r.kind==='job'){ if(r.obj.id) ACH_NOMS[r.obj.id] = nom; const jj = ajouterJob(p.jobs, 'PART', {cle:cvJobCle({code:'PART'}, r.obj), nom:r.obj.name, po:r.obj.po, adresse:r.obj.address, events:r.obj.events, reg:r.obj.reg, id:r.obj.id}); jj.cles.add(achatCle({code:'PART'}, r.obj)); }
       else if(r.kind==='reg' && r.obj.po) ajouterJob(p.jobs, 'PART', {cle:r.obj.nom, nom:r.obj.nom, po:r.obj.po, adresse:r.adresse, reg:r.obj});
-      else if(r.kind==='achat'){ const d = r.obj.job, po = cvPO(d); const j = ajouterJob(p.jobs, 'PART', {cle:d, nom:(po ? d.replace(po,'') : d).trim(), po}); j.achats.push(r.obj); }
+      else if(r.kind==='achat'){ const d = r.obj.job, po = cvPO(d);
+        if(String(d).includes(ACH_SEP)){ (p.__achNouv = p.__achNouv || []).push(r.obj); return; }   // v383 : rattaché après, par l'adresse
+        const j = ajouterJob(p.jobs, 'PART', {cle:d, nom:(po ? d.replace(po,'') : d).trim(), po}); j.achats.push(r.obj); }
       else if(r.kind==='soum') p.soum.push(r.obj);
     });
+    (p.__achNouv||[]).forEach(a=>{ const lj = Object.values(p.jobs).filter(j=>achatSurProjet(a.job, {address:j.adresse, name:j.nom}, [nom, j.nom, ...j.cles]));
+      if(lj.length) lj[0].achats.push(a); else ajouterJob(p.jobs, 'PART', {cle:a.job, nom:a.job}).achats.push(a); }); delete p.__achNouv;
     fusionNoms(p.jobs); sansRetirees(p.jobs, 'PART');
     p.retirees = F.retirees.filter(f=>(f.code||'PART')==='PART' && f.client && (persCle(f.client)===persCle(nom) || (fiche && fiche.alias.some(a=>persCle(a)===persCle(f.client)))));
     const lj = Object.values(p.jobs);
