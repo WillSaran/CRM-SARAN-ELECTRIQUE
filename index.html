@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v391';
+const APP_VERSION = 'v392';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2040,6 +2040,21 @@ function achPartiesDe(dest, achats, job){
   ((job && job.events)||[]).forEach(e=>{ if(e.phase && !/^(attente)$/i.test(e.phase)) l.add(cvTitleCase(String(e.phase).toLowerCase())); });
   return [...l].sort((a,b)=>a.localeCompare(b,'fr'));
 }
+// v392 : partie automatique (affichage seulement, rien n'est écrit) — seulement quand c'est sûr :
+// 1) la référence de la commande dit ROUGH / FINITION / ENTRÉE ; sinon 2) le jour de l'achat ou le jour ouvrable suivant,
+// le projet a UNE seule de ces étapes à l'agenda ou sur un AS (nom du papier). Sinon : pas de partie.
+const ACH_PH = [[/\bROUGH\b/,'Rough'],[/\b(FINITION|FINALE)\b/,'Finition'],[/\bENTR[EÉ]E\b/,'Entrée']];
+function achPhaseTexte(t){ const u = String(t||'').toUpperCase(); const l = ACH_PH.filter(([re])=>re.test(u)).map(x=>x[1]); return l.length===1 ? l[0] : ''; }
+function achPartieAuto(a, job, appelsJob){
+  const r = achPhaseTexte(a.ref); if(r) return r;
+  let d0 = String(a.date||a.recue||'').slice(0,10); if(!/^\d{4}-\d{2}-\d{2}$/.test(d0)) return '';
+  const jr = k => { const x = new Date(d0+'T12:00:00'); x.setDate(x.getDate()+k); return cvDay(x.toISOString()); };
+  const jours = [d0, jr(1)]; if(new Date(d0+'T12:00:00').getDay()===5) jours.push(jr(3));
+  const ph = new Set();
+  ((job && job.events)||[]).forEach(e=>{ if(!e.attente && jours.includes(e.day)){ const p = {ROUGH:'Rough', FINITION:'Finition', 'ENTRÉE':'Entrée'}[e.phase] || achPhaseTexte(e.title||e.titre||''); if(p) ph.add(p); } });
+  (appelsJob||[]).forEach(x=>{ if(jours.includes(x.jour)){ const p = achPhaseTexte(x.nom); if(p) ph.add(p); } });
+  return ph.size===1 ? [...ph][0] : '';
+}
 function AchPartie({dest, parties, onOk, onAnnuler}){
   const [v,setV]=useState('');
   return <div style={{marginTop:6,padding:'6px 8px',border:'1px solid var(--accent)',borderRadius:8,fontSize:12.5}}>
@@ -2857,7 +2872,7 @@ function ProjetsView(props){
 
 // v380 : dans un projet ouvert — ses factures clients (PDF, payée / en attente) et son matériel (factures de fournisseurs associées, PDF)
 const PJ_ETAT_PAIE = {payee:['payée','var(--success)'], partielle:['partielle','var(--warning)'], impayee:['en attente','var(--accent)'], credit:['crédit','var(--muted)'], annulee:['annulée','var(--muted)'], remplacee:['remplacée','var(--muted)']};
-function PjFacturesMateriel({job, factures, achats, clients, cfg, onChanged}){
+function PjFacturesMateriel({job, factures, achats, clients, cfg, onChanged, appelsJob}){
   const [chg,setChg]=useState(null);     // v386 : facture de fournisseur dont on change le projet
   const [busy,setBusy]=useState(false);
   const [dest,setDest]=useState(null);   // v387 : {row, dest} → reste à choisir la partie
@@ -2874,16 +2889,20 @@ function PjFacturesMateriel({job, factures, achats, clients, cfg, onChanged}){
   const fl = o => <span style={{display:'inline-block',width:14,color:'var(--muted)',fontSize:11}}>{o?'▼':'▶'}</span>;
   const T = (t, o, basculer) => <span onClick={basculer} style={{fontSize:12,fontWeight:800,letterSpacing:'.04em',textTransform:'uppercase',color:'var(--muted)',marginRight:8,cursor:basculer?'pointer':'default',userSelect:'none'}}>{basculer && fl(o)}{t}</span>;
   const nums = [...new Set((job.factures||[]).flatMap(n=>String(n).split(/[\s,;–-]+/)).filter(n=>/^\d{3,6}$/.test(n)))];
-  const m = cvMateriel(job, achats||[]);
+  const m0 = cvMateriel(job, achats||[]);
+  const m = {...m0, liste:m0.liste.map(a=>a.sous ? a : (()=>{ const p = achPartieAuto(a, job, appelsJob); return p ? {...a, sous:p, sousAuto:true} : a; })())};   // v392
   const lien = id => 'https://drive.google.com/file/d/'+id+'/view';
   return <div onClick={e=>e.stopPropagation()}>
     <div style={{fontSize:13,marginBottom:6}}>{T('Factures', ouvF, nums.length ? ()=>setOuvF(!ouvF) : null)}{!nums.length ? <span className="muted">aucune</span>
       : !ouvF ? (()=>{ const fs = nums.map(n=>(factures||{})[n]).filter(Boolean), tot = fs.filter(f=>!f.annulee).reduce((t,f)=>t+(f.ttc||0),0);
           const pay = fs.filter(f=>!f.annulee && f.etatPaie==='payee').length, att = fs.filter(f=>!f.annulee && ['impayee','partielle'].includes(f.etatPaie)).length;
           return <span style={{cursor:'pointer'}} onClick={()=>setOuvF(true)}>{nums.length} facture{nums.length>1?'s':''} · <b>{cvMoney(tot)}</b>{pay ? <span style={{color:'var(--success)'}}> · {pay} payée{pay>1?'s':''}</span> : ''}{att ? <span style={{color:'var(--accent)'}}> · {att} en attente</span> : ''}</span>; })()
-      : nums.map((n,i)=>{ const f = (factures||{})[n], e = f && (f.annulee ? 'annulee' : f.etatPaie), et = PJ_ETAT_PAIE[e];
-      return <span key={n} style={{whiteSpace:'nowrap'}}>{i>0 && <span className="muted"> · </span>}{f && f.pdf ? <a href={lien(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>#{n} ↗</a> : <b>#{n}</b>}
-        {f && f.ttc!=null && <span> {cvMoney(f.ttc)}</span>}{et ? <span style={{color:et[1],fontWeight:600}}> ({et[0]})</span> : !f ? <span className="muted"> (pas dans le registre)</span> : null}</span>; })}</div>
+      : <div style={{marginTop:3,display:'grid',gap:1}}>{nums.map(n=>{ const f = (factures||{})[n], e = f && (f.annulee ? 'annulee' : f.etatPaie), et = PJ_ETAT_PAIE[e];   // v392 : en liste
+        return <div key={n} style={{display:'grid',gridTemplateColumns:'80px 58px 1fr auto',gap:8,fontSize:12.5,padding:'2px 0',borderBottom:'1px dashed var(--border)',alignItems:'baseline',opacity:e==='annulee'?.6:1}}>
+          {f && f.pdf ? <a href={lien(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>#{n} ↗</a> : <b>#{n}</b>}
+          <span className="muted" style={{fontVariantNumeric:'tabular-nums'}}>{f && f.date ? cvFmtDay(String(f.date).slice(0,10)) : ''}</span>
+          <span className="muted" style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f && f.desc ? f.desc : ''}</span>
+          <span style={{whiteSpace:'nowrap'}}>{f && f.ttc!=null && <b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(f.ttc)}</b>}{et && <span style={{color:et[1],fontWeight:600,marginLeft:8}}>{et[0]}</span>}</span></div>; })}</div>}</div>
     <div style={{fontSize:13,marginBottom:6}}>{T('Matériel', ouvM, m.liste.length ? ()=>setOuvM(!ouvM) : null)}{!m.liste.length ? <span className="muted">aucune facture de fournisseur associée</span> : <>
       <span style={{cursor:'pointer'}} onClick={()=>setOuvM(!ouvM)}><b>{cvMoney(m.total)}</b> <span className="muted">avant taxes · {m.liste.length} facture{m.liste.length>1?'s':''}{(()=>{ const np = new Set(m.liste.map(a=>a.sous).filter(Boolean)).size; return np ? ' · '+np+' partie'+(np>1?'s':'') : ''; })()}</span></span>
       {ouvM && (()=>{ const partiesJob = achPartiesDe(m.liste[0] ? m.liste[0].job : '', achats, job); const avecP = m.liste.some(a=>a.sous);
@@ -2892,7 +2911,7 @@ function PjFacturesMateriel({job, factures, achats, clients, cfg, onChanged}){
         return cles.map(k=>{ const op = !avecP || !!ouvP[k]; return <div key={'g'+k} style={{marginTop:avecP?6:3}}>
           {avecP && <div onClick={()=>setOuvP(o=>({...o, [k]:!o[k]}))} style={{fontSize:12.5,fontWeight:800,cursor:'pointer',userSelect:'none'}}>{fl(op)}{k || <span className="muted" style={{fontWeight:600}}>Sans partie</span>} <span style={{fontWeight:700}}>· {cvMoney(groupes[k].reduce((t,a)=>t+(a.st||0),0))}</span> <span className="muted" style={{fontWeight:400}}>· {groupes[k].length} facture{groupes[k].length>1?'s':''}</span></div>}
       {op && <div style={{marginTop:2,display:'grid',gap:2,paddingLeft:avecP?10:0,borderLeft:avecP?'2px solid var(--border)':'none'}}>{groupes[k].slice().sort((a,b)=>String(b.date||b.recue).localeCompare(String(a.date||a.recue))).map(a=><div key={a.row} style={{fontSize:12.5,display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
-        <span>{a.fournisseur} {a.pdf ? <a href={lien(a.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>#{a.num} ↗</a> : <b>#{a.num}</b>}<span className="muted"> · {cvFmtDay(String(a.date||a.recue).slice(0,10))}{a.ref ? ' · réf. « '+a.ref+' »' : ''}</span></span>
+        <span>{a.fournisseur} {a.pdf ? <a href={lien(a.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>#{a.num} ↗</a> : <b>#{a.num}</b>}<span className="muted"> · {cvFmtDay(String(a.date||a.recue).slice(0,10))}{a.ref ? ' · réf. « '+a.ref+' »' : ''}</span>{a.sousAuto && <span title="Partie trouvée toute seule (référence, agenda ou AS) — « Partie » pour la changer" style={{fontSize:10.5,marginLeft:6,padding:'0 5px',borderRadius:4,background:'var(--bg3)',color:'var(--muted)'}}>auto</span>}</span>
         <span style={{display:'flex',gap:8,alignItems:'center'}}><b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(a.st)}</b>
           {cfg && <button className="btn btn-sm" style={{padding:'0 7px',fontSize:11}} title="Pour qui / quelle partie du projet (une facture par partie)" onClick={()=>{ setPartie(partie===a.row?null:a.row); setChg(null); setDest(null); }}>{a.sous ? 'Partie' : '+ Partie'}</button>}
           {cfg && <button className="btn btn-sm" style={{padding:'0 7px',fontSize:11}} title="Cette facture n'est pas de ce projet : la changer de projet" onClick={()=>{ setChg(chg===a.row?null:a.row); setDest(null); setPartie(null); }}>{chg===a.row?'Annuler':'Changer'}</button>}</span>
@@ -3038,7 +3057,7 @@ function ProjetsSuivi({cfg, refreshKey}){
         </div>)}
         <div style={{marginTop:10,paddingTop:8,borderTop:'1px solid var(--border)'}}>   {/* v388 : à la fin, sous les passages — les étapes d'abord */}
         <PjAppels liste={cvJobAppels(j, ap)} factures={factures}/>
-        <PjFacturesMateriel job={j} factures={factures} achats={achats} clients={clients} cfg={cfg} onChanged={()=>setTick(t=>t+1)}/>
+        <PjFacturesMateriel job={j} factures={factures} achats={achats} clients={clients} cfg={cfg} onChanged={()=>setTick(t=>t+1)} appelsJob={cvJobAppels(j, ap)}/>
         </div>
         <CvCourriels liste={j.po ? (courriels||{})[j.po] : null}/>
         {j.reg && j.reg.note && <div className="card" style={{marginTop:8,padding:8,fontSize:12.5,borderColor:'var(--warning)'}}>{j.reg.note}</div>}
@@ -11437,13 +11456,13 @@ function PjAppels({liste, factures}){
   if(!liste.length) return <div style={{fontSize:13,marginBottom:6}}>{T}<span className="muted">aucun appel de service trouvé</span></div>;
   return <div style={{fontSize:13,marginBottom:6}} onClick={e=>e.stopPropagation()}>
     <div onClick={()=>setOuv(!ouv)} style={{cursor:'pointer',userSelect:'none'}}>{T}{liste.length} appel{liste.length>1?'s':''}{dernier ? <span className="muted"> · dernier {cvFmtDay(dernier)}</span> : ''}
-      {pasEnv ? <span style={{color:'var(--warning)'}}> · {pasEnv} facture{pasEnv>1?'s':''} pas envoyée{pasEnv>1?'s':''}</span> : ''}{sansDoc ? <span className="muted"> · {sansDoc} document{sansDoc>1?'s':''} pas trouvé{sansDoc>1?'s':''}</span> : ''}</div>
+      {pasEnv ? <span style={{color:'var(--warning)'}}> · {pasEnv} facture{pasEnv>1?'s':''} pas envoyée{pasEnv>1?'s':''}</span> : ''}</div>
     {ouv && <div style={{marginTop:3,display:'grid',gap:1}}>{liste.slice().sort((x,y)=>String(x.jour||'').localeCompare(String(y.jour||''))).map((a,k)=>
       <div key={k} style={{display:'grid',gridTemplateColumns:'86px 58px 1fr',gap:8,fontSize:12.5,padding:'2px 0',borderBottom:'1px dashed var(--border)',alignItems:'baseline'}}>
         {a.url ? <a href={a.url} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>AP {a.as} ↗</a> : <b>AP {a.as}</b>}
         <span className="muted" style={{fontVariantNumeric:'tabular-nums'}}>{a.jour ? cvFmtDay(a.jour) : ''}</span>
         <span>{a.factures.length ? <>facture {a.factures.map((n,i)=><React.Fragment key={n}>{i>0?', ':''}{n}{!env(n) && <span style={{color:'var(--warning)'}}> (pas envoyée)</span>}</React.Fragment>)}</> : <span className="muted">pas de facture</span>}
-          {!a.url && <span className="muted"> · document pas trouvé</span>}</span></div>)}</div>}
+</span></div>)}</div>}
   </div>;
 }
 // Section « Appels de service » d'une fiche du Répertoire : les jobs du client et leurs appels de service
