@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v383';
+const APP_VERSION = 'v384';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1864,14 +1864,15 @@ const ACH_SEP = ' — ';
 function achatAdrCourte(a){ return String(a||'').split(',')[0].replace(/\s+/g,' ').trim(); }
 // v383 : nom du client = celui de sa fiche du Répertoire (rempli quand le Répertoire est construit), sinon « Client : » de l'agenda, sinon le titre sans « Job » ni type
 const ACH_NOMS = {};
-function achatNomClient(j){ return (j && j.id && ACH_NOMS[j.id]) || cvNomClientJob(j) || cvNomSansType(String((j && j.name)||'').replace(/^\s*job\s+/i,'')); }
+function achatNomClient(j){ return (j && j.id && ACH_NOMS[j.id]) || cvNomClientJob(j) || cvNomSansType(String((j && j.name)||'').replace(/^\s*job\s+/i,'').replace(/\bne\s+pas\s+(changer|d[ée]placer|bouger)\b.*$/i,'').trim()); }   // v384 : sans la note « ne pas changer date »
 // un achat « Nom — adresse » va au projet de cette adresse si le nom concorde (un mot du nom en commun : « JC L'Écuyer » = « Jean-Christophe L'Écuyer »)
 function achatMotsNom(n){ return String(n||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3 && w!=='job'); }
 function achatSurProjet(dest, j, nomsJob){
   const d = String(dest||''), i = d.indexOf(ACH_SEP); if(i<=0 || !j || !j.address) return false;
   if(cvNorm(d.slice(i+ACH_SEP.length))!==cvNorm(achatAdrCourte(j.address))) return false;
   const mots = achatMotsNom(d.slice(0,i)), ref = new Set((nomsJob || [achatNomClient(j), j.name]).flatMap(achatMotsNom));
-  return mots.some(w=>ref.has(w));
+  const refL = [...ref];   // v384 : « Olivierboudreau » contient « boudreau », « Jclecuyer » contient « ecuyer »
+  return mots.some(w=>ref.has(w) || (w.length>=4 && refL.some(r=>r.includes(w))) || refL.some(r=>r.length>=4 && w.includes(r)));
 }
 function achatCle(c, j){
   if((c && c.code)!=='PART' && (j && j.client)!=='PART') return cvJobCle(c, j);
