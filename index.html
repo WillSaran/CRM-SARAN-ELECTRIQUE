@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v378';
+const APP_VERSION = 'v379';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5477,7 +5477,7 @@ function PaiAge({f}){ const a = f.ageFac!=null ? f.ageFac : f.age; if(f.etat==='
   return <span title="Jours depuis la date de la facture" style={{fontSize:11.5, padding:'0 6px', borderRadius:6, color:st ? st.c : 'var(--muted)', background:st ? st.bg : 'transparent', fontWeight:st ? st.fw : 400, whiteSpace:'nowrap'}}>{a} j</span>; }
 const paiAujourdhui = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
 
-function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
+function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees}){
   const id = cfg.memoireFacturesSpreadsheetId;
   // v186 : Répertoire (même lecture que l'onglet Répertoire) pour mettre un nom sur les courriels des factures
   const [repTick,setRepTick]=useState(0);
@@ -5741,6 +5741,35 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact}){
   const etiquette = {sur:'Sûr', probable:'Probable', verifier:'À vérifier'};
   const Tuile = ({v, l, c, onClick}) => <div className="card" style={{padding:12,cursor:onClick?'pointer':'default'}} onClick={onClick}><div style={{fontSize:20,fontWeight:800,color:c||'inherit',fontVariantNumeric:'tabular-nums'}}>{v}</div><div className="muted" style={{fontSize:12}}>{l}</div></div>;
 
+  // v379 : fiche d'un client (Répertoire) › Factures › « Envoyées » : ses factures du registre de La mémoire, avec le PDF et l'état du paiement
+  if(compact && envoyees){ const code = String(envoyees.code||'').toUpperCase();
+    const sienne = f => code ? String(f.client||'').trim().toUpperCase()===code : filtreF(f);
+    const envoyee = f => !!(f.envoi || f.pdf);
+    const V0 = data.factures.__vieilles || {};
+    const L = [...Object.values(A.F).filter(f=>envoyee(f) && sienne(f)), ...Object.values(V0).filter(f=>envoyee(f) && sienne(f)).map(f=>({...f, etat:'avant'}))]
+      .sort((a,b)=>(+b.num||0)-(+a.num||0));
+    if(!L.length) return <div className="muted" style={{fontSize:12.5}}>Aucune facture envoyée dans le registre de La mémoire.</div>;
+    const actives = L.filter(f=>!['annulee','remplacee'].includes(f.etat));
+    const totEnv = actives.reduce((s,f)=>s+(f.ttc||0),0);
+    const du = L.filter(f=>['impayee','partielle','credit'].includes(f.etat)), totDu = du.reduce((s,f)=>s+(f.solde||0),0);
+    const etatDe = f => f.etat==='payee' ? {t:'Payée'+(datePaie(f) ? ' le '+cvFmtDay(datePaie(f)) : ''), c:'var(--success)'}
+      : f.etat==='impayee' ? {t:'En attente de paiement', c:'var(--accent)'}
+      : f.etat==='partielle' ? {t:'Partielle — reste '+cvMoney(f.solde), c:'var(--warning)'}
+      : f.etat==='credit' ? {t:'Crédit', c:'var(--muted)'}
+      : f.etat==='annulee' ? {t:'Annulée', c:'var(--muted)'}
+      : f.etat==='remplacee' ? {t:'Remplacée', c:'var(--muted)'}
+      : f.etat==='zero' ? {t:'0 $', c:'var(--muted)'}
+      : f.etat==='avant' ? {t:'Avant le 1er juillet', c:'var(--muted)'} : {t:'', c:'var(--muted)'};
+    return <div>
+      <div style={{display:'flex',gap:14,flexWrap:'wrap',fontSize:12.5,marginBottom:6}}>
+        <span>{actives.length} facture{actives.length>1?'s':''} envoyée{actives.length>1?'s':''} · <b>{cvMoney(totEnv)}</b></span>
+        <span style={{color:du.length?'var(--accent)':'var(--success)'}}>{du.length ? 'Encore dû : '+cvMoney(totDu)+' ('+du.length+')' : 'Rien en attente de paiement'}</span></div>
+      {L.map(f=>{ const e = etatDe(f), gris = ['annulee','remplacee','avant'].includes(f.etat);
+        return <div key={f.num+'-'+f.etat} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'5px 0',borderBottom:'1px dashed var(--border)',opacity:gris?.6:1}}>
+          <span style={{minWidth:0}}>{f.pdf ? <a href={repPdf(f.pdf)} target="_blank" rel="noopener" title="Ouvrir le PDF de la facture" style={{color:'var(--accent)',fontWeight:700}}>#{f.num} ↗</a> : <b>#{f.num}</b>}
+            <span className="muted"> · {f.date ? cvFmtDay(String(f.date).slice(0,10))+' '+String(f.date).slice(0,4) : ''}{f.envoi ? ' · envoyée le '+cvFmtDay(String(f.envoi).slice(0,10)) : ''}{f.po && f.po!=='AUCUN' ? ' · PO '+f.po : ''}{f.desc ? ' · '+String(f.desc).slice(0,60) : ''}</span></span>
+          <span style={{display:'flex',gap:10,alignItems:'center',whiteSpace:'nowrap'}}><b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(f.ttc)}</b><span style={{color:e.c,fontWeight:600}}>{e.t}</span></span></div>; })}
+    </div>; }
   // v291 : dans la fiche d'un client (Répertoire) : seulement ses paiements, sans totaux
   if(compact){ const sesF = n => A.F[n] && filtreF(A.F[n]);
     const liste = data.paiements.filter(p=>/^confirm/i.test(p.statut) && (filtreP(p) || p.confirmees.some(sesF))).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
@@ -6233,7 +6262,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
         <div className="card" style={{padding:12,cursor:'pointer'}} onClick={()=>setVue('annulees')}><div style={{fontSize:24,fontWeight:800}}>{annulees.length}</div><div className="muted" style={{fontSize:12}}>pas à facturer (**)</div></div>
       </div>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
-        {(compact ? [['toutes','Toutes'],['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['annulees','Pas à facturer ('+annulees.length+')']]
+        {(compact ? [['toutes','Toutes'],['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['annulees','Pas à facturer ('+annulees.length+')'],['envoyees','Envoyées']]
           : [['afacturer','À facturer ('+(manquantes.length+traitement.length)+')'],['tableur','📊 Mode tableur'],['papiers','Papiers à traiter ('+papiers.length+')'],['annulees','Pas à facturer ('+annulees.length+')'],['toutes','Toutes les lignes']]).map(([k,l])=><button key={k} className={'btn btn-sm'+(vue===k?' btn-p':'')} onClick={()=>setVue(k)}>{l}</button>)}
         {!compact && <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (projet, adresse, no)…" style={{flex:'1 1 160px',width:'auto',minWidth:0,padding:'6px 10px'}}/>}
       </div>
@@ -6249,6 +6278,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
             style={actif ? {background:k==='autre'?'var(--bg4)':c, color:k==='autre'?'var(--text)':texteSur(/^#/.test(c)?c:''), border:'none', fontWeight:700} : {borderColor:c, borderLeft:'5px solid '+c}}>{quiNom(k)} · {parQui[k]}</button>; })}
       </div>}
       {vue==='paiements' ? <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={q} contacts={contacts}/> :
+      vue==='envoyees' ? <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={filterC ? '' : q} contacts={contacts} compact envoyees={{code:filterC||''}}/> :
       vue==='tableur' ? <SuiviTableur rows={rows} id={id} onChanged={()=>setTick(t=>t+1)}/> :
       vue==='papiers' ? <div className="card">
         <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Ce qui est dans le dossier partagé <a href={'https://drive.google.com/drive/folders/'+PAD_DOSSIER} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>1-PAD SERVICE À TRAITER ↗</a> : papiers déposés par les gars, pas encore traités. Ce n'est pas une erreur. Pour chacun : où il en est dans le Suivi Travaux.</div>
