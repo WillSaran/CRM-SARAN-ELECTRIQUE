@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v389';
+const APP_VERSION = 'v390';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1839,20 +1839,26 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
 }
 
 // Fils de courriels d'une job : dates, qui a écrit en dernier, ce qui se passe.
-function CvCourriels({liste}){
+function CvCourriels({liste}){   // v390 : replié par défaut (une ligne de résumé) ; ouvert = une ligne par fil, l'extrait au clic
+  const [ouv,setOuv]=useState(false);
+  const [det,setDet]=useState(null);
   if(!liste || !liste.length) return null;
   const couleur = st => /toi de r/i.test(st) ? 'var(--danger)' : /attente/i.test(st) ? 'var(--warning)' : 'var(--muted)';
-  return <div style={{marginTop:10}}>
-    <div className="fh" style={{fontSize:14,margin:'4px 0 6px'}}>Courriels ({liste.length})</div>
-    {liste.map((c,i)=><div key={i} style={{padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:12.5}}>
-      <div style={{display:'flex',justifyContent:'space-between',gap:8}}>
-        <b>{c.sujet}</b>
-        {c.lien && <a href={c.lien} target="_blank" rel="noopener" style={{color:'var(--accent)',whiteSpace:'nowrap'}}>Ouvrir ↗</a>}
-      </div>
-      <div className="muted" style={{fontSize:12}}>{c.premier===c.dernier ? cvFmtDay(c.dernier) : cvFmtDay(c.premier)+' → '+cvFmtDay(c.dernier)} · {c.n} message{c.n>1?'s':''} · dernier de {c.de}</div>
-      <div style={{fontSize:12,fontWeight:700,color:couleur(c.statut)}}>{c.statut}</div>
-      {c.extrait && <div className="muted" style={{fontSize:12,fontStyle:'italic'}}>« {c.extrait} »</div>}
-    </div>)}
+  const aRep = liste.filter(c=>/toi de r/i.test(c.statut||'')).length, att = liste.filter(c=>/attente/i.test(c.statut||'')).length;
+  const dernier = liste.map(c=>c.dernier).filter(Boolean).sort().pop();
+  return <div style={{marginTop:10,fontSize:13}} onClick={e=>e.stopPropagation()}>
+    <div onClick={()=>setOuv(!ouv)} style={{cursor:'pointer',userSelect:'none'}}>
+      <span style={{fontSize:12,fontWeight:800,letterSpacing:'.04em',textTransform:'uppercase',color:'var(--muted)',marginRight:8}}><span style={{display:'inline-block',width:14,fontSize:11}}>{ouv?'▼':'▶'}</span>Courriels</span>
+      {liste.length} fil{liste.length>1?'s':''}{dernier ? <span className="muted"> · dernier {cvFmtDay(dernier)}</span> : ''}
+      {aRep ? <b style={{color:'var(--danger)'}}> · {aRep} à toi de répondre</b> : ''}{att ? <span style={{color:'var(--warning)'}}> · {att} en attente</span> : ''}</div>
+    {ouv && <div style={{marginTop:4}}>{liste.map((c,i)=><div key={i} style={{padding:'3px 0',borderBottom:'1px dashed var(--border)',fontSize:12.5}}>
+      <div style={{display:'flex',gap:8,alignItems:'baseline'}}>
+        <span className="muted" style={{whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums',minWidth:52}}>{cvFmtDay(c.dernier)}</span>
+        <span onClick={()=>setDet(det===i?null:i)} title={c.extrait || ''} style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:det===i?'normal':'nowrap',cursor:'pointer'}}><b>{c.sujet}</b> <span className="muted">· {c.n} msg · {c.de}</span></span>
+        {c.statut && <span style={{fontSize:11.5,fontWeight:700,color:couleur(c.statut),whiteSpace:'nowrap'}}>{c.statut}</span>}
+        {c.lien && <a href={c.lien} target="_blank" rel="noopener" style={{color:'var(--accent)',whiteSpace:'nowrap'}}>↗</a>}</div>
+      {det===i && c.extrait && <div className="muted" style={{fontSize:12,fontStyle:'italic',paddingLeft:60}}>« {c.extrait} »</div>}
+    </div>)}</div>}
   </div>;
 }
 
