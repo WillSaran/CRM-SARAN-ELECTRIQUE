@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v380';
+const APP_VERSION = 'v381';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2010,6 +2010,68 @@ function CvArticles({a}){
 }
 
 // Jobs d'un client : liste en ordre alphabétique, avec recherche.
+// v381 : uniformiser les anciennes associations des particuliers (« Alain Boucher maison neuve », « Alain Boucher SERV »…)
+// → « Nom — adresse » du projet, pour que toutes ses factures de fournisseurs s'attachent au même projet.
+// ESSAI d'abord : la liste est montrée, rien n'est écrit avant « Appliquer ». Les contracteurs (CODE nom PO) ne sont pas touchés.
+function achUniformiserListe(achats, clients){
+  const part = ((clients||{}).PART || {jobs:[]}).jobs.map(j=>({...j, client:'PART'}));
+  const cleDe = j => achatCle({code:'PART'}, j);
+  const out = [];
+  (achats||[]).forEach(a=>{ const d = String(a.job||'').trim();
+    if(!d || REP_SPECIAL(d) || d.includes(ACH_SEP) || cvAutreDest(d)) return;
+    const t0 = d.split(/\s+/)[0].toUpperCase(); if(CLIENT_CODES[t0] || (clients||{})[t0]) return;   // contracteur
+    const nd = cvNorm(d);
+    let c = part.filter(j=>nd===cvNorm(j.name) || nd===cvNorm(cvJobCle({code:'PART'}, j)) || (cvNorm(j.name).length>=4 && nd.endsWith(cvNorm(j.name))) || (j.po && d.includes(j.po)));
+    let sur = true;
+    if(!c.length){ c = part.filter(j=>{ const n = cvNorm(cvTitreJob(j)); return n.length>=5 && nd.startsWith(n); }); sur = false; }   // même client, projet à choisir
+    const cles = [...new Map(c.filter(j=>j.address).map(j=>[cleDe(j), j])).entries()];
+    if(!cles.length) return;
+    // plusieurs projets : celui qui a un passage près de la date d'achat (14 jours)
+    let choix = cles.length===1 ? cles[0][0] : '';
+    if(!choix){ const t = new Date(String(a.date||a.recue).slice(0,10)+'T12:00:00').getTime();
+      const pres = cles.filter(([,j])=>(j.events||[]).some(e=>Math.abs(new Date(e.day+'T12:00:00').getTime()-t) <= 14*864e5));
+      if(pres.length===1) choix = pres[0][0]; sur = false; }
+    out.push({a, avant:d, choix, sur: sur && cles.length===1, options:cles.map(([k, j])=>({k, info:(cvTypeJob(j)||'Service')+' · '+cvFmtDay(j.last)}))});
+  });
+  return out.sort((x,y)=>String(y.a.date||y.a.recue).localeCompare(String(x.a.date||x.a.recue)));
+}
+function AchUniformiser({cfg, achats, clients, onFait}){
+  const [L,setL]=useState(null);       // null = fermé
+  const [sel,setSel]=useState({});     // row → clé choisie ('' = ne pas changer)
+  const [busy,setBusy]=useState(false);
+  const [fini,setFini]=useState(0);
+  const ouvrir = () => { const l = achUniformiserListe(achats, clients); const s0 = {}; l.forEach(x=>{ s0[x.a.row] = x.sur ? x.choix : ''; }); setSel(s0); setL(l); setFini(0); };
+  const appliquer = async () => { const l = L.filter(x=>sel[x.a.row]); if(!l.length) return; setBusy(true);
+    try{ suivreEcritures(); const le = 'Uniformisée '+new Date().toLocaleDateString('fr-CA');
+      for(let i=0;i<l.length;i+=200) await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:cfg.memoireAchatsSpreadsheetId, resource:{valueInputOption:'RAW',
+        data:l.slice(i,i+200).map(x=>({range:'I'+x.a.row+':K'+x.a.row, values:[[sel[x.a.row], '', le]]}))}});
+      const m = {}; l.forEach(x=>{ m[x.a.row] = sel[x.a.row]; }); onFait(m); setFini(l.length); setL(null); }
+    catch(e){ alert('Impossible d\'écrire : '+apiErrMsg(e)); }
+    setBusy(false); };
+  if(!L) return <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',margin:'2px 0 10px',fontSize:12.5}}>
+    <button className="btn btn-sm" onClick={ouvrir}>Uniformiser les associations des particuliers (essai)</button>
+    {fini>0 && <span style={{color:'var(--success)'}}>✓ {fini} facture{fini>1?'s':''} mise{fini>1?'s':''} au nom du client — adresse du projet.</span>}</div>;
+  const nb = L.filter(x=>sel[x.a.row]).length;
+  return <div className="card" style={{marginBottom:12,borderColor:'var(--accent)',fontSize:13}}>
+    <b>Uniformiser les associations — essai</b> <span className="muted">· rien n'est écrit avant « Appliquer »</span>
+    <div className="muted" style={{fontSize:12,margin:'4px 0 8px'}}>Chaque facture de fournisseur d'un particulier passe au format « Nom — adresse » de son projet. Coché d'avance = sûr (un seul projet possible). Les autres : choisis le projet, ou laisse « ne pas changer ».</div>
+    {!L.length && <div className="muted">Rien à uniformiser.</div>}
+    <div style={{maxHeight:420,overflowY:'auto'}}>{L.map(x=>{ const v = sel[x.a.row]||'';
+      return <div key={x.a.row} style={{padding:'6px 0',borderBottom:'1px solid var(--border)',display:'grid',gap:3}}>
+        <div><b>{x.a.fournisseur} #{x.a.num}</b> <span className="muted">· {cvFmtDay(String(x.a.date||x.a.recue).slice(0,10))} · {cvMoney(x.a.st)}</span></div>
+        <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+          <span className="muted" style={{textDecoration:v?'line-through':'none'}}>« {x.avant} »</span><span>→</span>
+          <select value={v} onChange={e=>setSel(s=>({...s, [x.a.row]:e.target.value}))} style={{width:'auto',padding:'2px 6px',fontSize:12.5,fontWeight:v?700:400,color:v?'var(--accent)':'var(--muted)'}}>
+            <option value="">ne pas changer</option>
+            {x.options.map(o=><option key={o.k} value={o.k}>{o.k} ({o.info})</option>)}</select>
+          {!x.sur && x.options.length>1 && <span style={{color:'var(--warning)',fontSize:12}}>{x.options.length} projets — à vérifier</span>}
+          {!x.sur && x.options.length===1 && <span style={{color:'var(--warning)',fontSize:12}}>trouvé par le nom du client — à vérifier</span>}</div>
+      </div>; })}</div>
+    <div style={{display:'flex',gap:6,marginTop:8}}>
+      <button className="btn btn-sm btn-p" disabled={busy || !nb} onClick={appliquer}>{busy ? 'Écriture…' : 'Appliquer '+nb}</button>
+      <button className="btn btn-sm" disabled={busy} onClick={()=>setL(null)}>Fermer</button></div>
+  </div>;
+}
 // v380 : particuliers — on choisit le client (nom de sa fiche), puis son projet (adresse + type de job, comme dans Projets)
 function CvChoixClientProjet({jobs, onChoix}){
   const [q,setQ]=useState('');
@@ -2238,6 +2300,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
     </div>; };
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Comptes fournisseurs</h2>
+    <AchUniformiser cfg={cfg} achats={A} clients={clients} onFait={m=>setFait(f=>({...f, ...m}))}/>
     <div className="muted" style={{fontSize:13,marginBottom:12}}>Tes factures d'achat lues dans tes courriels. Clique une facture pour voir ses articles ; associe-la à une job, à l'entrepôt, à un camion, à Éclairage Saran ou à un employé.</div>
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher une facture (fournisseur, #, référence, job, employé, article…)" style={{width:'100%',boxSizing:'border-box',marginBottom:12}}/>
     {q.trim().length>=2 && <div className="card" style={{marginBottom:16,borderColor:'var(--accent)'}}>
