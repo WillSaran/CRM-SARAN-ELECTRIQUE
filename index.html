@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v377';
+const APP_VERSION = 'v378';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6069,6 +6069,32 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
   const [busy,setBusy]=useState('');
   const [tick,setTick]=useState(0);
   const id = cfg.suiviTravauxSpreadsheetId;
+  // v378 : qui a fait le passage = couleur (ou libellé) de l'événement dans The Crew ; sinon les initiales du titre.
+  // Sert à savoir quel gars n'a pas remis son papier, pour l'appeler.
+  const [evEquipe,setEvEquipe]=useState({});
+  const [filtreQui,setFiltreQui]=useState(null);
+  useEffect(()=>{
+    const l = rows.filter(r=>r.factureManquante && r.dateObj && r.eventId);
+    if(!l.length) return;
+    let ok=true;
+    const min = new Date(Math.min(...l.map(r=>r.dateObj.getTime()))-2*864e5), max = new Date(Date.now()+864e5);
+    listCalendarEventsRange([CREW_CAL], min.toISOString(), max.toISOString())
+      .then(evs=>{ if(!ok) return; const m={}; evs.forEach(e=>{ m[e.id]=e.colorId||''; }); setEvEquipe(m); })
+      .catch(()=>{});
+    return ()=>{ ok=false; };
+  },[rows.length, refreshKey]);
+  const NOM_VERS_COULEUR = Object.fromEntries(Object.entries(CREW_COLORS).map(([k,n])=>[n,k]));
+  const quiDe = r => {
+    const ev = String(r.eventId||'');
+    const c = evEquipe[ev] || evEquipe[ev.split('_')[0]];
+    if(c && CREW_COLORS[c]) return c;
+    const ini = (String(r.projet||'').toUpperCase().match(/\b[A-Z]{2}\b/g)||[]).filter(x=>CREW_INITIALS[x]);
+    for(const x of ini.slice().reverse()){ const k = NOM_VERS_COULEUR[CREW_INITIALS[x]]; if(k) return k; }
+    if(ini.length) return 'ini:'+ini[ini.length-1];      // ex. AU (Adèle) : pas de couleur à elle
+    return 'autre';
+  };
+  const quiNom = k => k.startsWith('ini:') ? String(CREW_INITIALS[k.slice(4)]||k.slice(4)).split(' ')[0] : k==='autre' ? 'Non attitré' : equipeNom(k);
+  const quiCouleur = k => k.startsWith('ini:') ? '#d4a017' : equipeCouleur(k);
   // Papiers déposés par les gars (appels de service / OT) que l'adjointe n'a pas encore traités : registre des appels de La mémoire.
   // Papiers déposés dans le dossier partagé « 1-PAD SERVICE À TRAITER » (lu en direct dans le Drive).
   const [papiers,setPapiers]=useState([]);
@@ -6098,7 +6124,12 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
   };
   const nom = c => c==='PARTICULIER' ? 'Particuliers' : c;
   const contracteurs = [...new Set(rows.map(r=>r.contracteur))].sort((a,b)=>(a==='PARTICULIER')-(b==='PARTICULIER') || a.localeCompare(b,'fr'));
-  const base = rows.filter(r=>(!filterC || r.contracteur===filterC) && (!q || cvNorm([r.projet,r.adresse,r.appelService,r.facture,r.contracteur].join(' ')).includes(cvNorm(q))));
+  const base = rows.filter(r=>(!filterC || r.contracteur===filterC) && (!filtreQui || quiDe(r)===filtreQui) && (!q || cvNorm([r.projet,r.adresse,r.appelService,r.facture,r.contracteur].join(' ')).includes(cvNorm(q))));
+  // v378 : passages « rien d'inscrit » par gars (sans le filtre employé, pour les compteurs)
+  const parQui = {};
+  rows.filter(r=>(!filterC || r.contracteur===filterC) && r.statutFacture==='manquant' && r.estPasseOuAujourdhui)
+    .forEach(r=>{ const k = quiDe(r); parQui[k] = (parQui[k]||0)+1; });
+  const quiListe = Object.keys(parQui).sort((a,b)=>equipeRang(a.startsWith('ini:')?'x':a)-equipeRang(b.startsWith('ini:')?'x':b) || parQui[b]-parQui[a]);
   // AP / OT du registre (sans facture, pas encore inscrits nulle part au Suivi) → le passage « rien d'inscrit » le plus récent de cette job.
   const GENERIQUES = new Set(['CRS','SERV','SERVICE','FINITION','ROUGH','AJUST','AJUSTEMENT','AJUSTEMENTS','PART','PAY','PAYNE','ASC','SAR','GGP','BOM','GOU','JOY','RROY','5PIL','PREP','EXTRA','BORNE']);
   const inscrits = new Set(rows.flatMap(r=>[r.appelService, r.ordreTravail]).flatMap(v=>String(v||'').split(/[\s,;]+/)).filter(Boolean));
@@ -6157,9 +6188,11 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
     const aps = [...new Set(recus.map(e=>e.ap).filter(Boolean))], ots = [...new Set(recus.map(e=>e.ot).filter(Boolean))];
     const pad = g.some(r=>r.statutFacture==='manquant') && !recus.length && padPourLigne(papiers, r0);
     const inscrire = async (ap, ot)=>{ setBusy(k); try{ for(const r of g){ if(ap && !r.appelService) await suiviEcrireCellule(id, r, 'K', ap); if(ot && !r.ordreTravail) await suiviEcrireCellule(id, r, 'L', ot); } setTick(t=>t+1); }catch(e){ alert('Impossible : '+apiErrMsg(e)); } setBusy(''); };
-    return <div key={k} style={{padding:'9px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+    const qui = quiDe(r0), qc = quiCouleur(qui);
+    return <div key={k} style={{padding:'9px 0 9px 10px',borderBottom:'1px solid var(--border)',borderLeft:'5px solid '+qc,fontSize:13}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
-        <div style={{minWidth:0}}>{titres.map((t,i)=><div key={i}><b>{t}</b></div>)}
+        <div style={{minWidth:0}}><span className="badge" style={{background:qui==='autre'?'var(--bg3)':qc,color:qui==='autre'?'var(--muted)':texteSur(/^#/.test(qc)?qc:''),fontWeight:700,marginBottom:3,display:'inline-block'}}>{quiNom(qui)}</span>
+          {titres.map((t,i)=><div key={i}><b>{t}</b></div>)}
           {r0.adresse && <div className="muted" style={{fontSize:12}}>{r0.adresse}</div>}
           {g.length>1 && <div style={{fontSize:12,marginTop:2,color:'var(--accent)'}}>🔗 {g.length} passages combinés : {g.map(r=>r.date).join(' + ')}</div>}
           <div style={{fontSize:12.5,marginTop:2}}>
@@ -6207,6 +6240,13 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
       {vue!=='paiements' && !compact && <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:10}}>
         <button className="btn btn-sm" style={!filterC?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(null)}>Tous</button>
         {contracteurs.map(c=><button key={c} className="btn btn-sm" style={filterC===c?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFilterC(filterC===c?null:c)}>{nom(c)}</button>)}
+      </div>}
+      {vue==='afacturer' && !compact && quiListe.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+        <span className="muted" style={{fontSize:12}}>Papiers pas remis, par gars :</span>
+        <button className="btn btn-sm" style={!filtreQui?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null} onClick={()=>setFiltreQui(null)}>Tous</button>
+        {quiListe.map(k=>{ const c = quiCouleur(k), actif = filtreQui===k;
+          return <button key={k} className="btn btn-sm" onClick={()=>setFiltreQui(actif?null:k)}
+            style={actif ? {background:k==='autre'?'var(--bg4)':c, color:k==='autre'?'var(--text)':texteSur(/^#/.test(c)?c:''), border:'none', fontWeight:700} : {borderColor:c, borderLeft:'5px solid '+c}}>{quiNom(k)} · {parQui[k]}</button>; })}
       </div>}
       {vue==='paiements' ? <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={q} contacts={contacts}/> :
       vue==='tableur' ? <SuiviTableur rows={rows} id={id} onChanged={()=>setTick(t=>t+1)}/> :
