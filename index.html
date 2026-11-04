@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v394';
+const APP_VERSION = 'v395';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6936,6 +6936,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
       {pill('afaire','📝 À faire',ouvertes.length,onglet,setOnglet)}
       {pill('envoyees','📤 Envoyées',envoyees.filter(s=>['aclasser','attente'].includes(etatEnv(s))).length,onglet,setOnglet)}
       {pill('recues','📥 Reçues des fournisseurs',recuesTout.length,onglet,setOnglet)}
+      {pill('miennes','🗂 Mes soumissions (CRM)',DC.docs.filter(x=>x.type==='Soumission').length,onglet,setOnglet)}
       {pill('preparer','✏️ Préparer une soumission',null,onglet,k=>{ setOnglet(k); })}
     </div>
     {onglet==='preparer' && <AppelServiceView key={'prep'+prepKey} cfg={cfg} toast={toast} mode="soumission" contacts={data && data.contacts} onNavigate={onNavigate} onEnregistre={()=>DC.lire(true)} onEnvoye={doc=>{
@@ -6947,6 +6948,21 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     {S.err && <div className="card" style={{color:'var(--red, #c0392b)'}}>{S.err}</div>}
     {S.lu && !S.existe && onglet!=='recues' && <div className="card muted" style={{fontSize:12.5,marginBottom:10}}>L'onglet « Soumissions » du registre des jobs n'existe pas encore. Il sera rempli tout seul quand le script <b>soumissions.gs</b> sera installé dans La mémoire. Tu peux quand même en ajouter à la main.</div>}
 
+    {(onglet==='miennes' || (onglet==='envoyees' && q)) && (()=>{   // v395 : toutes les soumissions faites dans le CRM, par numéro (E-0001, E-0002…)
+      const envNo = new Set(envoyees.map(s=>docCrmDe(s)).filter(Boolean).map(x=>x.numero));
+      const numN = x => +(String(x.numero||'').replace(/\D/g,''))||0;
+      const L = DC.docs.filter(x=>x.type==='Soumission').filter(x=>cherche([x.numero, x.client, x.courriel, x.titre, (()=>{ try{ return JSON.parse(x.donnees||'{}').adresse||''; }catch(e){ return ''; } })()].join(' ')))
+        .filter(x=>onglet==='miennes' || !envNo.has(x.numero)).sort((a,b)=>numN(b)-numN(a));
+      if(onglet==='envoyees' && !L.length) return null;
+      return <div className="card" style={{marginBottom:10}}>
+        <div style={{fontWeight:700,marginBottom:6}}>{onglet==='miennes' ? 'Mes soumissions faites dans le CRM' : 'Préparées dans le CRM (pas encore dans « Envoyées »)'} <span className="muted" style={{fontWeight:400}}>· {L.length}</span></div>
+        {!L.length && <div className="muted" style={{fontSize:13}}>Aucune.</div>}
+        {L.map(x=>{ const env = envNo.has(x.numero); return <div key={x.row} style={{display:'grid',gridTemplateColumns:'70px 70px 1fr auto',gap:8,alignItems:'baseline',padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+          <b>{x.numero}</b><span className="muted">{x.date ? cvFmtDay(String(x.date).slice(0,10)) : ''}</span>
+          <span style={{minWidth:0}}><b>{x.client||'—'}</b>{x.titre ? <span className="muted"> · {x.titre}</span> : ''}{x.st!=null ? <> · <b>{cvMoney(x.st)}</b></> : ''}</span>
+          <span style={{display:'flex',gap:6,alignItems:'center'}}><span className="badge" style={{background:env?'rgba(63,185,80,0.15)':'var(--bg3)',color:env?'var(--success)':'var(--muted)'}}>{env ? 'Envoyée' : 'Brouillon'}</span>
+            <button className="btn btn-sm" onClick={()=>rouvrir(x)}>Ouvrir</button></span></div>; })}
+      </div>; })()}
     {onglet==='afaire' && <div className="card">
       <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:4}}>
         <button className="btn btn-sm btn-p" onClick={()=>setNouveau(nouveau===null?'':null)}>+ Ajouter</button>
@@ -8342,10 +8358,12 @@ function docHtml(d, calc, plan, imprimer){
   const titre = nom+' '+(d.numero||'');
   const date = (d.jours[0]&&d.jours[0].date)||cvDay(new Date().toISOString());
   const dateFr = s => { const x=String(s||'').match(/^(\d{4})-(\d{2})-(\d{2})/); return x ? x[3]+'/'+x[2]+'/'+x[1] : esc(s); };
-  const qte = l => esc(l.qte)+' '+esc(String(l.unite||'un').toUpperCase());
+  const enPi = l => /^(pi|pieds?|ft)$/i.test(String(l.unite||'').trim());   // v395 : la soumission parle en mètres (le stock reste en pieds)
+  const qteM = l => Math.max(0.5, Math.round((cvNum(l.qte)||0)/3.28084*2)/2);
+  const qte = l => d.type==='Soumission' && enPi(l) ? String(qteM(l)).replace('.',',')+' M' : esc(l.qte)+' '+esc(String(l.unite||'un').toUpperCase());
   // Lignes : matériel, puis déplacement / électriciens / quincaillerie (comme ton logiciel)
-  const mat = d.lignes.filter(l=>cvNum(l.qte)).map(l=>{ const p=calc.px(l.code,l);
-    return '<tr><td>'+esc(l.code)+'</td><td>'+esc(l.desc)+'</td><td class="n">'+qte(l)+'</td>'+(prix && !forfait?'<td class="n">'+m(p)+'</td><td class="n">'+m(p*(cvNum(l.qte)||0))+'</td>':'')+'</tr>'; }).join('');
+  const mat = d.lignes.filter(l=>cvNum(l.qte)).map(l=>{ const p=calc.px(l.code,l), tot = p*(cvNum(l.qte)||0), pm = d.type==='Soumission' && enPi(l) ? tot/qteM(l) : p;
+    return '<tr><td>'+esc(l.code)+'</td><td>'+esc(l.desc)+'</td><td class="n">'+qte(l)+'</td>'+(prix && !forfait?'<td class="n">'+m(pm)+'</td><td class="n">'+m(tot)+'</td>':'')+'</tr>'; }).join('');
   const aSA = d.lignes.some(l=>/^SA0[12]$/i.test(l.code));
   let autres = '';
   if(prix && forfait){
@@ -8376,7 +8394,7 @@ function docHtml(d, calc, plan, imprimer){
   const logo = PLAN_IMG[LOGO_ID] ? '<img src="'+PLAN_IMG[LOGO_ID]+'" style="height:78px;max-width:170px;object-fit:contain"/>' : '<div style="font:bold 30px Arial;color:#222;letter-spacing:2px">SARAN</div>';
   const info = (l,v) => '<tr><td class="lb">'+l+'</td><td class="v">'+esc(v||'')+'</td></tr>';
   const clauses = d.type==='Ordre de travail' ? '' :
-    (d.type==='Soumission'?'<p>Cette soumission est valide pour une durée de 30 jours.</p>':'')+
+    (d.type==='Soumission'?'<p>Cette soumission est valide pour une durée de 30 jours.</p><p>Les travaux peuvent demander de déplacer des meubles ou des objets, de percer ou d\'ouvrir des murs, des plafonds ou d\'autres surfaces. Les retouches qui en découlent (joints, plâtre, peinture, béton, asphalte, aménagement paysager) ne sont pas comprises dans cette soumission.</p>':'')+
     '<p>INTÉRÊT SUR ARRÉRAGES<br>Sous réserve de tout autre droit ou recours de l\'Entrepreneur, tout retard dans un versement ou paiement dû à l\'Entrepreneur portera intérêt à un taux annuel de 12%.</p>'+
     '<p>ÉLECTION DE DOMICILE<br>Relativement à tout litige ou procédure judiciaire pouvant résulter de l\'application du présent contrat, les parties élisent domicile dans le district judiciaire d\'Iberville.</p>';
   const signature = d.type==='Soumission' ?
@@ -8624,11 +8642,11 @@ const CALC_SOUMISSION = {
       if(D) txt.push('Câblage d\'environ '+r1(D)+' m'+(ext ? ' : '+r1(I)+' m à l\'intérieur'+(v.entretoit?' (par l\'entretoit)':'')+', sortie par le mur'+(segs.length ? ', puis '+segs.map(s=>r1(s.m)+' m en '+nomSeg(s)).join(', ') : '')+' jusqu\'à la borne' : ' à l\'intérieur, '+(pInt||'')+(v.entretoit ? (pInt ? ' et ' : '')+'par l\'entretoit' : ''))+'.');
       if(S) txt.push('Tranchée d\'environ '+r1(S)+' m pour la partie enterrée.');
       if(perc) txt.push(perc==='brique' ? 'Perçage dans la brique pour le passage du câble.' : 'Perçage dans le béton pour le passage du câble.');
-      txt.push('Inclus : matériel électrique, déplacement, mise en service et essai de la borne.');
+      txt.push('Inclus : matériel électrique, déplacement et mise en service.');   // v395
       const detail = pBorne ? 'Détail : borne '+nomBorne+' — '+cvMoney(pBorne)+' · câblage et installation — '+cvMoney(inst)+'.' : '';
       const exclus = (S||perc) ? 'Ne comprend pas la réfection du béton, de l\'asphalte ou de l\'aménagement paysager.' : '';
       return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(inst+pBorne), installation:inst, borne:pBorne, metres:r1(D),
-        titre: v.borne==='client' ? 'Installation borne de recharge' : 'Borne '+nomBorne, travaux: txt.join('\n'), remarques:[detail, exclus].filter(Boolean).join('\n'), lignes:L, heures:h};
+        titre: v.borne==='client' ? 'Installation borne de recharge' : 'Borne '+nomBorne, travaux: txt.join('\n'), remarques:'', lignes:L, heures:h};   // v395 : remarques = toi seulement (les retouches sont dans les clauses)
     }
   },
   // v319 / v331 : assemblage d'entrée électrique 200A — à travers le toit (mât 10 ou 12 pi), à travers le toit avec réducteur (RFA 2 po),
@@ -9013,6 +9031,7 @@ function CalculRapide({C, d, setD, toast, onRempli}){
   const [mode,setMode0]=useState(()=>lsGet('calc_mode','heures'));
   const [gars,setGars]=useState(1);
   const [heures,setHeures]=useState('');          // vide = l'estimé du calcul
+  const [monPrix,setMonPrix]=useState('');        // v395 : ton prix (vide = le prix calculé)
   const [buffer,setBuffer0]=useState(()=>lsGet('calc_buffer','10'));
   const setMode = x => { setMode0(x); lsSet('calc_mode', x); };
   const setBuffer = x => { setBuffer0(x); lsSet('calc_buffer', x); };
@@ -9030,8 +9049,9 @@ function CalculRapide({C, d, setD, toast, onRempli}){
   const remplir = () => {
     if(d.lignes.some(l=>cvNum(l.qte)) && !confirm('Remplacer le matériel, les heures et le prix par le calcul ?')) return;
     const enHeures = mode==='heures';
-    const forfait = enHeures ? (totalH>0 ? String(totalH) : '') : (r.forfait!=='' ? String(r.forfait) : null);
-    const remarques = r.remarques.split('\n').filter(x=>!/^Détail :/.test(x)).join('\n');   // v394 : la borne et les travaux sont séparés dans le PDF
+    const forfait = cvNum(monPrix) ? String(cvNum(monPrix)) : enHeures ? (totalH>0 ? String(totalH) : '') : (r.forfait!=='' ? String(r.forfait) : null);   // v395 : ton prix d'abord
+    const garde = String(d.remarques||'').split('\n').filter(x=>!/^(Détail :|Ne comprend pas la réfection)/.test(x)).join('\n').trim();   // v395 : tes remarques restent les tiennes
+    const remarques = [garde, r.remarques && !String(garde).includes(r.remarques) ? r.remarques : ''].filter(Boolean).join('\n');
     const resume = enHeures ? '— Calcul du '+cvFmtDay(cvDay(new Date().toISOString()))+' : matériel '+cvMoney(matH)+' + main-d\'œuvre '+cvMoney(moH)+' ('+H+' h × '+gars+' gars) + dépl./quinc. '+cvMoney(dqH)+' = '+cvMoney(baseH)+' ; buffer '+(cvNum(buffer)||0)+' % = '+cvMoney(bufH)+' ; total '+cvMoney(totalH)+' avant taxes —' : '';
     setD(o=>({...o, buffer:String(buffer), ...(resume ? {visite:[String(o.visite||'').split('\n').filter(x=>!/^— Calcul du /.test(x)).join('\n').trim(), resume].filter(Boolean).join('\n\n')} : {}), typeProjet:def.typeProjet, titre: o.titre || r.titre, travaux:r.travaux, remarques, forfait: forfait!=null ? forfait : o.forfait,
       lignes: enHeures ? lignesPx : r.lignes.filter(l=>!l.outil), depl:true, quin:true, jours:[{...(o.jours[0]||{}), date:(o.jours[0]&&o.jours[0].date)||cvDay(new Date().toISOString()),
@@ -9063,7 +9083,8 @@ function CalculRapide({C, d, setD, toast, onRempli}){
           <span>Déplacement et quincaillerie</span><b style={{textAlign:'right'}}>{cvMoney(dqH)}</b>
           <span style={{borderTop:'1px solid var(--border2)',paddingTop:2}}>Sous-total</span><b style={{textAlign:'right',borderTop:'1px solid var(--border2)',paddingTop:2}}>{cvMoney(baseH)}</b>
           <span>Buffer {cvNum(buffer)||0} %{borneH>0 ? <span className="muted" style={{fontSize:12}}> (pas sur la borne)</span> : null}</span><b style={{textAlign:'right'}}>{cvMoney(bufH)}</b>
-          <span style={{fontSize:15}}>Prix de la soumission <span className="muted" style={{fontSize:12}}>avant taxes</span></span><b style={{textAlign:'right',fontSize:15}}>{cvMoney(totalH)}</b>
+          <span style={{fontSize:15}}>Prix calculé <span className="muted" style={{fontSize:12}}>avant taxes</span></span><b style={{textAlign:'right',fontSize:15}}>{cvMoney(totalH)}</b>
+          <span style={{fontSize:15}}>Ton prix <span className="muted" style={{fontSize:12}}>(vide = le prix calculé)</span></span><span style={{textAlign:'right'}}><input value={monPrix} onChange={e=>setMonPrix(e.target.value)} inputMode="decimal" placeholder={String(totalH)} style={{width:90,textAlign:'right',fontWeight:700}}/> $</span>
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
           <span className="muted" style={{fontSize:12}}>Le buffer ne touche pas au matériel ni aux heures ; il est noté dans tes notes privées (pas imprimé).</span>
@@ -9746,7 +9767,9 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
           {B.prix>0 && <><span className="muted" style={{paddingLeft:10}}>dont la borne ({B.nom})</span><span className="muted" style={{textAlign:'right'}}>{cvMoney(B.prix)}</span>
             <span className="muted" style={{paddingLeft:10}}>dont les travaux électriques</span><span className="muted" style={{textAlign:'right'}}>{cvMoney(sug-B.prix)}</span></>}
         </div>
-        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:8,fontSize:13}}>
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:8,fontSize:14}}>
+          <b>Ton prix (forfaitaire)</b> <input value={d.forfait||''} onChange={e=>maj({forfait:e.target.value})} inputMode="decimal" placeholder={String(sug)} style={{width:100,textAlign:'right',fontWeight:700}}/> $ <span className="muted" style={{fontSize:12}}>avant taxes — c'est ce prix qui est imprimé{B.prix>0 && aForfait ? ' (borne '+cvMoney(B.prix)+' + travaux '+cvMoney(fo-B.prix)+')' : ''}</span></div>
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:6,fontSize:13}}>
           {aForfait ? (Math.abs(fo-sug)<0.5 ? <span style={{color:'var(--success)'}}>✓ Le prix forfaitaire ({cvMoney(fo)}) est égal au prix suggéré.</span>
             : <span style={{color:'var(--warning)'}}>Prix forfaitaire actuel : <b>{cvMoney(fo)}</b> ({fo>sug?'+':''}{cvMoney(fo-sug)} vs suggéré)</span>)
             : <span className="muted">Pas de prix forfaitaire : la soumission montre le détail ligne par ligne.</span>}
