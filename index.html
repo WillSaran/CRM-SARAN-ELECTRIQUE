@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v397';
+const APP_VERSION = 'v398';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8521,6 +8521,12 @@ function ApercuPdf({d, prixDe, onImprimer, onFermer}){
 // cuisine, salle de bain, maison neuve, blocs — même moule.
 const piDe = m => Math.ceil((Number(m)||0)/0.3048 - 1e-6);
 const arr5 = n => Math.round(n/5)*5;
+// v398 : grosseur du tuyau PVC rigide (codes Westlake / ABB comme sur tes factures ; un code sans prix au catalogue est signalé « sans prix »)
+const BORNE_PVC = [
+  {po:'1',     nom:'1 po',     tuyau:'RC4001010', coupl:'REC20', adapt:'RTA20', coude:'REE2090', sangle:'RPS20', lb:'RSLB30S', bague:'CI2708'},
+  {po:'1-1/4', nom:'1-1/4 po', tuyau:'RC4001210', coupl:'REC25', adapt:'RTA25', coude:'REE2590', sangle:'RPS25', lb:'RSLB40S', bague:'CI2710'},
+  {po:'1-1/2', nom:'1-1/2 po', tuyau:'RC4001510', coupl:'REC30', adapt:'RTA30', coude:'REE3090', sangle:'RPS30', lb:'RSLB50S', bague:'CI2712'},
+  {po:'2',     nom:'2 po',     tuyau:'RC4002010', coupl:'REC35', adapt:'RTA35', coude:'REE3590', sangle:'RPS35', lb:'RSLB60S', bague:'CI2716'}];
 // v298 : borne à l'intérieur — par où passe le câble (texte de la soumission ; l'entretoit ajoute son tarif)
 const BORNE_PARCOURS_INT = [['ssol','par le sous-sol seulement','en passant par le sous-sol'],['ssol-garage','par le sous-sol, puis le garage','en passant par le sous-sol, puis dans le garage']];
 const CALC_SOUMISSION = {
@@ -8561,7 +8567,7 @@ const CALC_SOUMISSION = {
           {v.segs.map((s,i)=><div key={i} style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:12}}>
             {i+1}. {sel(s.type, x=>majSeg(i,{type:x}), [['TECK','Câble TECK/ACWU au mur'],['TECK_SOL','Câble TECK/ACWU sous terre'],['TUYAU','Tuyau PVC au mur'],['TUYAU_SOL','Tuyau PVC sous terre']])}
             {long(s.long, x=>majSeg(i,{long:x}))} {v.unite}
-            {/TUYAU/.test(s.type) && <>fils {sel(s.fil, x=>majSeg(i,{fil:x}), [['RW90','RW90'],['T90','T90'],['CABLE','le câble dans le tuyau']])}</>}
+            {/TUYAU/.test(s.type) && <>grosseur {sel(v.tuyauPo||'1', x=>maj({tuyauPo:x}), BORNE_PVC.map(p=>[p.po, p.nom]))} fils {sel(s.fil, x=>majSeg(i,{fil:x}), [['RW90','RW90'],['T90','T90'],['CABLE','le câble dans le tuyau']])}</>}
             {v.segs.length>1 && <button className="btn btn-sm" onClick={()=>maj({segs:v.segs.filter((x,k)=>k!==i)})}>✕</button>}
           </div>)}
           <div style={{paddingLeft:12}}><button className="btn btn-sm" onClick={()=>maj({segs:[...v.segs, {type:'TUYAU', long:'', fil:'RW90'}]})}>+ Un bout (ex. sous terre, puis remonter en tuyau)</button></div>
@@ -8623,19 +8629,20 @@ const CALC_SOUMISSION = {
       ajout('CI73','Connecteur NMD 1 po', 2*runs('NMD')); ajout('CI2216','Connecteur câble TECK 1 po', 2*runs('TECK'));
       // Tuyau PVC 1 po : longueurs de 10 pi, couplings, adaptateurs, coudes, sangles, colle
       const tuy = segs.filter(s=>s.tuyau);
+      const PV = BORNE_PVC.find(p=>p.po===(v.tuyauPo||'1')) || BORNE_PVC[0];   // v398
       if(tuy.length){
         let barres = 0, couplings = 0, tRuns = 0;
         segs.forEach((s,i)=>{ if(s.tuyau && !(i && segs[i-1].tuyau)) tRuns++; });
         let run = 0; segs.forEach((s,i)=>{ if(s.tuyau) run += s.m; if(!s.tuyau || i===segs.length-1 || !segs[i+1].tuyau){ if(run){ const b = Math.ceil(piDe(run)/10); barres += b; couplings += Math.max(0,b-1); run = 0; } } });
-        ajout('RC4001010','Conduit PVC rigide 1 po (longueurs de 10 pi)', barres*10, 'pi');
-        ajout('REC20','Coupling PVC 1 po', couplings);
-        ajout('RTA20','Adaptateur de boîte PVC 1 po', 2*tRuns);
-        ajout('REE2090','Coude PVC 1 po 90°', tuy.filter(s=>s.sol).length*2);
-        ajout('RPS20','Sangle PVC 1 po', tuy.filter(s=>!s.sol).reduce((n,s)=>n+Math.ceil(s.m)+1,0));
+        ajout(PV.tuyau,'Conduit PVC rigide '+PV.nom+' (longueurs de 10 pi)', barres*10, 'pi');
+        ajout(PV.coupl,'Coupling PVC '+PV.nom, couplings);
+        ajout(PV.adapt,'Adaptateur de boîte PVC '+PV.nom, 2*tRuns);
+        ajout(PV.coude,'Coude PVC '+PV.nom+' 90°', tuy.filter(s=>s.sol).length*2);
+        ajout(PV.sangle,'Sangle PVC '+PV.nom, tuy.filter(s=>!s.sol).reduce((n,s)=>n+Math.ceil(s.m)+1,0));
         ajout('RVOC475','Colle à solvant pour PVC', 1);
-        ajout('CI2708','Bague isolante 1 po', 2*tRuns);
+        ajout(PV.bague,'Bague isolante '+PV.nom, 2*tRuns);
       }
-      if(ext){ if(segs[0] && segs[0].tuyau) ajout('RSLB30S','LB PVC 1 po (sortie du mur)', 1); else ajout('CIDUCT-1','Composé scellant (passage du mur)', 1); }
+      if(ext){ if(segs[0] && segs[0].tuyau) ajout(PV.lb,'LB PVC '+PV.nom+' (sortie du mur)', 1); else ajout('CIDUCT-1','Composé scellant (passage du mur)', 1); }
       if(S) ajout('RUBAN-AVERT','Ruban d\'avertissement rouge (tranchée)', piDe(S), 'pi');
       if(perc) ajout('USC-72100','Tapcon 3/16 × 1-1/4 (boîte de 100)', 1);
       if(v.borne==='flox3') ajout('FLOX3','Borne FLO Maison X3, connecteur J1772',1);
@@ -8644,7 +8651,7 @@ const CALC_SOUMISSION = {
       // --- Heures (ordre de travail ; le prix, lui, est le forfait) ---
       const h = Math.round((3 + (ext?1:0) + S*0.3 + jb*0.5 + (perc?1:0) + (v.entretoit?1.5:0) + (v.dcc?1:0) + D*0.04)*2)/2;
       // --- Texte pour le client ---
-      const nomSeg = s => ({TECK:'câble TECK fixé au mur', TECK_SOL:'câble enterré', TUYAU:'tuyau PVC rigide au mur', TUYAU_SOL:'tuyau PVC rigide enterré'}[s.type]);
+      const nomSeg = s => ({TECK:'câble TECK fixé au mur', TECK_SOL:'câble enterré', TUYAU:'tuyau PVC rigide '+PV.nom+' au mur', TUYAU_SOL:'tuyau PVC rigide '+PV.nom+' enterré'}[s.type]);
       const txt = [];
       txt.push(v.borne==='client' ? 'Installation d\'une borne de recharge de niveau 2 (240 V) fournie par le client'+(v.modele?' ('+v.modele+')':'')+'.' : 'Fourniture et installation d\'une borne de recharge '+nomBorne+' (niveau 2, 240 V).');
       txt.push('Emplacement de la borne : '+((v.emplacement || (ext ? 'ext' : 'garage'))==='ext' ? 'à l\'extérieur' : 'dans le garage')+(v.note?', '+v.note:'')+'.');
