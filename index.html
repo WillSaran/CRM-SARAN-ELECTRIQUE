@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v393';
+const APP_VERSION = 'v394';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8305,6 +8305,10 @@ function useDocumentsCrm(cfg){
 function docVide(){ return {prixFiges:true, numero:'', type:'Soumission', typeProjet:'', origine:'', dossier:'', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
 
 // Calcul des montants d'un document (prix : ceux de la ligne, sinon mes prix / dernier facturé)
+// v394 : la borne (fournie par Saran) — montrée à part dans la soumission (prix de la borne / prix des travaux)
+const DOC_BORNE_RE = /^(FLOX3|BORNE|LEV-EV|EVC40)/i;
+function docBorne(d, calc){ const L = (d.lignes||[]).filter(l=>DOC_BORNE_RE.test(String(l.code||'')) && cvNum(l.qte));
+  return {lignes:L, prix:Math.round(L.reduce((t,l)=>t+calc.px(l.code,l)*(cvNum(l.qte)||0),0)*100)/100, nom:L.map(l=>l.desc||l.code).join(', ')}; }
 function docCalcul(d, prixDe){
   const h1 = d.jours.reduce((t,j)=>t+(cvNum(j.sa01)||0),0), h2 = d.jours.reduce((t,j)=>t+(cvNum(j.sa02)||0),0);
   const px = (code, l) => l && l.prix!=='' && l.prix!=null ? (cvNum(l.prix)||0) : (prixDe(code, l && l.unite)||0);
@@ -8363,6 +8367,10 @@ function docHtml(d, calc, plan, imprimer){
   const sommaire = !prix ? '' : forfait ?
     '<tr class="som"><td></td><td class="b">'+libTotal+'</td><td class="n b">'+m(calc.st)+'</td></tr>' :
     '<tr class="som"><td colspan="2"><i>Main-d\'oeuvre</i>&nbsp; '+m(calc.mo)+' &nbsp;&nbsp;&nbsp;&nbsp; <i>Matériel et autres</i>&nbsp; '+m(calc.mat+calc.depl+calc.quin)+'</td><td colspan="2" class="n">'+libTotal+'</td><td class="n">'+m(calc.st)+'</td></tr>';
+  const B = (prix && d.type==='Soumission') ? docBorne(d, calc) : {prix:0};
+  const sections = B.prix>0 && B.prix<calc.st ? (forfait
+      ? '<tr class="som"><td></td><td>Borne de recharge — '+esc(B.nom)+'</td><td class="n">'+m(B.prix)+'</td></tr><tr><td></td><td>Travaux électriques : câblage, matériel, installation, main-d\'œuvre et déplacement</td><td class="n">'+m(calc.st-B.prix)+'</td></tr><tr class="som"><td></td><td class="b">'+libTotal+'</td><td class="n b">'+m(calc.st)+'</td></tr>'
+      : '<tr class="som"><td colspan="4">Borne de recharge — '+esc(B.nom)+'</td><td class="n">'+m(B.prix)+'</td></tr><tr><td colspan="4">Travaux électriques : câblage, matériel, installation, main-d\'œuvre et déplacement</td><td class="n">'+m(calc.st-B.prix)+'</td></tr><tr class="som"><td colspan="4" class="b n">'+libTotal+'</td><td class="n b">'+m(calc.st)+'</td></tr>') : '';   // v394
   const taxes = (prix && d.type==='Facture') ? '<table class="tx"><tr><td>TPS (5 %)</td><td class="n">'+m(calc.tps)+'</td></tr><tr><td>TVQ (9,975 %)</td><td class="n">'+m(calc.tvq)+'</td></tr><tr class="b"><td>Total</td><td class="n">'+m(calc.total)+'</td></tr></table>' : '';
   const adr = String(d.adresse||'').split(/\s*,\s*/).filter(Boolean);
   const logo = PLAN_IMG[LOGO_ID] ? '<img src="'+PLAN_IMG[LOGO_ID]+'" style="height:78px;max-width:170px;object-fit:contain"/>' : '<div style="font:bold 30px Arial;color:#222;letter-spacing:2px">SARAN</div>';
@@ -8399,7 +8407,7 @@ function docHtml(d, calc, plan, imprimer){
       info('No de permis','')+info('No de facture', d.type==='Facture'?d.numero:'')+info('No de projet','')+info('No de contrat','')+'</table></div>'+
     '<div class="trav"><b>Travaux :</b> <span>'+esc(d.travaux||d.titre||'').replace(/\n/g,'<br>')+'</span></div>'+
     '<table class="l"><tr><th>Produit</th><th>Description</th><th class="n">Quantité</th>'+(prix && !forfait?'<th class="n">Prix</th><th class="n">Total</th>':'')+'</tr>'+
-      mat+autres+sommaire+'</table>'+taxes+
+      mat+autres+(sections || sommaire)+'</table>'+taxes+
     (d.remarques?'<div class="rq"><b>Remarques :</b><br>'+esc(d.remarques).replace(/\n/g,'<br>')+'</div>':'')+
     '<div style="break-inside:avoid"><div class="cl">'+clauses+'</div>'+signature+'</div>'+
     planHtml(d, plan||[], esc)+
@@ -9017,14 +9025,15 @@ function CalculRapide({C, d, setD, toast, onRempli}){
   const matH = lignesPx.reduce((a,l)=>a+(pxL(l)||0)*(cvNum(l.qte)||0),0);
   const moH = H*(C.prixDe('SA01')||0) + (gars===2 ? H*(C.prixDe('SA02')||0) : 0);
   const dqH = (C.prixDe('DEPL')||0) + (C.prixDe('QUIN')||0);
-  const baseH = matH+moH+dqH, bufH = baseH*((cvNum(buffer)||0)/100), totalH = arr5(baseH+bufH);
+  const borneH = lignesPx.filter(l=>DOC_BORNE_RE.test(String(l.code||''))).reduce((a,l)=>a+(pxL(l)||0)*(cvNum(l.qte)||0),0);   // v394 : pas de buffer sur la borne
+  const baseH = matH+moH+dqH, bufH = (baseH-borneH)*((cvNum(buffer)||0)/100), totalH = arr5(baseH+bufH);
   const remplir = () => {
     if(d.lignes.some(l=>cvNum(l.qte)) && !confirm('Remplacer le matériel, les heures et le prix par le calcul ?')) return;
     const enHeures = mode==='heures';
     const forfait = enHeures ? (totalH>0 ? String(totalH) : '') : (r.forfait!=='' ? String(r.forfait) : null);
-    const remarques = enHeures ? r.remarques.split('\n').filter(x=>!/^Détail :/.test(x)).join('\n') : r.remarques;
+    const remarques = r.remarques.split('\n').filter(x=>!/^Détail :/.test(x)).join('\n');   // v394 : la borne et les travaux sont séparés dans le PDF
     const resume = enHeures ? '— Calcul du '+cvFmtDay(cvDay(new Date().toISOString()))+' : matériel '+cvMoney(matH)+' + main-d\'œuvre '+cvMoney(moH)+' ('+H+' h × '+gars+' gars) + dépl./quinc. '+cvMoney(dqH)+' = '+cvMoney(baseH)+' ; buffer '+(cvNum(buffer)||0)+' % = '+cvMoney(bufH)+' ; total '+cvMoney(totalH)+' avant taxes —' : '';
-    setD(o=>({...o, ...(resume ? {visite:[String(o.visite||'').split('\n').filter(x=>!/^— Calcul du /.test(x)).join('\n').trim(), resume].filter(Boolean).join('\n\n')} : {}), typeProjet:def.typeProjet, titre: o.titre || r.titre, travaux:r.travaux, remarques, forfait: forfait!=null ? forfait : o.forfait,
+    setD(o=>({...o, buffer:String(buffer), ...(resume ? {visite:[String(o.visite||'').split('\n').filter(x=>!/^— Calcul du /.test(x)).join('\n').trim(), resume].filter(Boolean).join('\n\n')} : {}), typeProjet:def.typeProjet, titre: o.titre || r.titre, travaux:r.travaux, remarques, forfait: forfait!=null ? forfait : o.forfait,
       lignes: enHeures ? lignesPx : r.lignes.filter(l=>!l.outil), depl:true, quin:true, jours:[{...(o.jours[0]||{}), date:(o.jours[0]&&o.jours[0].date)||cvDay(new Date().toISOString()),
         sa01:String(enHeures ? H : r.heures), sa02: enHeures && gars===2 ? String(H) : ''}, ...o.jours.slice(1)]}));
     toast && toast('Soumission remplie — ajoute tes photos (📐 Plan) et vérifie l\'aperçu');
@@ -9053,7 +9062,7 @@ function CalculRapide({C, d, setD, toast, onRempli}){
           <span>Main-d'œuvre <span className="muted">({H} h × {gars} gars)</span></span><b style={{textAlign:'right'}}>{cvMoney(moH)}</b>
           <span>Déplacement et quincaillerie</span><b style={{textAlign:'right'}}>{cvMoney(dqH)}</b>
           <span style={{borderTop:'1px solid var(--border2)',paddingTop:2}}>Sous-total</span><b style={{textAlign:'right',borderTop:'1px solid var(--border2)',paddingTop:2}}>{cvMoney(baseH)}</b>
-          <span>Buffer {cvNum(buffer)||0} %</span><b style={{textAlign:'right'}}>{cvMoney(bufH)}</b>
+          <span>Buffer {cvNum(buffer)||0} %{borneH>0 ? <span className="muted" style={{fontSize:12}}> (pas sur la borne)</span> : null}</span><b style={{textAlign:'right'}}>{cvMoney(bufH)}</b>
           <span style={{fontSize:15}}>Prix de la soumission <span className="muted" style={{fontSize:12}}>avant taxes</span></span><b style={{textAlign:'right',fontSize:15}}>{cvMoney(totalH)}</b>
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
@@ -9718,6 +9727,32 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
         {!C.lu && <div className="muted" style={{padding:10}}>Chargement…</div>}
       </div>
     </div>
+
+    {prix && d.type==='Soumission' && (()=>{   // v394 : prix « heures + matériel » en direct, sous le matériel (ajoute des articles → le buffer et le prix suivent)
+      const lsB = (()=>{ try{ return localStorage.getItem('calc_buffer'); }catch(e){ return null; } })();
+      const bufP = d.buffer!=null && d.buffer!=='' ? d.buffer : (lsB || '10');
+      const base = calc.mat+calc.mo+calc.depl+calc.quin, B = docBorne(d, calc), buf = (base-B.prix)*((cvNum(bufP)||0)/100), sug = arr5(base+buf);
+      const fo = cvNum(d.forfait), aForfait = d.forfait!=='' && d.forfait!=null && fo!=null;
+      if(!base) return null;
+      return <div className="card" style={{marginBottom:10}}>
+        <div style={{fontWeight:700,marginBottom:6}}>Prix — heures + matériel <span className="muted" style={{fontWeight:400,fontSize:12}}>· se recalcule quand tu changes le matériel ou les heures (pas imprimé)</span></div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:'2px 16px',maxWidth:440,fontSize:13.5}}>
+          <span>Matériel ({choisies.length} article{choisies.length>1?'s':''})</span><b style={{textAlign:'right'}}>{cvMoney(calc.mat)}</b>
+          <span>Main-d'œuvre <span className="muted">({calc.h1} h SA01{calc.h2 ? ' + '+calc.h2+' h SA02' : ''})</span></span><b style={{textAlign:'right'}}>{cvMoney(calc.mo)}</b>
+          <span>Déplacement et quincaillerie</span><b style={{textAlign:'right'}}>{cvMoney(calc.depl+calc.quin)}</b>
+          <span style={{borderTop:'1px solid var(--border2)',paddingTop:2}}>Sous-total</span><b style={{textAlign:'right',borderTop:'1px solid var(--border2)',paddingTop:2}}>{cvMoney(base)}</b>
+          <span style={{display:'flex',gap:6,alignItems:'center'}}>Buffer <input value={bufP} onChange={e=>maj({buffer:e.target.value})} inputMode="decimal" style={{width:50}}/> %{B.prix>0 ? <span className="muted" style={{fontSize:12}}>(pas sur la borne)</span> : null}</span><b style={{textAlign:'right'}}>{cvMoney(buf)}</b>
+          <span style={{fontSize:15}}>Prix suggéré <span className="muted" style={{fontSize:12}}>avant taxes, arrondi à 5 $</span></span><b style={{textAlign:'right',fontSize:15}}>{cvMoney(sug)}</b>
+          {B.prix>0 && <><span className="muted" style={{paddingLeft:10}}>dont la borne ({B.nom})</span><span className="muted" style={{textAlign:'right'}}>{cvMoney(B.prix)}</span>
+            <span className="muted" style={{paddingLeft:10}}>dont les travaux électriques</span><span className="muted" style={{textAlign:'right'}}>{cvMoney(sug-B.prix)}</span></>}
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:8,fontSize:13}}>
+          {aForfait ? (Math.abs(fo-sug)<0.5 ? <span style={{color:'var(--success)'}}>✓ Le prix forfaitaire ({cvMoney(fo)}) est égal au prix suggéré.</span>
+            : <span style={{color:'var(--warning)'}}>Prix forfaitaire actuel : <b>{cvMoney(fo)}</b> ({fo>sug?'+':''}{cvMoney(fo-sug)} vs suggéré)</span>)
+            : <span className="muted">Pas de prix forfaitaire : la soumission montre le détail ligne par ligne.</span>}
+          {!(aForfait && Math.abs(fo-sug)<0.5) && <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={()=>maj({forfait:String(sug)})}>Prendre {cvMoney(sug)} comme prix forfaitaire</button>}
+        </div>
+      </div>; })()}
 
     <div className="card" style={{marginBottom:10}}>
       <textarea value={d.remarques} onChange={e=>maj({remarques:e.target.value})} rows={2} placeholder="Remarques…" style={{width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
