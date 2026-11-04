@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v395';
+const APP_VERSION = 'v396';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6777,6 +6777,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const S = useSoumissions(cfg, refreshKey);
   const [onglet,setOnglet]=useState(()=>navFocus('soumissions') ? 'envoyees' : 'afaire');   // v202 : soumissions d'un client (bouton de sa fiche)
   const [voirFinies,setVoirFinies]=useState(false);
+  const [voirFermees,setVoirFermees]=useState(false);   // v396
   const [filtre,setFiltre]=useState(()=>navFocus('soumissions') ? 'tout' : '');
   const [q,setQ]=useState(()=>(navFocus('soumissions')||{}).q || '');
   const [nouveau,setNouveau]=useState(null);
@@ -6951,17 +6952,20 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     {(onglet==='miennes' || (onglet==='envoyees' && q)) && (()=>{   // v395 : toutes les soumissions faites dans le CRM, par numéro (E-0001, E-0002…)
       const envNo = new Set(envoyees.map(s=>docCrmDe(s)).filter(Boolean).map(x=>x.numero));
       const numN = x => +(String(x.numero||'').replace(/\D/g,''))||0;
-      const L = DC.docs.filter(x=>x.type==='Soumission').filter(x=>cherche([x.numero, x.client, x.courriel, x.titre, (()=>{ try{ return JSON.parse(x.donnees||'{}').adresse||''; }catch(e){ return ''; } })()].join(' ')))
+      const nbF = DC.docs.filter(x=>x.type==='Soumission' && x.ferme).length;
+      const L = DC.docs.filter(x=>x.type==='Soumission' && (voirFermees || !x.ferme)).filter(x=>cherche([x.numero, x.client, x.courriel, x.titre, (()=>{ try{ return JSON.parse(x.donnees||'{}').adresse||''; }catch(e){ return ''; } })()].join(' ')))
         .filter(x=>onglet==='miennes' || !envNo.has(x.numero)).sort((a,b)=>numN(b)-numN(a));
       if(onglet==='envoyees' && !L.length) return null;
       return <div className="card" style={{marginBottom:10}}>
-        <div style={{fontWeight:700,marginBottom:6}}>{onglet==='miennes' ? 'Mes soumissions faites dans le CRM' : 'Préparées dans le CRM (pas encore dans « Envoyées »)'} <span className="muted" style={{fontWeight:400}}>· {L.length}</span></div>
+        <div style={{fontWeight:700,marginBottom:6,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><span>{onglet==='miennes' ? 'Mes soumissions faites dans le CRM' : 'Préparées dans le CRM (pas encore dans « Envoyées »)'} <span className="muted" style={{fontWeight:400}}>· {L.length}</span></span>
+          {nbF>0 && <label className="muted" style={{fontSize:12,fontWeight:400,display:'flex',gap:4,alignItems:'center',marginLeft:'auto'}}><input type="checkbox" checked={voirFermees} onChange={e=>setVoirFermees(e.target.checked)}/> Voir les fermées ({nbF})</label>}</div>
         {!L.length && <div className="muted" style={{fontSize:13}}>Aucune.</div>}
         {L.map(x=>{ const env = envNo.has(x.numero); return <div key={x.row} style={{display:'grid',gridTemplateColumns:'70px 70px 1fr auto',gap:8,alignItems:'baseline',padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
           <b>{x.numero}</b><span className="muted">{x.date ? cvFmtDay(String(x.date).slice(0,10)) : ''}</span>
           <span style={{minWidth:0}}><b>{x.client||'—'}</b>{x.titre ? <span className="muted"> · {x.titre}</span> : ''}{x.st!=null ? <> · <b>{cvMoney(x.st)}</b></> : ''}</span>
-          <span style={{display:'flex',gap:6,alignItems:'center'}}><span className="badge" style={{background:env?'rgba(63,185,80,0.15)':'var(--bg3)',color:env?'var(--success)':'var(--muted)'}}>{env ? 'Envoyée' : 'Brouillon'}</span>
-            <button className="btn btn-sm" onClick={()=>rouvrir(x)}>Ouvrir</button></span></div>; })}
+          <span style={{display:'flex',gap:6,alignItems:'center'}}><span className="badge" style={{background:x.ferme?'var(--bg3)':env?'rgba(63,185,80,0.15)':'var(--bg3)',color:x.ferme?'var(--muted)':env?'var(--success)':'var(--muted)'}}>{x.ferme ? 'Fermée' : env ? 'Envoyée' : 'Brouillon'}</span>
+            <button className="btn btn-sm" onClick={()=>rouvrir(x)}>Ouvrir</button>
+            <button className="btn btn-sm" title={x.ferme ? 'La remettre dans la liste' : 'Je n\'en ai plus besoin : elle disparaît des listes (rien n\'est effacé)'} onClick={()=>DC.fermer(x, !x.ferme)}>{x.ferme ? 'Rouvrir' : 'Fermer'}</button></span></div>; })}
       </div>; })()}
     {onglet==='afaire' && <div className="card">
       <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:4}}>
@@ -8310,12 +8314,18 @@ function useDocumentsCrm(cfg){
   const [docs,setDocs]=useState([]);
   const id = cfg.memoireJobsSpreadsheetId;
   const lire = useCallback(async(force)=>{
-    try{ const r = await lireCache(id, "'Documents CRM'!A1:K", force);
-      setDocs((r.result.values||[]).slice(1).map((x,i)=>({row:i+2, numero:x[0], type:x[1], date:x[2], client:x[3], courriel:x[4], titre:x[5], st:cvNum(x[6]), total:cvNum(x[9]), donnees:x[10]})).filter(d=>d.numero).reverse()); }
+    try{ const r = await lireCache(id, "'Documents CRM'!A1:L", force);
+      setDocs((r.result.values||[]).slice(1).map((x,i)=>({row:i+2, numero:x[0], type:x[1], date:x[2], client:x[3], courriel:x[4], titre:x[5], st:cvNum(x[6]), total:cvNum(x[9]), donnees:x[10], ferme:/^ferm/i.test(String(x[11]||'').trim())})).filter(d=>d.numero).reverse()); }
     catch(e){ setDocs([]); }
   },[id]);
   useEffect(()=>{ lire(); },[lire]);
-  return {docs, lire};
+  // v396 : fermer / rouvrir un document (colonne L « Statut » = « Fermée <date> ») — il disparaît des listes, rien n'est effacé
+  const fermer = async (doc, oui) => { suivreEcritures();
+    setDocs(l=>l.map(x=>x.row===doc.row ? {...x, ferme:oui} : x));
+    try{ await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:"'Documents CRM'!L1:L1", valueInputOption:'RAW', resource:{values:[['Statut']]}});
+      await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:"'Documents CRM'!L"+doc.row, valueInputOption:'RAW', resource:{values:[[oui ? 'Fermée '+new Date().toLocaleDateString('fr-CA') : '']]}}); }
+    catch(e){ setDocs(l=>l.map(x=>x.row===doc.row ? {...x, ferme:!oui} : x)); alert('Impossible : '+apiErrMsg(e)); } };
+  return {docs, lire, fermer};
 }
 
 function docVide(){ return {prixFiges:true, numero:'', type:'Soumission', typeProjet:'', origine:'', dossier:'', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
