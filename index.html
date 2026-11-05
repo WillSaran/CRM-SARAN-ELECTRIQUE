@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v404';
+const APP_VERSION = 'v405';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6286,6 +6286,11 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees}
     </div>}
 
     {sous==='deposer' && <div className="card">
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:8}}>
+        <button className="btn btn-sm btn-p" onClick={async()=>{ try{ if(!peutLireCourriels()) await requestToken('consent', SCOPE_GMAIL_LIRE); const r = await factEnvoisAuto(cfg, true);
+            alert(r.n ? r.n+' facture(s) trouvée(s) dans tes courriels envoyés : '+r.nums.map(n=>'#'+n).join(', ')+'. Elles passent en « en attente de paiement ».' : 'Aucune de ces factures n\'a été envoyée par courriel.'); setTick(t=>t+1); }
+          catch(e){ alert('Impossible : '+apiErrMsg(e)); } }}>🔎 Vérifier dans mes courriels envoyés</button>
+        <span className="muted" style={{fontSize:12}}>Le CRM le fait aussi tout seul à chaque connexion.</span></div>
       <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Factures venues de l'import du logiciel comptable, sans PDF ni courriel d'envoi : elles ne comptent pas (ni à recevoir, ni dans les totaux) tant qu'on n'a pas la preuve. Dépose leur PDF dans La mémoire › « Factures PDF » ; une facture envoyée par courriel ou nommée dans un paiement confirmé compte aussi.</div>
       {aDeposer.map(f=><div key={f.num} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'4px 0',borderBottom:'1px dashed var(--border)'}}>
         <span>📄 {f.pdf ? <a href={repPdf(f.pdf)} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} title="Ouvrir le PDF de la facture" style={{color:'inherit'}}><b>#{f.num}</b></a> : <b>#{f.num}</b>} <span className="muted">· {f.date}</span> · {f.nomAffiche}{f.nom && f.nom!==f.nomAffiche ? ' — '+f.nom : ''}{/^ouverte/i.test(f.statut||'') && <span style={{color:'var(--warning)'}}> · ouverte dans le logiciel (pas encore envoyée ?)</span>}</span>
@@ -14403,10 +14408,44 @@ function RepFicheFournisseur({f, K, toast, onAller}){
 }
 
 // ── App root ──────────────────────────────────────────────────────────────
+// v405 : factures envoyées par courriel mais restées « ouvertes » / « à déposer » dans le registre (La mémoire ne met pas à jour
+// une facture qu'elle connaît déjà) → le CRM cherche « Facture #N » dans tes courriels envoyés et inscrit la date d'envoi. Automatique, une fois par session.
+let FAC_ENVOIS_FAIT = 0;
+async function factEnvoisAuto(cfg, force){
+  const id = cfg && cfg.memoireFacturesSpreadsheetId; if(!id || !peutLireCourriels()) return {n:0, perm:false};
+  if(!force && Date.now()-FAC_ENVOIS_FAIT < 30*60000) return {n:0, perm:true};
+  FAC_ENVOIS_FAIT = Date.now();
+  const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'A1:N'});
+  const v = r.result.values||[], h = (v[0]||[]).map(x=>cvNorm(x)), col = re => h.findIndex(x=>re.test(x));
+  const iN = Math.max(0, col(/^facture/)), iD = col(/^date/), iE = col(/^envoyee/), iS = col(/^statut/);
+  if(iE<0) return {n:0, perm:true};
+  const cand = {}; v.slice(1).forEach((x,k)=>{ const n = String(x[iN]||'').replace(/\D/g,''); if(!n) return;
+    if(String(x[iE]||'').trim()) return; if(iS>=0 && /^annul/i.test(String(x[iS]||''))) return;
+    if(iD>=0 && String(x[iD]||'').slice(0,10) < '2026-06-01') return;
+    cand[n] = k+2; });
+  const nums = Object.keys(cand); if(!nums.length) return {n:0, perm:true};
+  const trouve = {};
+  for(let i=0;i<nums.length;i+=15){ const l = nums.slice(i,i+15);
+    const q = 'in:sent subject:Facture ('+l.map(n=>'"#'+n+'"').join(' OR ')+')';
+    const res = await window.gapi.client.request({path:'https://gmail.googleapis.com/gmail/v1/users/me/messages', params:{q, maxResults:100}});
+    for(const m of (res.result.messages||[])){
+      const g = await window.gapi.client.request({path:'https://gmail.googleapis.com/gmail/v1/users/me/messages/'+m.id, params:{format:'metadata', metadataHeaders:['Subject','To']}});
+      const hd = (g.result.payload && g.result.payload.headers)||[], suj = (hd.find(x=>/^subject$/i.test(x.name))||{}).value||'', to = (hd.find(x=>/^to$/i.test(x.name))||{}).value||'';
+      if(/info@saranelectrique\.com/i.test(to) && !/,/.test(to)) continue;   // un courriel à soi-même n'est pas un envoi au client
+      const mm = suj.match(/Facture\s*#\s*(\d{3,6})/i); if(!mm || !cand[mm[1]]) continue;
+      const d = new Date(Number(g.result.internalDate)), jour = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+      if(!trouve[mm[1]] || jour < trouve[mm[1]]) trouve[mm[1]] = jour; } }
+  const L = Object.entries(trouve); if(!L.length) return {n:0, perm:true};
+  const lettre = String.fromCharCode(65+iE); suivreEcritures();
+  await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:L.map(([n,j])=>({range:lettre+cand[n], values:[[j]]}))}});
+  return {n:L.length, nums:L.map(x=>x[0]), perm:true};
+}
 function App(){
   const [cfg,setCfg]=useState(loadCfg);
   const [ready,setReady]=useState(false);
   const [authed,setAuthed]=useState(false);
+  // v405 : une fois connecté, les factures envoyées par courriel sont inscrites « envoyées » dans le registre (sans rien demander)
+  useEffect(()=>{ if(!authed) return; const t = setTimeout(()=>{ factEnvoisAuto(cfg).then(r=>{ if(r && r.n) show(r.n+' facture'+(r.n>1?'s':'')+' trouvée'+(r.n>1?'s':'')+' dans tes courriels envoyés : '+r.nums.map(n=>'#'+n).join(', ')+' — marquée'+(r.n>1?'s':'')+' envoyée'+(r.n>1?'s':'')); }).catch(()=>{}); }, 8000); return ()=>clearTimeout(t); },[authed]);
   const [nav,setNav]=useState('dashboard');
   const [navKey,setNavKey]=useState(0);   // recliquer sur l'onglet du menu = revenir à son accueil (ex. tous les clients)
   const [initErr,setInitErr]=useState('');
