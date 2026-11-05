@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v407';
+const APP_VERSION = 'v408';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2012,7 +2012,14 @@ const CV_DEST_REF = {'Entrepôt':'ENT'};   // référence écrite sur la command
 function cvMateriel(job, achats){
   const part = job && job.client==='PART';   // v380-383 : « Nom — adresse » (adresse du projet + un mot du nom en commun)
   const l = (achats||[]).filter(a=>a.job && !CV_DESTS.includes(a.job) && ((job.po && a.job.includes(job.po)) || cvNorm(a.job).endsWith(cvNorm(job.name)) || (part && achatSurProjet(a.job, job, [achatNomClient(job), cvNomClientJob(job), job.name]))));
-  return {liste:l, total:l.reduce((t,a)=>t+a.st,0)};
+  // v408 : facture de fournisseur + son crédit (même fournisseur, même montant en négatif) = annulées → on ne les montre pas
+  const pris = new Set();
+  l.filter(a=>a.st < -0.005).sort((x,y)=>String(x.date||x.recue).localeCompare(String(y.date||y.recue))).forEach(c=>{
+    const f = l.filter(a=>!pris.has(a) && a!==c && a.fournisseur===c.fournisseur && a.st>0 && Math.abs(a.st + c.st)<0.02 && String(a.date||a.recue)<=String(c.date||c.recue))
+      .sort((x,y)=>String(y.date||y.recue).localeCompare(String(x.date||x.recue)))[0];
+    if(f){ pris.add(f); pris.add(c); } });
+  const lv = l.filter(a=>!pris.has(a));
+  return {liste:lv, total:lv.reduce((t,a)=>t+a.st,0), annulees:pris.size/2};
 }
 function CvArticles({a}){
   if(!a.articles) return <div className="muted" style={{fontSize:12}}>Articles pas encore lus pour cette facture.</div>;
