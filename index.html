@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v398';
+const APP_VERSION = 'v399';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5191,7 +5191,7 @@ function suiviApresSaisie(r, v){
   const statutFacture = fac ? (/^(\*\*|-)/.test(fac) ? 'annule' : 'complet') : as && !/^\*\*/.test(as) ? 'en_traitement' : 'manquant';
   return {...r, appelService:as, ordreTravail:ot, facture:fac, statutFacture, factureManquante:(statutFacture==='manquant' || statutFacture==='en_traitement') && r.estPasseOuAujourdhui};
 }
-function SuiviSaisie({id, rows, onDone}){
+function SuiviSaisie({id, rows, onDone, lien}){   // v399 : lien(t, n) → lien du papier AP / OT, pour le voir avant d'inscrire
   const [ouvert,setOuvert]=useState(false);
   const [v,setV]=useState({as:'', ot:'', fac:''});
   const [busy,setBusy]=useState(false);
@@ -5213,7 +5213,10 @@ function SuiviSaisie({id, rows, onDone}){
   if(!ouvert) return <span onClick={stop} style={{display:'inline-flex', gap:6, alignItems:'center'}}>
     {msg && <span style={{fontSize:11.5, color:/^Impossible/.test(msg) ? 'var(--danger)' : 'var(--success)'}}>{msg}</span>}
     <button className="btn btn-sm" style={{fontSize:11.5, padding:'2px 8px'}} onClick={()=>setOuvert(true)} title={rows.length>1 ? 'Inscrit sur les '+rows.length+' passages combinés' : ''}>{aAppel ? '+ No de facture' : '+ Appel / facture'}</button></span>;
+  const papiers = lien ? [...new Set([...rows.flatMap(r=>String(r.appelService||'').split(/[\s,;/]+/).map(n=>'AP '+n)), ...rows.flatMap(r=>String(r.ordreTravail||'').split(/[\s,;/]+/).map(n=>'OT '+n)),
+      ...String(v.as).split(/[\s,;/]+/).map(n=>'AP '+n), ...String(v.ot).split(/[\s,;/]+/).map(n=>'OT '+n)])].map(x=>{ const [t, n] = x.split(' '); return /^\d{3,}$/.test(n||'') && lien(t, n) ? {x, u:lien(t, n)} : null; }).filter(Boolean) : [];
   return <span onClick={stop} style={{display:'inline-flex', gap:5, flexWrap:'wrap', alignItems:'center', margin:'3px 0'}}>
+    {papiers.map(p=><a key={p.x} className="btn btn-sm" href={p.u} target="_blank" rel="noopener" style={{fontSize:11.5, padding:'2px 8px', textDecoration:'none'}} title="Voir le papier avant d'inscrire">📄 {p.x} ↗</a>)}
     {!aAppel && champ('as', 'No d\'appel')}{!aAppel && champ('ot', 'OT', 70)}{champ('fac', 'No de facture')}
     <button className="btn btn-sm btn-p" style={{fontSize:11.5, padding:'2px 8px'}} disabled={busy || (!v.as.trim() && !v.ot.trim() && !v.fac.trim())} onClick={ok}>{busy ? '…' : 'Inscrire'}</button>
     <button className="btn btn-sm" style={{fontSize:11.5, padding:'2px 8px'}} disabled={busy} onClick={()=>setOuvert(false)}>Annuler</button>
@@ -6376,8 +6379,11 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
   const [padErr,setPadErr]=useState('');
   // Registre des appels (La mémoire) : papiers déjà traités par La mémoire mais pas encore inscrits au Suivi (ex. AP 1744 Curpas).
   const [registre,setRegistre]=useState([]);
+  const [liensDoc,setLiensDoc]=useState({});   // v399 : 'AP1744' / 'OT591' → lien du papier (registre des appels + papiers au PAD)
   useEffect(()=>{ if(!cfg.memoireAppelsSpreadsheetId) return; let ok=true;
-    lireCache(cfg.memoireAppelsSpreadsheetId, 'A1:J', refreshKey>0 || tick>0).then(r=>{ if(ok) setRegistre((r.result.values||[]).slice(1).map(x=>({ap:(x[0]||'').trim(), facture:(x[1]||'').trim(), ot:(x[2]||'').trim(), po:(x[3]||'').trim(), client:x[4]||'', id:x[6]||''})).filter(x=>(x.ap||x.ot) && !x.facture)); }).catch(()=>{});
+    lireCache(cfg.memoireAppelsSpreadsheetId, 'A1:J', refreshKey>0 || tick>0).then(r=>{ if(!ok) return; const tous = (r.result.values||[]).slice(1).map(x=>({ap:(x[0]||'').trim(), facture:(x[1]||'').trim(), ot:(x[2]||'').trim(), po:(x[3]||'').trim(), client:x[4]||'', id:x[6]||''}));
+      setRegistre(tous.filter(x=>(x.ap||x.ot) && !x.facture));
+      const m = {}; tous.forEach(x=>{ if(!x.id) return; const l = 'https://drive.google.com/file/d/'+x.id+'/view'; if(x.ap && !m['AP'+x.ap]) m['AP'+x.ap] = l; if(x.ot && !m['OT'+x.ot]) m['OT'+x.ot] = l; }); setLiensDoc(m); }).catch(()=>{});   // v399 : lien vers le papier de chaque AP / OT
     return ()=>{ ok=false; }; },[cfg.memoireAppelsSpreadsheetId, refreshKey, tick]);
   useEffect(()=>{ let ok=true; lirePad(refreshKey>0).then(g=>{ if(ok){ setPapiers(g); setPadErr(''); } })
     .catch(e=>{ if(ok) setPadErr(e.message==='acces' ? 'acces' : apiErrMsg(e)); }); return ()=>{ ok=false; }; },[refreshKey, tick]);
@@ -6442,7 +6448,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
             <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
               <div style={{minWidth:0}}><b style={{color:'var(--accent)'}}>{nom(r.contracteur)} </b><b>{r.projet||r.adresse||'—'}</b>
                 {r.projet && r.adresse && <div className="muted" style={{fontSize:12}}>{r.adresse}</div>}
-                <div style={{fontSize:12.5,marginTop:2}}><Statut r={r}/>{r.ordreTravail ? <span className="muted"> · OT {r.ordreTravail}</span> : ''}</div>
+                <div style={{fontSize:12.5,marginTop:2}}><Statut r={r}/>{r.ordreTravail ? <span className="muted"> · OT <Nums t="OT" v={r.ordreTravail}/></span> : ''}</div>
               </div>
               <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
                 <div className="muted" style={{fontSize:12}}>{r.date}</div>
@@ -6451,7 +6457,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
             </div>
             <div style={{marginTop:5}}>
               {(()=>{ const p = r.statutFacture==='manquant' && padPourLigne(papiers, r); return p ? <span style={{fontSize:12,marginRight:8,color:'var(--accent)'}}>📄 Papier reçu{p.ap.length ? ' : AP '+p.ap.join(', ') : ''}{p.ot.length ? ' · OT '+p.ot.join(', ') : ''} — à inscrire</span> : null; })()}
-              {(r.statutFacture==='manquant' || r.statutFacture==='en_traitement') && r.estPasseOuAujourdhui && <SuiviSaisie id={id} rows={[r]} onDone={x=>{ setRows(rs=>rs.map(y=>y===r ? suiviApresSaisie(y, x) : y)); setTick(t=>t+1); }}/>}{' '}
+              {(r.statutFacture==='manquant' || r.statutFacture==='en_traitement') && r.estPasseOuAujourdhui && <SuiviSaisie id={id} rows={[r]} lien={lienPapier} onDone={x=>{ setRows(rs=>rs.map(y=>y===r ? suiviApresSaisie(y, x) : y)); setTick(t=>t+1); }}/>}{' '}
               {(r.statutFacture==='manquant' || r.statutFacture==='en_traitement') && r.estPasseOuAujourdhui &&
                 <button className="btn btn-sm" disabled={busy===k} title="Met « ** » dans les colonnes K et M du Sheet" onClick={()=>marquer(r, true)}>{busy===k?'…':'✕ Pas à facturer'}</button>}
               {r.statutFacture==='annule' && <button className="btn btn-sm" disabled={busy===k} onClick={()=>marquer(r, false)}>{busy===k?'…':'↩ Remettre à facturer'}</button>}
@@ -6472,7 +6478,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
           {g.length>1 && <div style={{fontSize:12,marginTop:2,color:'var(--accent)'}}>🔗 {g.length} passages combinés : {g.map(r=>r.date).join(' + ')}</div>}
           <div style={{fontSize:12.5,marginTop:2}}>
             {recus.length ? <span style={{color:'var(--warning)',fontWeight:700}}>📄 {aps.length?'AP '+aps.join(', '):''}{ots.length?(aps.length?' · ':'')+'OT '+ots.join(', '):''} reçu — pas encore inscrit au Suivi</span> : <Statut r={g.find(r=>r.statutFacture==='en_traitement')||r0}/>}
-            {r0.ordreTravail ? <span className="muted"> · OT {r0.ordreTravail}</span> : ''}
+            {r0.ordreTravail ? <span className="muted"> · OT <Nums t="OT" v={r0.ordreTravail}/></span> : ''}
           </div>
         </div>
         <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
@@ -6485,14 +6491,20 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
         {recus.filter(e=>e.id).map(e=><a key={e.id} className="btn btn-sm" href={'https://drive.google.com/file/d/'+e.id+'/view'} target="_blank" rel="noopener" style={{textDecoration:'none'}}>{e.ap?'AP '+e.ap:'OT '+e.ot} ↗</a>)}
         {pad && <><span style={{fontSize:12,color:'var(--accent)'}}>📄 Papier au PAD{pad.ap.length ? ' : AP '+pad.ap.join(', ') : ''}{pad.ot.length ? ' · OT '+pad.ot.join(', ') : ''}</span>
           {pad.ap.length>0 && <button className="btn btn-sm btn-p" disabled={busy===k} onClick={()=>inscrire(pad.ap.join(', '), pad.ot.join(', '))}>✍ Inscrire au Suivi{g.length>1?' ('+g.length+' passages)':''}</button>}</>}
-        <SuiviSaisie id={id} rows={g} onDone={x=>{ setRows(rs=>rs.map(y=>g.includes(y) ? suiviApresSaisie(y, g.length===1 ? x : {as:y.appelService ? '' : x.as, ot:y.ordreTravail ? '' : x.ot, fac:y.facture ? '' : x.fac}) : y)); setTick(t=>t+1); }}/>
+        <SuiviSaisie id={id} rows={g} lien={lienPapier} onDone={x=>{ setRows(rs=>rs.map(y=>g.includes(y) ? suiviApresSaisie(y, g.length===1 ? x : {as:y.appelService ? '' : x.as, ot:y.ordreTravail ? '' : x.ot, fac:y.facture ? '' : x.fac}) : y)); setTick(t=>t+1); }}/>
         <button className="btn btn-sm" disabled={busy===k} title="Met « ** » dans les colonnes K et M du Sheet" onClick={async()=>{ for(const r of g) await marquer(r, true); }}>{busy===k?'…':'✕ Pas à facturer'}</button>
       </div>
     </div>; };
   // Dossier d'un particulier : le titre sans la phase ni les initiales des gars (« SERV Jean Tremblay JG » → « Jean Tremblay »).
   const dossierDe = r => { const t = String(r.projet||r.adresse||'—').replace(/^\s*((PART|ROUGH|FINITION|FIN|SERV|SERVICE|AJUST|RAPUP|PREP)\b\s*)+/i,'').replace(/(\s+[A-ZÉÈ]{2,3})+\s*$/,'').trim(); return t || (r.projet||'—'); };
+  // v399 : un numéro d'AP / OT cliquable quand on a le papier (registre des appels, sinon le dossier PAD)
+  const lienPapier = (t, n) => { const k = t+String(n).trim(); if(liensDoc[k]) return liensDoc[k];
+    for(const p of papiers){ const f = (p.fichiers||[]).find(f=>new RegExp('^'+t+'[ _-]?0*'+String(n).trim()+'\\b','i').test(String(f.nom||''))); if(f) return f.lien; } return ''; };
+  const Nums = ({t, v}) => <>{String(v||'').split(/([\s,;/]+)/).map((x,i)=>/^\d{3,}$/.test(x) && lienPapier(t, x)
+    ? <a key={i} href={lienPapier(t, x)} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} title={'Voir le papier '+t+' '+x} style={{color:'inherit',textDecoration:'underline'}}>{x} ↗</a>
+    : <React.Fragment key={i}>{x}</React.Fragment>)}</>;
   const Statut = ({r}) => r.statutFacture==='complet' ? <span style={{color:'var(--success)',fontWeight:700}}>Facture <FacPdfLiens txt={r.facture} pdfs={pdfs}/></span>
-    : r.statutFacture==='en_traitement' ? <span style={{color:'var(--warning)',fontWeight:700}}>Appel {r.appelService} — facture à faire</span>
+    : r.statutFacture==='en_traitement' ? <span style={{color:'var(--warning)',fontWeight:700}}>Appel <Nums t="AP" v={r.appelService}/> — facture à faire</span>
     : r.statutFacture==='annule' ? <span className="muted" style={{fontWeight:700}}>{r.appelService==='-'||r.facture==='-' ? '- ' : '** '}Pas à facturer</span>
     : r.estPasseOuAujourdhui ? <span style={{color:'var(--danger)',fontWeight:700}}>Rien d'inscrit</span> : <span className="muted">À venir</span>;
   return <div>
