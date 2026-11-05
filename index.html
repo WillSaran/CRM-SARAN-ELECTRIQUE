@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v416';
+const APP_VERSION = 'v417';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -13305,7 +13305,7 @@ function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.se
 // v202 : Comptabilité — comptes fournisseurs, factures clients (et paiements reçus), appels de service, à vérifier. Les pages gardent toutes leurs fonctions.
 const CPT_NAV = {compta:'clients', drive:'archive', factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
 const CPT_ONGLETS = [['clients','Comptes clients'],['factures','Bons de vente'],['fourn','Comptes fournisseurs'],['grand','Grand livre']];   // v416 : Grand livre = Paiements, TPS/TVQ, Archive des factures
-const GL_ONGLETS = [['paiements','Paiements'],['taxes','TPS/TVQ'],['archive','Archive des factures']];   // v374 : TPS/TVQ   // v272   // v240
+const GL_ONGLETS = [['recevoir','Comptes à recevoir'],['paiements','Paiements'],['taxes','TPS/TVQ'],['archive','Archive des factures']];   // v417   // v374 : TPS/TVQ   // v272   // v240
 // v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
 // v380 : fiche du Répertoire › Factures (factures envoyées de ce client : en attente de paiement, puis payées)
 function FacturesClient({cfg, cfgRep, refreshKey, contacts}){
@@ -13744,11 +13744,126 @@ const ARC_CHAINE = /(?:remplac[ée]e? par|cr[ée]dit[ée]e? par|cr[ée]dit de|re
 function arcEtat(f, paye, auj){
   const st = String(f.statut||'').trim();
   if(/^annul/i.test(st)) return {k:'annulee', txt:st, c:'var(--muted)'};
+  if(f.creditee && !/^cr[ée]dit[ée]e par/i.test(st)) return {k:'creditee', txt:'Créditée par #'+f.creditee+' (même montant)', c:'var(--muted)'};
+  if(f.applique && f.ttc < -0.005 && !st) return {k:'credit', txt:'Crédit de #'+f.applique, c:'var(--accent)'};
   if(/^cr[ée]dit[ée]e par/i.test(st)) return {k:'creditee', txt:st.replace(/\s*\(\d{4}-\d{2}-\d{2}\)\s*$/,''), c:'var(--muted)'};
   if(f.ttc < -0.005 || /^cr[ée]dit de/i.test(st)) return {k:'credit', txt:st ? st.replace(/\s*\(\d{4}-\d{2}-\d{2}\)\s*$/,'') : 'Note de crédit', c:'var(--accent)'};
   if(paye || (f.payeLog>0 && f.payeLog >= f.ttc-0.05) || /^(ferm[ée]e|confirm[ée]e)/i.test(st)) return {k:'payee', txt:'Payée'+(paye ? ' le '+cvFmtDay(paye) : ''), c:'var(--success)'};
   if(f.envoi){ const j = Math.max(0, Math.floor((Date.parse(auj)-Date.parse(String(f.envoi).slice(0,10)))/864e5)); return {k:'attente', txt:'En attente · '+j+' j', c:j>45 ? 'var(--danger)' : 'var(--warning)'}; }
   return {k:'pasenv', txt:/^ouverte/i.test(st) ? 'Ouverte au logiciel · pas envoyée' : 'Pas envoyée', c:'var(--warning)'};
+}
+// v417 : lecture commune — Archive des factures, Factures à vérifier, Comptes à recevoir
+async function arcCharger(cfg, force){
+    const fid = cfg.memoireFacturesSpreadsheetId; if(!fid) throw new Error('Registre des factures introuvable (La mémoire).');
+    const [fr, pr, ar] = await Promise.all([lireCache(fid, 'A1:N', force).then(r=>r.result.values||[]),
+      lireCache(fid, qSheet('Paiements')+'!A1:L', force).then(r=>r.result.values||[], ()=>[]),
+      cfg.memoireAppelsSpreadsheetId ? lireCache(cfg.memoireAppelsSpreadsheetId, 'A1:J', force).then(r=>r.result.values||[], ()=>[]) : []]);
+    const h = (fr[0]||[]).map(x=>cvNorm(x)), col = re => h.findIndex(x=>re.test(x));
+    const X = {num:Math.max(0,col(/^facture/)), date:col(/^date/), cli:col(/^client/), po:col(/^po$/), nom:col(/^nom/), desc:col(/^description/), ttc:col(/^total/), env:col(/^envoyee/), pdf:col(/^pdf/), st:col(/^statut/), plog:col(/^payelogiciel/)};
+    const g = (r,k) => X[k]>=0 ? String(r[X[k]]==null?'':r[X[k]]).trim() : '';
+    const F = {}; fr.slice(1).forEach((r,i)=>{ const n = g(r,'num').replace(/\D/g,''); if(!n || n.length>5) return;
+      const f = {num:n, row:i+2, ttcBrut:g(r,'ttc'), verif:String(r[13]||'').trim(), date:g(r,'date').slice(0,10), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, envoi:g(r,'env').slice(0,10), pdf:g(r,'pdf'), statut:g(r,'st'), payeLog:Math.max(0, cvNum(g(r,'plog'))||0)};
+      if(!F[n] || (!F[n].pdf && f.pdf)) F[n] = f; });
+    const paye = {}; pr.slice(1).forEach(r=>{ if(!/^confirm/i.test(String(r[10]||''))) return; const dt = String(r[1]||'').slice(0,10);
+      paiNums(r[9]).forEach(n=>{ if(!paye[n] || dt > paye[n]) paye[n] = dt; }); });
+    const ap = {}; ar.slice(1).forEach(r=>{ const a = String(r[0]||'').trim(); if(!a) return;
+      (String(r[1]||'').match(/\d{4,5}/g)||[]).forEach(n=>(ap[n] = ap[n] || []).push({ap:a, ot:String(r[2]||'').trim(), id:String(r[6]||'').trim()})); });
+    const lies = {}; Object.values(F).forEach(f=>{ let m; ARC_CHAINE.lastIndex = 0; while((m = ARC_CHAINE.exec(f.statut))){ if(m[1]===f.num) continue;
+      (lies[f.num] = lies[f.num] || new Set()).add(m[1]); (lies[m[1]] = lies[m[1]] || new Set()).add(f.num); } });
+    return {F, paye, ap, lies, stCol:X.st>=0 ? X.st : 10};
+}
+// v417 : jumelage facture ↔ note de crédit (inscrit « Créditée par / Crédit de », sinon même client et même montant inverse)
+function arcJumeler(d){
+  const F = d.F, cleC = f => cvNorm(f.client || f.nom || ''), libre = f => !f.creditee && !f.applique;
+  Object.values(F).forEach(f=>{ const m = String(f.statut||'').match(/^cr[ée]dit[ée]e par #?(\d{3,5})/i); if(m && F[m[1]]){ f.creditee = m[1]; F[m[1]].applique = f.num; } });
+  Object.values(F).filter(f=>f.ttc < -0.005 && !/^annul/i.test(f.statut) && libre(f)).sort((a,b)=>+a.num - +b.num).forEach(nc=>{
+    const c = Object.values(F).filter(f=>libre(f) && f.ttc>0.005 && !/^annul/i.test(f.statut) && +f.num < +nc.num && cleC(f)===cleC(nc) && Math.abs(f.ttc + nc.ttc)<=0.02).sort((a,b)=>+b.num - +a.num)[0];
+    if(c){ c.creditee = nc.num; nc.applique = c.num; } });
+  return d; }
+// Factures pas claires : montant, date, client, PDF, doublon, crédit pas jumelé, jamais envoyée
+function arcPasClaires(d, debut, auj){
+  const L = [], F = d.F, cleC = f => cvNorm(f.client || f.nom || '');
+  const vals = Object.values(F).filter(f=>+f.num >= debut);
+  vals.forEach(f=>{ if(f.verif) return; const st = String(f.statut||''), annul = /^annul/i.test(st), R = [];
+    if(/\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}/.test(f.ttcBrut)) R.push('Montant illisible (on dirait une date : « '+f.ttcBrut.slice(0,20)+' »)');
+    else if(!annul && Math.abs(f.ttc) < 0.05) R.push('Montant à 0 ou 0,01 $');
+    else if(Math.abs(f.ttc) >= 100000) R.push('Montant très élevé ('+cvMoney(f.ttc)+')');
+    if(!f.date) R.push('Pas de date');
+    if(!f.client && !f.nom) R.push('Pas de client');
+    if(!annul){
+      if(f.envoi && !f.pdf) R.push('Envoyée, mais pas de PDF dans le registre');
+      if(f.ttc < -0.005 && !f.applique) R.push('Note de crédit pas jumelée à une facture');
+      if(f.ttc > 0.05 && !f.envoi && !f.creditee && !d.paye[f.num] && f.date && f.date < auj && (Date.parse(auj)-Date.parse(f.date))/864e5 > 14 && !/^(montant calcul|ouverte|ferm|confirm)/i.test(st)) R.push('Faite il y a plus de 14 jours, jamais envoyée');
+      const dbl = vals.find(g=>g!==f && !/^annul/i.test(g.statut||'') && g.ttc>0.05 && Math.abs(g.ttc-f.ttc)<0.01 && cleC(g)===cleC(f) && cleC(f)
+        && (cvNorm(g.desc)===cvNorm(f.desc) || !g.desc || !f.desc) && Math.abs(Date.parse(g.date||auj)-Date.parse(f.date||auj)) <= 30*864e5);
+      if(dbl && f.ttc>0.05) R.push('Doublon possible avec #'+dbl.num+' (même client, même montant)'); }
+    if(R.length) L.push({f, raisons:R}); });
+  return L.sort((a,b)=>+b.f.num - +a.f.num); }
+// Marquer « vérifiée » (colonne N du registre) : elle sort de la liste des factures pas claires
+async function arcMarquerVerifiee(cfg, f, auj){ suivreEcritures();
+  await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:cfg.memoireFacturesSpreadsheetId, resource:{valueInputOption:'RAW', data:[
+    {range:'N1', values:[['Vérifiée (archive)']]}, {range:'N'+f.row, values:[['Vérifiée le '+auj]]}]}}); }
+
+// v417 : nom du client d'une facture — le registre a souvent un courriel ou un code (CRS, ASC) : on met le nom de la fiche du Répertoire
+function useNomClient(cfg){
+  const dR = useClientsData(cfg, 'arc');
+  const FR = dR.fiches || {clients:[], jobs:[], fourn:[], masques:[], contacts:[]};
+  const clientsR = useMemo(()=>cvBuildClients(dR.events||[], dR.registry||[], dR.factures||{}),[dR.events, dR.registry, dR.factures]);
+  const R = useMemo(()=>repConstruire({clients:clientsR, registry:dR.registry||[], factures:dR.factures||{}, achats:dR.achats||[], soumissions:dR.soumissions||[], F:FR, contacts:[], gcmeq:dR.gcmeq||[]}),[clientsR, dR.registry, dR.factures, dR.achats, dR.soumissions, dR.fiches, dR.gcmeq]);
+  const parCourriel = useMemo(()=>{ const m = {};
+    (R.pers||[]).forEach(p=>(p.courriels||[]).forEach(e=>{ e = String(e).toLowerCase(); if(!m[e]) m[e] = p.nom; }));
+    (R.contr||[]).forEach(c=>(c.contacts||[]).forEach(k=>[...(k.courriels||[]), ...String(k.courriel||'').split(/[\s,;]+/)].filter(e=>/@/.test(e)).forEach(e=>{ e = e.toLowerCase(); if(!m[e]) m[e] = CLIENT_CODES[c.code]||c.nom||c.code; })));
+    return m; },[R]);
+  return useCallback(f=>{ const c = String(f.client||'').trim(), n = String(f.nom||'').trim();
+    if(/@/.test(c)){ const e = (c.match(/[\w.+-]+@[\w.-]+/)||[''])[0].toLowerCase(); if(parCourriel[e]) return parCourriel[e]; return n && !/@/.test(n) ? n : c; }
+    if(CLIENT_CODES[c.toUpperCase()]) return CLIENT_CODES[c.toUpperCase()];
+    return c || n || '(sans client)'; },[parCourriel]);
+}
+// ══ v417 : Grand livre › Comptes à recevoir — par client : courant, 30 j, 60 j, 90 j et plus (âge depuis la date de la facture) ══
+function ComptesRecevoirView({cfg}){
+  const auj = localDateStr(new Date());
+  const [d,setD]=useState(null), [err,setErr]=useState(''), [cle,setCle]=useState(0), [ouv,setOuv]=useState({}), [q,setQ]=useState('');
+  const nomClient = useNomClient(cfg);
+  useEffect(()=>{ let ok = true; arcCharger(cfg, cle>0).then(r=>{ if(ok){ setD(arcJumeler(r)); setErr(''); } }, e=>{ if(ok) setErr(apiErrMsg(e)); }); return ()=>{ ok = false; }; },[cle, cfg.memoireFacturesSpreadsheetId]);
+  if(err) return <div className="card" style={{color:'var(--danger)'}}>Erreur : {err}</div>;
+  if(!d) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des factures…</span></div>;
+  const COL = [['c','Courant'],['j30','30 j'],['j60','60 j'],['j90','90 j et plus']];
+  const tranche = j => j<=30 ? 'c' : j<=60 ? 'j30' : j<=90 ? 'j60' : 'j90';
+  const ouvertes = Object.values(d.F).filter(f=>{ const e = arcEtat(f, d.paye[f.num], auj);
+    if(['annulee','payee','creditee'].includes(e.k) || f.creditee || f.applique) return false;
+    if(Math.abs(f.ttc) < 0.05) return false;
+    if(!f.envoi && !f.pdf) return false;   // importée du logiciel sans preuve : pas encore une vraie facture
+    return (f.date || f.envoi) >= '2025-01-01'; });
+  const parC = {}; ouvertes.forEach(f=>{ const nom = nomClient(f), k = cvNorm(nom);
+    const j = Math.max(0, Math.floor((Date.parse(auj)-Date.parse(f.date || f.envoi))/864e5));
+    const c = parC[k] = parC[k] || {nom, c:0, j30:0, j60:0, j90:0, total:0, fac:[]}; c[tranche(j)] += f.ttc; c.total += f.ttc; c.fac.push({f, j}); });
+  const qq = cvNorm(q.trim());
+  const L = Object.values(parC).filter(c=>!qq || cvNorm(c.nom).includes(qq) || c.fac.some(x=>x.f.num.startsWith(q.trim().replace(/^#/,'')))).sort((a,b)=>b.total-a.total);
+  const T = L.reduce((t,c)=>{ COL.forEach(([k])=>t[k]+=c[k]); t.total+=c.total; return t; },{c:0, j30:0, j60:0, j90:0, total:0});
+  const cel = (v, k) => <td style={{textAlign:'right',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap',color: Math.abs(v)<0.005 ? 'var(--muted)' : k==='j90' ? 'var(--danger)' : k==='j60' ? 'var(--warning)' : undefined}}>{Math.abs(v)<0.005 ? '—' : cvMoney(v)}</td>;
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Comptes à recevoir</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Factures envoyées pas encore payées, par client, selon l'âge depuis la date de la facture (au {cvFmtDay(auj)}). Les notes de crédit pas jumelées viennent en moins. Clique un client pour voir ses factures.</div>
+    <div style={{display:'flex',gap:6,marginBottom:10}}>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un client ou un no de facture…" style={{flex:'1 1 200px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
+      {q && <button className="btn btn-sm" onClick={()=>setQ('')}>✕</button>}
+      <button className="btn btn-sm" onClick={()=>setCle(k=>k+1)}>↻</button></div>
+    <div className="card" style={{padding:'6px 10px',overflowX:'auto'}}>
+      <table style={{width:'100%',fontSize:13,borderCollapse:'collapse',minWidth:560}}>
+        <thead><tr className="muted" style={{textAlign:'right',fontSize:12}}><th style={{textAlign:'left',padding:'4px 0'}}>Client</th>{COL.map(([k,l])=><th key={k}>{l}</th>)}<th>Total</th></tr></thead>
+        <tbody>
+          {L.map(c=>{ const k = cvNorm(c.nom); return <React.Fragment key={k}>
+            <tr style={{borderTop:'1px solid var(--border)',cursor:'pointer'}} onClick={()=>setOuv(o=>({...o, [k]:!o[k]}))}>
+              <td style={{padding:'6px 0'}}>{ouv[k] ? '▾' : '▸'} {c.nom} <span className="muted" style={{fontSize:11.5}}>({c.fac.length})</span></td>
+              {COL.map(([kk])=><React.Fragment key={kk}>{cel(c[kk], kk)}</React.Fragment>)}<td style={{textAlign:'right',fontWeight:700,fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>{cvMoney(c.total)}</td></tr>
+            {ouv[k] && c.fac.sort((a,b)=>b.j-a.j).map(({f,j})=><tr key={f.num} style={{fontSize:12.5}}>
+              <td style={{padding:'3px 0 3px 18px'}}>{f.pdf ? <a href={'https://drive.google.com/file/d/'+f.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>#{f.num}</a> : '#'+f.num} <span className="muted">· {cvFmtDay(f.date || f.envoi)} · {j} j{f.nom && f.nom!==nomClient(f) && !/@/.test(f.nom) ? ' · '+f.nom : ''}{!f.envoi ? ' · pas envoyée' : ''}</span></td>
+              {COL.map(([kk])=><td key={kk} style={{textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{tranche(j)===kk ? cvMoney(f.ttc) : ''}</td>)}<td></td></tr>)}
+          </React.Fragment>; })}
+          <tr style={{borderTop:'2px solid var(--border2)',fontWeight:800}}><td style={{padding:'7px 0'}}>Total ({L.length} client{L.length>1?'s':''})</td>{COL.map(([k])=><React.Fragment key={k}>{cel(T[k], k)}</React.Fragment>)}<td style={{textAlign:'right',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>{cvMoney(T.total)}</td></tr>
+        </tbody></table></div>
+    <div className="muted" style={{fontSize:12,marginTop:8}}>Payée = paiement confirmé dans Paiements (ou fermée au logiciel). Un paiement qui couvre plusieurs factures les compte toutes payées. Les factures annulées, créditées ou importées du logiciel sans PDF ni envoi ne sont pas comptées.</div>
+  </div>;
 }
 function ArchiveFacturesView({cfg}){
   const auj = localDateStr(new Date());
@@ -13760,29 +13875,16 @@ function ArchiveFacturesView({cfg}){
   const [nb,setNb]=useState(120);
   const [rect,setRect]=useState(null);   // {num, choix, credit, remplace}
   const [etat,setEtat]=useState('');
+  const [ouvPC,setOuvPC]=useState(true);   // v417 : section « Factures à vérifier »
+  const nomClient = useNomClient(cfg);
   useEffect(()=>{ let ok = true; (async()=>{ try{
-    const fid = cfg.memoireFacturesSpreadsheetId; if(!fid) throw new Error('Registre des factures introuvable (La mémoire).');
-    const [fr, pr, ar] = await Promise.all([lireCache(fid, 'A1:N', cle>0).then(r=>r.result.values||[]),
-      lireCache(fid, qSheet('Paiements')+'!A1:L', cle>0).then(r=>r.result.values||[], ()=>[]),
-      cfg.memoireAppelsSpreadsheetId ? lireCache(cfg.memoireAppelsSpreadsheetId, 'A1:J', cle>0).then(r=>r.result.values||[], ()=>[]) : []]);
-    const h = (fr[0]||[]).map(x=>cvNorm(x)), col = re => h.findIndex(x=>re.test(x));
-    const X = {num:Math.max(0,col(/^facture/)), date:col(/^date/), cli:col(/^client/), po:col(/^po$/), nom:col(/^nom/), desc:col(/^description/), ttc:col(/^total/), env:col(/^envoyee/), pdf:col(/^pdf/), st:col(/^statut/), plog:col(/^payelogiciel/)};
-    const g = (r,k) => X[k]>=0 ? String(r[X[k]]==null?'':r[X[k]]).trim() : '';
-    const F = {}; fr.slice(1).forEach((r,i)=>{ const n = g(r,'num').replace(/\D/g,''); if(!n || n.length>5) return;
-      const f = {num:n, row:i+2, date:g(r,'date').slice(0,10), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, envoi:g(r,'env').slice(0,10), pdf:g(r,'pdf'), statut:g(r,'st'), payeLog:Math.max(0, cvNum(g(r,'plog'))||0)};
-      if(!F[n] || (!F[n].pdf && f.pdf)) F[n] = f; });
-    const paye = {}; pr.slice(1).forEach(r=>{ if(!/^confirm/i.test(String(r[10]||''))) return; const dt = String(r[1]||'').slice(0,10);
-      paiNums(r[9]).forEach(n=>{ if(!paye[n] || dt > paye[n]) paye[n] = dt; }); });
-    const ap = {}; ar.slice(1).forEach(r=>{ const a = String(r[0]||'').trim(); if(!a) return;
-      (String(r[1]||'').match(/\d{4,5}/g)||[]).forEach(n=>(ap[n] = ap[n] || []).push({ap:a, ot:String(r[2]||'').trim(), id:String(r[6]||'').trim()})); });
-    const lies = {}; Object.values(F).forEach(f=>{ let m; ARC_CHAINE.lastIndex = 0; while((m = ARC_CHAINE.exec(f.statut))){ if(m[1]===f.num) continue;
-      (lies[f.num] = lies[f.num] || new Set()).add(m[1]); (lies[m[1]] = lies[m[1]] || new Set()).add(f.num); } });
-    if(ok){ setD({F, paye, ap, lies, stCol:X.st>=0 ? X.st : 10}); setErr(''); }
+    const r = await arcCharger(cfg, cle>0); if(ok){ setD(arcJumeler(r)); setErr(''); }
   }catch(e){ if(ok) setErr(apiErrMsg(e)); } })(); return ()=>{ ok = false; }; },[cle, cfg.memoireFacturesSpreadsheetId, cfg.memoireAppelsSpreadsheetId]);
   if(err) return <div className="card" style={{color:'var(--danger)'}}>Erreur : {err}</div>;
   if(!d) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture du registre des factures…</span></div>;
   const nums = Object.keys(d.F).map(Number).sort((a,b)=>b-a);
-  const debut = tout ? nums[nums.length-1] : Math.min(...nums.filter(n=>d.F[n].date>=PAI_DEBUT || d.F[n].envoi>=PAI_DEBUT));
+  const debut = tout ? nums[nums.length-1] : (()=>{ const c = nums.filter(n=>d.F[n].date>=PAI_DEBUT || d.F[n].envoi>=PAI_DEBUT).sort((a,b)=>a-b);   // v417 : un vieux numéro isolé ne compte pas
+    return c.find(n=>c.filter(m=>m>=n && m<=n+60).length>=10) || c[0] || nums[nums.length-1]; })();
   const fin = nums[0];
   const qq = cvNorm(q.trim()), qNum = q.trim().replace(/^#/,''), qMont = cvNum(q.replace(/\$/g,''));
   const correspond = f => { if(!qq) return true;
@@ -13813,7 +13915,7 @@ function ArchiveFacturesView({cfg}){
       <div style={{display:'flex',gap:8,alignItems:'baseline',flexWrap:'wrap'}}>
         <b style={{fontVariantNumeric:'tabular-nums',minWidth:44}}>{f.pdf ? <a href={lienF(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>#{f.num}</a> : '#'+f.num}</b>
         <span className="muted" style={{fontSize:12,minWidth:70}}>{f.date ? cvFmtDay(f.date) : '—'}</span>
-        <span style={{flex:'1 1 160px',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={[f.client, f.nom, f.desc].filter(Boolean).join(' · ')}>{[f.client, f.nom && f.nom!==f.client ? f.nom : ''].filter(Boolean).join(' · ') || '—'}</span>
+        <span style={{flex:'1 1 160px',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={[f.client, f.nom, f.desc].filter(Boolean).join(' · ')}>{[nomClient(f), f.nom && f.nom!==nomClient(f) && !/@/.test(f.nom) ? f.nom : ''].filter(Boolean).join(' · ') || '—'}</span>
         <span style={{fontVariantNumeric:'tabular-nums',minWidth:80,textAlign:'right',textDecoration:e.k==='annulee' ? 'line-through' : 'none'}}>{cvMoney(f.ttc)}</span>
         <span style={{color:e.c,fontSize:12,minWidth:130,textAlign:'right'}}>{e.txt}</span>
         <button className="btn btn-sm" onClick={()=>setRect(ouvert ? null : {num:f.num, choix:'', credit:'', remplace:''})}>{ouvert ? 'Fermer' : 'Rectifier'}</button></div>
@@ -13840,6 +13942,16 @@ function ArchiveFacturesView({cfg}){
       {q && <button className="btn btn-sm" onClick={()=>setQ('')}>✕</button>}
       {!q && <button className={'btn btn-sm'+(tout?' btn-p':'')} onClick={()=>{ setTout(!tout); setNb(120); }}>{tout ? 'Depuis le 1er juillet' : 'Tout l\'historique'}</button>}
       <button className="btn btn-sm" onClick={()=>setCle(k=>k+1)}>↻</button></div>
+    {!qq && (()=>{ const PC = arcPasClaires(d, debut, auj); if(!PC.length) return <div className="card" style={{padding:'8px 12px',marginBottom:10,fontSize:13,color:'var(--success)'}}>✓ Aucune facture pas claire depuis #{debut}.</div>;
+      return <div className="card" style={{padding:'8px 10px',marginBottom:12,border:'1px solid var(--warning)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',cursor:'pointer'}} onClick={()=>setOuvPC(!ouvPC)}><b>Factures à vérifier <span className="muted" style={{fontWeight:400}}>({PC.length})</span></b><span className="muted">{ouvPC ? '▲' : '▼'}</span></div>
+        {ouvPC && <div style={{marginTop:4}}>
+          <div className="muted" style={{fontSize:12,marginBottom:2}}>Rectifie-les (annulée, créditée, remplacée), ou clique « C'est correct » si tout est bon : elles sortent de la liste.</div>
+          {PC.map(({f, raisons})=><div key={'pc'+f.num}>
+            <div style={{fontSize:12,color:'var(--warning)',padding:'6px 0 0 52px',borderTop:'1px solid var(--border)'}}>{raisons.join(' · ')}
+              <button className="btn btn-sm" style={{marginLeft:8,fontSize:11.5,padding:'1px 8px'}} disabled={!!etat} onClick={async()=>{ setEtat('Enregistrement…'); try{ await arcMarquerVerifiee(cfg, f, auj); setEtat(''); setCle(k=>k+1); }catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } }}>C'est correct</button></div>
+            <div style={{marginTop:-6}}>{Ligne({f})}</div></div>)}
+        </div>}</div>; })()}
     {!qq && <div className="muted" style={{fontSize:12.5,marginBottom:6}}>#{debut} à #{fin}{nbTrous ? ' · '+nbTrous+' numéro'+(nbTrous>1?'s':'')+' manquant'+(nbTrous>1?'s':'')+' dans le registre' : ' · aucun numéro manquant'}</div>}
     <div className="card" style={{padding:'4px 10px'}}>
       {!L.length && <div className="muted" style={{padding:10}}>Rien trouvé.</div>}
@@ -13855,7 +13967,7 @@ function ArchiveFacturesView({cfg}){
 function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, onglet0}){
   const estGL = k => GL_ONGLETS.some(x=>x[0]===k);
   const [onglet,setOnglet]=useState(onglet0==='verif' ? 'clients' : estGL(onglet0) ? 'grand' : (onglet0 || 'clients'));
-  const [sous,setSous]=useState(estGL(onglet0) ? onglet0 : 'paiements');
+  const [sous,setSous]=useState(estGL(onglet0) ? onglet0 : 'recevoir');
   const [cles,setCles]=useState({});
   const choisir = k => { if(k===onglet) setCles(c=>({...c, [k]:(c[k]||0)+1})); setOnglet(k); NAV_FOCUS = null; window.scrollTo(0,0); };
   const choisirSous = k => { if(k===sous) setCles(c=>({...c, [k]:(c[k]||0)+1})); setSous(k); NAV_FOCUS = null; window.scrollTo(0,0); };
@@ -13872,6 +13984,7 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
     {onglet==='grand' && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>{GL_ONGLETS.map(([k,l])=><button key={k} className={'btn btn-sm'+(sous===k?' btn-p':'')} onClick={()=>choisirSous(k)}>{l}</button>)}</div>}
     {onglet==='grand' && sous==='paiements' && <PaiementsOnglet key={'p'+(cles.paiements||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='grand' && sous==='taxes' && <TaxesView key={'t'+(cles.taxes||0)} cfg={cfgRep}/>}
+    {onglet==='grand' && sous==='recevoir' && <ComptesRecevoirView key={'r'+(cles.recevoir||0)} cfg={cfgRep}/>}
     {onglet==='grand' && sous==='archive' && <ArchiveFacturesView key={'a'+(cles.archive||0)} cfg={cfgRep}/>}
     {onglet==='factures' && <FacturesView key={'x'+(cles.factures||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='verif' && <>
