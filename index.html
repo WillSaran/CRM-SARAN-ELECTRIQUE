@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v413';
+const APP_VERSION = 'v414';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -13491,8 +13491,8 @@ function useTaxes(cfg, cle){
       const ah = ar[0]||[], ax = {f:col(ah,/^fournisseur/), num:col(ah,/^facture/), date:col(ah,/^date/), ref:col(ah,/^reference/), ht:col(ah,/^sous-?total/), ttc:col(ah,/^total/), pdf:col(ah,/^pdf/), st:col(ah,/^statut/)};
       const achats = ar.slice(1).filter(r=>r[ax.num] && !/ignor|doublon|annul|retir/i.test(r[ax.st]||'')).map(r=>{ const t = txTaxes(r[ax.ht], r[ax.ttc]);
         return {type:'achat', num:r[ax.num], date:txDate(r[ax.date]), qui:r[ax.f]||'', ref:r[ax.ref]||'', pdf:r[ax.pdf]||'', ...t}; }).filter(x=>x.date);
-      const depenses = dr.v.slice(1).filter(r=>r[0]).map((r,i)=>({type:'depense', row:i+2, id:r[0], date:txDate(r[1]), qui:r[2]||'', ref:r[3]||'', ht:txNum(r[4]), tps:txNum(r[5]), tvq:txNum(r[6]), ttc:txNum(r[7]),
-        source:r[8]||'', pdf:r[9]||'', estime:/^oui/i.test(r[10]||'')})).filter(x=>x.date);
+      const depenses = dr.v.slice(1).map((r,i)=>r[0] && !/^rempl/i.test(r[10]||'') ? ({type:'depense', row:i+2, id:r[0], date:txDate(r[1]), qui:r[2]||'', ref:r[3]||'', ht:txNum(r[4]), tps:txNum(r[5]), tvq:txNum(r[6]), ttc:txNum(r[7]),
+        source:r[8]||'', pdf:r[9]||'', estime:/^oui/i.test(r[10]||'')}) : null).filter(x=>x && x.date);   // v414 : « remplacée » = estimé remplacé par la vraie facture
       setD({lu:true, err:'', ventes, achats, depenses, depExiste:dr.ok});
     }catch(e){ setD(s=>({...s, lu:true, err:apiErrMsg(e)})); } },[cfg.memoireFacturesSpreadsheetId, cfg.memoireAchatsSpreadsheetId]);
   useEffect(()=>{ lire(false); },[lire, cle]);
@@ -13511,22 +13511,26 @@ async function depFichier(fichier, sansTexte){
   return {id:r.id, texte}; }
 
 // Déposer une facture de dépense : lue toute seule, à vérifier, puis enregistrée
-function DepotFacture({cfg, existe, onFait, onFermer}){
+function DepotFacture({cfg, existe, remplace, onFait, onFermer}){
   const [etat,setEtat]=useState('');
   const [f,setF]=useState(null);   // {fournisseur, date, ht, tps, tvq, ttc, ref, pdf, lu}
   const choisir = async fichier => { if(!fichier) return; setEtat('Lecture de la facture…');
     try{ const {id, texte} = await depFichier(fichier); const x = texte ? txLireFacture(texte) : {};
-      setF({fournisseur:x.fournisseur||'', date:x.date||localDateStr(new Date()), ht:x.ht!==undefined ? String(x.ht) : '', tps:x.tps!==undefined ? String(x.tps) : '', tvq:x.tvq!==undefined ? String(x.tvq) : '',
+      const rp = remplace || {};
+      setF({fournisseur:x.fournisseur||rp.qui||'', date:x.date||rp.date||localDateStr(new Date()), ht:x.ht!==undefined ? String(x.ht) : '', tps:x.tps!==undefined ? String(x.tps) : '', tvq:x.tvq!==undefined ? String(x.tvq) : '',
         ttc:x.ttc!==undefined ? String(x.ttc) : '', ref:fichier.name||'', pdf:id, lu:!!texte, coherent:!!x.coherent, calcule:!!x.calcule}); setEtat(''); }
     catch(e){ setEtat('Erreur : '+(e.message||e)); } };
   const recalcul = () => { const c = f.ht ? txTaxes(f.ht, f.ttc) : txInclus(f.ttc); setF({...f, ht:String(c.ht), tps:String(c.tps), tvq:String(c.tvq), ttc:String(c.ttc)}); };
   const ecart = f ? txR(txNum(f.ht)+txNum(f.tps)+txNum(f.tvq)-txNum(f.ttc)) : 0;
   const sauver = async () => { setEtat('Enregistrement…');
-    try{ await depAjouter(cfg, existe, [{date:f.date, qui:f.fournisseur.trim(), ref:f.ref, ht:f.ht, tps:f.tps, tvq:f.tvq, ttc:f.ttc, source:'Facture', pdf:f.pdf, estime:false}]); setEtat(''); onFait('Facture de '+(f.fournisseur||'dépense')+' ajoutée.'); }
+    try{ await depAjouter(cfg, existe, [{date:f.date, qui:f.fournisseur.trim(), ref:f.ref, ht:f.ht, tps:f.tps, tvq:f.tvq, ttc:f.ttc, source:'Facture', pdf:f.pdf, estime:false}]);
+      if(remplace && remplace.row) await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:cfg.memoireAchatsSpreadsheetId, range:qSheet(DEP_ONGLET)+'!K'+remplace.row, valueInputOption:'RAW', resource:{values:[['remplacée par la facture '+(f.ref||'')+' le '+localDateStr(new Date())]]}});   // v414 : l'estimé ne compte plus
+      setEtat(''); onFait('Facture de '+(f.fournisseur||'dépense')+' ajoutée'+(remplace ? ' (remplace l\'estimé du relevé)' : '')+'.'); }
     catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
   const champ = (k, l, w) => <label style={{display:'grid',gap:2,fontSize:12}}><span className="muted">{l}</span><input value={f[k]} onChange={e=>setF({...f, [k]:e.target.value})} style={{width:w||110,padding:'5px 8px'}}/></label>;
   return <div className="card" style={{border:'1px solid var(--accent)',marginBottom:12}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}><b>Déposer une facture (dépense)</b><button className="btn btn-sm" onClick={onFermer}>Fermer</button></div>
+    {remplace && <div style={{fontSize:12.5,marginBottom:6}}>Remplace l'estimé du relevé : <b>{remplace.qui}</b> · {cvFmtDay(remplace.date)} · {cvMoney(remplace.ttc)}</div>}
     {!f && <label className="btn btn-p" style={{cursor:'pointer',display:'inline-block'}}>{etat || '📄 Choisir le PDF ou la photo'}<input type="file" accept="application/pdf,image/*" style={{display:'none'}} disabled={!!etat} onChange={e=>{ const x = e.target.files[0]; e.target.value=''; choisir(x); }}/></label>}
     {!f && <div className="muted" style={{fontSize:12,marginTop:6}}>Le fichier va dans Drive (« Saran CRM — Dépenses ») ; le fournisseur, la date, le sous-total, la TPS, la TVQ et le total sont lus tout seuls. Tu vérifies, puis tu enregistres.</div>}
     {f && <div style={{display:'grid',gap:8}}>
@@ -13617,6 +13621,7 @@ function TaxesView({cfg}){
   const [depot,setDepot]=useState('');
   const [msg,setMsg]=useState('');
   const [ouv,setOuv]=useState({});
+  const [remp,setRemp]=useState(null);   // v414 : dépense estimée à remplacer par sa facture
   const [a,b] = txBornes(mode, per);
   const dans = x => x.date>=a && x.date<=b;
   const V = T.ventes.filter(dans).sort((x,y)=>x.date.localeCompare(y.date)), A = T.achats.filter(dans).sort((x,y)=>x.date.localeCompare(y.date)), D = T.depenses.filter(dans).sort((x,y)=>x.date.localeCompare(y.date));
@@ -13657,15 +13662,28 @@ function TaxesView({cfg}){
       <Tuile l={tvqP-tvqA>=0 ? 'TVQ à remettre' : 'TVQ à recevoir'} v={Math.abs(txR(tvqP-tvqA))} c={tvqP-tvqA>=0 ? 'var(--warning)' : 'var(--success)'}/>
     </div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
-      <button className={'btn btn-sm'+(depot==='facture'?' btn-p':'')} onClick={()=>{ setDepot(depot==='facture'?'':'facture'); setMsg(''); }}>+ Déposer une facture</button>
+      <button className={'btn btn-sm'+(depot==='facture'?' btn-p':'')} onClick={()=>{ setRemp(null); setDepot(depot==='facture'?'':'facture'); setMsg(''); }}>+ Déposer une facture</button>
       <button className={'btn btn-sm'+(depot==='releve'?' btn-p':'')} onClick={()=>{ setDepot(depot==='releve'?'':'releve'); setMsg(''); }}>+ Déposer un relevé de carte</button>
       {msg && <span style={{color:'var(--success)',fontSize:12.5}}>✓ {msg}</span>}
     </div>
-    {depot==='facture' && <DepotFacture cfg={cfg} existe={T.depExiste} onFait={fait} onFermer={()=>setDepot('')}/>}
+    {depot==='facture' && <DepotFacture key={remp ? 'r'+remp.row : 'n'} cfg={cfg} existe={T.depExiste} remplace={remp} onFait={m=>{ setRemp(null); fait(m); }} onFermer={()=>{ setRemp(null); setDepot(''); }}/>}
     {depot==='releve' && <DepotReleve cfg={cfg} existe={T.depExiste} depenses={T.depenses} achats={T.achats} onFait={fait} onFermer={()=>setDepot('')}/>}
     <Liste k="v" titre="Factures clients (taxes perçues)" L={V}/>
     <Liste k="a" titre="Factures fournisseurs (Dubo, Lumen, Gagnon…)" L={A}/>
     <Liste k="d" titre="Dépenses déposées (factures et relevés de cartes)" L={D}/>
+    {(()=>{ const E = D.filter(x=>x.estime).sort((x,y)=>y.ttc-x.ttc); if(!E.length) return null;   // v414 : factures à trouver et déposer (taxes estimées)
+      return <div className="card" style={{marginBottom:10,padding:10}}>
+        <div style={{display:'flex',justifyContent:'space-between',cursor:'pointer',gap:8}} onClick={()=>setOuv(o=>({...o, e:!o.e}))}>
+          <b>Factures à déposer — taxes estimées <span className="muted" style={{fontWeight:400}}>({E.length})</span></b>
+          <span className="muted" style={{fontSize:12.5}}>TPS ≈ {cvMoney(som(E,'tps'))} · TVQ ≈ {cvMoney(som(E,'tvq'))} {ouv.e ? '▲' : '▼'}</span></div>
+        {ouv.e && <div style={{marginTop:6}}>
+          <div className="muted" style={{fontSize:12,marginBottom:6}}>Achats des relevés de carte sans reçu trouvé, du plus gros au plus petit. Dépose la vraie facture : ses taxes remplacent l'estimé.</div>
+          {E.map(x=><div key={x.row} style={{display:'grid',gridTemplateColumns:'70px 1fr 90px auto',gap:8,alignItems:'center',padding:'4px 0',borderTop:'1px solid var(--border)',fontSize:12.5,fontVariantNumeric:'tabular-nums'}}>
+            <span>{cvFmtDay(x.date)}</span><span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={x.qui}>{x.qui||'—'}</span>
+            <span style={{textAlign:'right'}}>{cvMoney(x.ttc)}</span>
+            <button className="btn btn-sm" onClick={()=>{ setRemp(x); setDepot('facture'); setMsg(''); window.scrollTo({top:0,behavior:'smooth'}); }}>Déposer la facture</button></div>)}
+        </div>}
+      </div>; })()}
     <div className="muted" style={{fontSize:12}}>Selon la date des factures. Taxes = total − sous-total (TPS 5 % du sous-total, TVQ le reste). Les dépenses de relevés de cartes sont estimées. Les notes de crédit viennent en moins. Année fiscale du 1er juillet au 30 juin.</div>
   </div>;
 }
