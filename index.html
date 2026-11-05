@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v415';
+const APP_VERSION = 'v416';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5573,8 +5573,10 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   // Nom du client appris des paiements confirmés (factures où il n'y a qu'un courriel).
   const nomsAppris = {}, titre = t => String(t||'').toLowerCase().replace(/(^|[\s'’-])\p{L}/gu, m=>m.toUpperCase());
   conf.forEach(p=>{ if(!p.de || /^manuel-/.test(p.id)) return; p.confirmees.forEach(n=>{ if(F[n]) nomsAppris[paiClientCle(F[n])] = titre(p.de); }); });
+  // v416 : « Créditée par N » inscrit dans l'Archive des factures — jumelage sûr, avant le jumelage automatique
+  Object.values(F).forEach(f=>{ const m = String(f.statut||'').match(/^cr[ée]dit[ée]e par #?(\d{3,5})/i); if(m && F[m[1]] && !F[m[1]].applique){ f.creditee = m[1]; F[m[1]].applique = f.num; } });
   // v200 : note de crédit (facture négative) — annule la facture ouverte du même client au même montant (ex. #2320 annule #2319)
-  Object.values(F).filter(f=>f.ttc < -0.05 && !f.annulee).sort((a,b)=>+a.num - +b.num).forEach(nc=>{
+  Object.values(F).filter(f=>f.ttc < -0.05 && !f.annulee && !f.applique).sort((a,b)=>+a.num - +b.num).forEach(nc=>{
     // v254 : même montant exact — d'abord la facture à la même adresse / description (ex. crédit du 297 Salaberry → facture du 297), puis la plus vieille
     const dnT = f => cvNorm(String(f.desc||'').replace(/[·\-–]?\s*travaux\s+\d{4}-\d{2}-\d{2}/ig,''));
     const cible = Object.values(F).filter(f=>!f.creditee && !f.annulee && f.ttc>0.05 && f.paye<0.05 && !(f.payeLog>0.05) && +f.num < +nc.num && cleG(f)===cleG(nc) && Math.abs(f.ttc + nc.ttc)<=0.02)
@@ -6537,7 +6539,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
     : r.statutFacture==='annule' ? <span className="muted" style={{fontWeight:700}}>{r.appelService==='-'||r.facture==='-' ? '- ' : '** '}Pas à facturer</span>
     : r.estPasseOuAujourdhui ? <span style={{color:'var(--danger)',fontWeight:700}}>Rien d'inscrit</span> : <span className="muted">À venir</span>;
   return <div>
-    {!compact && <><h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Bons de travail</h2>
+    {!compact && <><h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Bons de vente</h2>
     <div className="muted" style={{fontSize:13,marginBottom:12}}>Tiré du Sheet « SUIVI TRAVAUX SARAN ÉLECTRIQUE ». Tout passage fait qui n'a pas encore de facture est ici, le plus vieux en premier. Un passage qui ne se facture pas (annulé, garantie, visite) : « Pas à facturer » met « ** » dans le Sheet.</div></>}
     {!id && <div className="card">Configure l'ID du Sheet "SUIVI TRAVAUX" dans Réglages.</div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
@@ -6712,7 +6714,7 @@ async function driveFetch(url, opts){
   return r.json();
 }
 // v404 : onglet « Drive » — tape un numéro d'appel de service, d'OT ou de facture et ouvre le papier tout de suite
-function DriveRapideView({cfg}){
+function DriveRapideView({cfg, sansTitre}){
   const [type,setType]=useState('AP');
   const [num,setNum]=useState('');
   const [res,setRes]=useState(null);
@@ -6736,7 +6738,7 @@ function DriveRapideView({cfg}){
       setRes(out); setEtat(''); }
     catch(e){ setRes(out); setEtat(e.message==='acces' ? 'Le CRM n\'a pas accès au Drive : déconnecte-toi puis reconnecte-toi.' : apiErrMsg(e)); } };
   return <div>
-    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Drive</h2>
+    {!sansTitre && <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Drive</h2>}
     <div className="muted" style={{fontSize:13,marginBottom:12}}>Tape un numéro : le papier s'ouvre en un clic (registres de La mémoire, dossier 1-PAD, puis tout ton Drive).</div>
     <div className="card" style={{display:'grid',gap:10}}>
       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{[['AP','Appel de service'],['OT','Ordre de travail'],['FAC','Facture']].map(([k,l])=><button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>{ setType(k); setRes(null); }}>{l}</button>)}</div>
@@ -13301,8 +13303,9 @@ function repIgnores(){ try{ return new Set(JSON.parse(localStorage.getItem('crm_
 function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.setItem('crm_rep_ignores', JSON.stringify([...s])); }catch(e){} }
 
 // v202 : Comptabilité — comptes fournisseurs, factures clients (et paiements reçus), appels de service, à vérifier. Les pages gardent toutes leurs fonctions.
-const CPT_NAV = {compta:'clients', factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
-const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['clients','Comptes clients'],['factures','Bons de travail'],['paiements','Paiements'],['taxes','TPS/TVQ']];   // v374 : TPS/TVQ   // v272   // v240
+const CPT_NAV = {compta:'clients', drive:'archive', factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
+const CPT_ONGLETS = [['clients','Comptes clients'],['factures','Bons de vente'],['fourn','Comptes fournisseurs'],['grand','Grand livre']];   // v416 : Grand livre = Paiements, TPS/TVQ, Archive des factures
+const GL_ONGLETS = [['paiements','Paiements'],['taxes','TPS/TVQ'],['archive','Archive des factures']];   // v374 : TPS/TVQ   // v272   // v240
 // v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
 // v380 : fiche du Répertoire › Factures (factures envoyées de ce client : en attente de paiement, puis payées)
 function FacturesClient({cfg, cfgRep, refreshKey, contacts}){
@@ -13735,10 +13738,127 @@ function CodeComptaReglage({cfg, toast}){
     </div>
     <div className="muted" style={{fontSize:11.5,marginTop:4}}>Au moins 4 caractères. Le code est demandé une fois par onglet du navigateur. Les Sheets restent protégés par leur partage Google.</div></div>;
 }
+// ══ v416 : Grand livre › Archive des factures — tous les numéros à la suite (trous signalés), statut, PDF et AP joints, et « Rectifier » (annulée / créditée / remplacée) ══
+// Écrit seulement la colonne Statut du registre de La mémoire (jamais le logiciel comptable).
+const ARC_CHAINE = /(?:remplac[ée]e? par|cr[ée]dit[ée]e? par|cr[ée]dit de|remplace)\s*#?(\d{3,5})/gi;
+function arcEtat(f, paye, auj){
+  const st = String(f.statut||'').trim();
+  if(/^annul/i.test(st)) return {k:'annulee', txt:st, c:'var(--muted)'};
+  if(/^cr[ée]dit[ée]e par/i.test(st)) return {k:'creditee', txt:st.replace(/\s*\(\d{4}-\d{2}-\d{2}\)\s*$/,''), c:'var(--muted)'};
+  if(f.ttc < -0.005 || /^cr[ée]dit de/i.test(st)) return {k:'credit', txt:st ? st.replace(/\s*\(\d{4}-\d{2}-\d{2}\)\s*$/,'') : 'Note de crédit', c:'var(--accent)'};
+  if(paye || (f.payeLog>0 && f.payeLog >= f.ttc-0.05) || /^(ferm[ée]e|confirm[ée]e)/i.test(st)) return {k:'payee', txt:'Payée'+(paye ? ' le '+cvFmtDay(paye) : ''), c:'var(--success)'};
+  if(f.envoi){ const j = Math.max(0, Math.floor((Date.parse(auj)-Date.parse(String(f.envoi).slice(0,10)))/864e5)); return {k:'attente', txt:'En attente · '+j+' j', c:j>45 ? 'var(--danger)' : 'var(--warning)'}; }
+  return {k:'pasenv', txt:/^ouverte/i.test(st) ? 'Ouverte au logiciel · pas envoyée' : 'Pas envoyée', c:'var(--warning)'};
+}
+function ArchiveFacturesView({cfg}){
+  const auj = localDateStr(new Date());
+  const [d,setD]=useState(null);
+  const [err,setErr]=useState('');
+  const [cle,setCle]=useState(0);
+  const [q,setQ]=useState('');
+  const [tout,setTout]=useState(false);
+  const [nb,setNb]=useState(120);
+  const [rect,setRect]=useState(null);   // {num, choix, credit, remplace}
+  const [etat,setEtat]=useState('');
+  useEffect(()=>{ let ok = true; (async()=>{ try{
+    const fid = cfg.memoireFacturesSpreadsheetId; if(!fid) throw new Error('Registre des factures introuvable (La mémoire).');
+    const [fr, pr, ar] = await Promise.all([lireCache(fid, 'A1:N', cle>0).then(r=>r.result.values||[]),
+      lireCache(fid, qSheet('Paiements')+'!A1:L', cle>0).then(r=>r.result.values||[], ()=>[]),
+      cfg.memoireAppelsSpreadsheetId ? lireCache(cfg.memoireAppelsSpreadsheetId, 'A1:J', cle>0).then(r=>r.result.values||[], ()=>[]) : []]);
+    const h = (fr[0]||[]).map(x=>cvNorm(x)), col = re => h.findIndex(x=>re.test(x));
+    const X = {num:Math.max(0,col(/^facture/)), date:col(/^date/), cli:col(/^client/), po:col(/^po$/), nom:col(/^nom/), desc:col(/^description/), ttc:col(/^total/), env:col(/^envoyee/), pdf:col(/^pdf/), st:col(/^statut/), plog:col(/^payelogiciel/)};
+    const g = (r,k) => X[k]>=0 ? String(r[X[k]]==null?'':r[X[k]]).trim() : '';
+    const F = {}; fr.slice(1).forEach((r,i)=>{ const n = g(r,'num').replace(/\D/g,''); if(!n || n.length>5) return;
+      const f = {num:n, row:i+2, date:g(r,'date').slice(0,10), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, envoi:g(r,'env').slice(0,10), pdf:g(r,'pdf'), statut:g(r,'st'), payeLog:Math.max(0, cvNum(g(r,'plog'))||0)};
+      if(!F[n] || (!F[n].pdf && f.pdf)) F[n] = f; });
+    const paye = {}; pr.slice(1).forEach(r=>{ if(!/^confirm/i.test(String(r[10]||''))) return; const dt = String(r[1]||'').slice(0,10);
+      paiNums(r[9]).forEach(n=>{ if(!paye[n] || dt > paye[n]) paye[n] = dt; }); });
+    const ap = {}; ar.slice(1).forEach(r=>{ const a = String(r[0]||'').trim(); if(!a) return;
+      (String(r[1]||'').match(/\d{4,5}/g)||[]).forEach(n=>(ap[n] = ap[n] || []).push({ap:a, ot:String(r[2]||'').trim(), id:String(r[6]||'').trim()})); });
+    const lies = {}; Object.values(F).forEach(f=>{ let m; ARC_CHAINE.lastIndex = 0; while((m = ARC_CHAINE.exec(f.statut))){ if(m[1]===f.num) continue;
+      (lies[f.num] = lies[f.num] || new Set()).add(m[1]); (lies[m[1]] = lies[m[1]] || new Set()).add(f.num); } });
+    if(ok){ setD({F, paye, ap, lies, stCol:X.st>=0 ? X.st : 10}); setErr(''); }
+  }catch(e){ if(ok) setErr(apiErrMsg(e)); } })(); return ()=>{ ok = false; }; },[cle, cfg.memoireFacturesSpreadsheetId, cfg.memoireAppelsSpreadsheetId]);
+  if(err) return <div className="card" style={{color:'var(--danger)'}}>Erreur : {err}</div>;
+  if(!d) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture du registre des factures…</span></div>;
+  const nums = Object.keys(d.F).map(Number).sort((a,b)=>b-a);
+  const debut = tout ? nums[nums.length-1] : Math.min(...nums.filter(n=>d.F[n].date>=PAI_DEBUT || d.F[n].envoi>=PAI_DEBUT));
+  const fin = nums[0];
+  const qq = cvNorm(q.trim()), qNum = q.trim().replace(/^#/,''), qMont = cvNum(q.replace(/\$/g,''));
+  const correspond = f => { if(!qq) return true;
+    if(/^\d{3,5}$/.test(qNum) && (f.num.startsWith(qNum) || (d.ap[f.num]||[]).some(a=>a.ap===qNum || a.ot===qNum))) return true;
+    if(qMont && /[.,]\d/.test(q) && Math.abs(Math.abs(f.ttc)-qMont)<0.01) return true;
+    const t = cvNorm([f.client, f.nom, f.desc, f.po, f.statut].join(' ')); return qq.split(/\s+/).every(w=>t.includes(w)); };
+  let L = [];
+  if(qq) L = nums.map(n=>d.F[n]).filter(correspond).map(f=>({f}));
+  else for(let n=fin; n>=debut && n>fin-4000; n--) L.push(d.F[n] ? {f:d.F[n]} : {manquant:String(n)});
+  const nbTrous = qq ? 0 : L.filter(x=>x.manquant).length;
+  const lienF = id => 'https://drive.google.com/file/d/'+id+'/view';
+  const ecrire = async (num, valeur) => { const f = d.F[num]; if(!f) return; suivreEcritures();
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:cfg.memoireFacturesSpreadsheetId, range:String.fromCharCode(65+d.stCol)+f.row, valueInputOption:'RAW', resource:{values:[[valeur]]}}); };
+  const appliquer = async () => { const r = rect, f = d.F[r.num]; if(!f) return; setEtat('Enregistrement…');
+    const c = String(r.credit||'').replace(/\D/g,''), p = String(r.remplace||'').replace(/\D/g,''), dt = ' ('+auj+')';
+    try{
+      if(r.choix==='retablir') await ecrire(f.num, '');
+      else if(r.choix==='annulee') await ecrire(f.num, 'Annulée'+(p ? ' — remplacée par '+p : '')+dt);
+      else if(r.choix==='creditee'){ if(!c) throw new Error('Inscris le numéro de la note de crédit.');
+        await ecrire(f.num, 'Créditée par '+c+(p ? ', remplacée par '+p : '')+dt);
+        if(d.F[c]) await ecrire(c, 'Crédit de '+f.num+dt); }
+      else if(r.choix==='remplacee'){ if(!p) throw new Error('Inscris le numéro de la nouvelle facture.'); await ecrire(f.num, 'Annulée — remplacée par '+p+dt); }
+      setRect(null); setEtat(''); setCle(k=>k+1); }
+    catch(e){ setEtat('Erreur : '+(e.message && !e.result ? e.message : apiErrMsg(e))); } };
+  const Ligne = ({f}) => { const e = arcEtat(f, d.paye[f.num], auj), aps = d.ap[f.num]||[], li = [...(d.lies[f.num]||[])].sort();
+    const ouvert = rect && rect.num===f.num;
+    return <div style={{padding:'7px 2px',borderTop:'1px solid var(--border)',fontSize:13,opacity:e.k==='annulee' ? .6 : 1}}>
+      <div style={{display:'flex',gap:8,alignItems:'baseline',flexWrap:'wrap'}}>
+        <b style={{fontVariantNumeric:'tabular-nums',minWidth:44}}>{f.pdf ? <a href={lienF(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>#{f.num}</a> : '#'+f.num}</b>
+        <span className="muted" style={{fontSize:12,minWidth:70}}>{f.date ? cvFmtDay(f.date) : '—'}</span>
+        <span style={{flex:'1 1 160px',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={[f.client, f.nom, f.desc].filter(Boolean).join(' · ')}>{[f.client, f.nom && f.nom!==f.client ? f.nom : ''].filter(Boolean).join(' · ') || '—'}</span>
+        <span style={{fontVariantNumeric:'tabular-nums',minWidth:80,textAlign:'right',textDecoration:e.k==='annulee' ? 'line-through' : 'none'}}>{cvMoney(f.ttc)}</span>
+        <span style={{color:e.c,fontSize:12,minWidth:130,textAlign:'right'}}>{e.txt}</span>
+        <button className="btn btn-sm" onClick={()=>setRect(ouvert ? null : {num:f.num, choix:'', credit:'', remplace:''})}>{ouvert ? 'Fermer' : 'Rectifier'}</button></div>
+      {(aps.length>0 || li.length>0 || !f.pdf) && <div style={{display:'flex',gap:8,flexWrap:'wrap',fontSize:12,marginTop:3,paddingLeft:52}}>
+        {!f.pdf && <span className="muted">PDF pas dans le registre</span>}
+        {aps.map((a,i)=>a.id ? <a key={i} href={lienF(a.id)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>AP {a.ap}{a.ot ? ' · OT '+a.ot : ''} ↗</a> : <span key={i} className="muted">AP {a.ap}</span>)}
+        {li.map(n=><span key={n} style={{cursor:'pointer',color:'var(--accent)'}} onClick={()=>setQ(n)}>lié à #{n}</span>)}</div>}
+      {ouvert && <div className="card" style={{margin:'6px 0 2px 52px',padding:10,display:'grid',gap:8,border:'1px solid var(--accent)'}}>
+        <div style={{fontSize:12.5}}>Statut actuel : <b>{f.statut || 'aucun'}</b></div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{[['annulee','Annulée'],['creditee','Créditée par…'],['remplacee','Remplacée par…'],['retablir','Rétablir (enlever le statut)']].map(([k,l])=>
+          <button key={k} className={'btn btn-sm'+(rect.choix===k?' btn-p':'')} onClick={()=>setRect({...rect, choix:k})}>{l}</button>)}</div>
+        {rect.choix==='creditee' && <label style={{fontSize:12.5}}>No de la note de crédit <input value={rect.credit} onChange={e=>setRect({...rect, credit:e.target.value})} inputMode="numeric" placeholder="ex. 2655" style={{width:90,padding:'3px 6px'}}/></label>}
+        {['annulee','creditee','remplacee'].includes(rect.choix) && <label style={{fontSize:12.5}}>{rect.choix==='remplacee' ? 'No de la nouvelle facture' : 'Remplacée par (facultatif)'} <input value={rect.remplace} onChange={e=>setRect({...rect, remplace:e.target.value})} inputMode="numeric" placeholder="ex. 2700" style={{width:90,padding:'3px 6px'}}/></label>}
+        {rect.choix && <div className="muted" style={{fontSize:12}}>{rect.choix==='annulee' ? 'Elle ne compte plus nulle part (paiements, TPS/TVQ).' : rect.choix==='creditee' ? 'La facture et sa note de crédit se balancent : les deux sont liées, la facture n\'est plus en attente de paiement.' : rect.choix==='remplacee' ? 'Elle ne compte plus ; la nouvelle facture prend sa place.' : 'Le statut est effacé : la facture compte de nouveau normalement.'} Seul le registre de La mémoire change.</div>}
+        <div style={{display:'flex',gap:6,alignItems:'center'}}><button className="btn btn-sm btn-p" disabled={!rect.choix || !!etat} onClick={appliquer}>{etat==='Enregistrement…' ? etat : 'Enregistrer'}</button>
+          {etat && etat!=='Enregistrement…' && <span style={{color:'var(--danger)',fontSize:12}}>{etat}</span>}</div>
+      </div>}
+    </div>; };
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Archive des factures</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Tous les numéros de facture à la suite, avec leur statut, le PDF (clique le numéro) et les appels de service joints. « Rectifier » pour une facture annulée, créditée ou refaite.</div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+      <input value={q} onChange={e=>{ setQ(e.target.value); setNb(120); }} placeholder="No de facture ou d'AP, client, montant…" style={{flex:'1 1 200px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
+      {q && <button className="btn btn-sm" onClick={()=>setQ('')}>✕</button>}
+      {!q && <button className={'btn btn-sm'+(tout?' btn-p':'')} onClick={()=>{ setTout(!tout); setNb(120); }}>{tout ? 'Depuis le 1er juillet' : 'Tout l\'historique'}</button>}
+      <button className="btn btn-sm" onClick={()=>setCle(k=>k+1)}>↻</button></div>
+    {!qq && <div className="muted" style={{fontSize:12.5,marginBottom:6}}>#{debut} à #{fin}{nbTrous ? ' · '+nbTrous+' numéro'+(nbTrous>1?'s':'')+' manquant'+(nbTrous>1?'s':'')+' dans le registre' : ' · aucun numéro manquant'}</div>}
+    <div className="card" style={{padding:'4px 10px'}}>
+      {!L.length && <div className="muted" style={{padding:10}}>Rien trouvé.</div>}
+      {L.slice(0, nb).map(x=>x.manquant
+        ? <div key={'m'+x.manquant} style={{padding:'6px 2px',borderTop:'1px solid var(--border)',fontSize:13,display:'flex',gap:8}}><b style={{minWidth:44,color:'var(--danger)'}}>#{x.manquant}</b><span style={{color:'var(--danger)'}}>Numéro manquant — pas dans le registre (sauté, annulé au logiciel ou pas encore enregistré)</span></div>
+        : <React.Fragment key={x.f.num}>{Ligne({f:x.f})}</React.Fragment>)}   {/* appelée comme fonction : les champs de « Rectifier » gardent le focus */}
+      {L.length>nb && <div style={{padding:8,textAlign:'center'}}><button className="btn btn-sm" onClick={()=>setNb(n=>n+200)}>Voir plus ({L.length-nb})</button></div>}
+    </div>
+    <details style={{marginTop:12}}><summary className="muted" style={{cursor:'pointer',fontSize:13}}>Pas dans l'archive ? Chercher un AP, un OT ou une facture dans tout le Drive</summary>
+      <div style={{marginTop:8}}><DriveRapideView cfg={cfg} sansTitre/></div></details>
+  </div>;
+}
 function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, onglet0}){
-  const [onglet,setOnglet]=useState(onglet0==='verif' ? 'clients' : (onglet0 || 'clients'));
+  const estGL = k => GL_ONGLETS.some(x=>x[0]===k);
+  const [onglet,setOnglet]=useState(onglet0==='verif' ? 'clients' : estGL(onglet0) ? 'grand' : (onglet0 || 'clients'));
+  const [sous,setSous]=useState(estGL(onglet0) ? onglet0 : 'paiements');
   const [cles,setCles]=useState({});
   const choisir = k => { if(k===onglet) setCles(c=>({...c, [k]:(c[k]||0)+1})); setOnglet(k); NAV_FOCUS = null; window.scrollTo(0,0); };
+  const choisirSous = k => { if(k===sous) setCles(c=>({...c, [k]:(c[k]||0)+1})); setSous(k); NAV_FOCUS = null; window.scrollTo(0,0); };
   return <div>
     <h2 className="fh" style={{margin:'0 0 8px',fontSize:22}}>Comptabilité</h2>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,borderBottom:'1px solid var(--border)',paddingBottom:10}}>
@@ -13749,8 +13869,10 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
       <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Comptes clients</h2>
       <div className="muted" style={{fontSize:13,marginBottom:10}}>Tous tes clients : contracteurs et particuliers. Clique un client pour voir ses jobs (en cours, terminées), puis une job pour ses factures, achats, PO et dossier.</div>
       <RepertoireView key={'c'+(cles.clients||0)} mode="factures" cfg={cfgRep} refreshKey={refreshKey} toast={toast} isDesktop={isDesktop} contacts={contacts}/></>}
-    {onglet==='paiements' && <PaiementsOnglet key={'p'+(cles.paiements||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
-    {onglet==='taxes' && <TaxesView key={'t'+(cles.taxes||0)} cfg={cfgRep}/>}
+    {onglet==='grand' && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>{GL_ONGLETS.map(([k,l])=><button key={k} className={'btn btn-sm'+(sous===k?' btn-p':'')} onClick={()=>choisirSous(k)}>{l}</button>)}</div>}
+    {onglet==='grand' && sous==='paiements' && <PaiementsOnglet key={'p'+(cles.paiements||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
+    {onglet==='grand' && sous==='taxes' && <TaxesView key={'t'+(cles.taxes||0)} cfg={cfgRep}/>}
+    {onglet==='grand' && sous==='archive' && <ArchiveFacturesView key={'a'+(cles.archive||0)} cfg={cfgRep}/>}
     {onglet==='factures' && <FacturesView key={'x'+(cles.factures||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='verif' && <>
       <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>À vérifier</h2>
@@ -14662,7 +14784,6 @@ function App(){
     {id:'courriels',label:'Courriels'},
     {id:'heures',label:'Employés'},
     {id:'produits',label:'Inventaire'},   // v275 : Inventaire = Catalogue (ex-Produits) + Inventaire (ex-Stock)
-    {id:'drive',label:'Drive'},           // v404 : ouvrir vite un appel de service, un OT ou une facture par son numéro
     {id:'reglages',label:'Réglages'}
   ];
 
@@ -14716,7 +14837,6 @@ function App(){
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='soumissions' && <AppelsServiceSection key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {nav==='commandes' && <CommandesView key={'bc'+navKey} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
-        {nav==='drive' && <VerrouCompta cfg={effectiveCfg}><DriveRapideView cfg={effectiveCfg}/></VerrouCompta>}
         {(nav==='produits' || nav==='stock') && <InventaireSection key={'inv'+navKey} initial={nav==='stock' ? 'inventaire' : ''} cfg={effectiveCfg} toast={show} data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
         </Parechoc>
