@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v405';
+const APP_VERSION = 'v406';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5551,7 +5551,7 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
   // pour que le virement balance et se confirme. Elle ne devient pas « à recevoir » (seulement les factures depuis le 1er juillet le sont).
   const V = factures.__vieilles || {}, nommees = new Set(paiements.filter(p=>String(p.date).slice(0,10) >= PAI_DEBUT).flatMap(p=>[...p.lues, ...paiNums(p.message), ...(p.confirmees||[])]));
   const F = {}; [...Object.values(factures), ...Object.values(V).filter(f=>nommees.has(f.num) && !factures[f.num])].forEach(f=>{ F[f.num] = {...f, paye:0, paiements:[]};
-    const c = String(f.client||'').trim().toLowerCase(); if(nomDe && c.includes('@')){ const r = nomDe(c); if(r) F[f.num].nomRep = r.nom; else F[f.num].sansFiche = c; } });
+    const c = String(f.client||'').trim().toLowerCase(); if(nomDe && c.includes('@')){ const r = nomDe(c, f); if(r) F[f.num].nomRep = r.nom; else F[f.num].sansFiche = c; } });
   const conf = paiements.filter(p=>/^confirm/i.test(p.statut) && p.confirmees.length).sort((a,b)=>a.date.localeCompare(b.date));
   // Ce qu'on a appris : tel « Envoyé par » paie pour tel client.
   const appris = {};
@@ -5768,7 +5768,11 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees}
       const cle = 'g:'+ids.slice().sort()[0]; ids.forEach(i=>{ if(!grp[i]) grp[i] = cle; }); });
     const groupe = f => { for(const i of [persCle(f.client||''), String(f.client||'').trim().toLowerCase(), persCle(f.nom||'')]) if(i && grp[i]) return grp[i]; return null; };
     return {parNom, parCourriel, conjoint, conjMots, payeur, groupe}; },[R]);
-  const nomDe = useCallback(e => parCourriel[e] || (()=>{ const code = repCodeCourriel(e, FR); return code ? {nom:CLIENT_CODES[code]||code} : null; })(),[parCourriel, FR]);
+  // v406 : courriel inconnu du Répertoire → la job où la facture est inscrite (agenda) donne le client (ex. smainville8@… = Serge Mainville, facture #2684)
+  const persDeJob = useMemo(()=>{ const m = {}; (R.pers||[]).forEach(p=>(p.srcJobs||[]).forEach(j=>{ if(j && j.id && !m[j.id]) m[j.id] = p; })); return m; },[R]);
+  const parJob = useCallback(n => { const j = jobDeFac[n]; if(!j) return null; const p = persDeJob[j.id];
+    if(p) return {nom:p.nom, p, viaJob:true}; if(j.client==='PART'){ const nm = cvTitreJob(j); return nm ? {nom:nm, viaJob:true} : null; } return null; },[jobDeFac, persDeJob]);
+  const nomDe = useCallback((e, f) => parCourriel[e] || (()=>{ const code = repCodeCourriel(e, FR); return code ? {nom:CLIENT_CODES[code]||code} : null; })() || (f && f.num ? parJob(f.num) : null),[parCourriel, FR, parJob]);
   const [assoc,setAssoc]=useState(null);   // {courriel, q, nom}
   const associer = async (courriel, cible, nomNouveau) => { setBusy('as'+courriel);
     try{
@@ -5782,6 +5786,19 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees}
     setBusy(''); };
   const [tick,setTick]=useState(0);
   const [data,setData]=useState(null);
+  // v406 : le courriel d'une facture trouvé par la job est ajouté tout seul à la fiche du client dans le Répertoire (une fois)
+  const fichesFaites = useRef(new Set());
+  useEffect(()=>{ if(!data || !data.factures || !(R.pers||[]).length) return;
+    const aEcrire = {};
+    Object.values(data.factures).forEach(f=>{ const c = String(f.client||'').trim().toLowerCase(); if(!c.includes('@') || parCourriel[c] || repCodeCourriel(c, FR)) return;
+      const r = parJob(f.num); if(!r || !r.p || !r.p.fiche) return;
+      const deja = String(r.p.fiche.courriel||'').toLowerCase().split(/[\s,;]+/); if(deja.includes(c)) return;
+      const k = r.p.fiche.row+'|'+c; if(fichesFaites.current.has(k)) return; fichesFaites.current.add(k);
+      (aEcrire[r.p.fiche.row] = aEcrire[r.p.fiche.row] || {f:r.p.fiche, c:new Set()}).c.add(c); });
+    const L = Object.values(aEcrire); if(!L.length) return;
+    (async()=>{ for(const x of L){ try{ await ficheEcrire(cfgRep || cfg, {...x.f, type:'Client', courriel:[...new Set([...String(x.f.courriel||'').split(/[\s,;]+/), ...x.c].filter(Boolean))].join(', ')}); }catch(e){} }
+      setRepTick(t=>t+1); })();
+  },[data, R, parJob]);
   const [err,setErr]=useState('');
   const [sous,setSous]=useState('confirmer');
   const [busy,setBusy]=useState('');
