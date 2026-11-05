@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v406';
+const APP_VERSION = 'v407';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11342,6 +11342,9 @@ function cvClientDescription(desc, titre){
   if(!courriel){ const l = L.find(x=>/^(courriel|e-?mail)\b/i.test(x)); if(l) courriel = mailDe(l); }
   return {nom:noms[0], conjoint:noms[1]||'', tel, courriel};
 }
+// v407 : chez CRS (Cuisines Rive-Sud), tout est cuisine ou salle de bain — « La Jeunesse Cuisine » = « La Jeunesse »
+function cvSansPiece(code, nom){ if(code!=='CRS') return nom;
+  const t = String(nom||'').replace(/\b(cuisines?|salles?\s+de\s+bains?|salle\s*de\s*bain|sdb)\b/ig,' ').replace(/\s+/g,' ').trim(); return t || nom; }
 function cvParseEvent(e){
   const title = String(e.title||'').trim();
   const toks = title.replace(new RegExp(CV_NOJOB_RE.source,'ig'),' ').replace(/[()]/g,' ').split(/[\s\-–\/,+&]+/).filter(Boolean);
@@ -11360,7 +11363,7 @@ function cvParseEvent(e){
   });
   while(nameParts.length>1 && CREW_INITIALS[nameParts[nameParts.length-1].toUpperCase().replace(/\.$/,'')]) initials.push(nameParts.pop().toUpperCase().replace(/\.$/,''));   // « Bourne Au » à la fin = initiales
   const po = cvPO(title) || cvPO(e.description);
-  const name = cvTitleCase(nameParts.join(' ').trim());
+  const name = cvTitleCase(cvSansPiece(code, nameParts.join(' ').trim()));
   const crew = new Set(initials.map(i=>CREW_INITIALS[i]));
   if(CREW_COLORS[e.colorId]) crew.add(CREW_COLORS[e.colorId]);
   return {
@@ -11512,7 +11515,7 @@ function cvBuildClients(events, registry, factures){
       }
       const id = po ? p.code+'|'+po : p.code+'|'+(p.key || cvNorm(p.location) || p.title);
       const reg = po ? regByPO[po] : null;
-      const j = getJob(id, {client:p.code, po, name: reg ? reg.nom : (p.name || p.location || p.title), reg});
+      const j = getJob(id, {client:p.code, po, name: reg ? cvSansPiece(p.code, reg.nom) : (p.name || p.location || p.title), reg});
       j.events.push(p);
     } else {
       if(raw.calendarId !== CREW_CAL && raw.calendarId !== EN_ATTENTE_CAL) return; // particuliers : calendrier de l'équipe + En Attente
