@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v403';
+const APP_VERSION = 'v404';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6682,6 +6682,45 @@ async function driveFetch(url, opts){
   if(!r.ok){ const t = await r.text().catch(()=>''); throw new Error((r.status===403?'Permission Drive manquante — ':'Drive '+r.status+' ')+t.slice(0,120)); }
   return r.json();
 }
+// v404 : onglet « Drive » — tape un numéro d'appel de service, d'OT ou de facture et ouvre le papier tout de suite
+function DriveRapideView({cfg}){
+  const [type,setType]=useState('AP');
+  const [num,setNum]=useState('');
+  const [res,setRes]=useState(null);
+  const [etat,setEtat]=useState('');
+  const chercher = async () => { const n = num.trim().replace(/^#/,''); if(!n) return; setEtat('Recherche…'); setRes(null);
+    const out = [], vus = new Set(); const aj = (nom, lien, src) => { if(!lien || vus.has(lien)) return; vus.add(lien); out.push({nom, lien, src}); };
+    const lienF = id => 'https://drive.google.com/file/d/'+id+'/view';
+    try{
+      if(type==='FAC' && cfg.memoireFacturesSpreadsheetId){ const r = await lireCache(cfg.memoireFacturesSpreadsheetId, 'A1:J', false);
+        const v = r.result.values||[], h = (v[0]||[]).map(x=>cvNorm(x)), iP = h.findIndex(x=>/^pdf/.test(x));
+        v.slice(1).forEach(x=>{ if(String(x[0]||'').replace(/\D/g,'')===n.replace(/\D/g,'') && iP>=0 && x[iP]) aj('Facture #'+n+' — '+(x[4]||x[2]||'')+(x[7] ? ' · '+cvMoney(cvNum(x[7])) : ''), lienF(String(x[iP]).trim()), 'La mémoire — Factures'); }); }
+      if((type==='AP' || type==='OT') && cfg.memoireAppelsSpreadsheetId){ const r = await lireCache(cfg.memoireAppelsSpreadsheetId, 'A1:J', false);
+        (r.result.values||[]).slice(1).forEach(x=>{ const ap = String(x[0]||'').trim(), ot = String(x[2]||'').trim();
+          if(((type==='AP' && ap===n) || (type==='OT' && ot===n)) && x[6]) aj((type==='AP'?'AP ':'OT ')+n+(x[4] ? ' — '+x[4] : '')+(x[1] ? ' · facture '+x[1] : ''), lienF(x[6]), 'La mémoire — Appels de service'); }); }
+      if(type!=='FAC'){ try{ const g = await lirePad(true); g.forEach(p=>(p.fichiers||[]).forEach(f=>{ if(new RegExp('^'+type+'[ _-]?0*'+n+'\\b','i').test(String(f.nom||''))) aj(f.nom, f.lien, 'Dossier 1-PAD (pas encore traité)'); })); }catch(e){} }
+      // Partout dans le Drive : nom du fichier qui contient le numéro
+      const q = encodeURIComponent("name contains '"+n.replace(/'/g,"\\'")+"' and trashed=false and mimeType!='application/vnd.google-apps.folder'");
+      const r = await driveFetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id,name,webViewLink,modifiedTime)&orderBy=modifiedTime desc&pageSize=25&supportsAllDrives=true&includeItemsFromAllDrives=true');
+      (r.files||[]).filter(f=>new RegExp('(^|\\D)0*'+n+'(\\D|$)').test(f.name)).sort((a,b)=>{ const sc = f => (new RegExp(type==='FAC' ? 'factur' : '^'+type,'i').test(f.name) ? 0 : 1); return sc(a)-sc(b); })
+        .forEach(f=>aj(f.name, f.webViewLink || lienF(f.id), 'Drive · '+cvFmtDay(String(f.modifiedTime).slice(0,10))));
+      setRes(out); setEtat(''); }
+    catch(e){ setRes(out); setEtat(e.message==='acces' ? 'Le CRM n\'a pas accès au Drive : déconnecte-toi puis reconnecte-toi.' : apiErrMsg(e)); } };
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Drive</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:12}}>Tape un numéro : le papier s'ouvre en un clic (registres de La mémoire, dossier 1-PAD, puis tout ton Drive).</div>
+    <div className="card" style={{display:'grid',gap:10}}>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{[['AP','Appel de service'],['OT','Ordre de travail'],['FAC','Facture']].map(([k,l])=><button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>{ setType(k); setRes(null); }}>{l}</button>)}</div>
+      <div style={{display:'flex',gap:6}}>
+        <input autoFocus value={num} onChange={e=>setNum(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') chercher(); }} inputMode="numeric" placeholder={type==='FAC' ? 'No de facture — ex. 2719' : type==='OT' ? 'No d\'OT — ex. 591' : 'No d\'appel — ex. 1744'} style={{flex:1,fontSize:18,padding:'8px 12px'}}/>
+        <button className="btn btn-p" disabled={!num.trim() || etat==='Recherche…'} onClick={chercher}>Ouvrir</button></div>
+      {etat && <div className="muted" style={{fontSize:13}}>{etat}</div>}
+      {res && !res.length && !etat && <div className="muted" style={{fontSize:13}}>Rien trouvé pour {type==='FAC'?'la facture':type} {num}.</div>}
+      {res && res.length>0 && <div style={{display:'grid',gap:6}}>{res.map((x,i)=><a key={i} href={x.lien} target="_blank" rel="noopener" className="card" style={{padding:'10px 12px',textDecoration:'none',color:'inherit',display:'block',borderColor:i===0?'var(--accent)':undefined}}>
+        <div style={{fontWeight:700,color:'var(--accent)'}}>📄 {x.nom} ↗</div><div className="muted" style={{fontSize:12}}>{x.src}</div></a>)}</div>}
+    </div>
+  </div>;
+}
 async function driveDossier(nom, parent){
   const q = encodeURIComponent("name='"+nom.replace(/'/g,"\\'")+"' and mimeType='application/vnd.google-apps.folder' and trashed=false and '"+(parent||'root')+"' in parents");
   const l = await driveFetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id)&pageSize=1');
@@ -11526,7 +11565,7 @@ function cvBuildClients(events, registry, factures){
   });
   Object.values(clients).forEach(c=>{
     c.jobs.sort((a,b)=>b.first.localeCompare(a.first));
-    c.active = c.jobs.filter(j=>j.status!=='done').length;
+    c.active = c.jobs.filter(j=>!cvFinie(j)).length;
     c.flags = c.jobs.filter(j=>j.flag).length;
     c.poTotal = c.jobs.reduce((t,j)=>t+((j.reg&&j.reg.ht)||0),0);
     c.billed = c.jobs.reduce((t,j)=>t+(j.billed||0),0);
@@ -11659,6 +11698,8 @@ function CvPhaseCell({job, phase}){
   </div></div>;
 }
 
+// v404 : une job « terminée » mais pas encore facturée (factures pas envoyées) reste visible partout, comme une job active
+const cvFinie = j => j && j.status==='done' && j.etatClient!=='afacturer';
 const CV_STATUS = {afacturer:['À facturer','var(--warning)'], done:['Terminée','var(--success)'], cours:['En cours','var(--accent)'], avenir:['À venir','var(--muted)'], attente:['En attente','var(--warning)']};
 function CvPill({status}){
   const [t,c]=CV_STATUS[status];
@@ -12118,20 +12159,20 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
   const [voirTerm,setVoirTerm]=useVoirTerminees();
   const [reglees, marquerRegle] = useVerifsReglees(cfg);
   const av = useMemo(()=>cvAVerifierClient(client, reglees, archives),[client, reglees, archives]);
-  const nbTerm = client.jobs.filter(j=>j.status==='done' && !arch(j)).length;
+  const nbTerm = client.jobs.filter(j=>cvFinie(j) && !arch(j)).length;
   // v115 : une recherche cherche dans TOUTES les jobs (terminées et archivées comprises), peu importe le filtre choisi
   const qn = cvNorm(q.replace(/\bP[O0]\s*(?=\d)/i,'P0'));
   const trouve = j => { const t = cvNorm([j.po,j.name,j.address,...j.factures].join(' ')); return t.includes(qn) || (/^\d{3,}$/.test(qn) && t.includes('p0'+qn)); };
   const list = q.trim() ? client.jobs.filter(trouve) :
     client.jobs.filter(j=>(filter==='arch' ? arch(j) : !arch(j)) && (filter==='all' || filter==='arch' || (filter==='flag'?av.ids.has(j.id):j.etatClient===filter)) &&
-    (voirTerm || filter==='done' || filter==='arch' || filter==='flag' || j.status!=='done'));
+    (voirTerm || filter==='done' || filter==='arch' || filter==='flag' || !cvFinie(j)));
   const job = client.jobs.find(j=>j.id===sel) || null;
   function pick(id){ setSel(id); if(!isDesktop) setTimeout(()=>detailRef.current && detailRef.current.scrollIntoView({behavior:'smooth'}),50); }
   const tiles = [
     [client.jobs.length,'jobs'],
     [client.poTotal ? Math.round(client.poTotal).toLocaleString('fr-CA')+' $' : '—','en PO, avant taxes'],
     [client.billed ? Math.round(client.billed).toLocaleString('fr-CA')+' $' : '—','facturé, avant taxes'],
-    [client.jobs.filter(j=>j.status==='done').length,'terminées'],
+    [client.jobs.filter(j=>cvFinie(j)).length,'terminées'],
     [client.active,'en cours ou à venir'],
     [av.n,'à vérifier']
   ];
@@ -12661,8 +12702,8 @@ function ClientsView({cfg, refreshKey, isDesktop}){
         <button className="btn btn-sm" title={ouvert?'Cacher les jobs':'Voir les jobs'} onClick={()=>setDeplie(d=>({...d,[c.code]:!d[c.code]}))}>{ouvert?'▲':'▼'}</button>
       </div>
       {ouvert && <div style={{marginTop:8,borderTop:'1px solid var(--border)'}}>
-        {!voirTerm && !c.jobs.some(j=>j.status!=='done') && <div className="muted" style={{fontSize:12.5,padding:'8px 0'}}>Toutes terminées — coche « Terminées » pour les voir.</div>}
-        {c.jobs.filter(j=>voirTerm || j.status!=='done').map(j=><div key={j.id} className="remind-item" style={{cursor:'pointer'}} onClick={()=>setOpen(c.code)}>
+        {!voirTerm && !c.jobs.some(j=>!cvFinie(j)) && <div className="muted" style={{fontSize:12.5,padding:'8px 0'}}>Toutes terminées — coche « Terminées » pour les voir.</div>}
+        {c.jobs.filter(j=>voirTerm || !cvFinie(j)).map(j=><div key={j.id} className="remind-item" style={{cursor:'pointer'}} onClick={()=>setOpen(c.code)}>
           <div><b style={{fontSize:13.5}}>{cvTitreJobComplet(j)}</b>{j.po && <span className="muted" style={{fontSize:12}}> · {j.po}</span>}<div className="muted" style={{fontSize:12}}>{j.address}</div></div>
           <div className="muted" style={{fontSize:12,whiteSpace:'nowrap'}}>{cvFmtDay(j.last)}</div>
         </div>)}
@@ -13668,7 +13709,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
     let cl = null;
     if(suivi==='PART') cl = clients.PART;
     else if(suivi.startsWith('P:')){ const p = R.pers.find(x=>x.id===suivi);
-      if(p && clients.PART){ const jobs = p.srcJobs; cl = {...clients.PART, label:p.nom, contact:'', jobs, active:jobs.filter(j=>j.status!=='done').length,
+      if(p && clients.PART){ const jobs = p.srcJobs; cl = {...clients.PART, label:p.nom, contact:'', jobs, active:jobs.filter(j=>!cvFinie(j)).length,
         poTotal:jobs.reduce((t,j)=>t+((j.reg&&j.reg.ht)||0),0), billed:jobs.reduce((t,j)=>t+(j.billed||0),0), lastDay:jobs.reduce((m,j)=>j.last>m?j.last:m,'')}; } }
     else cl = clients[suivi];
     // v240 : pour un particulier sans PO, le montant de référence = sa soumission (la dernière envoyée avant le premier passage)
@@ -13805,7 +13846,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
       <CvAnomalies cfg={cfg} factures={d.factures} clients={clients} appels={d.appels || {parNumero:{}, parFacture:{}, liste:[]}} onOpen={code=>setSuivi(code)} onChanged={()=>setTick(t=>t+1)}/></>;
   } else if(vue==='factures'){   // v240 : Factures clients — contracteurs en cubes + un cube Particuliers
     const stats = cl => { const L = (cl && cl.jobs) || []; const n = L.filter(j=>!(d.archives||{})[j.id]);
-      return n.length ? n.length+' job'+(n.length>1?'s':'')+' · '+n.filter(j=>j.status!=='done').length+' en cours ou à venir' : 'Aucune job récente'; };
+      return n.length ? n.length+' job'+(n.length>1?'s':'')+' · '+n.filter(j=>!cvFinie(j)).length+' en cours, à venir ou à facturer' : 'Aucune job récente'; };
     const totF = contrTri.reduce((t,c)=>t+(aVerif['C:'+c.code]||0),0) + (aVerif.PART||0);
     corps = <>{totF>0 && <div className="muted" style={{fontSize:12.5,marginTop:4}}>En rouge : <b style={{color:'var(--danger)'}}>{totF} à vérifier</b> — ouvre le client, la liste « À vérifier » est en haut de ses jobs.</div>}
       {titre('Contracteurs', contrTri.length)}
@@ -14457,6 +14498,7 @@ function App(){
     {id:'courriels',label:'Courriels'},
     {id:'heures',label:'Employés'},
     {id:'produits',label:'Inventaire'},   // v275 : Inventaire = Catalogue (ex-Produits) + Inventaire (ex-Stock)
+    {id:'drive',label:'Drive'},           // v404 : ouvrir vite un appel de service, un OT ou une facture par son numéro
     {id:'reglages',label:'Réglages'}
   ];
 
@@ -14510,6 +14552,7 @@ function App(){
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='soumissions' && <AppelsServiceSection key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {nav==='commandes' && <CommandesView key={'bc'+navKey} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
+        {nav==='drive' && <VerrouCompta cfg={effectiveCfg}><DriveRapideView cfg={effectiveCfg}/></VerrouCompta>}
         {(nav==='produits' || nav==='stock') && <InventaireSection key={'inv'+navKey} initial={nav==='stock' ? 'inventaire' : ''} cfg={effectiveCfg} toast={show} data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
         </Parechoc>
