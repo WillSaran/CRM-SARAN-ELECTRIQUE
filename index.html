@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v410';
+const APP_VERSION = 'v411';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -13423,6 +13423,27 @@ function txLireReleve(txt){
       coche: !paiement && !interet && !etranger && montant>0}); }
   return out; }
 
+// v411 : relevé de carte Visa Desjardins (lignes lues par pdf.js) — « JJ MM [JJ MM NNN] Description Montant[CR] »
+function txLireReleveCarte(lignes){
+  const T = lignes.join('\n');
+  const d = T.match(/Jour\s*(\d{1,2})\s*Mois\s*(\d{1,2})\s*Ann[ée]e\s*(20\d{2})/i);
+  const anR = d ? +d[3] : new Date().getFullYear(), moR = d ? +d[2] : 12;
+  const re = /^\s*(\d{1,2})\s+(\d{1,2})\s+(?:(\d{1,2})\s+(\d{1,2})\s+(?:\d{3}\s+)?)?(\S.*?)\s+(-?\d{1,3}(?:[  ]?\d{3})*,\d{2})\s*(CR)?\s*$/i;
+  const out = []; let titulaire = '';
+  lignes.forEach(l=>{
+    const t = l.match(/effectu[ée]es avec la carte(?: de)?\s*:\s*(.+?)(?:\s+Carte\s*:.*)?$/i); if(t){ titulaire = /^X|\*/.test(t[1]) ? '' : t[1].trim(); return; }
+    if(/Op[ée]rations au compte/i.test(l)){ titulaire = ''; return; }
+    const m = l.match(re); if(!m) return;
+    const j = +m[1], mo = +m[2]; if(!(j>=1 && j<=31 && mo>=1 && mo<=12)) return;
+    const y = mo > moR ? anR-1 : anR;
+    const desc = m[5].replace(/\s+/g,' ').trim(), montant = txNum(m[6]) * (m[7] ? -1 : 1);
+    const paiement = !!m[7] || montant<0 || /paiement|payment|\bmerci\b|pr[ée]l[èe]vement/i.test(desc);
+    const interet = /int[ée]r[êe]ts?|frais de cr[ée]dit|frais (annuels|carte suppl)/i.test(desc);
+    const etranger = /ANTHROPIC|OPENAI|CHATGPT|LOVABLE|MANUS|MIRO|SPOTIFY/i.test(desc) || /\s(SE|SG|DE|US|GB|IE|NL)(\s|$)/.test(desc);
+    out.push({date:y+'-'+String(mo).padStart(2,'0')+'-'+String(j).padStart(2,'0'), desc:(desc+(titulaire ? ' · '+titulaire : '')).slice(0,90), montant, paiement, interet, etranger,
+      coche: !paiement && !interet && !etranger && montant>0}); });
+  return out; }
+
 // ── Données : factures clients, achats fournisseurs, dépenses déposées ──
 function useTaxes(cfg, cle){
   const [d,setD]=useState({lu:false, err:'', ventes:[], achats:[], depenses:[], depExiste:false});
@@ -13451,11 +13472,11 @@ async function depAjouter(cfg, existe, lignes){
   if(typeof suivreEcritures==='function') suivreEcritures();
   return window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:cfg.memoireAchatsSpreadsheetId, range:qSheet(DEP_ONGLET)+'!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS',
     resource:{values:lignes.map((x,i)=>['D'+Date.now()+'-'+i, x.date, x.qui, x.ref||'', String(txR(txNum(x.ht))), String(txR(txNum(x.tps))), String(txR(txNum(x.tvq))), String(txR(txNum(x.ttc))), x.source, x.pdf||'', x.estime ? 'oui' : 'non', new Date().toLocaleString('fr-CA')])}}); }
-async function depFichier(fichier){
+async function depFichier(fichier, sansTexte){
   if(!peutDeposer()){ await requestToken('consent'); if(!peutDeposer()) throw new Error('Permission Drive refusée (coche « fichiers Drive »)'); }
   const dossier = await driveDossier('Saran CRM — Dépenses');
   const r = await driveDeposer(fichier, dossier);
-  let texte = ''; try{ texte = await driveTexte(r.id); }catch(e){ texte = ''; }
+  let texte = ''; if(!sansTexte){ try{ texte = await driveTexte(r.id); }catch(e){ texte = ''; } }
   return {id:r.id, texte}; }
 
 // Déposer une facture de dépense : lue toute seule, à vérifier, puis enregistrée
@@ -13496,8 +13517,11 @@ function DepotReleve({cfg, existe, depenses, onFait, onFermer}){
   const [ajout,setAjout]=useState({date:localDateStr(new Date()), desc:'', montant:''});
   const deja = x => depenses.some(d=>d.date===x.date && Math.abs(d.ttc-x.montant)<0.01 && cvNorm(d.qui).slice(0,12)===cvNorm(x.desc).slice(0,12));
   const choisir = async fichier => { if(!fichier) return; setEtat('Lecture du relevé…');
-    try{ const {id, texte} = await depFichier(fichier); const lignes = txLireReleve(texte).map(x=>({...x, deja:deja(x), coche:x.coche && !deja(x)}));
-      setRel({pdf:id, nom:fichier.name||'Relevé', lignes, lu:!!texte}); setEtat(''); }
+    try{ // v411 : PDF lu par pdf.js (colonnes en ordre) — le relevé Visa Desjardins « JJ MM … » ; sinon, l'ancienne lecture par Drive
+      let lus = [];
+      if(/\.pdf$/i.test(fichier.name||'') || fichier.type==='application/pdf'){ try{ const pages = await relevePdfPages(fichier); lus = txLireReleveCarte(pages.flatMap(p=>releveLignes(p).map(l=>l.txt))); }catch(e){ lus = []; } }
+      const {id, texte} = await depFichier(fichier, lus.length>0); const lignes = (lus.length ? lus : txLireReleve(texte)).map(x=>({...x, deja:deja(x), coche:x.coche && !deja(x)}));
+      setRel({pdf:id, nom:fichier.name||'Relevé', lignes, lu:!!(texte || lus.length)}); setEtat(''); }
     catch(e){ setEtat('Erreur : '+(e.message||e)); } };
   const maj = (i, o) => setRel(r=>({...r, lignes:r.lignes.map((x,k)=>k===i ? {...x, ...o} : x)}));
   const coches = rel ? rel.lignes.filter(x=>x.coche) : [];
