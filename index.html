@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v401';
+const APP_VERSION = 'v402';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7839,6 +7839,9 @@ function ChoixProduit({produits, onChoix, defaut}){
 function ProduitsView({cfg, toast}){
   const C = useCatalogue(cfg);
   const [vue,setVue]=useState('catalogue');
+  // v402 : vue compacte (cellulaire) — photo, code, description et prix sur une même ligne, sans défiler à droite
+  const [compacte,setCompacte0]=useState(()=>{ try{ const x = localStorage.getItem('prod_compacte'); if(x!=null) return x==='1'; }catch(e){} return window.innerWidth<760; });
+  const setCompacte = x => { setCompacte0(x); try{ localStorage.setItem('prod_compacte', x?'1':'0'); }catch(e){} };
   const [cat,setCat]=useState('');
   const [sous,setSous]=useState(''), [type,setType]=useState('');   // v357 : type = 2e niveau (CONDUIT · PVC → Coude, LB…)
   const [q,setQ]=useState('');
@@ -7961,7 +7964,27 @@ function ProduitsView({cfg, toast}){
         {niv.n2[sous].map(t=><button key={t} className={'btn btn-sm'+(type===t?' btn-p':'')} style={{fontSize:11,padding:'1px 7px'}} onClick={()=>setType(t)}>{t}</button>)}
       </div>}
       {q && <div className="muted" style={{fontSize:12,marginBottom:6}}>Recherche dans tout le catalogue : {liste.length} produit{liste.length>1?'s':''}</div>}
-      <div className="card" style={{padding:0,overflowX:'auto'}}>
+      <div style={{display:'flex',justifyContent:'flex-end',marginBottom:6}}><button className="btn btn-sm" onClick={()=>setCompacte(!compacte)}>{compacte ? '▦ Vue tableau' : '📱 Vue compacte'}</button></div>
+      {compacte && <div className="card" style={{padding:0}}>   {/* v402 */}
+        {liste.slice(0,lim).map(p=>{ const k=p.cat+'|'+p.code, sug=C.suggereDe(p.code), mp=C.monPrix(p.code), f=C.factureDe(p.code);
+          if(edit && edit.k===k) return <div key={k} style={{padding:8,borderBottom:'1px solid var(--border)'}}><FicheEdit p={p} edit={edit} setEdit={setEdit} C={C} toast={toast} err={err} photoDe={photoDe}/></div>;
+          const os = C.offresDe(p.code).filter(o=>o.prix>0), u = p.unite || (os[0]||{}).unite;
+          const parF = fourn.map(fr=>{ const l = os.filter(o=>o.f===fr); if(!l.length) return null; const px = Math.min(...l.map(o=>prixEnUnite(o.prix,o.unite,u))); return {fr, px}; }).filter(Boolean);
+          const min = parF.length ? Math.min(...parF.map(x=>x.px)) : null;
+          const vente = mp && mp.prix!=null && mp.prix!=='' ? cvNum(mp.prix) : sug;
+          return <div key={k} onClick={()=>setEdit({k, code:p.code, desc:p.desc, unite:p.unite, cat:p.cat, sous:p.sous||'', photo:p.photo||'', notes:p.notes||'', alias:p.alias||''})}
+            style={{display:'grid',gridTemplateColumns:'38px 1fr auto',gap:8,alignItems:'center',padding:'6px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer'}}>
+            <ProdPhoto src={photoDe(p)}/>
+            <div style={{minWidth:0,fontSize:12.5,lineHeight:1.25}}><b>{p.code}</b><div style={{overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{p.desc}</div></div>
+            <div style={{textAlign:'right',fontSize:12,lineHeight:1.3,whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>
+              {parF.map(x=><div key={x.fr} style={x.px===min && parF.length>1 ? {color:'var(--success)',fontWeight:700} : null}><span className="muted" style={{fontSize:10.5}}>{x.fr} </span>{cvMoney(x.px)}</div>)}
+              {!parF.length && f && <div className="muted"><span style={{fontSize:10.5}}>facturé </span>{cvMoney(f.prix)}</div>}
+              {vente!=null && <div style={{fontWeight:700}}><span className="muted" style={{fontSize:10.5,fontWeight:400}}>vente </span>{cvMoney(vente)}</div>}
+              <div className="muted" style={{fontSize:10}}>/{u||'un'}</div></div>
+          </div>; })}
+        {C.lu && !liste.length && <div className="muted" style={{padding:16}}>Aucun produit.</div>}
+      </div>}
+      {!compacte && <div className="card" style={{padding:0,overflowX:'auto'}}>
         <table>
           <thead><tr><th></th><th>Code</th><th>Description</th>{fourn.map(f=><th key={f}>{f}</th>)}<th style={{textAlign:'right'}}>Suggéré</th><th style={{textAlign:'right'}}>Mon prix</th><th style={{textAlign:'right'}}>Dernier facturé</th><th></th></tr></thead>
           <tbody>
@@ -7989,7 +8012,7 @@ function ProduitsView({cfg, toast}){
             {C.lu && !liste.length && <tr><td colSpan={7+fourn.length} className="muted" style={{padding:16}}>Aucun produit.</td></tr>}
           </tbody>
         </table>
-      </div>
+      </div>}
       {liste.length>lim && <div style={{textAlign:'center',marginTop:8}}><button className="btn btn-sm" onClick={()=>setLim(lim+300)}>Afficher plus ({liste.length-lim} autres)</button></div>}
     </>}
 
