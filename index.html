@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v408';
+const APP_VERSION = 'v409';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11349,6 +11349,13 @@ function cvClientDescription(desc, titre){
   if(!courriel){ const l = L.find(x=>/^(courriel|e-?mail)\b/i.test(x)); if(l) courriel = mailDe(l); }
   return {nom:noms[0], conjoint:noms[1]||'', tel, courriel};
 }
+// v409 : projets CRS = nom de famille seulement (« Eve Côté » → « Côté », « PM Dicaire » → « Dicaire »)
+const PRENOMS_QC = new Set(('eve marie julie sophie isabelle nathalie chantal josee johanne lyne line sylvie diane linda nancy manon karine caroline genevieve melanie stephanie annie valerie emilie catherine audrey vanessa jessica amelie marilyne maryse mylene veronique marie-eve marie-pier marie-claude marie-josee anne-marie gisele helene louise monique francine lise ginette carole suzanne nicole denise lucie danielle christine claudine josiane andree pascale jacinthe kathleen laurie camille sarah chloe lea rosalie noemie jade maude roxanne justine'
+  +' jean pierre michel andre claude jacques marc luc guy alain daniel francois martin eric stephane patrick sylvain richard robert serge yves denis gilles normand mario mathieu maxime alexandre simon philippe sebastien louis benoit dominique nicolas olivier vincent jonathan kevin david steve frederic julien hugo samuel gabriel antoine felix william charles jean-francois jean-marc jean-pierre jean-guy marc-andre pierre-luc pier-luc francis guillaume vincent mathieu jeremie raphael etienne christian rene roger real gaetan gerald paul bruno carl rejean sylvio michael ryan')
+  .split(/\s+/).filter(Boolean).map(x=>x.replace(/[^a-z]/g,'')));
+function cvNomFamille(code, nom){ if(code!=='CRS') return nom; const m = String(nom||'').trim().split(/\s+/); if(m.length<2) return nom;
+  const n0 = cvNorm(m[0]).replace(/[^a-z]/g,''); if(PRENOMS_QC.has(n0) || /^[b-df-hj-np-tv-z]{1,2}\.?$/i.test(m[0])) return m.slice(1).join(' ');   // prénom ou initiales (« PM ») devant le nom
+  return nom; }
 // v407 : chez CRS (Cuisines Rive-Sud), tout est cuisine ou salle de bain — « La Jeunesse Cuisine » = « La Jeunesse »
 function cvSansPiece(code, nom){ if(code!=='CRS') return nom;
   const t = String(nom||'').replace(/\b(cuisines?|salles?\s+de\s+bains?|salle\s*de\s*bain|sdb)\b/ig,' ').replace(/\s+/g,' ').trim(); return t || nom; }
@@ -11522,7 +11529,7 @@ function cvBuildClients(events, registry, factures){
       }
       const id = po ? p.code+'|'+po : p.code+'|'+(p.key || cvNorm(p.location) || p.title);
       const reg = po ? regByPO[po] : null;
-      const j = getJob(id, {client:p.code, po, name: reg ? cvSansPiece(p.code, reg.nom) : (p.name || p.location || p.title), reg});
+      const j = getJob(id, {client:p.code, po, name: cvNomFamille(p.code, reg ? cvSansPiece(p.code, reg.nom) : (p.name || p.location || p.title)), reg});
       j.events.push(p);
     } else {
       if(raw.calendarId !== CREW_CAL && raw.calendarId !== EN_ATTENTE_CAL) return; // particuliers : calendrier de l'équipe + En Attente
