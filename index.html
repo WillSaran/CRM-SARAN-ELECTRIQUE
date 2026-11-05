@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v409';
+const APP_VERSION = 'v410';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2611,7 +2611,7 @@ function pjPhases(job, s, ctx){
     else { const service = visites.some(v=>v.faite) && !avenir.length;   // job de service : pas de rough / finition
       actif = !service; source = service ? 'job de service' : ''; }
     phasesInfo[nom] = {actif, source, plus, moins, agenda: L.length>0};
-    if(!actif && (P==='ENTREE' || !pro)) return;   // l'entrée électrique (et chez un particulier, le rough / la finition) n'apparaît que si elle s'applique
+    if(!actif && (P==='ENTREE' || !pro || source==='job de service')) return;   // l'entrée électrique (et chez un particulier, le rough / la finition) n'apparaît que si elle s'applique ; v410 : job de service d'un contracteur = pas de rough / finition grisés
     const na = !actif;
     const vs = visites.filter(v=>v.faite && (P==='ENTREE' ? v.events.some(estP) : v.phase===P));
     const nonCmd = futurs.filter(e=>!(ctx.commandes && cvCmd(ctx.commandes, job, e).fait));   // un passage déjà fait = la commande a été faite
@@ -2634,7 +2634,7 @@ function pjPhases(job, s, ctx){
   };
   phase('ENTREE','Entrée électrique'); phase('ROUGH','Rough'); phase('FINITION','Finition');
   // v239 : particulier — les passages SERV forment une phase au nom du type de job (« Faire l'éclairage », « Faire le garage »…)
-  if(!pro){
+  { // v410 : aussi pour les contracteurs (ex. CRS « déplacer la fixture de la salle à manger ») — une étape Service avec ses visites, l'AP et la facture
     const estServ = e => !['ROUGH','FINITION','RAPUP'].includes(e.phase) && !PJ_ENTREE_RE.test(e.title||'') && !e.entreeType;
     const L = ev.filter(estServ);
     if(L.length){
