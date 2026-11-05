@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v402';
+const APP_VERSION = 'v403';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11437,7 +11437,11 @@ function cvBuildClients(events, registry, factures){
       let po = p.po;
       if(!po && p.key){
         // Pas de PO dans le titre : on cherche une job du même client avec le même nom.
-        const cands = registry.filter(r=>r.code===p.code && r.key===p.key);
+        let cands = registry.filter(r=>r.code===p.code && r.key===p.key);
+        // v403 : « CRS ROUGH SARAO CUI MC » → la job « Sarao » du registre (le nom du registre est un des mots du titre, ou même adresse)
+        if(!cands.length){ const mots = String(p.key||'').split(' ').filter(Boolean), civ = (String(p.location||'').match(/^\s*(\d+)\s+\S*\s*(\S+)/)||[]);
+          cands = registry.filter(r=>r.code===p.code && r.po && ((r.key && r.key.length>=4 && mots.includes(r.key)) ||
+            (civ[1] && r.adresse && new RegExp('^\\s*'+civ[1]+'\\b').test(r.adresse) && cvNorm(r.adresse).includes(cvNorm(civ[2]||'').slice(0,5))))); }
         if(cands.length===1) po = cands[0].po;
         else if(cands.length>1){
           const loc = cvNorm(p.location);
@@ -11503,8 +11507,9 @@ function cvBuildClients(events, registry, factures){
     // v377 : la facture inscrite sur le passage a-t-elle été envoyée ? (registre lu seulement — sans registre, on ne juge pas)
     if(Object.keys(factures).length) j.events.forEach(e=>{ if(!e.fac || e.fac==='**') return;
       const ns = String(e.fac).split(/[\s,–-]+/).filter(t=>/^\d{3,}$/.test(t)); if(!ns.length) return;
-      e.facEnvoyee = ns.some(n=>{ const f = factures[n]; return f ? !f.annulee && !!(f.envoi || f.pdf || f.payeLog>0) : e.day < PAI_DEBUT; }); });
+      e.facEnvoyee = ns.some(n=>{ const f = factures[n]; return f ? !f.annulee && !!(f.envoi || f.payeLog>0 || f.etatPaie==='payee') : e.day < PAI_DEBUT; }); });   // v403 : envoyée par courriel (ou payée) — le PDF seul ne compte pas
     j.missing = cvVisites(j).filter(v=>v.faite && !v.facturee).length;   // une facture par visite
+    if(j.status==='done' && j.missing>0) j.etatClient = 'afacturer';   // v403 : une job n'est pas terminée tant que ses factures ne sont pas envoyées
     // Facture sur deux jobs : seulement si les jobs n'ont AUCUN mot de nom en commun
     // (« CRS ROUGH AUBIN » et « CRS aubin », c'est la même job, écrite autrement).
     j.dupAvec = {};
@@ -11654,7 +11659,7 @@ function CvPhaseCell({job, phase}){
   </div></div>;
 }
 
-const CV_STATUS = {done:['Terminée','var(--success)'], cours:['En cours','var(--accent)'], avenir:['À venir','var(--muted)'], attente:['En attente','var(--warning)']};
+const CV_STATUS = {afacturer:['À facturer','var(--warning)'], done:['Terminée','var(--success)'], cours:['En cours','var(--accent)'], avenir:['À venir','var(--muted)'], attente:['En attente','var(--warning)']};
 function CvPill({status}){
   const [t,c]=CV_STATUS[status];
   return <span className="badge" style={{background:'var(--bg3)',color:c,border:'1px solid var(--border2)'}}>{t}</span>;
@@ -11744,7 +11749,8 @@ function CvInscrirePO({cfg, job, registry, onChanged}){
   const [dossiers,setDossiers]=useState(null);
   const [choix,setChoix]=useState('');
   const [etat,setEtat]=useState('');
-  if(job.client==='PART' || !job.po || !cfg || (reg && reg.dossier && reg.ht!=null)) return null;
+  const [poN,setPoN]=useState('');   // v403 : job sans PO dans l'agenda — tu tapes le PO
+  if(job.client==='PART' || !cfg || (reg && reg.dossier && reg.ht!=null)) return null;
   const chercher = async () => { setEtat('Recherche dans le Drive…');
     try{ const qq = encodeURIComponent("mimeType='application/vnd.google-apps.folder' and trashed=false and name contains '"+q.trim().replace(/'/g,"\\'")+"'");
       const r = await driveFetch('https://www.googleapis.com/drive/v3/files?q='+qq+'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=15');
@@ -11757,13 +11763,14 @@ function CvInscrirePO({cfg, job, registry, onChanged}){
         if(ht!=null && reg.ht==null && ix.ht>=0) maj.push({range:String.fromCharCode(65+ix.ht)+reg.row, values:[[ht]]});
         if(maj.length) await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:maj}}); }
       else await window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:id, range:'A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS',
-        resource:{values:[[job.client, job.po, String(job.name||'').toUpperCase(), job.address||'', '', ht!=null ? ht : '', choix || '', '', '', '', '', 'Inscrit dans le CRM le '+new Date().toLocaleDateString('fr-CA')]]}});
+        resource:{values:[[job.client, job.po || poN.trim().toUpperCase(), String(job.name||'').toUpperCase(), job.address||'', '', ht!=null ? ht : '', choix || '', '', '', '', '', 'Inscrit dans le CRM le '+new Date().toLocaleDateString('fr-CA')]]}});
       setEtat(''); setOuvert(false); onChanged && onChanged(); }
     catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
   if(!ouvert) return <button className="btn btn-sm" style={{marginBottom:10}} onClick={()=>{ setOuvert(true); if(!dossiers) chercher(); }}>
-    {reg ? (!reg.dossier ? '📁 Rattacher le dossier' : '＋ Montant du PO') : '📁 Inscrire '+job.po+' (dossier et montant)'}</button>;
+    {reg ? (!reg.dossier ? '📁 Rattacher le dossier' : '＋ Montant du PO') : job.po ? '📁 Inscrire '+job.po+' (dossier et montant)' : '＋ Inscrire le PO (numéro et montant)'}</button>;
   return <div className="card" style={{padding:10,marginBottom:10,borderColor:'var(--accent)'}}>
-    <div style={{fontWeight:800,marginBottom:6}}>{job.po} — {job.name}{reg ? '' : <span className="muted" style={{fontWeight:400,fontSize:12}}> · pas encore dans le registre des jobs</span>}</div>
+    {!job.po && <div className="field"><label>Numéro du PO</label><input value={poN} onChange={e=>setPoN(e.target.value)} placeholder="ex. P02907"/></div>}
+    <div style={{fontWeight:800,marginBottom:6}}>{job.po || poN || 'PO ?'} — {job.name}{reg ? '' : <span className="muted" style={{fontWeight:400,fontSize:12}}> · pas encore dans le registre des jobs</span>}</div>
     {(!reg || reg.ht==null) && <div className="field"><label>Montant du PO avant taxes (facultatif)</label><input value={montant} inputMode="decimal" onChange={e=>setMontant(e.target.value)} placeholder="ex. 500"/></div>}
     {(!reg || !reg.dossier) && <>
       <div style={{display:'flex',gap:6,margin:'4px 0'}}><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Nom du dossier dans le Drive" style={{flex:1}}/><button className="btn btn-sm" onClick={chercher}>Chercher</button></div>
@@ -11774,7 +11781,7 @@ function CvInscrirePO({cfg, job, registry, onChanged}){
         {!dossiers.length && <div className="muted" style={{padding:8,fontSize:12.5}}>Aucun dossier trouvé avec ce nom.</div>}
       </div>}</>}
     <div style={{display:'flex',gap:6,marginTop:8,alignItems:'center',flexWrap:'wrap'}}>
-      <button className="btn btn-sm btn-p" disabled={!!etat || (!choix && cvNum(montant)==null && !!reg)} onClick={enregistrer}>{reg ? 'Enregistrer' : 'Inscrire au registre'}</button>
+      <button className="btn btn-sm btn-p" disabled={!!etat || (!choix && cvNum(montant)==null && !!reg) || (!job.po && !poN.trim())} onClick={enregistrer}>{reg ? 'Enregistrer' : 'Inscrire au registre'}</button>
       <button className="btn btn-sm" onClick={()=>setOuvert(false)}>Annuler</button>
       {etat && <span className="muted" style={{fontSize:12}}>{etat}</span>}
     </div>
@@ -12139,7 +12146,7 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
     <div style={{display:'grid',gridTemplateColumns:isDesktop?'minmax(0,1.2fr) minmax(0,1fr)':'1fr',gap:14,alignItems:'start'}}>
       <div className="card" style={{minWidth:0}}>
         <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
-          {[['all','Toutes'],['done','Terminées'],['cours','En cours'],['avenir','À venir'],['flag','À vérifier'],['arch','Archivées']].map(([k,l])=>
+          {[['all','Toutes'],['afacturer','À facturer'],['done','Terminées'],['cours','En cours'],['avenir','À venir'],['flag','À vérifier'],['arch','Archivées']].map(([k,l])=>
             <button key={k} className={'btn btn-sm'+(filter===k?' btn-p':'')} onClick={()=>setFilter(k)}>{l}</button>)}
           <CaseTerminees v={voirTerm} set={setVoirTerm} n={nbTerm}/>
           <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,whiteSpace:'nowrap'}} title="Barre orange : % des étapes faites (comme dans Projets)"><input type="checkbox" checked={voirAv} onChange={e=>setVoirAv(e.target.checked)}/> Avancement</label>
