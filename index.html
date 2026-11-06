@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v422';
+const APP_VERSION = 'v423';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3952,11 +3952,13 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
       const vieille = af.reduce((m,x)=>Math.max(m, soumJours(x.date)||0),0);
       const T = [
         {n:suivi ? aFacturer.length : null, l:'À facturer', go:'factures', sub:sansFac ? sansFac+" sans rien d'inscrit, "+(aFacturer.length-sansFac)+' facture à faire' : 'appels faits, factures à faire', niv:sansFac ? 'urgent' : 'oui'},
-        {n:aRepondre.length, l:'Courriels à répondre', go:'courriels', sub:aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'le plus vieux : '+cvJoursDepuis(aRepondre[0].dernier)+' jours' : 'clients et contracteurs', niv:aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'urgent' : 'oui'},
+        false && {n:aRepondre.length, l:'Courriels à répondre',   // v423 : retiré du tableau de bord (demande de William)
+         go:'courriels', sub:aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'le plus vieux : '+cvJoursDepuis(aRepondre[0].dernier)+' jours' : 'clients et contracteurs', niv:aRepondre.length && cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'urgent' : 'oui'},
         {n:soum.lu ? af.length : null, l:'Soumissions à produire', go:'soumissions', sub:af.length && vieille>=7 ? 'la plus vieille : '+vieille+' jours' : (att ? att+' envoyée'+(att>1?'s':'')+' en attente' : 'notes et demandes reçues'), niv:vieille>=7 ? 'urgent' : 'oui'},
         {n:anomalies.length, l:'À vérifier', go:'verif', sub:'factures, PO, appels', niv:'oui'},
         {n:aAssocier.length, l:'Achats à associer', go:'fournisseurs', sub:cvMoney(achatsMois)+' achetés ce mois-ci', niv:'oui'},
-        {n:adresses.length, l:'Adresses à confirmer', go:'dashboard', sub:'proposées par La mémoire', niv:'oui'},
+        false && {n:adresses.length, l:'Adresses à confirmer',   // v423 : retiré
+         go:'dashboard', sub:'proposées par La mémoire', niv:'oui'},
         (()=>{ const o = (BLd.liste||[]).filter(b=>b.statut!=='Réglé'), pp = o.filter(b=>b.source==='punchpro');
           const rec = pp.filter(b=>b.cree && cvJoursDepuis(b.cree)<=2).length;
           return {n:o.length, l:'Blocages ouverts', go:'projets', sub: pp.length ? pp.length+' signalé'+(pp.length>1?'s':'')+' dans PunchPro'+(rec ? ' · '+rec+' récent'+(rec>1?'s':'') : '') : 'dans Projets', niv: pp.length ? 'urgent' : 'oui'}; })(),
@@ -3992,7 +3994,8 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
           : listeJour.length ? <div className="muted" style={{fontSize:13}}>Aucun passage pour les équipes cochées.</div>
           : <div className="muted" style={{fontSize:13}}>{vueJour==='auj' ? "Aucun passage aujourd'hui." : vueJour==='dem' ? 'Aucun passage demain.' : 'Aucun passage dans les 7 prochains jours.'}</div>}
       </div>)},
-        (adresses.length>0 || nbSansAdresse>0) && {k:'adresses', el:(<div className="card" style={{marginBottom:14,borderLeft:'4px solid var(--warning)'}}>
+        false && (adresses.length>0 || nbSansAdresse>0) && {k:'adresses',   // v423 : retiré
+         el:(<div className="card" style={{marginBottom:14,borderLeft:'4px solid var(--warning)'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,flexWrap:'wrap',marginBottom:4}}>
           <div className="fh" style={{fontSize:15}}>Adresses à confirmer {adresses.length>0 && <span className="badge" style={{background:'var(--warning)',color:'#fff'}}>{adresses.length}</span>}</div>
           {urlAdresses && <span style={{color:'var(--accent)',fontSize:12.5,cursor:'pointer'}} title="Cherche l'adresse des jobs qui n'en ont pas (registre + courriels). Prêt dans environ 5 min." onClick={()=>window.open(urlAdresses,'_blank')}>🔎 Chercher</span>}
@@ -4001,7 +4004,8 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
         {nbSansAdresse>0 && <div className="muted" style={{fontSize:12.5,marginTop:6}}>{nbSansAdresse} job{nbSansAdresse>1?'s':''} sans adresse trouvée — à ajouter à la main dans l'agenda.</div>}
         {adresses.length>0 && <div className="muted" style={{fontSize:11.5,marginTop:6}}>✓ écrit l'adresse dans tous les passages de la job dans l'agenda. Tu peux la corriger avant.</div>}
       </div>)},
-        (aRepondre.length>0) && {k:'courriels', el:(<Bloc titre="Courriels à répondre" n={aRepondre.length} go="courriels" montre={8} niv={cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'urgent' : 'oui'}>
+        false && (aRepondre.length>0) && {k:'courriels',   // v423 : retiré
+         el:(<Bloc titre="Courriels à répondre" n={aRepondre.length} go="courriels" montre={8} niv={cvJoursDepuis(aRepondre[0].dernier)>=3 ? 'urgent' : 'oui'}>
         {aRepondre.slice(0,8).map((f,i)=>{ const j = cvJoursDepuis(f.dernier); return <Rang key={i} go="courriels" droite={j!=null ? <span style={{color:j>=3?'var(--danger)':undefined}}>il y a {j} j</span> : ''}>« {f.sujet} »<div className="muted" style={{fontSize:11.5}}>{nomPO(f.po)}{f.de ? ' · '+f.de : ''}</div></Rang>; })}
       </Bloc>)},
         (aFacturer.length>0) && {k:'facturer', el:(<Bloc titre="À facturer" n={aFacturer.length} go="factures" montre={8} niv={sansFac ? 'urgent' : 'oui'}>
