@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v429';
+const APP_VERSION = 'v430';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9011,9 +9011,9 @@ const CALC_SOUMISSION = {
       return <div style={{display:'grid',gap:10,fontSize:13}}>
         <div style={{display:'grid',gap:6,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
           <b>Extérieur — nouvelle entrée 200A</b>
-          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Entrée {sel(v.mat, x=>maj({mat:x, longMat: x==='pvc' ? '16' : '12'}), [['toit','Nouveau mât à travers le toit'],['existant','Mât existant réutilisé (pas de mât ni de kit)'],['pvc','En PVC sur le mur (pas de mât)']])}
-            {pvc ? <>tuyau de {n('longMat')} pi</> : v.mat==='existant' ? null : <>mât {sel(v.longMat==='10' ? '10' : '12', x=>maj({longMat:x}), [['12','12 pi (MM12)'],['10','10 pi (MM10)']])} · kit {sel(v.kit, x=>maj({kit:x}), [['AM','AM (hub PVC + RFA + MM700)'],['MH','MH (tout en métal)'],['DEUX','Les deux (au cas)']])}</>}</div>
-          <div className="muted" style={{fontSize:12}}>{v.mat==='existant' ? 'Mât existant : on garde le mât, la tête et la ferrure ; seulement l\'embase, le fil et l\'intérieur.' : pvc ? 'PVC : tête REF35, clips PVC 2 po, hub PVC 2 po et ferrure de branchement (rien du kit).' : v.kit==='MH' ? 'Kit MH : tête, hub en métal pour la BQ2-V, 3 clips + 6 lag screws, solins caoutchouc et métal, ferrure de branchement.' : 'Kit AM : comme le MH mais avec un hub PVC 2 po ; on ajoute le RFA (PVC → métal) et la MM700 (bride de continuité des masses).'}</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Entrée {sel(v.mat, x=>maj({mat:x, longMat: x==='pvc' ? '16' : '12', kit: x==='existant' ? 'AUCUN' : (v.kit==='AUCUN' ? 'AM' : v.kit)}), [['toit','Nouveau mât à travers le toit'],['existant','Mât existant réutilisé (pas de mât)'],['pvc','En PVC sur le mur (pas de mât)']])}
+            {pvc ? <>tuyau de {n('longMat')} pi</> : v.mat==='existant' ? <>kit {sel(v.kit||'AUCUN', x=>maj({kit:x}), [['AUCUN','Aucun'],['AM','AM (hub PVC + RFA + MM700)'],['MH','MH (tout en métal)'],['DEUX','Les deux (au cas)']])}</> : <>mât {sel(v.longMat==='10' ? '10' : '12', x=>maj({longMat:x}), [['12','12 pi (MM12)'],['10','10 pi (MM10)']])} · kit {sel(v.kit, x=>maj({kit:x}), [['AM','AM (hub PVC + RFA + MM700)'],['MH','MH (tout en métal)'],['DEUX','Les deux (au cas)']])}</>}</div>
+          <div className="muted" style={{fontSize:12}}>{v.mat==='existant' ? 'Mât existant : on garde le mât'+(v.kit && v.kit!=='AUCUN' ? ' ; le kit '+(v.kit==='DEUX' ? 'AM et MH' : v.kit)+' est commandé pour ses pièces (tête, clips, solins, ferrure…).' : ', la tête et la ferrure ; seulement l\'embase, le fil et l\'intérieur.') : pvc ? 'PVC : tête REF35, clips PVC 2 po, hub PVC 2 po et ferrure de branchement (rien du kit).' : v.kit==='MH' ? 'Kit MH : tête, hub en métal pour la BQ2-V, 3 clips + 6 lag screws, solins caoutchouc et métal, ferrure de branchement.' : 'Kit AM : comme le MH mais avec un hub PVC 2 po ; on ajoute le RFA (PVC → métal) et la MM700 (bride de continuité des masses).'}</div>
           <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>BQ2-V · tuyau PVC compteur → panneau {n('dist')} pi <span className="muted">(0 = on garde le tuyau existant)</span> · 2 RTA 2 po + contre-écrous</div>
           {(()=>{ const f = maj100Fil(v); return <div style={{display:'grid',gap:4,padding:'6px 8px',background:'var(--bg2)',borderRadius:6}}>
             <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>Fil</b> (2 × 250 MCM alu noir + 1 × #2 alu blanc) — distances :</div>
@@ -9054,14 +9054,14 @@ const CALC_SOUMISSION = {
         ajout('REC35','Coupling PVC 2 po', Math.max(0, Math.ceil(lm/10)-1));
         ajout('RC4002010','Conduit PVC 2 po (longueurs de 10 pi)', Math.ceil(lm/10)*10, 'pi');
         ajout('REF35','Tête de branchement PVC 2 po', 1); }
-      else if(v.mat!=='existant'){   // v429 : mât existant réutilisé → ni mât ni kit
+      else {   // v430 : mât existant réutilisé → pas de mât, mais le kit au choix (Aucun par défaut)
         if(v.kit==='AM' || v.kit==='DEUX'){ ecrous += 1;
           ajout('MM700','Bride de continuité des masses (avec le RFA)', 1);
           ajout('RFA35','Adaptateur PVC 2 po → métal (RFA, avec le kit AM)', 1);
           ajout('RMHU35','Hub PVC 2 po pour la base de compteur (kit AM)', 1);
           ajout('KIT-200AM','Kit de mât 200A (AM) — tête, 3 clips + 6 lag screws, solins, ferrure', 1); }
         if(v.kit==='MH' || v.kit==='DEUX') ajout('KIT-200MH','Kit de mât 200A (MH) — tête, hub métal, 3 clips + 6 lag screws, solins, ferrure', 1);
-        ajout(lm===10 ? 'MM10' : 'MM12', 'Mât '+lm+' pi', 1); }
+        if(v.mat!=='existant') ajout(lm===10 ? 'MM10' : 'MM12', 'Mât '+lm+' pi', 1); }
       ajout('CI1716','Contre-écrou 2 po', ecrous);
       ajout('RTA35','Adaptateur de boîte PVC 2 po (RTA)', 2);
       ajout('BQ2-V','Base de compteur 200A (BQ2-V)', 1);
