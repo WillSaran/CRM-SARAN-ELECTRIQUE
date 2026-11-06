@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v428';
+const APP_VERSION = 'v429';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8997,7 +8997,7 @@ const CALC_SOUMISSION = {
       ['ENTREE-PVC-PI','Tuyau PVC compteur → panneau, au-delà de 10 pi ($/pi)'],['ENTREE-MUR','Entrée en PVC (2 étages / grenier), en plus ($)'],
       ['ENTREE-HYDRO','Connecteurs Hydro fournis ($)'],['SURTENSION','Protection contre les surtensions, installée ($)']],
     defaut:{panneau:'HOM84', circuits:'20', reutiliser:false, agrandir:false, terre:'plaque', hydro:true, surtension:'non', note:'', disj:{},
-      mat:'toit', longMat:'12', kit:'AM', dist:'10', filInt:'5', commanderFil:false, hydroConn:false},
+      mat:'toit', longMat:'12', kit:'AM', dist:'10', filHaut:'', filBas:'', commanderFil:false, hydroConn:false},
     deviner(txt){ const t=String(txt||''), v={...CALC_SOUMISSION.panneau200.deviner(t)};
       if(/mm\s?10\b/i.test(t)) v.longMat='10';
       if(/\bpvc\b/i.test(t) && !/m[âa]t/i.test(t)) v.mat='pvc';
@@ -9011,11 +9011,16 @@ const CALC_SOUMISSION = {
       return <div style={{display:'grid',gap:10,fontSize:13}}>
         <div style={{display:'grid',gap:6,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
           <b>Extérieur — nouvelle entrée 200A</b>
-          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Entrée {sel(v.mat, x=>maj({mat:x, longMat: x==='pvc' ? '16' : '12'}), [['toit','Mât à travers le toit'],['pvc','En PVC sur le mur (pas de mât)']])}
-            {pvc ? <>tuyau de {n('longMat')} pi</> : <>mât {sel(v.longMat==='10' ? '10' : '12', x=>maj({longMat:x}), [['12','12 pi (MM12)'],['10','10 pi (MM10)']])} · kit {sel(v.kit, x=>maj({kit:x}), [['AM','AM (hub PVC + RFA + MM700)'],['MH','MH (tout en métal)'],['DEUX','Les deux (au cas)']])}</>}</div>
-          <div className="muted" style={{fontSize:12}}>{pvc ? 'PVC : tête REF35, clips PVC 2 po, hub PVC 2 po et ferrure de branchement (rien du kit).' : v.kit==='MH' ? 'Kit MH : tête, hub en métal pour la BQ2-V, 3 clips + 6 lag screws, solins caoutchouc et métal, ferrure de branchement.' : 'Kit AM : comme le MH mais avec un hub PVC 2 po ; on ajoute le RFA (PVC → métal) et la MM700 (bride de continuité des masses).'}</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Entrée {sel(v.mat, x=>maj({mat:x, longMat: x==='pvc' ? '16' : '12'}), [['toit','Nouveau mât à travers le toit'],['existant','Mât existant réutilisé (pas de mât ni de kit)'],['pvc','En PVC sur le mur (pas de mât)']])}
+            {pvc ? <>tuyau de {n('longMat')} pi</> : v.mat==='existant' ? null : <>mât {sel(v.longMat==='10' ? '10' : '12', x=>maj({longMat:x}), [['12','12 pi (MM12)'],['10','10 pi (MM10)']])} · kit {sel(v.kit, x=>maj({kit:x}), [['AM','AM (hub PVC + RFA + MM700)'],['MH','MH (tout en métal)'],['DEUX','Les deux (au cas)']])}</>}</div>
+          <div className="muted" style={{fontSize:12}}>{v.mat==='existant' ? 'Mât existant : on garde le mât, la tête et la ferrure ; seulement l\'embase, le fil et l\'intérieur.' : pvc ? 'PVC : tête REF35, clips PVC 2 po, hub PVC 2 po et ferrure de branchement (rien du kit).' : v.kit==='MH' ? 'Kit MH : tête, hub en métal pour la BQ2-V, 3 clips + 6 lag screws, solins caoutchouc et métal, ferrure de branchement.' : 'Kit AM : comme le MH mais avec un hub PVC 2 po ; on ajoute le RFA (PVC → métal) et la MM700 (bride de continuité des masses).'}</div>
           <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>BQ2-V · tuyau PVC compteur → panneau {n('dist')} pi <span className="muted">(0 = on garde le tuyau existant)</span> · 2 RTA 2 po + contre-écrous</div>
-          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Fil 250 MCM × 2 + #2 alu blanc : 1 m au-dessus de la tête + le {pvc ? 'tuyau' : 'mât'} + 1 pi + 1 pi + {n('filInt',50)} pi à l'intérieur · {c('commanderFil','Commander le fil (sinon : à vérifier à la shop / dans le camion)')}</div>
+          {(()=>{ const f = maj100Fil(v); return <div style={{display:'grid',gap:4,padding:'6px 8px',background:'var(--bg2)',borderRadius:6}}>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>Fil</b> (2 × 250 MCM alu noir + 1 × #2 alu blanc) — distances :</div>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:8}}>De la tête à l'embase (BQ2-V) {n('filHaut',50)} pi <span className="muted">(vide = {f.hautAuto} pi, le {pvc ? 'tuyau' : 'mât'})</span></div>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:8}}>De l'embase au panneau {n('filBas',50)} pi <span className="muted">(vide = {f.basAuto} pi, le tuyau compteur → panneau)</span></div>
+            <div style={{fontSize:12.5}}>= 3,3 pi qui sort de la tête (1 m) + {f.haut} + {f.bas} + 2 pi de raccord (1 dans l'embase, 1 dans le panneau) = <b>{f.total} pi par conducteur</b> → {2*f.total} pi de 250 MCM et {f.total} pi de #2</div>
+            <div>{c('commanderFil','Commander le fil (sinon : à vérifier à la shop / dans le camion)')}</div></div>; })()}
           <div>{c('hydroConn','Connecteurs Hydro × 2 (TTD-2610XFBTA) + WR159')}</div>
         </div>
         <div style={{padding:8,border:'1px solid var(--border)',borderRadius:8}}><b>Intérieur — panneau 200A</b>{CALC_SOUMISSION.panneau200.champs({...v, __sansFil:true}, maj)}</div>
@@ -9031,7 +9036,7 @@ const CALC_SOUMISSION = {
       const pvc = v.mat==='pvc', lm = pvc ? N(v.longMat, 16) : (String(v.longMat)==='10' ? 10 : 12), D = N(v.dist, 10);
       let ecrous = 2;
       // Extérieur (ajouté en tête de liste, donc en ordre inverse)
-      const fil = Math.ceil(3.281 + lm + 1 + 1 + N(v.filInt, 5));
+      const fil = maj100Fil(v).total;   // v429 : 1 m qui sort de la tête + tête → embase + embase → panneau + 2 pi
       if(v.hydroConn){ ajout('WR159','Connecteur en H (H-tap)', 1); ajout('TTD-2610XFBTA','Connecteur Hydro', 2); }
       ajout('CIDUCT-1','Duct Seal (pâte d\'étanchéité) — à chaque entrée et chaque LB', 1, 'un', true);
       ajout('SCES100PT','Colle à PVC', 1, 'un', true);
@@ -9049,7 +9054,7 @@ const CALC_SOUMISSION = {
         ajout('REC35','Coupling PVC 2 po', Math.max(0, Math.ceil(lm/10)-1));
         ajout('RC4002010','Conduit PVC 2 po (longueurs de 10 pi)', Math.ceil(lm/10)*10, 'pi');
         ajout('REF35','Tête de branchement PVC 2 po', 1); }
-      else {
+      else if(v.mat!=='existant'){   // v429 : mât existant réutilisé → ni mât ni kit
         if(v.kit==='AM' || v.kit==='DEUX'){ ecrous += 1;
           ajout('MM700','Bride de continuité des masses (avec le RFA)', 1);
           ajout('RFA35','Adaptateur PVC 2 po → métal (RFA, avec le kit AM)', 1);
@@ -9066,7 +9071,7 @@ const CALC_SOUMISSION = {
       if(pvc) px += T('ENTREE-MUR');
       if(v.hydroConn) px += T('ENTREE-HYDRO');
       const h = Math.round(((r2.heures||0) + 4 + (pvc ? 1 : 0) + Math.max(0, D-10)*0.05)*2)/2;
-      const txt = ['Mise à niveau de l\'entrée électrique de 100A à 200A : nouvelle base de compteur 200A, '+(pvc ? 'entrée en tuyau PVC fixée au mur' : 'nouveau mât à travers la toiture')+' et nouveau fil d\'entrée, incluant raccordement selon les normes en vigueur.',
+      const txt = ['Mise à niveau de l\'entrée électrique de 100A à 200A : nouvelle base de compteur 200A, '+(pvc ? 'entrée en tuyau PVC fixée au mur' : v.mat==='existant' ? 'mât existant conservé' : 'nouveau mât à travers la toiture')+' et nouveau fil d\'entrée, incluant raccordement selon les normes en vigueur.',
         ...String(r2.travaux||'').split('\n').map(x=>x.replace('Remplacement du panneau électrique existant 200A','Remplacement du panneau électrique existant 100A'))];
       return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(px), installation:arr5(px), borne:0,
         titre:'Mise à niveau de l\'entrée électrique 100A → 200A', travaux:txt.join('\n'), remarques:r2.remarques, lignes:L, heures:h};
@@ -9074,6 +9079,11 @@ const CALC_SOUMISSION = {
   },
 };
 
+// v429 : longueur du fil d'entrée (par conducteur) — 1 m qui sort de la tête + tête → embase + embase → panneau + 2 pi de raccord
+function maj100Fil(v){ const N = (x, d0) => { const y = cvNum(x); return y==null || String(x).trim()==='' ? d0 : Math.max(0,y); };
+  const pvc = v.mat==='pvc', lm = pvc ? N(v.longMat, 16) : (String(v.longMat)==='10' ? 10 : 12), D = N(v.dist, 10);
+  const hautAuto = lm, basAuto = D>0 ? D : 10, haut = N(v.filHaut, hautAuto), bas = N(v.filBas, basAuto);
+  return {hautAuto, basAuto, haut, bas, total:Math.ceil(3.281 + haut + bas + 2)}; }
 // v347 : disjoncteurs par marque de panneau (codes des factures ; « à confirmer » = pas encore vu sur une facture)
 const PANNEAU_DISJ_TYPES = [['1P15','1P 15A'],['1P20','1P 20A'],['AF15','1P 15A AFCI'],['DF20','1P 20A DDFT'],
   ['2P15','2P 15A'],['2P20','2P 20A'],['2P25','2P 25A'],['2P30','2P 30A'],['2P40','2P 40A'],['2P50','2P 50A'],['2P60','2P 60A'],['2P100','2P 100A'],
