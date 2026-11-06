@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v425';
+const APP_VERSION = 'v426';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3086,7 +3086,7 @@ function ProjetsSuivi({cfg, refreshKey}){
         </div>)}
         </React.Fragment>)}
         <CvAdresseJob job={j} propositions={propAdresses} onDone={()=>setTick(t=>t+1)}/>
-        <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/><CvArchiver cfg={cfg} job={j} archives={archives} onChanged={()=>setTick(t=>t+1)}/></div>
+        <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob key={'no'+j.id} cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/><CvArchiver cfg={cfg} job={j} archives={archives} onChanged={()=>setTick(t=>t+1)}/></div>
         {c.code!=='PART' && <div style={{fontSize:12.5,margin:'6px 0'}}>👤 Contracteur : <b>{CLIENT_CODES[c.code]||c.code}</b>{CLIENT_CONTACT[c.code] ? ' — '+CLIENT_CONTACT[c.code] : ''}
           {(()=>{ const gens=[...new Set(((j.po && (courriels||{})[j.po])||[]).map(f=>f.de).filter(n=>n && !/saran|william/i.test(n)))]; return gens.length ? <div className="muted" style={{fontSize:12}}>Dans les courriels de cette job : {gens.join(', ')}</div> : null; })()}</div>}
         <PjPassages events={j.events} today={today} ajouter={<CvAjouterPassage job={j} onDone={()=>setTick(t=>t+1)}/>} ligne={(e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
@@ -11909,7 +11909,7 @@ function CvInscrirePO({cfg, job, registry, onChanged}){
     </div>
   </div>;
 }
-function CvCreerNoJob({cfg, job, registry, events, onChanged}){
+function CvCreerNoJob({cfg, job, registry, events, onChanged}){   // v426 : key={job.id} là où il est affiché — sinon le nom et l'adresse de la job ouverte avant restaient (ex. Prince-Arthur affiché pour Union Garage)
   const code = job.client==='PART' ? 'PART' : job.client;
   const [mode,setMode]=useState('');
   const [nom,setNom]=useState(job.name||'');
@@ -12051,7 +12051,7 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
       <Row k="Équipe">{job.crew.join(', ')}</Row>
       <Row k="Montant PO">{r.ht!=null && <>{cvMoney(r.ht)} avant taxes · {cvMoney(r.ht*1.14975)} taxes incluses</>}</Row>
     </div>
-    {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvRattacherPO job={job} clients={clients} onDone={onChanged}/><CvMemeProjet cfg={cfg} job={job} clients={clients} onChanged={onChanged}/><CvInscrirePO cfg={cfg} job={job} registry={registry} onChanged={onChanged}/><CvCreerNoJob cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
+    {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvRattacherPO job={job} clients={clients} onDone={onChanged}/><CvMemeProjet key={'mp'+job.id} cfg={cfg} job={job} clients={clients} onChanged={onChanged}/><CvInscrirePO key={'po'+job.id} cfg={cfg} job={job} registry={registry} onChanged={onChanged}/><CvCreerNoJob key={'no'+job.id} cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
     <CvGauge job={job}/>
     <CvAcheteFacture job={job} achats={achats} facLignes={facLignes}/>
     {(()=>{ const m=cvMateriel(job, achats); return m.liste.length ? <div style={{fontSize:13,margin:'0 0 10px'}}>
