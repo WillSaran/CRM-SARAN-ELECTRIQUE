@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v430';
+const APP_VERSION = 'v431';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9015,12 +9015,23 @@ const CALC_SOUMISSION = {
             {pvc ? <>tuyau de {n('longMat')} pi</> : v.mat==='existant' ? <>kit {sel(v.kit||'AUCUN', x=>maj({kit:x}), [['AUCUN','Aucun'],['AM','AM (hub PVC + RFA + MM700)'],['MH','MH (tout en métal)'],['DEUX','Les deux (au cas)']])}</> : <>mât {sel(v.longMat==='10' ? '10' : '12', x=>maj({longMat:x}), [['12','12 pi (MM12)'],['10','10 pi (MM10)']])} · kit {sel(v.kit, x=>maj({kit:x}), [['AM','AM (hub PVC + RFA + MM700)'],['MH','MH (tout en métal)'],['DEUX','Les deux (au cas)']])}</>}</div>
           <div className="muted" style={{fontSize:12}}>{v.mat==='existant' ? 'Mât existant : on garde le mât'+(v.kit && v.kit!=='AUCUN' ? ' ; le kit '+(v.kit==='DEUX' ? 'AM et MH' : v.kit)+' est commandé pour ses pièces (tête, clips, solins, ferrure…).' : ', la tête et la ferrure ; seulement l\'embase, le fil et l\'intérieur.') : pvc ? 'PVC : tête REF35, clips PVC 2 po, hub PVC 2 po et ferrure de branchement (rien du kit).' : v.kit==='MH' ? 'Kit MH : tête, hub en métal pour la BQ2-V, 3 clips + 6 lag screws, solins caoutchouc et métal, ferrure de branchement.' : 'Kit AM : comme le MH mais avec un hub PVC 2 po ; on ajoute le RFA (PVC → métal) et la MM700 (bride de continuité des masses).'}</div>
           <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>BQ2-V · tuyau PVC compteur → panneau {n('dist')} pi <span className="muted">(0 = on garde le tuyau existant)</span> · 2 RTA 2 po + contre-écrous</div>
-          {(()=>{ const f = maj100Fil(v); return <div style={{display:'grid',gap:4,padding:'6px 8px',background:'var(--bg2)',borderRadius:6}}>
-            <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>Fil</b> (2 × 250 MCM alu noir + 1 × #2 alu blanc) — distances :</div>
-            <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:8}}>De la tête à l'embase (BQ2-V) {n('filHaut',50)} pi <span className="muted">(vide = {f.hautAuto} pi, le {pvc ? 'tuyau' : 'mât'})</span></div>
-            <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:8}}>De l'embase au panneau {n('filBas',50)} pi <span className="muted">(vide = {f.basAuto} pi, le tuyau compteur → panneau)</span></div>
-            <div style={{fontSize:12.5}}>= 3,3 pi qui sort de la tête (1 m) + {f.haut} + {f.bas} + 2 pi de raccord (1 dans l'embase, 1 dans le panneau) = <b>{f.total} pi par conducteur</b> → {2*f.total} pi de 250 MCM et {f.total} pi de #2</div>
-            <div>{c('commanderFil','Commander le fil (sinon : à vérifier à la shop / dans le camion)')}</div></div>; })()}
+          {(()=>{ const f = maj100Fil(v);   // v431 : calcul du fil présenté comme une addition, ligne par ligne
+            const lig = (l, val, aide) => <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto',gap:8,alignItems:'center',padding:'3px 0',borderBottom:'1px dashed var(--border)'}}>
+              <span>{l}{aide && <div className="muted" style={{fontSize:11.5}}>{aide}</div>}</span><span style={{textAlign:'right',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>{val}</span></div>;
+            const champ = (k, auto) => <span><input value={v[k]||''} placeholder={String(auto)} inputMode="decimal" onChange={e=>maj({[k]:e.target.value})} style={{width:56,textAlign:'right'}}/> pi</span>;
+            return <div style={{padding:'8px 10px',background:'var(--bg2)',borderRadius:8,fontSize:13}}>
+              <b>Fil d'entrée — longueur d'UN conducteur</b>
+              <div style={{marginTop:4}}>
+                {lig('1. Dépasse de la tête (pour Hydro)', '3,3 pi', '1 mètre, fixe')}
+                {lig('2. De la tête jusqu\'à l\'embase (BQ2-V)', champ('filHaut', f.hautAuto), 'Ta mesure (vide = '+f.hautAuto+' pi, la longueur du '+(v.mat==='pvc' ? 'tuyau' : 'mât')+')')}
+                {lig('3. De l\'embase jusqu\'au panneau', champ('filBas', f.basAuto), 'Ta mesure (vide = '+f.basAuto+' pi, le tuyau compteur → panneau)')}
+                {lig('4. Raccords', '2 pi', '1 pi dans l\'embase + 1 pi dans le panneau, fixe')}
+                <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto',gap:8,padding:'5px 0',fontWeight:700}}><span>Longueur d'un conducteur</span><span style={{fontVariantNumeric:'tabular-nums'}}>{f.total} pi</span></div>
+              </div>
+              <div style={{marginTop:4,padding:'6px 8px',border:'1px solid var(--accent)',borderRadius:6}}>
+                <b>Au panier :</b> 250 MCM alu noir : 2 × {f.total} = <b>{2*f.total} pi</b> · #2 alu blanc : 1 × {f.total} = <b>{f.total} pi</b>
+                <div style={{marginTop:4}}>{c('commanderFil','Commander le fil (sinon : à vérifier à la shop / dans le camion, pas commandé)')}</div></div>
+            </div>; })()}
           <div>{c('hydroConn','Connecteurs Hydro × 2 (TTD-2610XFBTA) + WR159')}</div>
         </div>
         <div style={{padding:8,border:'1px solid var(--border)',borderRadius:8}}><b>Intérieur — panneau 200A</b>{CALC_SOUMISSION.panneau200.champs({...v, __sansFil:true}, maj)}</div>
