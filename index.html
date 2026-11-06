@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v424';
+const APP_VERSION = 'v425';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1838,6 +1838,15 @@ function pjEtapes(job, appels, commandes, courriels, manuels){
   return {E:actifs, G, manquants, etape, prochain, total:actifs.length, faits:actifs.length-manquants.length, vocal, vocaux, otFait, apFait};
 }
 
+// v425 : titre lisible d'un vocal de PunchPro — « VOCAL_PB_CRS ROUGH LEMAY_2026-11-05_14h32.webm » → « PB · 5 nov. 14 h 32 · CRS ROUGH LEMAY »
+// (ancien format « VOCAL_Philippe-Bernier_1793900000000.webm » → initiales + date du numéro)
+function cvVocalTitre(t){ const s = String(t||'');
+  let m = s.match(/^VOCAL_([A-Z]{1,4})_(?:(.+?)_)?(\d{4}-\d{2}-\d{2})_(\d{2})h(\d{2})\.\w+$/);
+  if(m) return m[1]+' · '+cvFmtDay(m[3])+' '+(+m[4])+' h '+m[5]+(m[2] ? ' · '+m[2] : '');
+  m = s.match(/^VOCAL_(.+?)_(\d{12,14})\.\w+$/);
+  if(m){ const ini = m[1].split(/[-\s]+/).filter(Boolean).map(w=>w[0].toUpperCase()).join(''), d = new Date(+m[2]);
+    return ini+' · '+cvFmtDay(localDateStr(d))+' '+d.getHours()+' h '+String(d.getMinutes()).padStart(2,'0'); }
+  return s.replace(/\.\w{2,4}$/,''); }
 // Fils de courriels d'une job : dates, qui a écrit en dernier, ce qui se passe.
 function CvCourriels({liste}){   // v390 : replié par défaut (une ligne de résumé) ; ouvert = une ligne par fil, l'extrait au clic
   const [ouv,setOuv]=useState(false);
@@ -3036,9 +3045,9 @@ function ProjetsSuivi({cfg, refreshKey}){
         <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
           <span style={{marginRight:8,fontSize:14}}>
             {s.vocal && <span style={{marginLeft:4,position:'relative'}} onClick={e=>{ e.stopPropagation(); if(s.vocaux.length===1) window.open(s.vocaux[0].url,'_blank','noopener'); else setVocOuv(vocOuv===k?null:k); }}>
-              <span title={s.vocaux.length===1 ? 'Écouter le mémo vocal' : 'Écouter un des '+s.vocaux.length+' mémos vocaux'} style={{cursor:'pointer'}}>🎤{s.vocaux.length>1 && <sup style={{fontSize:10}}>{s.vocaux.length}</sup>}</span>
+              <span title={s.vocaux.length===1 ? 'Écouter le mémo vocal — '+cvVocalTitre(s.vocaux[0].titre) : 'Écouter un des '+s.vocaux.length+' mémos vocaux'} style={{cursor:'pointer'}}>🎤{s.vocaux.length>1 && <sup style={{fontSize:10}}>{s.vocaux.length}</sup>}</span>
               {vocOuv===k && s.vocaux.length>1 && <div style={{position:'absolute',right:0,top:'120%',zIndex:20,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8,padding:6,minWidth:240,textAlign:'left',boxShadow:'0 4px 14px rgba(0,0,0,.35)'}}>
-                {s.vocaux.map((v,i)=><a key={i} href={v.url} target="_blank" rel="noopener" onClick={()=>setVocOuv(null)} style={{display:'block',padding:'4px 6px',fontSize:12.5,color:'var(--accent)',whiteSpace:'normal'}}>{v.jour ? cvFmtDay(v.jour)+' · ' : ''}{v.titre}</a>)}
+                {s.vocaux.map((v,i)=><a key={i} href={v.url} target="_blank" rel="noopener" onClick={()=>setVocOuv(null)} style={{display:'block',padding:'4px 6px',fontSize:12.5,color:'var(--accent)',whiteSpace:'normal'}}>🎤 {/^VOCAL_/.test(v.titre) ? cvVocalTitre(v.titre) : (v.jour ? cvFmtDay(v.jour)+' · ' : '')+v.titre}</a>)}
               </div>}
             </span>}
             {s.otFait && <span title="OT fait" style={{marginLeft:4}}>📝</span>}
@@ -4174,7 +4183,7 @@ function HeuresView({cfg, refreshKey}){
             <div style={{fontWeight:800,fontVariantNumeric:'tabular-nums',color:x.compte?'var(--text)':'var(--muted)'}}>{x.compte ? fmtH(x.heures) : 'ne compte pas'}</div>
             <div><b>{x.job}</b> <span className="muted">· {x.type}{x.debut||x.fin ? ' · '+[x.debut, x.fin].filter(Boolean).join(' → ') : ''}{x.deplacement ? ' · déplacement '+x.deplacement+' min' : ''}{x.coequipiers ? ' · avec '+x.coequipiers : ''}</span>
               {x.note && <div style={{whiteSpace:'pre-wrap'}}>📝 {x.note}</div>}
-              {x.fichiers.length>0 && <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{x.fichiers.map((f,j)=><a key={j} href={f.url} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>{/^VOCAL_/.test(f.nom) ? '🎤' : /^(AP|OT)_/.test(f.nom) ? '📋' : '📎'} {f.nom}</a>)}</div>}
+              {x.fichiers.length>0 && <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{x.fichiers.map((f,j)=><a key={j} href={f.url} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>{/^VOCAL_/.test(f.nom) ? '🎤' : /^(AP|OT)_/.test(f.nom) ? '📋' : '📎'} {/^VOCAL_/.test(f.nom) ? cvVocalTitre(f.nom) : f.nom}</a>)}</div>}
             </div></div>)}
         </div>; })}
     </div>; };
