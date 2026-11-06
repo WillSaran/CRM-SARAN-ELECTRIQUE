@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v417';
+const APP_VERSION = 'v418';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5737,7 +5737,7 @@ function PaiAge({f}){ const a = f.ageFac!=null ? f.ageFac : f.age; if(f.etat==='
   return <span title="Jours depuis la date de la facture" style={{fontSize:11.5, padding:'0 6px', borderRadius:6, color:st ? st.c : 'var(--muted)', background:st ? st.bg : 'transparent', fontWeight:st ? st.fw : 400, whiteSpace:'nowrap'}}>{a} j</span>; }
 const paiAujourdhui = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
 
-function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees}){
+function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees, vieillissement}){
   const id = cfg.memoireFacturesSpreadsheetId;
   // v186 : Répertoire (même lecture que l'onglet Répertoire) pour mettre un nom sur les courriels des factures
   const [repTick,setRepTick]=useState(0);
@@ -5995,6 +5995,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees}
   // v250 : factures de l'import du logiciel sans PDF ni courriel (ni paiement) — à déposer dans « Factures PDF »
   const aDeposer = Object.values(A.F).filter(f=>f.etat==='adeposer' && filtreF(f)).sort((a,b)=>(+b.num)-(+a.num));
   const totalDu = aRecevoir.reduce((s,f)=>s+f.solde,0);
+  if(vieillissement) return <PaiVieillissement G={paiGroupesCompagnies(aRecevoir, FR)}/>;   // v418 : Comptes à recevoir = mêmes chiffres que « En attente de paiement »
   // v199 : argent reçu depuis le 1er juillet (virements, dépôts, chèques, comptant) — sauf les paiements marqués « Ignoré » (argent personnel, remboursement…)
   // v235 : un paiement confirmé seulement pour des factures d'avant le 1er juillet (année fiscale précédente) n'est pas compté dans le total
   const V = data.factures.__vieilles || {}, anneePrec = p => p.confirmees.length>0 && p.confirmees.every(n=>V[n]);
@@ -13819,51 +13820,42 @@ function useNomClient(cfg){
     if(CLIENT_CODES[c.toUpperCase()]) return CLIENT_CODES[c.toUpperCase()];
     return c || n || '(sans client)'; },[parCourriel]);
 }
-// ══ v417 : Grand livre › Comptes à recevoir — par client : courant, 30 j, 60 j, 90 j et plus (âge depuis la date de la facture) ══
-function ComptesRecevoirView({cfg}){
-  const auj = localDateStr(new Date());
-  const [d,setD]=useState(null), [err,setErr]=useState(''), [cle,setCle]=useState(0), [ouv,setOuv]=useState({}), [q,setQ]=useState('');
-  const nomClient = useNomClient(cfg);
-  useEffect(()=>{ let ok = true; arcCharger(cfg, cle>0).then(r=>{ if(ok){ setD(arcJumeler(r)); setErr(''); } }, e=>{ if(ok) setErr(apiErrMsg(e)); }); return ()=>{ ok = false; }; },[cle, cfg.memoireFacturesSpreadsheetId]);
-  if(err) return <div className="card" style={{color:'var(--danger)'}}>Erreur : {err}</div>;
-  if(!d) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des factures…</span></div>;
-  const COL = [['c','Courant'],['j30','30 j'],['j60','60 j'],['j90','90 j et plus']];
-  const tranche = j => j<=30 ? 'c' : j<=60 ? 'j30' : j<=90 ? 'j60' : 'j90';
-  const ouvertes = Object.values(d.F).filter(f=>{ const e = arcEtat(f, d.paye[f.num], auj);
-    if(['annulee','payee','creditee'].includes(e.k) || f.creditee || f.applique) return false;
-    if(Math.abs(f.ttc) < 0.05) return false;
-    if(!f.envoi && !f.pdf) return false;   // importée du logiciel sans preuve : pas encore une vraie facture
-    return (f.date || f.envoi) >= '2025-01-01'; });
-  const parC = {}; ouvertes.forEach(f=>{ const nom = nomClient(f), k = cvNorm(nom);
-    const j = Math.max(0, Math.floor((Date.parse(auj)-Date.parse(f.date || f.envoi))/864e5));
-    const c = parC[k] = parC[k] || {nom, c:0, j30:0, j60:0, j90:0, total:0, fac:[]}; c[tranche(j)] += f.ttc; c.total += f.ttc; c.fac.push({f, j}); });
-  const qq = cvNorm(q.trim());
-  const L = Object.values(parC).filter(c=>!qq || cvNorm(c.nom).includes(qq) || c.fac.some(x=>x.f.num.startsWith(q.trim().replace(/^#/,'')))).sort((a,b)=>b.total-a.total);
-  const T = L.reduce((t,c)=>{ COL.forEach(([k])=>t[k]+=c[k]); t.total+=c.total; return t; },{c:0, j30:0, j60:0, j90:0, total:0});
-  const cel = (v, k) => <td style={{textAlign:'right',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap',color: Math.abs(v)<0.005 ? 'var(--muted)' : k==='j90' ? 'var(--danger)' : k==='j60' ? 'var(--warning)' : undefined}}>{Math.abs(v)<0.005 ? '—' : cvMoney(v)}</td>;
+// ══ v418 : Grand livre › Comptes à recevoir — les factures « En attente de paiement » de l'onglet Paiements (même calcul : paiements
+// confirmés, payées en partie, escomptes, notes de crédit, auxiliaire d'avant le 1er juillet), par client : courant, 30 j, 60 j, 90 j et plus
+function ComptesRecevoirView({cfg, cfgRep, refreshKey, contacts}){
+  const [q,setQ]=useState('');
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Comptes à recevoir</h2>
-    <div className="muted" style={{fontSize:13,marginBottom:10}}>Factures envoyées pas encore payées, par client, selon l'âge depuis la date de la facture (au {cvFmtDay(auj)}). Les notes de crédit pas jumelées viennent en moins. Clique un client pour voir ses factures.</div>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Les mêmes factures que « En attente de paiement » dans Paiements (soldes après paiements, escomptes et crédits), par client, selon l'âge depuis la date de la facture. Clique un client pour voir ses factures.</div>
     <div style={{display:'flex',gap:6,marginBottom:10}}>
       <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un client ou un no de facture…" style={{flex:'1 1 200px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
-      {q && <button className="btn btn-sm" onClick={()=>setQ('')}>✕</button>}
-      <button className="btn btn-sm" onClick={()=>setCle(k=>k+1)}>↻</button></div>
-    <div className="card" style={{padding:'6px 10px',overflowX:'auto'}}>
-      <table style={{width:'100%',fontSize:13,borderCollapse:'collapse',minWidth:560}}>
-        <thead><tr className="muted" style={{textAlign:'right',fontSize:12}}><th style={{textAlign:'left',padding:'4px 0'}}>Client</th>{COL.map(([k,l])=><th key={k}>{l}</th>)}<th>Total</th></tr></thead>
-        <tbody>
-          {L.map(c=>{ const k = cvNorm(c.nom); return <React.Fragment key={k}>
-            <tr style={{borderTop:'1px solid var(--border)',cursor:'pointer'}} onClick={()=>setOuv(o=>({...o, [k]:!o[k]}))}>
-              <td style={{padding:'6px 0'}}>{ouv[k] ? '▾' : '▸'} {c.nom} <span className="muted" style={{fontSize:11.5}}>({c.fac.length})</span></td>
-              {COL.map(([kk])=><React.Fragment key={kk}>{cel(c[kk], kk)}</React.Fragment>)}<td style={{textAlign:'right',fontWeight:700,fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>{cvMoney(c.total)}</td></tr>
-            {ouv[k] && c.fac.sort((a,b)=>b.j-a.j).map(({f,j})=><tr key={f.num} style={{fontSize:12.5}}>
-              <td style={{padding:'3px 0 3px 18px'}}>{f.pdf ? <a href={'https://drive.google.com/file/d/'+f.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>#{f.num}</a> : '#'+f.num} <span className="muted">· {cvFmtDay(f.date || f.envoi)} · {j} j{f.nom && f.nom!==nomClient(f) && !/@/.test(f.nom) ? ' · '+f.nom : ''}{!f.envoi ? ' · pas envoyée' : ''}</span></td>
-              {COL.map(([kk])=><td key={kk} style={{textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{tranche(j)===kk ? cvMoney(f.ttc) : ''}</td>)}<td></td></tr>)}
-          </React.Fragment>; })}
-          <tr style={{borderTop:'2px solid var(--border2)',fontWeight:800}}><td style={{padding:'7px 0'}}>Total ({L.length} client{L.length>1?'s':''})</td>{COL.map(([k])=><React.Fragment key={k}>{cel(T[k], k)}</React.Fragment>)}<td style={{textAlign:'right',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>{cvMoney(T.total)}</td></tr>
-        </tbody></table></div>
-    <div className="muted" style={{fontSize:12,marginTop:8}}>Payée = paiement confirmé dans Paiements (ou fermée au logiciel). Un paiement qui couvre plusieurs factures les compte toutes payées. Les factures annulées, créditées ou importées du logiciel sans PDF ni envoi ne sont pas comptées.</div>
+      {q && <button className="btn btn-sm" onClick={()=>setQ('')}>✕</button>}</div>
+    <PaiementsView cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} q={q} contacts={contacts} vieillissement/>
   </div>;
+}
+function PaiVieillissement({G}){
+  const [ouv,setOuv]=useState({});
+  const COL = [['c','Courant'],['j30','30 j'],['j60','60 j'],['j90','90 j et plus']];
+  const tranche = j => j==null || j<=30 ? 'c' : j<=60 ? 'j30' : j<=90 ? 'j60' : 'j90';
+  const L = G.map(x=>{ const c = {k:x.k, nom:x.nom, c:0, j30:0, j60:0, j90:0, total:0, fs:x.fs};
+    x.fs.forEach(f=>{ const v = f.solde||0; c[tranche(f.ageFac)] += v; c.total += v; }); return c; }).sort((a,b)=>b.total-a.total);
+  const T = L.reduce((t,c)=>{ COL.forEach(([k])=>t[k]+=c[k]); t.total+=c.total; return t; },{c:0, j30:0, j60:0, j90:0, total:0});
+  const cel = (v, k) => <td style={{textAlign:'right',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap',color: Math.abs(v)<0.005 ? 'var(--muted)' : k==='j90' ? 'var(--danger)' : k==='j60' ? 'var(--warning)' : undefined}}>{Math.abs(v)<0.005 ? '—' : cvMoney(v)}</td>;
+  if(!L.length) return <div className="card muted">Tout est payé.</div>;
+  return <div className="card" style={{padding:'6px 10px',overflowX:'auto'}}>
+    <table style={{width:'100%',fontSize:13,borderCollapse:'collapse',minWidth:560}}>
+      <thead><tr className="muted" style={{textAlign:'right',fontSize:12}}><th style={{textAlign:'left',padding:'4px 0'}}>Client</th>{COL.map(([k,l])=><th key={k}>{l}</th>)}<th>Total</th></tr></thead>
+      <tbody>
+        {L.map(c=><React.Fragment key={c.k}>
+          <tr style={{borderTop:'1px solid var(--border)',cursor:'pointer'}} onClick={()=>setOuv(o=>({...o, [c.k]:!o[c.k]}))}>
+            <td style={{padding:'6px 0'}}>{ouv[c.k] ? '▾' : '▸'} {c.nom} <span className="muted" style={{fontSize:11.5}}>({c.fs.length})</span></td>
+            {COL.map(([k])=><React.Fragment key={k}>{cel(c[k], k)}</React.Fragment>)}<td style={{textAlign:'right',fontWeight:700,fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>{cvMoney(c.total)}</td></tr>
+          {ouv[c.k] && c.fs.slice().sort((a,b)=>(b.ageFac||0)-(a.ageFac||0)).map(f=><tr key={f.num} style={{fontSize:12.5}}>
+            <td style={{padding:'3px 0 3px 18px'}}>{f.pdf ? <a href={'https://drive.google.com/file/d/'+f.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>#{f.num}</a> : '#'+f.num} <span className="muted">· {cvFmtDay(String(f.date||f.envoi||'').slice(0,10))}{f.ageFac!=null ? ' · '+f.ageFac+' j' : ''}{f.etat==='partielle' ? ' · payée en partie' : f.etat==='credit' ? ' · crédit' : ''}{f.desc ? ' · '+String(f.desc).slice(0,50) : ''}</span></td>
+            {COL.map(([k])=><td key={k} style={{textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{tranche(f.ageFac)===k ? cvMoney(f.solde||0) : ''}</td>)}<td></td></tr>)}
+        </React.Fragment>)}
+        <tr style={{borderTop:'2px solid var(--border2)',fontWeight:800}}><td style={{padding:'7px 0'}}>Total ({L.length} client{L.length>1?'s':''})</td>{COL.map(([k])=><React.Fragment key={k}>{cel(T[k], k)}</React.Fragment>)}<td style={{textAlign:'right',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>{cvMoney(T.total)}</td></tr>
+      </tbody></table></div>;
 }
 function ArchiveFacturesView({cfg}){
   const auj = localDateStr(new Date());
@@ -13984,7 +13976,7 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
     {onglet==='grand' && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>{GL_ONGLETS.map(([k,l])=><button key={k} className={'btn btn-sm'+(sous===k?' btn-p':'')} onClick={()=>choisirSous(k)}>{l}</button>)}</div>}
     {onglet==='grand' && sous==='paiements' && <PaiementsOnglet key={'p'+(cles.paiements||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='grand' && sous==='taxes' && <TaxesView key={'t'+(cles.taxes||0)} cfg={cfgRep}/>}
-    {onglet==='grand' && sous==='recevoir' && <ComptesRecevoirView key={'r'+(cles.recevoir||0)} cfg={cfgRep}/>}
+    {onglet==='grand' && sous==='recevoir' && <ComptesRecevoirView key={'r'+(cles.recevoir||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='grand' && sous==='archive' && <ArchiveFacturesView key={'a'+(cles.archive||0)} cfg={cfgRep}/>}
     {onglet==='factures' && <FacturesView key={'x'+(cles.factures||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='verif' && <>
