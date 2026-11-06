@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v420';
+const APP_VERSION = 'v421';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -13977,6 +13977,11 @@ function EtatsCompteView({cfg, refreshKey}){
   if(loading && !documents) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des états de compte…</span></div>;
   const rel = (documents||[]).filter(x=>/^relev/i.test(x.type||'') && (!q || cvNorm([x.fournisseur, x.num, x.ref, x.fichier].join(' ')).includes(cvNorm(q))));
   const parF = {}; rel.forEach(x=>{ const k = x.fournisseur || '(fournisseur ?)'; (parF[k] = parF[k] || []).push(x); });
+  // v421 : même relevé enregistré deux fois (« fax00167413 » et « 167413 », « LUM3144…083126 » et « 3144…083126 ») : on n'en garde qu'un (celui avec le total)
+  const chiffres = x => String(x.num||'').replace(/\.0+$/,'').replace(/\D/g,'').replace(/^0+/,'');
+  Object.keys(parF).forEach(k=>{ const out = []; parF[k].forEach(x=>{ const c = chiffres(x);
+    const m = out.find(y=>{ const d = chiffres(y); return c && d && (c===d || c.endsWith(d) || d.endsWith(c)) && String(y.date).slice(0,10)===String(x.date).slice(0,10); });
+    if(!m) out.push({...x}); else { if(m.total==null && x.total!=null) m.total = x.total; if(!m.pdf && x.pdf) m.pdf = x.pdf; } }); parF[k] = out; });
   const L = Object.entries(parF).map(([f, xs])=>[f, xs.sort((a,b)=>String(b.date).localeCompare(String(a.date)))]).sort((a,b)=>String(b[1][0].date).localeCompare(String(a[1][0].date)) || a[0].localeCompare(b[0]));
   const moisDe = x => String(x.date||'').slice(0,7);
   const dernierMois = L.reduce((m,[,xs])=>moisDe(xs[0])>m ? moisDe(xs[0]) : m, '');
