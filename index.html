@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v418';
+const APP_VERSION = 'v419';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6715,11 +6715,12 @@ async function driveFetch(url, opts){
   return r.json();
 }
 // v404 : onglet « Drive » — tape un numéro d'appel de service, d'OT ou de facture et ouvre le papier tout de suite
-function DriveRapideView({cfg, sansTitre}){
-  const [type,setType]=useState('AP');
-  const [num,setNum]=useState('');
+function DriveRapideView({cfg, sansTitre, type0, num0}){
+  const [type,setType]=useState(type0 || 'AP');
+  const [num,setNum]=useState(num0 || '');
   const [res,setRes]=useState(null);
   const [etat,setEtat]=useState('');
+  useEffect(()=>{ if(num0) chercher(); },[]);   // eslint-disable-line   // v419 : ouvert depuis « Numéros manquants » : cherche tout de suite
   const chercher = async () => { const n = num.trim().replace(/^#/,''); if(!n) return; setEtat('Recherche…'); setRes(null);
     const out = [], vus = new Set(); const aj = (nom, lien, src) => { if(!lien || vus.has(lien)) return; vus.add(lien); out.push({nom, lien, src}); };
     const lienF = id => 'https://drive.google.com/file/d/'+id+'/view';
@@ -13868,6 +13869,7 @@ function ArchiveFacturesView({cfg}){
   const [rect,setRect]=useState(null);   // {num, choix, credit, remplace}
   const [etat,setEtat]=useState('');
   const [ouvPC,setOuvPC]=useState(true);   // v417 : section « Factures à vérifier »
+  const [ouvM,setOuvM]=useState(true), [chM,setChM]=useState('');   // v419 : section « Numéros manquants »
   const nomClient = useNomClient(cfg);
   useEffect(()=>{ let ok = true; (async()=>{ try{
     const r = await arcCharger(cfg, cle>0); if(ok){ setD(arcJumeler(r)); setErr(''); }
@@ -13934,6 +13936,17 @@ function ArchiveFacturesView({cfg}){
       {q && <button className="btn btn-sm" onClick={()=>setQ('')}>✕</button>}
       {!q && <button className={'btn btn-sm'+(tout?' btn-p':'')} onClick={()=>{ setTout(!tout); setNb(120); }}>{tout ? 'Depuis le 1er juillet' : 'Tout l\'historique'}</button>}
       <button className="btn btn-sm" onClick={()=>setCle(k=>k+1)}>↻</button></div>
+    {!qq && (()=>{ const M = []; for(let n=debut; n<=fin && n<debut+4000; n++) if(!d.F[n]) M.push(n);
+      if(!M.length) return <div className="card" style={{padding:'8px 12px',marginBottom:10,fontSize:13,color:'var(--success)'}}>✓ Aucun numéro de facture manquant de #{debut} à #{fin}.</div>;
+      const P = []; M.forEach(n=>{ const l = P[P.length-1]; if(l && n===l[1]+1) l[1] = n; else P.push([n,n]); });   // suites : 2420–2424
+      return <div className="card" style={{padding:'8px 10px',marginBottom:12,border:'1px solid var(--danger)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',cursor:'pointer'}} onClick={()=>setOuvM(!ouvM)}><b>Numéros manquants <span className="muted" style={{fontWeight:400}}>({M.length} de #{debut} à #{fin})</span></b><span className="muted">{ouvM ? '▲' : '▼'}</span></div>
+        {ouvM && <div style={{marginTop:6}}>
+          <div className="muted" style={{fontSize:12,marginBottom:6}}>Ces numéros ne sont pas dans le registre de La mémoire. Clique un numéro pour le chercher dans le Drive ; une fois trouvé, mets la facture dans « Factures PDF » ou envoie-la, et elle entre dans le registre. Si le numéro a été annulé au logiciel, il n'y a rien à faire.</div>
+          <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{P.map(([a,b])=>{ const nums = []; for(let n=a;n<=b;n++) nums.push(n);
+            return nums.map(n=><button key={n} className={'btn btn-sm'+(chM===String(n)?' btn-p':'')} style={{fontSize:12,padding:'1px 8px'}} onClick={()=>setChM(chM===String(n) ? '' : String(n))}>#{n}</button>); })}</div>
+          {chM && <div style={{marginTop:8}}><DriveRapideView key={chM} cfg={cfg} sansTitre type0="FAC" num0={chM}/></div>}
+        </div>}</div>; })()}
     {!qq && (()=>{ const PC = arcPasClaires(d, debut, auj); if(!PC.length) return <div className="card" style={{padding:'8px 12px',marginBottom:10,fontSize:13,color:'var(--success)'}}>✓ Aucune facture pas claire depuis #{debut}.</div>;
       return <div className="card" style={{padding:'8px 10px',marginBottom:12,border:'1px solid var(--warning)'}}>
         <div style={{display:'flex',justifyContent:'space-between',cursor:'pointer'}} onClick={()=>setOuvPC(!ouvPC)}><b>Factures à vérifier <span className="muted" style={{fontWeight:400}}>({PC.length})</span></b><span className="muted">{ouvPC ? '▲' : '▼'}</span></div>
