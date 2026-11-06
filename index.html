@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v433';
+const APP_VERSION = 'v434';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8997,7 +8997,7 @@ const CALC_SOUMISSION = {
       ['ENTREE-PVC-PI','Tuyau PVC compteur → panneau, au-delà de 10 pi ($/pi)'],['ENTREE-MUR','Entrée en PVC (2 étages / grenier), en plus ($)'],
       ['ENTREE-HYDRO','Connecteurs Hydro fournis ($)'],['SURTENSION','Protection contre les surtensions, installée ($)']],
     defaut:{panneau:'HOM84', circuits:'20', reutiliser:false, agrandir:false, terre:'plaque', hydro:true, surtension:'non', note:'', disj:{},
-      mat:'toit', longMat:'12', kit:'AM', dist:'10', coudes:'1', lb:'0', filHaut:'', filBas:'', commanderFil:false, hydroConn:false},
+      mat:'toit', longMat:'12', kit:'AM', dist:'10', coudes:'1', lb:'1', filHaut:'', filBas:'', commanderFil:false, hydroConn:false},
     deviner(txt){ const t=String(txt||''), v={...CALC_SOUMISSION.panneau200.deviner(t)};
       if(/mm\s?10\b/i.test(t)) v.longMat='10';
       if(/\bpvc\b/i.test(t) && !/m[âa]t/i.test(t)) v.mat='pvc';
@@ -10788,6 +10788,9 @@ function CommandesView({cfg, toast, refreshKey}){
   const K = useContactsFournisseurs(cfg);
   // v274 : onglets Bon de commande | Assemblages | Modèles | À commander
   const [ongletC,setOngletC]=useState(()=>{ if(BC_PREFILL) return 'bon'; try{ return localStorage.getItem('cmd_onglet')||'bon'; }catch(e){ return 'bon'; } });
+  // v434 : confirmation qui reste affichée après l'envoi (on revient de Gmail) : « Commande passée … pour la job … »
+  const [passee,setPassee]=useState(()=>{ try{ return JSON.parse(sessionStorage.getItem('cmd_passee')||'null'); }catch(e){ return null; } });
+  const marquerPassee = x => { setPassee(x); try{ if(x) sessionStorage.setItem('cmd_passee', JSON.stringify(x)); else sessionStorage.removeItem('cmd_passee'); }catch(e){} };
   const choisirOngletC = k => { setOngletC(k); try{ localStorage.setItem('cmd_onglet', k); }catch(e){} };
   const [pick,setPick]=useState('');   // '' | 'as' | 'mo' : sélecteur ouvert dans le bon
   const [pq,setPq]=useState(''), [pcat,setPcat]=useState(''), [pph,setPph]=useState('');
@@ -10945,6 +10948,8 @@ function CommandesView({cfg, toast, refreshKey}){
           return (v1.length ? '\n\nÀ vérifier à la shop / dans le camion (pas commandé) :\n'+v1.map(t=>'- '+sp(t)).join('\n') : '')+(v2.length ? '\n\nÀ prendre à la shop :\n'+v2.map(t=>'- '+sp(t)).join('\n') : ''); })() : ''), {fournisseur:[...new Set(envoyes.map(e=>e.f))].join(' + '), mode:bc.mode});
       const restent = fournsBon.filter(y=>y!==f);
       toast && toast(numero+' prêt dans Gmail'+(x?' · passage marqué ✅ Placée':'')+(restent.length ? ' — reste à envoyer chez '+restent.join(', ') : ''));
+      marquerPassee({bons:[...(passee && passee.ref===bc.ref ? passee.bons : []), numero+' chez '+f], ref:bc.ref, job:bc.job, passage: x ? x.e.day+' '+(x.e.phase||'') : '', mode:bc.mode, pour:pourTxt, employe:bc.employe, restent, quand:new Date().toLocaleString('fr-CA',{day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'})});
+      window.scrollTo(0,0);
       if(restent.length) setBc(b=>({...b, lignes:b.lignes.filter(l=>(l.f||b.fournisseur)!==f), libre: f===b.fournisseur ? '' : b.libre, envoyes}));
       else setBc({...bcVide(), fournisseur:bc.fournisseur, courriel:bc.courriel});
     }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
@@ -10956,6 +10961,15 @@ function CommandesView({cfg, toast, refreshKey}){
   const nbAFaire = aVenir.filter(x=>!x.cmd.fait).length;
   return <div>
     <h2 className="fh" style={{margin:'0 0 8px',fontSize:20}}>Commandes</h2>
+    {passee && <div className="card" style={{border:'2px solid var(--success)',padding:'12px 14px',marginBottom:12}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start'}}>
+        <div><div style={{fontSize:16,fontWeight:800,color:'var(--success)'}}>✓ Commande passée{passee.restent && passee.restent.length ? ' (en partie)' : ''}</div>
+          <div style={{fontSize:13.5,marginTop:4}}>{passee.bons.join(' · ')}</div>
+          <div style={{fontSize:13.5}}>Pour la job : <b>{passee.ref || passee.job || '—'}</b>{passee.passage ? ' · passage du '+passee.passage+' marqué ✅ Placée' : ''}</div>
+          <div className="muted" style={{fontSize:12.5}}>{passee.mode==='À aller chercher' ? 'À aller chercher le '+passee.pour+(passee.employe ? ' par '+passee.employe : '') : 'Livraison souhaitée le '+passee.pour} · envoyée le {passee.quand}</div>
+          {passee.restent && passee.restent.length>0 && <div style={{fontSize:13,color:'var(--warning)',marginTop:4}}>Reste à envoyer chez {passee.restent.join(', ')} (toujours dans le bon ci-dessous).</div>}
+          <div className="muted" style={{fontSize:12,marginTop:4}}>Le courriel s'est ouvert dans Gmail : vérifie qu'il est bien parti (bouton Envoyer de Gmail).</div></div>
+        <button className="btn btn-sm" onClick={()=>marquerPassee(null)}>OK</button></div></div>}
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
       {[['bon','Bon de commande'],['rapide','Assemblage rapide'],['assemblages','Assemblages'],['modeles','Modèles'],['acommander','À commander'+(nbAFaire?' · '+nbAFaire:'')]].map(([k,l])=><button key={k} className={'btn'+(ongletC===k?' btn-p':'')} onClick={()=>choisirOngletC(k)}>{l}</button>)}
     </div>
