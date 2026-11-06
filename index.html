@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v421';
+const APP_VERSION = 'v422';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2139,7 +2139,7 @@ function AchUniformiser({cfg, achats, clients, R, onFait}){
           {!v && x.choix && <button className="btn btn-sm" style={{padding:'0 7px',fontSize:11.5}} onClick={()=>setSel(s=>({...s, [x.a.row]:x.choix}))}>✓ suggéré</button>}
           {!x.sur && x.options.length>1 && <span style={{color:'var(--warning)',fontSize:12}}>{x.options.length} projets — à vérifier</span>}
           {!x.sur && x.options.length===1 && <span style={{color:'var(--warning)',fontSize:12}}>trouvé par le nom du client — à vérifier</span>}</div>
-        {autre===x.a.row && <div style={{paddingLeft:8}}><CvChoixJob clients={clients} R={R} date={x.a.date||x.a.recue} refAchat={x.a.ref}
+        {autre===x.a.row && <div style={{paddingLeft:8}}><CvChoixJob clients={clients} R={R} cfg={cfg} date={x.a.date||x.a.recue} refAchat={x.a.ref}
           onChoix={dest=>{ setPerso(p=>({...p, [x.a.row]:dest})); setSel(s=>({...s, [x.a.row]:dest})); setAutre(null); }}/>
           <button className="btn btn-sm" style={{marginTop:4}} onClick={()=>setAutre(null)}>Annuler</button></div>}
       </div>; })}</div>
@@ -2220,11 +2220,18 @@ function repDestinations(R){
     jobs:p.listeJobs.map(j=>({label:j.label, dest:j.ficheJob ? j.ficheJob.canon : ([...j.cles][0] || p.nom)}))}));
   return out;
 }
-function RepChoixDest({R, refAchat, onChoix}){
+function RepChoixDest({R, refAchat, onChoix, cfg}){
   const [q,setQ]=useState('');
   const [ouvert,setOuvert]=useState('');
+  const [nouv,setNouv]=useState(null);   // v422 : créer une fiche dans le Répertoire {nom, commerce, adresse, ville, tel, courriel}
+  const [etatN,setEtatN]=useState('');
   const L = useMemo(()=>repDestinations(R),[R]);
-  if(!R) return null;
+  if(!R && !cfg) return null;
+  const creer = async () => { const n = nouv.nom.trim(); if(!n) return; setEtatN('Création…');
+    try{ await ficheEcrire(cfg, {type:'Client', code:nouv.commerce ? 'COMMERCE' : 'PART', nom:n, alias:[], adresse:nouv.adresse.trim(), ville:nouv.ville.trim(), tel:nouv.tel.trim(), courriel:nouv.courriel.trim(), notes:'Créée en associant une facture fournisseur'});
+      if(typeof CV_CACHE!=='undefined') Object.keys(CV_CACHE).forEach(k=>{ delete CV_CACHE[k]; });   // le Répertoire relit la nouvelle fiche
+      setEtatN(''); setNouv(null); onChoix(n); }
+    catch(e){ setEtatN('Erreur : '+apiErrMsg(e)); } };
   const nq = cvNorm(q);
   const motsRef = String(refAchat||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=4 && !SUGG_STOP.has(w));
   const auto = !nq && motsRef.length ? L.filter(x=>x.icone!=='🏗' && x.nom.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=4).some(w=>motsRef.includes(w))).slice(0,4) : [];
@@ -2245,10 +2252,27 @@ function RepChoixDest({R, refAchat, onChoix}){
         {x.lies.map(y=><button key={y.id} className="btn btn-sm" style={{fontSize:11.5}} onMouseDown={e=>e.preventDefault()} onClick={()=>onChoix(y.dest)} title="Associer plutôt à cette fiche">{y.icone} {y.nom}</button>)}
       </div>}
     </div>)}
-    {nq.length>=2 && !liste.length && <div className="muted" style={{fontSize:12}}>Rien trouvé — ajoute le client dans le Répertoire, ou utilise ✏️ Autre….</div>}
+    {nq.length>=2 && !liste.length && !nouv && <div className="muted" style={{fontSize:12,marginTop:3}}>Pas dans le Répertoire.</div>}
+    {cfg && !nouv && <button className="btn btn-sm" style={{marginTop:5,fontSize:12}} onMouseDown={e=>e.preventDefault()} onClick={()=>setNouv({nom:q.trim(), commerce:false, adresse:'', ville:'', tel:'', courriel:''})}>+ Créer {q.trim() ? '« '+q.trim()+' »' : 'un client'} dans le Répertoire</button>}
+    {nouv && <div style={{marginTop:6,padding:8,border:'1px solid var(--accent)',borderRadius:8,display:'grid',gap:6}}>
+      <b style={{fontSize:12.5}}>Nouvelle fiche dans le Répertoire</b>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        <input autoFocus value={nouv.nom} onChange={e=>setNouv({...nouv, nom:e.target.value})} placeholder="Nom (ex. Hélène Bouchard)" style={{flex:'1 1 180px',padding:'4px 8px',fontSize:12.5}}/>
+        <label style={{fontSize:12,display:'flex',gap:4,alignItems:'center'}}><input type="checkbox" checked={nouv.commerce} onChange={e=>setNouv({...nouv, commerce:e.target.checked})}/> Commerce</label></div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        <input value={nouv.adresse} onChange={e=>setNouv({...nouv, adresse:e.target.value})} placeholder="Adresse" style={{flex:'2 1 180px',padding:'4px 8px',fontSize:12.5}}/>
+        <input value={nouv.ville} onChange={e=>setNouv({...nouv, ville:e.target.value})} placeholder="Ville" style={{flex:'1 1 110px',padding:'4px 8px',fontSize:12.5}}/></div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        <input value={nouv.tel} onChange={e=>setNouv({...nouv, tel:e.target.value})} placeholder="Téléphone" style={{flex:'1 1 120px',padding:'4px 8px',fontSize:12.5}}/>
+        <input value={nouv.courriel} onChange={e=>setNouv({...nouv, courriel:e.target.value})} placeholder="Courriel" style={{flex:'1 1 160px',padding:'4px 8px',fontSize:12.5}}/></div>
+      <div style={{display:'flex',gap:6,alignItems:'center'}}>
+        <button className="btn btn-sm btn-p" disabled={!nouv.nom.trim() || !!etatN} onMouseDown={e=>e.preventDefault()} onClick={creer}>{etatN==='Création…' ? etatN : 'Créer et associer la facture'}</button>
+        <button className="btn btn-sm" onMouseDown={e=>e.preventDefault()} onClick={()=>{ setNouv(null); setEtatN(''); }}>Annuler</button>
+        {etatN && etatN!=='Création…' && <span style={{color:'var(--danger)',fontSize:12}}>{etatN}</span>}</div>
+    </div>}
   </div>;
 }
-function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat, onChoix, R}){
+function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat, onChoix, R, cfg}){
   const [groupe,setGroupe]=useState('');
   const [autre,setAutre]=useState(null);
   const [emp,setEmp]=useState(false);
@@ -2263,7 +2287,7 @@ function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat
       {CV_DESTS.map(d=>pill(cvIconeDest(d)+d, ()=>onChoix(d)))}
       {pill('✏️ Autre…', ()=>setAutre(autre===null?'':null))}
     </div>
-    {R && <RepChoixDest R={R} refAchat={refAchat} onChoix={onChoix}/>}
+    {(R || cfg) && <RepChoixDest R={R} cfg={cfg} refAchat={refAchat} onChoix={onChoix}/>}
     {(()=>{ const ag = agendaAchat(date, clients, refAchat).filter(x=>x.cle!==propose); if(!ag.length) return null;
       return <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,alignItems:'center'}}>
         <span className="muted" style={{fontSize:11.5}}>📅 À l'agenda :</span>
@@ -2376,7 +2400,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
       </div>}
       {(assoc || changer===a.row) && (busy===a.row ? <div className="muted" style={{fontSize:12}}>Enregistrement…</div>
         : partieDe && partieDe.a.row===a.row ? <AchPartie dest={partieDe.job} parties={achPartiesDe(partieDe.job, achats, null)} onOk={sous=>enregistrer(a, partieDe.job, sous)} onAnnuler={()=>setPartieDe(null)}/>
-        : <CvChoixJob clients={clients} R={R} propose={proposeAchat(a, clients)} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients)} date={date(a)} refAchat={a.ref} onChoix={job=>choisir(a, job)}/>)}
+        : <CvChoixJob clients={clients} R={R} cfg={cfg} propose={proposeAchat(a, clients)} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients)} date={date(a)} refAchat={a.ref} onChoix={job=>choisir(a, job)}/>)}
     </div>; };
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Comptes fournisseurs</h2>
@@ -2926,7 +2950,7 @@ function PjFacturesMateriel({job, factures, achats, clients, cfg, onChanged, app
           : <AchPartie dest={a.job} parties={partiesJob} onOk={sous=>ecrire(a, a.job, sous)} onAnnuler={()=>setPartie(null)}/>}</div>}
         {chg===a.row && <div style={{flexBasis:'100%',paddingLeft:8}}>{busy ? <span className="muted">Enregistrement…</span>
           : dest && dest.row===a.row ? <AchPartie dest={dest.dest} parties={achPartiesDe(dest.dest, achats, null)} onOk={sous=>ecrire(a, dest.dest, sous)} onAnnuler={()=>setDest(null)}/>
-          : <CvChoixJob clients={clients||{}} propose={proposeAchat(a, clients||{})} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients||{})} date={a.date||a.recue} refAchat={a.ref} onChoix={d=>deplacer(a, d)}/>}</div>}
+          : <CvChoixJob clients={clients||{}} cfg={cfg} propose={proposeAchat(a, clients||{})} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients||{})} date={a.date||a.recue} refAchat={a.ref} onChoix={d=>deplacer(a, d)}/>}</div>}
         </div>)}</div>}</div>; }); })()}</>}</div>
   </div>;
 }
