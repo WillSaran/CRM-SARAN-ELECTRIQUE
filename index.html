@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v431';
+const APP_VERSION = 'v432';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8941,7 +8941,7 @@ const CALC_SOUMISSION = {
               <input value={code ? (D[k]||'') : ''} disabled={!code} inputMode="numeric" placeholder="0" onChange={e=>maj({disj:{...D, [k]:e.target.value}})} style={{width:44,textAlign:'right'}}/>
               <span style={{fontSize:12.5}}>{l}{code ? '' : ' (—)'}</span></label>; })}
           </div>}</div>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>5. Mise à la terre</b> {r('terre',[['aucune','Garder l\'existante (vérifier)'],['plaque','Ajouter une plaque 10 × 16 (1016BTB)'],['eau','Collier sur l\'entrée d\'eau']])}</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>5. Mise à la terre</b> {r('terre',[['aucune','Aucune (on garde l\'existante)'],['plaque','Ajouter une plaque 10 × 16 (1016BTB)'],['eau','Collier sur l\'entrée d\'eau']])}</div>
         <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}>{c('hydro','Coupure Hydro-Québec à demander (note dans la soumission)')}</div>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>Protection contre les surtensions</b> {sel(v.surtension||'non', x=>maj({surtension:x}), SURTENSION_CHOIX)}</div>
         <input value={v.note} onChange={e=>maj({note:e.target.value})} placeholder="Note (ex. panneau au sous-sol, ancien Federal Pioneer, garage)" style={{width:'100%',boxSizing:'border-box'}}/>
@@ -9070,8 +9070,8 @@ const CALC_SOUMISSION = {
           ajout('MM700','Bride de continuité des masses (avec le RFA)', 1);
           ajout('RFA35','Adaptateur PVC 2 po → métal (RFA, avec le kit AM)', 1);
           ajout('RMHU35','Hub PVC 2 po pour la base de compteur (kit AM)', 1);
-          ajout('KIT-200AM','Kit de mât 200A (AM) — tête, 3 clips + 6 lag screws, solins, ferrure', 1); }
-        if(v.kit==='MH' || v.kit==='DEUX') ajout('KIT-200MH','Kit de mât 200A (MH) — tête, hub métal, 3 clips + 6 lag screws, solins, ferrure', 1);
+          ajout('KIT-200AM','Kit 200A AM', 1); }
+        if(v.kit==='MH' || v.kit==='DEUX') ajout('KIT-200MH','Kit 200A MH', 1);
         if(v.mat!=='existant') ajout(lm===10 ? 'MM10' : 'MM12', 'Mât '+lm+' pi', 1); }
       ajout('CI1716','Contre-écrou 2 po', ecrous);
       ajout('RTA35','Adaptateur de boîte PVC 2 po (RTA)', 2);
@@ -10830,7 +10830,10 @@ function CommandesView({cfg, toast, refreshKey}){
     setBc(x=>{ let L = x.lignes.slice();
       lignes.forEach(l=>{ const ex = L.find(y=>!y.libre && codeNorm(y.code)===codeNorm(l.code));
         if(ex) L = L.map(y=>y===ex ? {...y, qte:(cvNum(y.qte)||0)+l.qte} : y);
-        else L.push({code:l.code, desc:l.desc, unite:l.unite, qte:l.qte, f:bcFournCode(l.code)||x.fournisseur, format:''}); });
+        else { // v432 : description courte sur le bon (celle du catalogue, sinon sans les explications « — … » / « (…) »)
+          const pc = (C.produits||[]).find(p=>codeNorm(p.code)===codeNorm(l.code));
+          const court = pc && pc.desc ? pc.desc : String(l.desc||'').split(' — ')[0].replace(/\s*\([^)]{12,}\)\s*$/,'').trim();   // les courtes parenthèses (AM), (MH) restent
+          L.push({code:l.code, desc:court, unite:l.unite, qte:l.qte, f:bcFournCode(l.code)||x.fournisseur, format:''}); } });
       const V = [...(x.verifier||[])]; (verif||[]).forEach(t=>{ if(!V.includes(t)) V.push(t); });
       return {...x, lignes:L, ref: x.ref || ref, verifier:V}; });
     choisirOngletC('bon'); setCalcBon(''); setPick('');
