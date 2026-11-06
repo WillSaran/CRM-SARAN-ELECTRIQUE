@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v419';
+const APP_VERSION = 'v420';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -13307,7 +13307,7 @@ function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.se
 // v202 : Comptabilité — comptes fournisseurs, factures clients (et paiements reçus), appels de service, à vérifier. Les pages gardent toutes leurs fonctions.
 const CPT_NAV = {compta:'clients', drive:'archive', factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
 const CPT_ONGLETS = [['clients','Comptes clients'],['factures','Bons de vente'],['fourn','Comptes fournisseurs'],['grand','Grand livre']];   // v416 : Grand livre = Paiements, TPS/TVQ, Archive des factures
-const GL_ONGLETS = [['recevoir','Comptes à recevoir'],['paiements','Paiements'],['taxes','TPS/TVQ'],['archive','Archive des factures']];   // v417   // v374 : TPS/TVQ   // v272   // v240
+const GL_ONGLETS = [['recevoir','Comptes à recevoir'],['paiements','Paiements'],['taxes','TPS/TVQ'],['archive','Archive des factures'],['etats','États de compte']];   // v417   // v420 : États de compte   // v374 : TPS/TVQ   // v272   // v240
 // v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
 // v380 : fiche du Répertoire › Factures (factures envoyées de ce client : en attente de paiement, puis payées)
 function FacturesClient({cfg, cfgRep, refreshKey, contacts}){
@@ -13969,6 +13969,41 @@ function ArchiveFacturesView({cfg}){
       <div style={{marginTop:8}}><DriveRapideView cfg={cfg} sansTitre/></div></details>
   </div>;
 }
+// ══ v420 : Grand livre › États de compte — les relevés de compte reçus des fournisseurs (fin de mois), par fournisseur, le plus récent en premier ══
+function EtatsCompteView({cfg, refreshKey}){
+  const {loading, err, documents} = useClientsData(cfg, refreshKey+'|ec');
+  const [ouv,setOuv]=useState({}), [q,setQ]=useState('');
+  if(err) return <div className="card" style={{color:'var(--danger)'}}>Erreur : {err}</div>;
+  if(loading && !documents) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des états de compte…</span></div>;
+  const rel = (documents||[]).filter(x=>/^relev/i.test(x.type||'') && (!q || cvNorm([x.fournisseur, x.num, x.ref, x.fichier].join(' ')).includes(cvNorm(q))));
+  const parF = {}; rel.forEach(x=>{ const k = x.fournisseur || '(fournisseur ?)'; (parF[k] = parF[k] || []).push(x); });
+  const L = Object.entries(parF).map(([f, xs])=>[f, xs.sort((a,b)=>String(b.date).localeCompare(String(a.date)))]).sort((a,b)=>String(b[1][0].date).localeCompare(String(a[1][0].date)) || a[0].localeCompare(b[0]));
+  const moisDe = x => String(x.date||'').slice(0,7);
+  const dernierMois = L.reduce((m,[,xs])=>moisDe(xs[0])>m ? moisDe(xs[0]) : m, '');
+  const lien = x => x.pdf ? <a href={'https://drive.google.com/file/d/'+x.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>Ouvrir ↗</a> : <span className="muted">pas de PDF</span>;
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>États de compte</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Les états de compte (relevés) reçus de tes fournisseurs à chaque fin de mois, lus dans tes courriels par La mémoire. Le plus récent de chaque fournisseur est en haut ; clique pour voir les mois d'avant.</div>
+    <div style={{display:'flex',gap:6,marginBottom:10}}>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un fournisseur…" style={{flex:'1 1 200px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
+      {q && <button className="btn btn-sm" onClick={()=>setQ('')}>✕</button>}</div>
+    {!L.length && <div className="card muted">Aucun état de compte reçu{q ? ' pour cette recherche' : ''}.</div>}
+    {L.length>0 && <div className="card" style={{padding:'4px 10px'}}>
+      {L.map(([f, xs])=>{ const x = xs[0], vieux = dernierMois && moisDe(x) < dernierMois;
+        return <div key={f} style={{borderTop:'1px solid var(--border)',padding:'7px 0'}}>
+          <div style={{display:'flex',gap:8,alignItems:'baseline',flexWrap:'wrap',cursor:xs.length>1?'pointer':'default'}} onClick={()=>xs.length>1 && setOuv(o=>({...o, [f]:!o[f]}))}>
+            <span className="muted" style={{width:12}}>{xs.length>1 ? (ouv[f] ? '▾' : '▸') : ''}</span>
+            <b style={{flex:'1 1 160px'}}>{f} <span className="muted" style={{fontWeight:400,fontSize:12}}>({xs.length})</span></b>
+            <span style={{fontSize:12.5,color:vieux ? 'var(--warning)' : undefined}}>{x.date ? cvFmtDay(String(x.date).slice(0,10)) : '—'}{vieux ? ' · pas reçu pour le dernier mois' : ''}</span>
+            <b style={{fontVariantNumeric:'tabular-nums',minWidth:90,textAlign:'right'}}>{x.total!=null ? cvMoney(x.total) : '—'}</b>
+            {lien(x)}</div>
+          {ouv[f] && xs.slice(1).map((y,i)=><div key={i} style={{display:'flex',gap:8,alignItems:'baseline',fontSize:12.5,padding:'3px 0 3px 20px'}}>
+            <span style={{flex:'1 1 160px'}} className="muted">{y.num ? '#'+y.num : 'Relevé'}{y.ref ? ' · '+y.ref : ''}</span>
+            <span>{y.date ? cvFmtDay(String(y.date).slice(0,10)) : '—'}</span>
+            <span style={{fontVariantNumeric:'tabular-nums',minWidth:90,textAlign:'right'}}>{y.total!=null ? cvMoney(y.total) : '—'}</span>{lien(y)}</div>)}
+        </div>; })}</div>}
+  </div>;
+}
 function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, onglet0}){
   const estGL = k => GL_ONGLETS.some(x=>x[0]===k);
   const [onglet,setOnglet]=useState(onglet0==='verif' ? 'clients' : estGL(onglet0) ? 'grand' : (onglet0 || 'clients'));
@@ -13990,6 +14025,7 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
     {onglet==='grand' && sous==='paiements' && <PaiementsOnglet key={'p'+(cles.paiements||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='grand' && sous==='taxes' && <TaxesView key={'t'+(cles.taxes||0)} cfg={cfgRep}/>}
     {onglet==='grand' && sous==='recevoir' && <ComptesRecevoirView key={'r'+(cles.recevoir||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
+    {onglet==='grand' && sous==='etats' && <EtatsCompteView key={'e'+(cles.etats||0)} cfg={cfgRep} refreshKey={refreshKey}/>}
     {onglet==='grand' && sous==='archive' && <ArchiveFacturesView key={'a'+(cles.archive||0)} cfg={cfgRep}/>}
     {onglet==='factures' && <FacturesView key={'x'+(cles.factures||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='verif' && <>
