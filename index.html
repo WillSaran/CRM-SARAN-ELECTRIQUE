@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v439';
+const APP_VERSION = 'v440';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -416,8 +416,11 @@ async function libellesEvenements(calId, timeMinISO, timeMaxISO){
 async function attitrerCouleur(calId, eventId, k, labelActuel){
   const eventUrl = 'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/events/'+encodeURIComponent(eventId);
   const libs = await libellesAgenda(calId), lib = libs.find(l=>l.crew===k) || (CREW_COLORS[k] ? null : libs.find(l=>l.colorId===k));
-  if(lib){ await window.gapi.client.request({path:eventUrl, method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:lib.id}}); }
-  else {
+  let parCouleur = !lib;
+  if(lib){ await window.gapi.client.request({path:eventUrl, method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:lib.id}}).catch(()=>null);
+    const v = await window.gapi.client.request({path:eventUrl, params:{eventLabelVersion:1, fields:'eventLabelId'}}).then(r=>r.result.eventLabelId||'', ()=>'');
+    if(v!==lib.id) parCouleur = true; }   // v440 : le libellé n'a pas pris (ex. événement venu d'un autre agenda) → on passe par la couleur
+  if(parCouleur){
     // v438 : retirer l'ancien libellé (celui de l'équipe d'avant l'emporte sur la couleur → l'événement « revenait » à l'autre gars)
     const lu = await window.gapi.client.request({path:eventUrl, params:{eventLabelVersion:1, fields:'eventLabelId'}}).then(r=>r.result.eventLabelId||'', ()=>labelActuel||'');
     if(lu) await window.gapi.client.request({path:eventUrl, method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:null}});
@@ -425,7 +428,7 @@ async function attitrerCouleur(calId, eventId, k, labelActuel){
   }
   // Vérification : si un libellé d'une autre équipe est resté, on le dit au lieu de laisser l'agenda revenir en arrière
   const apres = await window.gapi.client.request({path:eventUrl, params:{eventLabelVersion:1, fields:'eventLabelId,colorId'}}).then(r=>r.result, ()=>null);
-  if(apres && (lib ? apres.eventLabelId!==lib.id : !!apres.eventLabelId)){ const l2 = libs.find(l=>l.id===apres.eventLabelId);
+  if(apres && apres.eventLabelId && !(lib && apres.eventLabelId===lib.id)){ const l2 = libs.find(l=>l.id===apres.eventLabelId);
     throw new Error('le libellé '+(l2 && l2.crew ? '« '+equipeNom(l2.crew)+' »' : 'de couleur')+' est resté sur l\'événement dans Google Agenda — change-le là une fois'); }
 }
 // ── Lecture SEULE du Calendar PunchPro (jobs) ─────────────────────────────
@@ -4539,9 +4542,14 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
     try{
       const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(pj), ...buildTimeFields() };
       await patchEventFull(event.calendarId, event.id, fields);
-      if(couleur && couleur!==(event.colorId||'')) await attitrerCouleur(event.calendarId, event.id, couleur, event.labelId);
-      if(deplacable && agenda!==event.calendarId) await window.gapi.client.calendar.events.move({calendarId:event.calendarId, eventId:event.id, destination:agenda});
-      toast(deplacable && agenda!==event.calendarId ? (agenda===CREW_CAL ? 'Enregistré et cédulé dans The Crew.' : agenda===SUIVI_AG ? 'Enregistré et mis dans Suivi Saran Électrique.' : 'Enregistré et mis En attente.') : 'Événement mis à jour.','ok');
+      // v440 : un événement de Suivi qu'on attitre à une équipe va dans The Crew ; on déplace d'abord, puis on met l'équipe dans l'agenda d'arrivée
+      const dest = (deplacable && event.calendarId===SUIVI_AG && agenda===SUIVI_AG && couleur && CREW_COLORS[couleur]) ? CREW_CAL : agenda;
+      const bouge = deplacable && dest!==event.calendarId;
+      if(bouge) await window.gapi.client.calendar.events.move({calendarId:event.calendarId, eventId:event.id, destination:dest});
+      const calFinal = bouge ? dest : event.calendarId;
+      if(couleur && (bouge || couleur!==(event.colorId||''))) await attitrerCouleur(calFinal, event.id, couleur, bouge ? '' : event.labelId);
+      const agenda2 = dest;
+      toast(bouge ? (agenda2===CREW_CAL ? 'Enregistré et cédulé dans The Crew'+(couleur && CREW_COLORS[couleur] ? ' pour '+equipeNom(couleur) : '')+'.' : agenda2===SUIVI_AG ? 'Enregistré et mis dans Suivi Saran Électrique.' : 'Enregistré et mis En attente.') : 'Événement mis à jour.','ok');
       onSaved(); onClose();
     }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
     setBusy(false);
@@ -4967,9 +4975,15 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
         const k = couloirs[Math.max(0, Math.min(couloirs.length-1, Math.floor((e.clientX-rect.left)/rect.width*couloirs.length)))];
         if(k && k!=='autres' && k!==couloirDe(info.ev) && CREW_COLORS[k]){ const ev0 = info.ev;
           setEvents(l=>l.map(x=>x.id===ev0.id && x.calendarId===ev0.calendarId ? {...x, colorId:k, couleurId:k, labelId:''} : x));
-          pCouleur = attitrerCouleur(ev0.calendarId, ev0.id, k, ev0.labelId).then(()=>toast('Attitrée à '+equipeNom(k)+'.','ok')).catch(err=>toast('Couleur : '+apiErrMsg(err),'err')); } }
+          // v440 : une job de l'agenda Suivi déposée dans le couloir d'une équipe passe dans The Crew, puis prend la couleur de l'équipe
+          const versCrew = ev0.calendarId===SUIVI_CAL_ID;
+          pCouleur = (versCrew ? window.gapi.client.calendar.events.move({calendarId:ev0.calendarId, eventId:ev0.id, destination:CREW_CAL}) : Promise.resolve())
+            .then(()=>attitrerCouleur(versCrew ? CREW_CAL : ev0.calendarId, ev0.id, k, versCrew ? '' : ev0.labelId))
+            .then(()=>toast('Attitrée à '+equipeNom(k)+(versCrew ? ' (déplacée dans The Crew)' : '')+'.','ok')).catch(err=>toast('Couleur : '+apiErrMsg(err),'err'));
+          info.calFinal = versCrew ? CREW_CAL : ev0.calendarId; } }
       majLocale(info.ev, new Date(newStartMs).toISOString(), new Date(newEndMs).toISOString());
-      patchEventTimes(info.ev.calendarId, info.ev.id, new Date(newStartMs).toISOString(), new Date(newEndMs).toISOString())
+      (info.calFinal && info.calFinal!==info.ev.calendarId ? pCouleur.then(()=>patchEventTimes(info.calFinal, info.ev.id, new Date(newStartMs).toISOString(), new Date(newEndMs).toISOString()))
+        : patchEventTimes(info.ev.calendarId, info.ev.id, new Date(newStartMs).toISOString(), new Date(newEndMs).toISOString()))
         .then(()=>pCouleur).then(()=>{ toast('Job déplacée.','ok'); setReloadKey(k=>k+1); })
         .catch(err=>{ toast('Erreur: '+apiErrMsg(err),'err'); setReloadKey(k=>k+1); });
     }
@@ -11472,6 +11486,7 @@ function equipeRang(k){ const i = EQUIPES_ORDRE.indexOf(k); return i<0 ? (k==='a
 const PHASES = [['WRAPUP','RAPUP'],['ENTRÉE','ENTRÉE'],['ENTREE','ENTRÉE'],['ROUGH','ROUGH'],['FINITION','FINITION'],['FINALE','FINITION'],['SERV','SERV'],['SERVICE','SERV'],['AJUSTEMENTS','AJUST'],['AJUSTEMENT','AJUST'],['RAPUP','RAPUP'],['DÉMO','DÉMO'],['DEMO','DÉMO']];
 const CLIENT_IGNORE = /^(off\b|mon plan|plan de la semaine|topo|ma journée|congé|vacances|prep|préparation)|(^|[\s\-–(])(rdv|rendez[\s-]?vous|r\.d\.v\.?)(?=$|[\s\-–).,:])/i;   // v160 : « OFF Adèle », « OFF WILL » = congés, pas des jobs
 const CREW_CAL = 'saranelectrique@gmail.com';
+const SUIVI_CAL_ID = 'info@saranelectrique.com';   // v440 : agenda « Suivi Saran Électrique »
 // Calendrier « En Attente » : jobs à faire mais pas encore cédulées (la date est un samedi provisoire).
 const EN_ATTENTE_CAL = 'c_7d3dd0732b25a3afd30d0f2c453bef2d31a41b08a6d7112b08accea16ff49daf@group.calendar.google.com';
 
