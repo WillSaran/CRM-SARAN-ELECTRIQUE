@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v434';
+const APP_VERSION = 'v435';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4632,9 +4632,15 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
   </Modal>;
 }
 
+// v435 : l'agenda revient où tu étais (vue, date, défilement) quand tu reviens d'un autre onglet du menu
+let AGENDA_POS = (()=>{ try{ return JSON.parse(sessionStorage.getItem('agenda_pos')||'null'); }catch(e){ return null; } })();
 function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
-  const [viewMode,setViewMode]=useState('semaine'); // 'jour'|'semaine'|'mois'
-  const [anchor,setAnchor]=useState(()=>new Date());
+  const [viewMode,setViewMode]=useState(()=>AGENDA_POS && AGENDA_POS.viewMode || 'semaine'); // 'jour'|'semaine'|'mois'
+  const [anchor,setAnchor]=useState(()=>AGENDA_POS && AGENDA_POS.anchor ? new Date(AGENDA_POS.anchor) : new Date());
+  useEffect(()=>{ AGENDA_POS = {...(AGENDA_POS||{}), viewMode, anchor:anchor.getTime()}; try{ sessionStorage.setItem('agenda_pos', JSON.stringify(AGENDA_POS)); }catch(e){} },[viewMode, anchor]);
+  useEffect(()=>{ const y = AGENDA_POS && AGENDA_POS.scrollY; if(y) setTimeout(()=>window.scrollTo(0, y), 60);
+    const garder = () => { AGENDA_POS = {...(AGENDA_POS||{}), scrollY:window.scrollY}; try{ sessionStorage.setItem('agenda_pos', JSON.stringify(AGENDA_POS)); }catch(e){} };
+    window.addEventListener('scroll', garder, {passive:true}); return ()=>window.removeEventListener('scroll', garder); },[]);
   // Commandes de la semaine (même semaine que l'agenda) : jobs, heures, équipe, OT et commande placée ou non.
   const cd = useClientsData(cfg, refreshKey);
   const cdClients = useMemo(()=>cvBuildClients(cd.events, cd.registry, cd.factures),[cd.events, cd.registry, cd.factures]);
