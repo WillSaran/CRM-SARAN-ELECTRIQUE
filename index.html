@@ -4782,7 +4782,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
     flecheRef.current = {sens, t:setTimeout(()=>{ flecheRef.current = null; sens>0 ? goRef.current.goNext() : goRef.current.goPrev(); }, 600)};
   };
   // v341 : raccourcis clavier comme Google Agenda — M mois, W semaine, D jour, T aujourd'hui, J / → suivant, K / ← précédent
-  const goRef = useRef({}); goRef.current = {goPrev, goNext, goToday};
+  const goRef = useRef({}); goRef.current = {goPrev, goNext, goToday, changerVue};
   useEffect(()=>{
     const onKey = e => {
       if(e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
@@ -4792,7 +4792,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       if(ongletAg!=='agenda') return;
       const k = e.key.toLowerCase();
       if(e.key==='/'){ e.preventDefault(); rechRef.current && rechRef.current.focus(); return; }
-      if(k==='m') setViewMode('mois'); else if(k==='w') setViewMode('semaine'); else if(k==='d') setViewMode('jour');
+      if(k==='m') setViewMode('mois'); else if(k==='w') setViewMode('semaine'); else if(k==='d') goRef.current.changerVue('jour');
       else if(k==='t') goRef.current.goToday();
       else if(k==='j' || k==='n' || e.key==='ArrowRight') goRef.current.goNext();
       else if(k==='k' || k==='p' || e.key==='ArrowLeft') goRef.current.goPrev();
@@ -4802,6 +4802,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
     window.addEventListener('keydown', onKey);
     return ()=>window.removeEventListener('keydown', onKey);
   },[ongletAg]);
+  // v436 : de la vue Semaine au bouton Jour (ou touche D) → le lundi de la semaine regardée
+  function changerVue(id){ if(id==='jour' && viewMode==='semaine'){ const d = new Date(anchor); d.setDate(d.getDate()-((d.getDay()+6)%7)); setAnchor(d); } setViewMode(id); }
   function openNewJob(dStr, heureStr){ setJobDate(dStr||todayISO()); setJobHeure(heureStr||null); setShowJobModal(true); }
   function rangeLabel(){
     if(viewMode==='jour') return anchor.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
@@ -5021,7 +5023,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
       </div>}
       <div style={{display:'inline-flex',border:'1px solid var(--border2)',borderRadius:10,overflow:'hidden',background:'var(--bg3)'}}>
         {[['jour','Jour'],['semaine','Semaine'],['mois','Mois']].map(([id,label],i)=>
-          <button key={id} onClick={()=>setViewMode(id)} style={{border:'none',borderLeft:i?'1px solid var(--border2)':'none',padding:'7px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',
+          <button key={id} onClick={()=>changerVue(id)} style={{border:'none',borderLeft:i?'1px solid var(--border2)':'none',padding:'7px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',
             background:viewMode===id?'var(--accent)':'transparent',color:viewMode===id?'#fff':'var(--text)'}}>{label}</button>)}
       </div>
       <div style={{display:'flex',gap:4,marginLeft:'auto',flexWrap:'wrap'}}>
