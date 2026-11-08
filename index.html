@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v441';
+const APP_VERSION = 'v442';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -424,12 +424,13 @@ async function attitrerCouleur(calId, eventId, k, labelActuel){
   if(parCouleur){
     // v438 : retirer l'ancien libellé (celui de l'équipe d'avant l'emporte sur la couleur → l'événement « revenait » à l'autre gars)
     const lu = await window.gapi.client.request({path:eventUrl, params:{eventLabelVersion:1, fields:'eventLabelId'}}).then(r=>r.result.eventLabelId||'', ()=>labelActuel||'');
-    if(lu) await window.gapi.client.request({path:eventUrl, method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:null}});
+    if(lu) await window.gapi.client.request({path:eventUrl, method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:null}}).catch(()=>null);   // v442 : un libellé venu d'un autre agenda (En attente) peut refuser d'être retiré — pas grave, la couleur suffit
     await window.gapi.client.calendar.events.patch({calendarId:calId, eventId, resource:{colorId:k}});
   }
   // Vérification : si un libellé d'une autre équipe est resté, on le dit au lieu de laisser l'agenda revenir en arrière
   const apres = await window.gapi.client.request({path:eventUrl, params:{eventLabelVersion:1, fields:'eventLabelId,colorId'}}).then(r=>r.result, ()=>null);
   if(apres && apres.eventLabelId && !(lib && apres.eventLabelId===lib.id)){ const l2 = libs.find(l=>l.id===apres.eventLabelId);
+    if(!(l2 && l2.crew && l2.crew!==k)) return;   // v442 : libellé inconnu de cet agenda (venu d'En attente) : sans effet ici, la couleur est mise
     throw new Error('le libellé '+(l2 && l2.crew ? '« '+equipeNom(l2.crew)+' »' : 'de couleur')+' est resté sur l\'événement dans Google Agenda — change-le là une fois'); }
 }
 // ── Lecture SEULE du Calendar PunchPro (jobs) ─────────────────────────────
