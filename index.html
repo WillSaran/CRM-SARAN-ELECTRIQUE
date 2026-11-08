@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v438';
+const APP_VERSION = 'v439';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4484,7 +4484,8 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
   const [televerse,setTeleverse]=useState('');
   const [driveOk,setDriveOk]=useState(()=>peutDeposer());
   const fichierRef = useRef(null);
-  const deplacable = event.calendarId===CREW_CAL || event.calendarId===EN_ATTENTE_CAL;
+  const SUIVI_AG = 'info@saranelectrique.com';   // v439 : « Suivi Saran Électrique » aussi dans le choix d'agenda
+  const deplacable = event.calendarId===CREW_CAL || event.calendarId===EN_ATTENTE_CAL || event.calendarId===SUIVI_AG;
   async function televerser(files){
     if(!files.length) return;
     try{
@@ -4540,7 +4541,7 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
       await patchEventFull(event.calendarId, event.id, fields);
       if(couleur && couleur!==(event.colorId||'')) await attitrerCouleur(event.calendarId, event.id, couleur, event.labelId);
       if(deplacable && agenda!==event.calendarId) await window.gapi.client.calendar.events.move({calendarId:event.calendarId, eventId:event.id, destination:agenda});
-      toast(deplacable && agenda!==event.calendarId ? (agenda===CREW_CAL ? 'Enregistré et cédulé dans The Crew.' : 'Enregistré et mis En attente.') : 'Événement mis à jour.','ok');
+      toast(deplacable && agenda!==event.calendarId ? (agenda===CREW_CAL ? 'Enregistré et cédulé dans The Crew.' : agenda===SUIVI_AG ? 'Enregistré et mis dans Suivi Saran Électrique.' : 'Enregistré et mis En attente.') : 'Événement mis à jour.','ok');
       onSaved(); onClose();
     }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
     setBusy(false);
@@ -4552,17 +4553,6 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
       await insertCalendarEvent(deplacable ? agenda : event.calendarId, fields);
       toast('Événement dupliqué.','ok');
       onSaved(); onClose();
-    }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
-    setBusy(false);
-  }
-  // v438 : copie dans l'agenda « Suivi Saran Électrique » (info@saranelectrique.com) — l'événement d'origine reste où il est
-  async function copierSuivi(){
-    setBusy(true);
-    try{
-      const fields = { summary: titre, location: lieu, description: desc, attachments: attachments.map(pj), ...buildTimeFields(), ...(couleur ? {colorId:couleur} : {}) };
-      await insertCalendarEvent('info@saranelectrique.com', fields);
-      toast('Copié dans Suivi Saran Électrique.','ok');
-      onSaved();
     }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
     setBusy(false);
   }
@@ -4598,7 +4588,7 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
     </div>
     {deplacable && <div className="field"><label>Agenda</label>
       <div style={{display:'flex',gap:6}}>
-        {[[CREW_CAL,'The Crew (cédulée)'],[EN_ATTENTE_CAL,'⏳ En attente']].map(([k,l])=><button key={k} type="button" className={'btn btn-sm'+(agenda===k?' btn-p':'')} onClick={()=>setAgenda(k)}>{l}</button>)}
+        {[[CREW_CAL,'The Crew (cédulée)'],[EN_ATTENTE_CAL,'⏳ En attente'],[SUIVI_AG,'📌 Suivi']].map(([k,l])=><button key={k} type="button" className={'btn btn-sm'+(agenda===k?' btn-p':'')} onClick={()=>setAgenda(k)}>{l}</button>)}
       </div></div>}
     <div className="field"><label>Adresse / lieu</label><input value={lieu} onChange={e=>setLieu(e.target.value)}/>
       {lieu.trim() && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6}}>
@@ -4645,7 +4635,6 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
       <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
         <button className="btn btn-s" onClick={onClose}>Fermer</button>
         <button className="btn btn-s" onClick={handleDuplicate} disabled={busy} title="Crée une copie de cet événement avec les mêmes infos">{busy?'...':'Dupliquer'}</button>
-        {event && event.calendarId!=='info@saranelectrique.com' && <button className="btn btn-s" onClick={copierSuivi} disabled={busy} title="Met aussi une copie de cet événement dans ton agenda « Suivi Saran Électrique »">📌 Aussi dans Suivi</button>}
         <button className="btn btn-p" onClick={handleSave} disabled={busy}>{busy?'Sauvegarde...':'Enregistrer'}</button>
       </div>
     </div>
