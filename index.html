@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v436';
+const APP_VERSION = 'v437';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -440,7 +440,7 @@ async function listCalendarEventsRange(calendarIds, timeMinISO, timeMaxISO, q){ 
             start:(e.start&&(e.start.dateTime||e.start.date))||'',
             end:(e.end&&(e.end.dateTime||e.end.date))||'',
             allDay:!(e.start&&e.start.dateTime), location:e.location||'', description:e.description||'',
-            colorId:e.colorId||'', calColor:calCouleurs[calId.trim()]||'', calendarId:calId.trim(), attachments:e.attachments||[], htmlLink:e.htmlLink||''
+            colorId:e.colorId||'', calColor:calCouleurs[calId.trim()]||'', calendarId:calId.trim(), attachments:e.attachments||[], htmlLink:e.htmlLink||'', created:e.created||''   // v437 : date de création (âge des jobs en attente)
           });
         });
         pageToken = resp.result.nextPageToken;
@@ -4679,6 +4679,11 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
   const [cachees,setCachees]=useState(()=>{ try{ return JSON.parse(localStorage.getItem('agenda_groupes_caches')||'[]'); }catch(e){ return []; } });
   const basculerGroupe = k => setCachees(l=>{ const n = l.includes(k) ? l.filter(x=>x!==k) : [...l, k]; try{ localStorage.setItem('agenda_groupes_caches', JSON.stringify(n)); }catch(e){} return n; });
   const [attListe,setAttListe]=useState(null);
+  // v437 : En attente — onglets Tous / Contracteurs / Particuliers, et depuis combien de temps chaque job attend (date de création)
+  const [filtreAtt,setFiltreAtt]=useState(()=>{ try{ return localStorage.getItem('att_filtre')||'tous'; }catch(e){ return 'tous'; } });
+  const choisirFiltreAtt = k => { setFiltreAtt(k); try{ localStorage.setItem('att_filtre', k); }catch(e){} };
+  const estContracteur = e => !!CLIENT_CODES[String(e.title||'').trim().split(/[\s\-–]+/)[0].toUpperCase()];
+  const ageAtt = e => e.created ? Math.max(0, Math.floor((Date.now()-Date.parse(e.created))/864e5)) : null;
   const [cedule,setCedule]=useState(null);
   const [voirPanneau,setVoirPanneau]=useState(true);
   // v268 : fin de semaine repliée, vue par équipe (1/3 – 1/3 – 1/3), panneau En attente grand, recherche
@@ -5156,17 +5161,21 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
           : <span style={{display:'flex',gap:4}}><button className="btn btn-sm" onClick={basculerGrand} title={grandPanneau?'Réduire le panneau':'Agrandir le panneau'}>{grandPanneau?'⇥ Réduire':'⇤ Agrandir'}</button>
             <button className="btn btn-sm" onClick={basculerPanneau} title="Fermer le panneau : l'agenda prend toute la largeur (bouton « En attente » en haut pour le rouvrir)">✕</button></span>}
       </div>
+      {voirPanneau && attListe && attListe.length>0 && <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:8}}>
+        {[['tous','Tous'],['contr','Contracteurs'],['part','Particuliers']].map(([k,l])=>{ const n = attListe.filter(e=>k==='tous' || (k==='contr') === estContracteur(e)).length;
+          return <button key={k} className={'btn btn-sm'+(filtreAtt===k?' btn-p':'')} style={{fontSize:12,padding:'2px 8px'}} onClick={()=>choisirFiltreAtt(k)}>{l} ({n})</button>; })}</div>}
       {voirPanneau && attListe && attListe.length>4 && <input value={chercheAtt} onChange={e=>setChercheAtt(e.target.value)} placeholder="Chercher (client, adresse, mot)…" style={{padding:'6px 10px',fontSize:13,marginBottom:8}}/>}
       {voirPanneau && <>
         <div className="muted" style={{fontSize:11.5,marginBottom:8}}>{isDesktop ? 'Glisse une job sur un jour pour la céduler, ou une job de l\'agenda ici pour la mettre en attente. Clique pour la modifier.' : 'Touche une job pour la modifier ou changer sa date.'}</div>
         {attListe===null ? <div className="muted" style={{fontSize:12.5}}>Lecture…</div>
           : !attListe.length ? <div className="muted" style={{fontSize:12.5}}>Rien en attente.</div>
-          : attListe.filter(e=>{ const q = chercheAtt.trim().toLowerCase(); return !q || (e.title+' '+(e.location||'')+' '+texteDescription(e.description)).toLowerCase().includes(q); }).map(e=>{ const d0 = String(e.start).slice(0,10), passe = d0 && d0 < todayStr, txt = texteDescription(e.description);
+          : attListe.filter(e=>filtreAtt==='tous' || (filtreAtt==='contr') === estContracteur(e)).sort((a,b)=>filtreAtt==='tous' ? 0 : String(a.created).localeCompare(String(b.created))).filter(e=>{ const q = chercheAtt.trim().toLowerCase(); return !q || (e.title+' '+(e.location||'')+' '+texteDescription(e.description)).toLowerCase().includes(q); }).map(e=>{ const d0 = String(e.start).slice(0,10), passe = d0 && d0 < todayStr, txt = texteDescription(e.description);
             return <div key={e.id} draggable={isDesktop} onDragStart={ev=>{ panneauDragRef.current = e; dragGrilleRef.current = false; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }}
               onDragEnd={()=>{ panneauDragRef.current = null; }} onClick={()=>setEditEvent(e)}
               style={{padding:'8px 10px',marginBottom:8,borderRadius:8,border:'1px dashed var(--border2)',borderLeft:'5px solid '+(e.colorId && GCAL_COLOR_MAP[e.colorId] || 'var(--muted)'),cursor:isDesktop?'grab':'pointer',fontSize:13,background:'var(--bg3)',userSelect:'none'}}>
               <div style={{fontWeight:700,fontSize:13.5,overflow:'hidden',textOverflow:'ellipsis'}}>{e.title}</div>
               <div style={{fontSize:11.5,color:passe?'var(--warning)':'var(--muted)',marginTop:1}}>{e.allDay ? cvFmtDay(d0) : new Date(e.start).toLocaleString('fr-CA',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}{passe?' · date passée':''}{e.location ? ' · 📍 '+e.location : ''}</div>
+              {ageAtt(e)!=null && <div style={{fontSize:11.5,fontWeight:700,marginTop:2,color:ageAtt(e)>30 ? 'var(--danger)' : ageAtt(e)>14 ? 'var(--warning)' : 'var(--muted)'}}>⏳ En attente depuis {ageAtt(e)} jour{ageAtt(e)>1?'s':''} <span style={{fontWeight:400}}>(créé le {cvFmtDay(localDateStr(new Date(e.created)))})</span></div>}
               {txt && <div style={{fontSize:12,color:'var(--text)',opacity:.85,marginTop:4,whiteSpace:'pre-line',overflow:'hidden',display:'-webkit-box',WebkitLineClamp:grandPanneau?7:3,WebkitBoxOrient:'vertical'}}>{txt}</div>}
               {e.attachments && e.attachments.length>0 && <div className="muted" style={{fontSize:11,marginTop:3}}>📎 {e.attachments.length} pièce{e.attachments.length>1?'s':''} jointe{e.attachments.length>1?'s':''}</div>}
             </div>; })}
