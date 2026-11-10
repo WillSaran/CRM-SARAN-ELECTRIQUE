@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v449';
+const APP_VERSION = 'v450';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6769,7 +6769,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
 // Les 2 premiers viennent de l'onglet « Soumissions » du registre des jobs, rempli par soumissions.gs (La mémoire).
 // Colonnes : A Clé | B Type | C Date | D No | E Client | F Courriel | G Sujet | H Extrait | I Montant | J PDF | K Lien | L Réponse | M Statut | N Le | O Note
 // Le script remplit A–L ; le CRM écrit seulement M–O (statut, date, note) et les lignes ajoutées à la main (clé « M-… »).
-const SOUM_ONGLET_ENTETE = ['Clé','Type','Date','No','Client','Courriel','Sujet','Extrait','Montant','PDF','Lien','Réponse','Statut','Le','Note','Photos','Infos demande','Type de projet','Accusé envoyé'];
+const SOUM_ONGLET_ENTETE = ['Clé','Type','Date','No','Client','Courriel','Sujet','Extrait','Montant','PDF','Lien','Réponse','Statut','Le','Note','Photos','Infos demande','Type de projet','Accusé envoyé','Titre (CRM)'];
 // Types de projet (William peut corriger celui deviné). Q = infos lues par soumissions.gs ; R et S = écrites par le CRM.
 const TYPES_PROJET = ['Borne de recharge','Panneau / entrée électrique','Prises et circuits','Éclairage','Chauffage / climatisation','Spa / piscine','Génératrice','Rénovation','Construction neuve','Commercial','Service / réparation','Autre'];
 function soumTypeDevine(t){
@@ -6815,10 +6815,10 @@ function useSoumissions(cfg, refreshKey){
     if(!id){ setEtat(s=>({...s, lu:true, err:'Le registre des jobs n\'est pas configuré (Réglages).'})); return; }
     let liste=[], existe=false, recues=[];
     try{
-      const r = await lireCache(id, 'Soumissions!A1:S', force);
+      const r = await lireCache(id, 'Soumissions!A1:T', force);
       existe = true;
       liste = (r.result.values||[]).slice(1).map((x,i)=>({row:i+2, cle:x[0]||'', type:x[1]||'', date:String(x[2]||'').slice(0,10), no:x[3]||'', client:x[4]||'', courriel:(x[5]||'').toLowerCase(),
-        sujet:x[6]||'', extrait:x[7]||'', montant:cvNum(x[8]), pdf:x[9]||'', lien:x[10]||'', reponse:x[11]||'', statut:x[12]||'', le:x[13]||'', note:x[14]||'', photos:x[15]||'', infos:(()=>{ try{ return x[16] ? JSON.parse(x[16]) : null; }catch(e){ return null; } })(), typeProjet:x[17]||'', accuse:x[18]||''})).filter(x=>x.cle);
+        sujet:x[6]||'', extrait:x[7]||'', montant:cvNum(x[8]), pdf:x[9]||'', lien:x[10]||'', reponse:x[11]||'', statut:x[12]||'', le:x[13]||'', note:x[14]||'', photos:x[15]||'', infos:(()=>{ try{ return x[16] ? JSON.parse(x[16]) : null; }catch(e){ return null; } })(), typeProjet:x[17]||'', accuse:x[18]||'', titre:x[19]||''})).filter(x=>x.cle);
     }catch(e){ existe = false; }
     try{
       if(idA){ const d = await lireCache(idA, 'Documents!A1:L', force);
@@ -6846,7 +6846,7 @@ function useSoumissions(cfg, refreshKey){
   // Type de projet choisi par William (R) et accusé de réception envoyé (S) : colonnes du CRM seulement.
   const majCol = async (s, col, val, champ)=>{
     setEtat(e=>({...e, liste:e.liste.map(x=>x.cle===s.cle ? {...x, [champ]:val} : x)}));
-    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!Q1:S1', valueInputOption:'RAW', resource:{values:[['Infos demande','Type de projet','Accusé envoyé']]}});
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!Q1:T1', valueInputOption:'RAW', resource:{values:[['Infos demande','Type de projet','Accusé envoyé','Titre (CRM)']]}});
     await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!'+col+s.row, valueInputOption:'RAW', resource:{values:[[val]]}});
   };
   // Soumission à faire ajoutée à la main.
@@ -6967,6 +6967,48 @@ function SoumDeposer({titre, dossier, onDossier, toast, libelle}){
 
 // Photos d'une note « Soumission … » (dossier Drive gardé par soumissions.gs en colonne J).
 const SOUM_PHOTOS = {};
+// v450 : photos jointes au courriel de la demande → dossier photos de la soumission (lié à la demande et à la fiche du client)
+function gmPiecesJointes(payload, out){ out = out || [];
+  if(!payload) return out;
+  if(payload.filename && payload.body && payload.body.attachmentId) out.push({nom:payload.filename, type:payload.mimeType||'', taille:payload.body.size||0, att:payload.body.attachmentId});
+  (payload.parts||[]).forEach(p=>gmPiecesJointes(p, out));
+  return out;
+}
+const b64urlVersOctets = d => { const s = atob(String(d||'').replace(/-/g,'+').replace(/_/g,'/')); const a = new Uint8Array(s.length); for(let i=0;i<s.length;i++) a[i] = s.charCodeAt(i); return a; };
+// Importe les photos (et PDF) des courriels donnés dans le dossier ; saute les petites images de signature et ce qui est déjà là. Retourne le nombre importé.
+async function soumImporterPhotos(msgs, dossier, onEtat){
+  const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+  const q = encodeURIComponent("'"+dossier+"' in parents and trashed=false");
+  const r = await fetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(name)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true', {headers:{Authorization:'Bearer '+tok}});
+  const deja = new Set(r.ok ? ((await r.json()).files||[]).map(f=>cvNorm(f.name.replace(/\.\w+$/,''))) : []);
+  let n = 0;
+  for(const m of msgs){ const pj = gmPiecesJointes(m.payload).filter(p=>(/^image\//i.test(p.type) && p.taille>25000) || /pdf/i.test(p.type));
+    for(const p of pj){ if(deja.has(cvNorm(p.nom.replace(/\.\w+$/,'')))) continue;
+      onEtat && onEtat('Photo '+(n+1)+'…');
+      const d = await gmReq('messages/'+m.id+'/attachments/'+p.att);
+      const f = new File([b64urlVersOctets(d.data)], p.nom, {type:p.type||'application/octet-stream'});
+      await driveDeposer(f, dossier); deja.add(cvNorm(p.nom.replace(/\.\w+$/,''))); n++; } }
+  if(n) delete SOUM_PHOTOS[dossier];
+  return n;
+}
+// v450 : dans la fiche du Répertoire — les photos de ses demandes de soumission (même nom, titre ou courriel)
+function ClientPhotos({cfg, nom, courriels, toast}){
+  const S = useSoumissions(cfg, 0);
+  const [tick,setTick]=useState(0);
+  const cles = [cvNorm(nom)].filter(x=>x.length>=3), mails = (courriels||[]).map(x=>String(x).toLowerCase()).filter(Boolean);
+  const L = S.liste.filter(s=>s.type==='À faire' && ((s.courriel && mails.includes(s.courriel)) || cles.some(k=>cvNorm([s.titre, s.client, s.sujet, (s.infos||{}).nom].join(' ')).includes(k))
+    || (soumFicheLue(s.cle) && cles.includes(cvNorm(soumFicheLue(s.cle).nom)))));
+  if(!S.lu) return <div className="muted" style={{fontSize:13}}>Lecture des demandes…</div>;
+  if(!L.length) return <div className="muted" style={{fontSize:13}}>Aucune demande de soumission liée à {nom}.</div>;
+  return <div style={{display:'grid',gap:10}}>{L.map(s=><div key={s.cle} style={{paddingBottom:8,borderBottom:'1px solid var(--border)'}}>
+    <div style={{fontSize:13.5}}><b>{s.titre || s.client || s.sujet}</b> <span className="muted" style={{fontSize:12}}>· demande du {cvFmtDay(s.date)}</span></div>
+    {s.pdf && <SoumPhotos dossier={s.pdf}/>}
+    {s.photos && <SoumPhotos dossier={s.photos} tick={tick}/>}
+    {!s.pdf && !s.photos && <div className="muted" style={{fontSize:12}}>Pas encore de photos.</div>}
+    <div style={{marginTop:6}}><SoumDeposer titre={(s.titre||s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'} dossier={s.photos} toast={toast} libelle="📷 Ajouter des photos"
+      onDossier={async(d, fin)=>{ if(fin) setTick(t=>t+1); else await S.dossierPhotos(s, d); }}/></div>
+  </div>)}</div>;
+}
 function SoumPhotos({dossier, tick}){
   const [fichiers,setFichiers]=useState(SOUM_PHOTOS[dossier]||null);
   useEffect(()=>{
@@ -7033,12 +7075,13 @@ function sfMotsTitre(sujet){
 }
 const sfTexteMsg = m => { const c = gmCorps(m.payload); return c.txt || String(c.html||'').replace(/<br\s*\/?>|<\/(p|div|tr|li)>/gi,'\n').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&'); };
 const sfSansSignature = t => String(t||'').split('\n').filter(l=>!/saran|438.?490.?3412|J3B 4J6|pr[ée]sident|cordialement|RBQ/i.test(l)).join('\n');
-function SoumFiche({cfg, infos, cle, sujet, onSauve, onFermer, toast}){
+function SoumFiche({cfg, infos, cle, sujet, typeProjet, dossier, onDossier, titreDossier, onSauve, onFermer, toast}){
   const [F,setF]=useState(null);
   const [fiche,setFiche]=useState(null);       // fiche du Répertoire trouvée (ou choisie)
   const [v,setV]=useState({nom:infos.nom||'', tel:infos.tel||'', courriel:infos.courriel||'', adresse:infos.adresse||'', ville:'', notes:''});
   const [q,setQ]=useState('');
   const [sugg,setSugg]=useState(null);         // {tels, adrs, noms, mails, liens}
+  const [pj,setPj]=useState(null);             // v450 : photos jointes au courriel de la demande ({n, msgs})
   const [lu,setLu]=useState(null);             // v448 : ce qui a été lu dans le courriel de la demande (lignes étiquetées)
   const [etat,setEtat]=useState('');
   const appliquer = f => { setFiche(f);
@@ -7053,7 +7096,8 @@ function SoumFiche({cfg, infos, cle, sujet, onSauve, onFermer, toast}){
     const o = {}; msgs.forEach(m=>{ const e = sfEtiquettes(sfTexteMsg(m)); Object.keys(e).forEach(k=>{ if(!o[k]) o[k] = e[k]; }); });
     return {o, msgs}; };
   useEffect(()=>{ let ok=true; if(!cle && !sujet) return;
-    lireDemande().then(({o})=>{ if(!ok) return; setLu(o);
+    lireDemande().then(({o, msgs})=>{ if(!ok) return; setLu(o);
+      const n = msgs.reduce((t,m)=>t+gmPiecesJointes(m.payload).filter(p=>(/^image\//i.test(p.type) && p.taille>25000) || /pdf/i.test(p.type)).length, 0); setPj({n, msgs});
       setV(x=>{ const n = {...x}; ['nom','tel','courriel'].forEach(k=>{ if(o[k] && !String(n[k]||'').trim()) n[k] = k==='tel' ? repTelFmt(o[k]) : o[k]; });
         if(o.adresse && !String(n.adresse||'').trim()){ const p = o.adresse.split(/\s*,\s*/); n.adresse = p[0]; if(p[1] && !n.ville) n.ville = p.slice(1).join(', '); }
         return n; }); }).catch(()=>{});
@@ -7083,6 +7127,13 @@ function SoumFiche({cfg, infos, cle, sujet, onSauve, onFermer, toast}){
         mails:u(mails).filter(m=>!/saranelectrique/i.test(m) && m!==mail), liens, termes, n:vus.size});
       setEtat(''); }
     catch(e){ setEtat('Gmail : '+apiErrMsg(e)); } };
+  // v450 : photos du courriel → dossier photos de la demande (créé au besoin) ; aussi fait automatiquement en sauvant la fiche
+  const importerPhotos = async (silencieux) => { if(!pj || !pj.n || !onDossier) return 0;
+    if(!peutDeposer()){ if(!silencieux) setEtat('Autorise d\'abord les photos (bouton 🔓 dans la demande).'); return 0; }
+    let d = dossier; if(!d){ d = await driveDossier((titreDossier||'Soumission').slice(0,80), await driveDossier(PHOTOS_RACINE)); await onDossier(d); }
+    const n = await soumImporterPhotos(pj.msgs, d, x=>setEtat(x)); setEtat(''); if(n) await onDossier(d, true);
+    if(!silencieux || n) toast && toast(n ? n+' photo'+(n>1?'s':'')+' du courriel ajoutée'+(n>1?'s':'')+' à la demande' : 'Les photos du courriel sont déjà là');
+    return n; };
   const sauver = async () => { if(!String(v.nom||'').trim()){ setEtat('Le nom est requis.'); return; } setEtat('Enregistrement…');
     try{ const base = fiche || {};
       const masquee = base.row && !/^client$/i.test(base.type||'');
@@ -7094,6 +7145,7 @@ function SoumFiche({cfg, infos, cle, sujet, onSauve, onFermer, toast}){
       const res = {nom:v.nom.trim(), tel:v.tel.trim(), courriel:v.courriel.trim().toLowerCase(), adresse, le:cvDay(new Date().toISOString())};
       if(cle) soumFicheGarder(cle, res);
       toast && toast(masquee ? 'Fiche réactivée dans le Répertoire' : fiche ? 'Fiche mise à jour dans le Répertoire' : 'Fiche créée dans le Répertoire');
+      try{ await importerPhotos(true); }catch(e){}
       setEtat(''); onSauve && onSauve(res); }
     catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
   const nq = cvNorm(q), choix = nq.length>=2 && F ? [...F.clients, ...F.masques].filter(f=>cvNorm([f.nom, ...(f.alias||[]), f.courriel, f.tel].join(' ')).includes(nq)).slice(0,6) : [];
@@ -7128,6 +7180,7 @@ function SoumFiche({cfg, infos, cle, sujet, onSauve, onFermer, toast}){
     </div>}
     {lu && Object.keys(lu).length>0 && <div className="muted" style={{fontSize:12}}>✓ Lu dans le courriel de la demande : {['nom','tel','courriel','adresse'].filter(k=>lu[k]).map(k=>({nom:'nom',tel:'téléphone',courriel:'courriel',adresse:'adresse'})[k]).join(', ')}{fiche ? ' (proposé à côté si différent de la fiche)' : ''}</div>}
     <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+      {pj && pj.n>0 && onDossier && <button className="btn btn-sm" onClick={()=>importerPhotos(false).catch(e=>setEtat('Photos : '+apiErrMsg(e)))} title="Copie les photos jointes au courriel dans le dossier photos de cette demande (fait aussi en sauvant la fiche)">📥 Importer les {pj.n} photo{pj.n>1?'s':''} du courriel</button>}
       <button className="btn btn-sm" onClick={chercher} disabled={etat==='Lecture des courriels…'} title="Lit ses derniers courriels (signature, réponses) pour trouver téléphone et adresse">✉ Chercher dans ses courriels</button>
       <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} disabled={!F || etat==='Enregistrement…'} onClick={sauver}>{etat==='Enregistrement…' ? etat : 'Sauver la fiche'}</button>
       <button className="btn btn-sm" onClick={onFermer}>Fermer</button>
@@ -7283,7 +7336,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     if(b){ DOC_OUVRIR = b; DOC_PREFILL = null; setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); return; }
     const i = infosDe(s), sujet = (s.sujet||'').replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'').replace(/^\s*soumission\s*[-:–]?\s*/i,'').replace(/^Contact depuis votre site\s*:\s*/i,'');
     DOC_PREFILL = {type:'Soumission', typeProjet:i.type, origine:s.cle, nom:i.nom, tel:i.tel, courriel:i.courriel, adresse:i.adresse,
-      titre: i.type ? i.type+(i.adresse ? ' — '+i.adresse.split(',')[0] : '') : sujet, travaux:i.travaux, dossier:s.pdf||s.photos||''};
+      titre: s.titre || (i.type ? i.type+(i.adresse ? ' — '+i.adresse.split(',')[0] : '') : sujet), travaux:i.travaux, dossier:s.pdf||s.photos||''};
     setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); };
   const accuse = async s => { const i = infosDe(s); if(!i.courriel){ toast && toast('Pas de courriel pour ce client'); return; }
     const formulaire = /linkeo|contact depuis votre site/i.test(s.sujet+' '+s.courriel) || (s.infos && s.infos.formulaire);
@@ -7301,7 +7354,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     return <div style={{padding:'10px 0',borderBottom:'1px solid var(--border)',opacity:fini?.6:1}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
         <div style={{minWidth:0,flex:'1 1 220px'}}>
-          <div onClick={()=>setOuverte(o=>o===s.cle?'':s.cle)} style={{fontWeight:700,fontSize:14,cursor:'pointer'}}>{ouverte===s.cle?'▾ ':'▸ '}{s.client || s.sujet}</div>
+          <div onClick={()=>setOuverte(o=>o===s.cle?'':s.cle)} style={{fontWeight:700,fontSize:14,cursor:'pointer'}}>{ouverte===s.cle?'▾ ':'▸ '}{s.titre || s.client || s.sujet}</div>
           {s.client && s.sujet && !cvNorm(s.sujet).includes(cvNorm(s.client)) && <div><SoumRef txt={s.sujet.replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'')}/></div>}
           <div className="muted" style={{fontSize:11.5}}>{cvFmtDay(s.date)}{j!=null && j>0 && <> · il y a {j} jour{j>1?'s':''}</>}{s.cle.startsWith('M-') && <> · ajoutée à la main</>}</div>
           {(i.tel || i.courriel || i.adresse) && <div style={{fontSize:12,marginTop:2,display:'flex',gap:10,flexWrap:'wrap'}}>
@@ -7321,6 +7374,8 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
         <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
           {lienGmail(s)}
           {!fini ? <>
+            <SoumDeposer titre={(s.titre||s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'} dossier={s.photos} toast={toast} libelle="📷 Photos"
+              onDossier={async(d, fin)=>{ if(fin) setTick(t=>t+1); else await S.dossierPhotos(s, d); }}/>
             <button className={'btn btn-sm'+(i.fiche ? '' : '')} onClick={()=>setFicheOuv(ficheOuv===s.cle?'':s.cle)} title="Vérifier et sauver le contact dans le Répertoire avant la soumission">{i.fiche ? '📇 Fiche ✓' : '📇 Fiche client'}</button>
             <button className="btn btn-sm btn-p" onClick={()=>preparer(s)} title={b ? 'Rouvre le brouillon '+b.numero+' là où tu l\'as laissé' : 'Ouvre la soumission déjà remplie (client, téléphone, courriel, adresse, travaux)'}>{b ? 'Continuer la soumission' : '📝 Faire la soumission'}</button>
             {i.courriel && !s.accuse && <button className="btn btn-sm" onClick={()=>accuse(s)} title="« Nous avons bien reçu votre demande… » — Gmail s'ouvre, tu n'as qu'à envoyer">✉️ Accusé de réception</button>}
@@ -7333,7 +7388,11 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
           </>}
         </div>
       </div>
-      {!fini && ficheOuv===s.cle && <SoumFiche cfg={cfg} cle={s.cle} sujet={s.sujet} infos={i} toast={toast} onFermer={()=>setFicheOuv('')} onSauve={()=>{ setFicheOuv(''); setFicheTick(t=>t+1); }}/>}
+      {!fini && ficheOuv===s.cle && <SoumFiche cfg={cfg} cle={s.cle} sujet={s.sujet} infos={i} toast={toast} dossier={s.photos} titreDossier={(s.titre||s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'}
+        onDossier={async(d, fin)=>{ if(fin) setTick(t=>t+1); else await S.dossierPhotos(s, d); }}
+        onFermer={()=>setFicheOuv('')} onSauve={async f=>{ setFicheOuv(''); setFicheTick(t=>t+1);
+          const ty = s.typeProjet || i.type || ''; const t = f.nom+(ty ? ' — '+ty : '');   // v450 : le titre de la demande devient « Nom — Catégorie »
+          try{ if(t!==s.titre) await S.majCol(s, 'T', t, 'titre'); }catch(e){} }}/>}
       {ouverte!==s.cle ? (s.extrait && <div className="muted" onClick={()=>setOuverte(s.cle)} style={{fontSize:12,marginTop:3,cursor:'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.extrait.split('\n')[0]}{(s.pdf||s.photos) ? '  · 📎 PDF / photos' : ''}</div>) : <>
       <SoumNote txt={s.extrait}/>
       {s.pdf && <SoumPhotos dossier={s.pdf}/>}
@@ -7380,7 +7439,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     </div>;
   };
 
-  const listeAFaire = (voirFinies ? aFaire : ouvertes).filter(s=>cherche([s.client,s.sujet,s.extrait,s.courriel,(s.infos||{}).adresse,(s.infos||{}).tel].join(' ')))
+  const listeAFaire = (voirFinies ? aFaire : ouvertes).filter(s=>cherche([s.titre,s.client,s.sujet,s.extrait,s.courriel,(s.infos||{}).adresse,(s.infos||{}).tel].join(' ')))
     .filter(s=>!filtreAF || (filtreAF==='attente' ? s.statut==='En attente' : filtreAF==='nouvelles' ? s.statut!=='En attente' : infosDe(s).type===filtreAF));
   const typesAF = [...new Set(ouvertes.map(s=>infosDe(s).type).filter(Boolean))];
   const filtreEnv = filtre || (envoyees.some(s=>etatEnv(s)==='aclasser') ? 'aclasser' : 'attente');
@@ -15409,17 +15468,17 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
       </div>
       {pers && evOuvert && <EvenementClient c={c} adresse={adrToutes[0]||''} tel={telsTous[0]||''} courriel={courrielsTous[0]||''} onFermer={()=>setEvOuvert(false)}/>}
       {onAller && (()=>{ const q = pers ? c.nom : c.code;   // v202 : sections de ce client, déjà filtrées ; v273 : affichées ici, sous la fiche
-        const filtres = {factures: pers ? {vue:'toutes', q:c.nom} : {vue:'toutes', code:c.code}, paiements:{q}, projets: pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code}, soumissions:{q:c.nom},
+        const filtres = {factures: pers ? {vue:'toutes', q:c.nom} : {vue:'toutes', code:c.code}, paiements:{q}, projets: pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code}, soumissions:{q:c.nom}, photos:{courriels:courrielsTous},
           appels: pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code}};   // v377
         const montrer = cible => { if(!rendreSection){ onAller(cible, {...filtres[cible], nom:c.nom}); return; }
           if(section && section.cible===cible){ setSection(null); return; }
           NAV_FOCUS = {...filtres[cible], nom:c.nom, cible, t:Date.now()}; setSection({cible, k:Date.now()}); };
         return <>
           <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
-            {[['factures','Factures'],['projets','Projets'],['soumissions','Soumissions']].map(([k,l])=>
+            {[['factures','Factures'],['projets','Projets'],['soumissions','Soumissions'],...(pers ? [['photos','Photos']] : [])].map(([k,l])=>
               <button key={k} className={'btn btn-sm'+(section && section.cible===k ? ' btn-p' : '')} onClick={()=>montrer(k)}>{l}</button>)}
             {section && <span style={{marginLeft:'auto',display:'flex',gap:10,alignItems:'center',fontSize:12.5}}>
-              {section.cible!=='appels' && <span style={{color:'var(--accent)',cursor:'pointer'}} onClick={()=>section.cible==='factures' ? onAller('paiements', {...filtres.paiements, nom:c.nom}) : onAller(section.cible, {...filtres[section.cible], nom:c.nom})}>Ouvrir en grand ›</span>}
+              {!['appels','photos'].includes(section.cible) && <span style={{color:'var(--accent)',cursor:'pointer'}} onClick={()=>section.cible==='factures' ? onAller('paiements', {...filtres.paiements, nom:c.nom}) : onAller(section.cible, {...filtres[section.cible], nom:c.nom})}>Ouvrir en grand ›</span>}
               <span className="muted" style={{cursor:'pointer'}} onClick={()=>setSection(null)}>✕ Fermer</span></span>}
           </div>
           {section && rendreSection && <div key={section.k} style={{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border)'}}>{rendreSection(section.cible)}</div>}
@@ -15655,7 +15714,8 @@ function App(){
             : cible==='factures' ? <VerrouCompta cfg={effectiveCfg}><FacturesClient cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts}/></VerrouCompta>
             : cible==='paiements' ? <VerrouCompta cfg={effectiveCfg}><PaiementsOnglet cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} compact/></VerrouCompta>
             : cible==='soumissions' ? <SoumissionsView cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>
-            : cible==='appels' ? <AppelsClientView cfg={effectiveCfg} refreshKey={refreshKey}/> : null}/>}
+            : cible==='appels' ? <AppelsClientView cfg={effectiveCfg} refreshKey={refreshKey}/>
+            : cible==='photos' ? <ClientPhotos cfg={effectiveCfg} nom={(NAV_FOCUS||{}).nom||''} courriels={(NAV_FOCUS||{}).courriels||[]} toast={show}/> : null}/>}
         {nav==='courriels' && <CourrielsView cfg={effectiveCfg} refreshKey={refreshKey} toast={show}/>}
         {nav==='contacts' && <RepertoireView key={'rc'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts}/>}
         {nav==='projets' && <ProjetsView key={'p'+navKey} data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
