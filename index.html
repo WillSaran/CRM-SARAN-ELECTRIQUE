@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v464';
+const APP_VERSION = 'v465';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10340,6 +10340,202 @@ function BufferChamp({valeur, base, C, onChange}){
     </div>}
   </span>;
 }
+// ===== v465 : SOUMISSION MAISON — le plan (PDF) décortiqué par étage et par pièce, avec tes sorties SO =====
+// Le PDF AutoCAD cache le nom et les dimensions des pièces (annotations « AutoCAD SHX Text ») : on les lit, sinon on ajoute les pièces à la main.
+// Chauffage : 10 W/pi² arrondi à la hausse, réparti en plinthes sous les fenêtres ; chaque plinthe ET chaque thermostat = une sortie SO220.
+const MAISON_ETAGES = ['Sous-sol','Rez-de-chaussée','Étage','Garage','Extérieur'];
+const MAISON_LIB = {SO00:'prise dérivation',SO01:'prise 15 A',"SO01.1":'prise 15 A GFI',"SO01.11":'prise USB',"SO01.2":'prise 20 A',"SO01.21":'prise 20 A GFI',"SO01.22":'prise 20 A USB',
+  SO02:'interrupteur',"SO02.1":'interrupteur 3 voies',"SO02.2":'gradateur',"SO02.3":'interrupteur domotique',"SO02.4":'détecteur de mouvement',
+  SO03:'encastré (non fourni)',"SO03.1":'encastré SlimLED fourni',"SO03.2":'encastré dirigeable (NF)',"SO03.3":'encastré dirigeable fourni',SO04:'plafonnier / murale',SO05:'détecteur de fumée',SO06:'hotte / ventilateur',
+  SO07:'prise extérieure',SO08:'éclairage extérieur',SO09:'carillon',SO10:'télécom',SO11:'réseau',SO12:'câble (télé)',SO13:'téléphone',SO220:'sortie chauffage',"SO220.2":'thermostat intelligent',
+  SO221:'four / cuisinière 40 A',SO222:'sécheuse 30 A',SO223:'thermopompe / AC',SO224:'chauffe-eau',SO225:'borne de recharge 40 A'};
+const MAISON_TYPES = {
+  chambre:{nom:'Chambre', items:{SO01:4, SO02:1, SO04:1}, chauf:'plinthe'},
+  bureau:{nom:'Bureau', items:{SO01:4, SO02:1, SO04:1, SO11:1}, chauf:'plinthe'},
+  salon:{nom:'Salon / séjour', items:{SO01:3, SO02:1, SO04:1}, chauf:'plinthe'},
+  sam:{nom:'Salle à manger', items:{SO01:2, SO02:1, SO04:1}, chauf:'plinthe'},
+  cuisine:{nom:'Cuisine', items:{"SO01.2":5, "SO01.21":1, SO01:1, SO221:1, SO06:1, SO02:1, SO03:4}, chauf:'plinthe'},
+  sdb:{nom:'Salle de bain', items:{"SO01.1":1, SO02:1, SO04:1, SO06:1}, chauf:'plinthe'},
+  lavage:{nom:'Salle de lavage', items:{SO222:1, SO01:1, SO02:1, SO04:1}, chauf:'plinthe'},
+  corridor:{nom:'Corridor / hall', items:{SO04:1, "SO02.1":2}, chauf:'aucun'},
+  rangement:{nom:'Walk-in / rangement', items:{SO04:1, SO02:1}, chauf:'aucun'},
+  mecanique:{nom:'Salle mécanique', items:{SO04:1, SO01:1, SO224:1}, chauf:'aucun'},
+  ssnonfini:{nom:'Sous-sol non fini', items:{SO04:4, SO01:4}, chauf:'plinthe'},
+  garage:{nom:'Garage', items:{SO01:4, "SO02.1":2, SO04:2}, chauf:'aero'},
+  exterieur:{nom:'Extérieur', items:{SO08:2, SO07:1}, chauf:'aucun'},
+  autre:{nom:'Autre', items:{}, chauf:'aucun'},
+};
+function maisonTypeDe(nom){ const n = cvNorm(nom).replace(/[^a-z0-9 ]/g,' ');
+  if(/chambre|ch\s*\d|master/.test(n)) return 'chambre'; if(/bureau/.test(n)) return 'bureau';
+  if(/cuisine/.test(n)) return 'cuisine'; if(/manger|s a m|sam\b|dinette/.test(n)) return 'sam';
+  if(/salon|sejour|familiale|boudoir|cinema|salle de jeu/.test(n)) return 'salon';
+  if(/sdb|bain|salle d eau|douche|toilette|\bwc\b|powder/.test(n)) return 'sdb';
+  if(/buanderie|lavage|lavoir/.test(n)) return 'lavage'; if(/garage/.test(n)) return 'garage';
+  if(/mec|mecanique|fournaise|chaufferie/.test(n)) return 'mecanique';
+  if(/walk|w i c|wic|g m|garde|rangement|pantry|range|depense|cellier/.test(n)) return 'rangement';
+  if(/corridor|hall|passage|vestibule|entree|escalier|mezzanine/.test(n)) return 'corridor';
+  if(/balcon|galerie|terrasse|patio|perron|exterieur/.test(n)) return 'exterieur';
+  return 'autre'; }
+const PLINTHES = [500,750,1000,1250,1500,2000,2500];
+// Répartit le wattage (arrondi à la hausse) sur les fenêtres ; plus de plinthes si une seule ne suffit pas
+function maisonPlinthes(pi2, fenetres){ const W = Math.ceil((cvNum(pi2)||0)*10/250)*250; if(!W) return [];
+  let n = Math.max(1, Math.round(cvNum(fenetres)||1)); while(W/n > 2500) n++;
+  const par = PLINTHES.find(x=>x >= W/n - 1) || 2500; return Array.from({length:n}, ()=>par); }
+function maisonChauffage(p){ const c = p.chauf || 'aucun', th = Math.max(1, Math.round(cvNum(p.thermos)||1));
+  if(c==='aucun') return {so220:0, plinthes:[], txt:'', libres:[], intel:0};
+  if(c==='aero') return {so220:1+th, plinthes:[], txt:'aérotherme (dragon) avec relais + thermostat', libres:['Aérotherme Stelpro (dragon) avec relais RC840T'], intel:p.intel ? th : 0};
+  if(c==='radiant') return {so220:1+th, plinthes:[], txt:'plancher radiant + thermostat', libres:[], intel:p.intel ? th : 0};
+  const pl = maisonPlinthes(p.pi2, p.fenetres);
+  if(!pl.length) return {so220:1+th, plinthes:[], txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+' (entre les pi² pour le wattage) + thermostat', libres:[], intel:p.intel ? th : 0};
+  return {so220:pl.length+th, plinthes:pl, txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+(pl.length>1?'s':'')+' '+pl.map(w=>w+' W').join(' + ')+' + '+(th>1 ? th+' thermostats' : 'thermostat'), libres:[], intel:p.intel ? th : 0}; }
+// Résumé client d'une pièce (« 4 prises 15 A, 1 interrupteur, … »)
+function maisonResume(p){ const it = p.items||{}, ch = maisonChauffage(p);
+  const L = Object.entries(it).filter(([,q])=>q>0).map(([c,q])=>q+' '+(q>1 ? String(MAISON_LIB[c]||c).replace(/^(\S+?)([sx]?)(?=\s|$)/, (w,a,b)=>a+(b||'s')) : (MAISON_LIB[c]||c)));
+  if(ch.txt) L.push(ch.txt); return L.join(', '); }
+function maisonNouvellePiece(nom, etage, type, pi2){ const t = MAISON_TYPES[type] || MAISON_TYPES.autre;
+  return {id:'P'+Date.now()+Math.random().toString(36).slice(2,6), nom, etage, type, pi2:pi2!=null ? String(pi2) : '', fenetres:'1', thermos:'1', intel:false, chauf:t.chauf, items:{...t.items}}; }
+// Lecture du PDF : pages, étage de chaque page, pièces (nom + dimensions)
+async function maisonLirePlan(file, onEtat){
+  if(!window.pdfjsLib){ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }
+  const doc = await window.pdfjsLib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise, pages = [], pieces = [];
+  const ft = s => { const m = String(s).match(/(\d+)\s*'\s*-?\s*(\d+(?:\s+\d+\/\d+)?)?/); if(!m) return null; let po = 0; if(m[2]){ const [a,b] = m[2].split(/\s+/); po = +a + (b ? (+b.split('/')[0])/(+b.split('/')[1]||1) : 0); } return +m[1] + po/12; };
+  for(let i=1;i<=doc.numPages;i++){ onEtat && onEtat('Page '+i+' / '+doc.numPages+'…');
+    const pg = await doc.getPage(i), an = await pg.getAnnotations().catch(()=>[]), tc = await pg.getTextContent().catch(()=>({items:[]}));
+    const L = [...an.filter(a=>a.contents || (a.contentsObj && a.contentsObj.str)).map(a=>({t:String(a.contents || a.contentsObj.str).trim(), x:(a.rect[0]+a.rect[2])/2, y:(a.rect[1]+a.rect[3])/2})),
+      ...tc.items.filter(t=>String(t.str).trim()).map(t=>({t:String(t.str).trim(), x:t.transform[4], y:t.transform[5]}))];
+    const tout = L.map(x=>x.t).join(' | ').toUpperCase();
+    const etDe = t => /SOUS[- ]SOL/.test(t) ? 'Sous-sol' : /REZ|R-D-C|RDC/.test(t) ? 'Rez-de-chaussée' : /[ÉE]TAGE|2E/.test(t) ? 'Étage' : '';
+    const ets = [...new Set((tout.match(/PLAN D.AM[ÉE]NAGEMENT[^|]{0,40}/g)||[]).map(etDe).filter(Boolean))];
+    const etage = ets.length===1 ? ets[0] : '', titre = etage;   // une page index (plusieurs plans) : on saute
+    const dims = L.filter(x=>/^±?\s*\d+\s*'\s*-?\s*\d*.*[xX×]\s*\d+\s*'/.test(x.t));
+    const noms = L.filter(x=>/^[A-ZÉÈÀÂÎÔÛÇ][A-ZÉÈÀÂÎÔÛÇ0-9 #.'’\-]{1,30}$/.test(x.t) && !/^(SCALE|PLAN|SOLIVES|COUPE|DÉTAIL|DETAIL|NOTE|LÉGENDE|MUR |POUTRE|COLONNE)/.test(x.t) && !/^([A-Z]\d*|\d+)$/.test(x.t) && maisonTypeDe(x.t)!=='autre');
+    if(etage || noms.length){ const vp = pg.getViewport({scale:0.35}), c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+      try{ await pg.render({canvasContext:c.getContext('2d'), viewport:vp}).promise; }catch(e){}
+      pages.push({no:i, etage, titre:titre.trim(), img:c.toDataURL('image/jpeg', 0.7)}); }
+    if(!etage) continue;
+    // chaque dimension va au nom le plus proche ; une pièce sans dimension n'est gardée que si c'est clairement une pièce
+    const proche = d => noms.map(n=>({n, k:Math.hypot(d.x-n.x, d.y-n.y)})).sort((a,b)=>a.k-b.k)[0];
+    noms.forEach(n=>{ const d = dims.map(d=>({d, k:Math.hypot(d.x-n.x, d.y-n.y)})).filter(x=>x.k<60 && proche(x.d).n===n).sort((a,b)=>a.k-b.k)[0];
+      if(!d && !['mecanique','garage','chambre','cuisine','salon','lavage'].includes(maisonTypeDe(n.t))) return;
+      let pi2 = null; if(d){ const [a,b] = d.d.t.replace(/^±/,'').split(/[xX×]/); const fa = ft(a), fb = ft(b); if(fa && fb) pi2 = Math.round(fa*fb); }
+      const type = maisonTypeDe(n.t), et = type==='exterieur' ? 'Extérieur' : type==='garage' ? 'Garage' : etage;
+      pieces.push(maisonNouvellePiece(n.t.charAt(0)+n.t.slice(1).toLowerCase(), et, type, pi2)); });
+  }
+  return {pages, pieces};
+}
+const MAISON_APPAREILS = [['thermopompe','Thermopompe','SO223'],['borne','Borne de recharge','SO225'],['chauffeeau','Chauffe-eau 60 gal (30 A)','SO224'],['fournaise','Fournaise électrique (80 A)',''],
+  ['lavage2','2e laveuse-sécheuse','SO222'],['spa','Spa',''],['echangeur','Échangeur d\'air','SO01']];
+const MAISON_INCLUS = ['Permis et inspection','Raccordement des appareils de chauffage','Détecteurs de fumée interconnectés','Pose des luminaires fournis par le client','Plaques décoratives blanches'];
+const MAISON_EXCLUS = ['Luminaires (fournis par le client)','Réfection des murs, plafonds et finis','Frais d\'Hydro-Québec','Câblage d\'alarme et caméras','Plinthes et thermostats (fournis par le client)'];
+function maisonVide(){ return {pieces:[], entree:'200 A', entreeType:'aérienne', appareils:{}, inclus:MAISON_INCLUS.slice(0,3), exclus:MAISON_EXCLUS.slice(0,3)}; }
+function MaisonPlan({d, setD, C, toast}){
+  const m = d.maison || maisonVide();
+  const majM = patch => setD(o=>({...o, maison:{...(o.maison||maisonVide()), ...(typeof patch==='function' ? patch(o.maison||maisonVide()) : patch)}}));
+  const majP = (id, patch) => majM(x=>({pieces:x.pieces.map(p=>p.id===id ? {...p, ...patch} : p)}));
+  const [etat,setEtat]=useState('');
+  const [ouverte,setOuverte]=useState('');
+  const [grand,setGrand]=useState(null);
+  const [pages,setPages]=useState([]);   // vignettes du plan : en mémoire seulement (pas dans la soumission sauvée)
+  const [ajout,setAjout]=useState({etage:'Rez-de-chaussée', type:'chambre'});
+  const ref = useRef(null);
+  const lire = async f => { if(!f) return; setEtat('Lecture du plan…');
+    try{ const r = await maisonLirePlan(f, setEtat);
+      setPages(r.pages.filter(p=>p.etage)); majM(x=>({pieces:[...x.pieces, ...r.pieces]}));
+      setEtat(''); toast && toast(r.pieces.length ? r.pieces.length+' pièces trouvées sur le plan' : 'Aucune pièce lue (plan scanné ?) — ajoute-les à la main');
+      if(peutDeposer()){ try{ let dos = d.dossier; if(!dos){ dos = await driveDossier((d.nom||'Client')+(d.adresse?' — '+d.adresse.split(',')[0]:''), await driveDossier(PHOTOS_RACINE)); setD(o=>({...o, dossier:dos})); } await driveDeposer(f, dos); }catch(e){} } }
+    catch(e){ setEtat(''); toast && toast('Plan illisible : '+(e && e.message || e)); } };
+  const prix = c => C && C.prixDe ? (C.prixDe(c)||0) : 0;
+  const totalPiece = p => { const ch = maisonChauffage(p); return Object.entries(p.items||{}).reduce((t,[c,q])=>t+prix(c)*q,0) + ch.so220*prix('SO220') + ch.intel*prix('SO220.2'); };
+  const etages = MAISON_ETAGES.filter(e=>m.pieces.some(p=>p.etage===e));
+  const codesTous = Object.keys(MAISON_LIB);
+  // Applique à la soumission : lignes (sorties SO additionnées), texte des travaux par étage / pièce, inclusions / exclusions, liste de chauffage (notes privées)
+  const appliquer = () => {
+    const q = {}, libres = [], plinthes = [];
+    const aj = (c, n) => { if(n>0) q[c] = (q[c]||0)+n; };
+    m.pieces.forEach(p=>{ Object.entries(p.items||{}).forEach(([c,n])=>aj(c, n)); const ch = maisonChauffage(p); aj('SO220', ch.so220); aj('SO220.2', ch.intel); libres.push(...ch.libres); ch.plinthes.forEach(w=>plinthes.push(w+' W — '+p.nom)); });
+    const app = m.appareils||{};
+    MAISON_APPAREILS.forEach(([k,l,c])=>{ const n = cvNum(app[k])||0; if(!n) return; if(c) aj(c, n); else libres.push(l+(n>1?' ×'+n:'')); });
+    if(m.entree) libres.push('Entrée électrique '+m.entree+' '+(m.entreeType||''));
+    const lignesM = [...Object.entries(q).map(([c,n])=>{ const pr = C && C.produitDe ? C.produitDe(c) : null; return {code:c, desc:(pr && pr.desc) || ('Sortie '+(MAISON_LIB[c]||c)), unite:'un', qte:String(n), prix:'', maison:true}; }),
+      ...libres.map(t=>({code:'', desc:t, unite:'un', qte:'1', prix:'', maison:true}))];
+    const txt = ['Installation électrique complète — '+(m.pieces.length)+' pièces, par étage :', '',
+      ...etages.flatMap(e=>[e.toUpperCase(), ...m.pieces.filter(p=>p.etage===e).map(p=>'• '+p.nom+(cvNum(p.pi2) ? ' ('+p.pi2+' pi²)' : '')+' : '+(maisonResume(p)||'—')), '']),
+      m.entree ? 'ENTRÉE ÉLECTRIQUE : '+m.entree+' '+(m.entreeType||'') : '',
+      MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).length ? 'APPAREILS RACCORDÉS : '+MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).map(([k,l])=>l+(cvNum(app[k])>1?' ×'+app[k]:'')).join(', ') : ''].filter((x,i,a)=>x!=='' || a[i-1]!=='').join('\n').trim();
+    const incl = (m.inclus||[]).length ? 'INCLUS : '+m.inclus.join(' ; ')+'.' : '', excl = (m.exclus||[]).length ? 'EXCLUS : '+m.exclus.join(' ; ')+'.' : '';
+    setD(o=>{ const rem = String(o.remarques||'').split('\n').filter(x=>!/^(INCLUS|EXCLUS) :/.test(x)).join('\n').trim();
+      const vis = String(o.visite||'').split('\n').filter(x=>!/^— Liste chauffage/.test(x)).join('\n').trim();
+      return {...o, typeProjet:o.typeProjet || 'Construction neuve', titre:o.titre || 'Installation électrique — maison', travaux:txt,
+        lignes:[...o.lignes.filter(l=>!l.maison), ...lignesM], remarques:[rem, incl, excl].filter(Boolean).join('\n'),
+        visite:[vis, plinthes.length ? '— Liste chauffage ('+plinthes.length+' plinthes) : '+plinthes.join(' ; ') : ''].filter(Boolean).join('\n')}; });
+    toast && toast('Soumission remplie par étage et par pièce — vérifie le matériel et le prix'); };
+  const ch = l => <input type="checkbox" checked={l} readOnly style={{width:'auto'}}/>;
+  return <div style={{display:'grid',gap:8}}>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+      <input ref={ref} type="file" accept="application/pdf" style={{display:'none'}} onChange={e=>{ const f = e.target.files[0]; e.target.value=''; lire(f); }}/>
+      <button className="btn btn-sm btn-p" disabled={!!etat} onClick={()=>ref.current && ref.current.click()}>📄 Lire un plan (PDF)</button>
+      {etat && <span className="muted" style={{fontSize:12.5}}>{etat}</span>}
+      <span className="muted" style={{fontSize:12}}>ou ajoute les pièces à la main :</span>
+      <select value={ajout.etage} onChange={e=>setAjout({...ajout, etage:e.target.value})} style={{width:'auto',fontSize:12.5}}>{MAISON_ETAGES.map(x=><option key={x}>{x}</option>)}</select>
+      <select value={ajout.type} onChange={e=>setAjout({...ajout, type:e.target.value})} style={{width:'auto',fontSize:12.5}}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select>
+      <button className="btn btn-sm" onClick={()=>{ const n = MAISON_TYPES[ajout.type].nom.split(' /')[0]; const k = m.pieces.filter(p=>p.type===ajout.type).length+1;
+        const p = maisonNouvellePiece(n+(['chambre','sdb'].includes(ajout.type) ? ' #'+k : ''), ajout.etage, ajout.type, ''); majM(x=>({pieces:[...x.pieces, p]})); setOuverte(p.id); }}>+ Pièce</button>
+    </div>
+    {pages.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{pages.map(pg=><div key={pg.no} onClick={()=>setGrand(pg)} style={{cursor:'pointer',textAlign:'center',fontSize:11}}>
+      <img src={pg.img} alt="" style={{height:70,border:'1px solid var(--border2)',borderRadius:4}}/><div className="muted">{pg.etage || 'p. '+pg.no}</div></div>)}</div>}
+    {grand && <div onClick={()=>setGrand(null)} style={{position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,.8)',display:'flex',alignItems:'center',justifyContent:'center',padding:10}}>
+      <img src={grand.img} alt="" style={{maxWidth:'96vw',maxHeight:'92vh',background:'#fff',borderRadius:6}}/></div>}
+    {etages.map(e=>{ const ps = m.pieces.filter(p=>p.etage===e), st = ps.reduce((t,p)=>t+totalPiece(p),0);
+      return <div key={e} style={{border:'1px solid var(--border)',borderRadius:8}}>
+        <div style={{display:'flex',padding:'6px 10px',background:'var(--bg3)',borderRadius:'8px 8px 0 0',fontWeight:700}}>{e} <span className="muted" style={{fontWeight:400,marginLeft:6}}>· {ps.length} pièce{ps.length>1?'s':''}</span><span style={{marginLeft:'auto'}}>{cvMoney(st)}</span></div>
+        {ps.map(p=>{ const o = ouverte===p.id, chf = maisonChauffage(p);
+          return <div key={p.id} style={{borderTop:'1px solid var(--border)',padding:'6px 10px',fontSize:13}}>
+            <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setOuverte(o?'':p.id)}>
+              <b>{o?'▾':'▸'} {p.nom}</b><span className="muted" style={{fontSize:12}}>{MAISON_TYPES[p.type] ? MAISON_TYPES[p.type].nom : ''}{cvNum(p.pi2) ? ' · '+p.pi2+' pi²' : ''}</span>
+              <span style={{marginLeft:'auto',fontWeight:600}}>{cvMoney(totalPiece(p))}</span></div>
+            {!o && <div className="muted" style={{fontSize:12,marginTop:2}}>{maisonResume(p) || '—'}</div>}
+            {o && <div style={{display:'grid',gap:6,marginTop:6}}>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+                <input value={p.nom} onChange={x=>majP(p.id,{nom:x.target.value})} style={{width:170}}/>
+                <select value={p.type} onChange={x=>{ const t = MAISON_TYPES[x.target.value]; majP(p.id,{type:x.target.value, items:{...t.items}, chauf:t.chauf}); }} style={{width:'auto'}}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select>
+                <select value={p.etage} onChange={x=>majP(p.id,{etage:x.target.value})} style={{width:'auto'}}>{MAISON_ETAGES.map(x=><option key={x}>{x}</option>)}</select>
+                <input value={p.pi2} onChange={x=>majP(p.id,{pi2:x.target.value})} inputMode="decimal" placeholder="pi²" style={{width:60}}/> pi²
+                <button className="btn btn-sm" style={{marginLeft:'auto',color:'var(--muted)'}} onClick={()=>majM(x=>({pieces:x.pieces.filter(y=>y.id!==p.id)}))}>✕ Enlever</button>
+              </div>
+              <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+                {Object.entries(p.items||{}).filter(([,n])=>n>0).map(([c,n])=><span key={c} style={{display:'inline-flex',gap:3,alignItems:'center',background:SORTIE_TEINTE,border:'1px solid '+SORTIE_BORD,borderRadius:12,padding:'1px 4px 1px 8px',fontSize:12}}>
+                  {MAISON_LIB[c]||c} <span className="muted" style={{fontSize:10.5}}>{c}</span>
+                  <button className="btn btn-sm" style={{padding:'0 6px'}} onClick={()=>majP(p.id,{items:{...p.items, [c]:Math.max(0,n-1)}})}>−</button><b>{n}</b>
+                  <button className="btn btn-sm" style={{padding:'0 6px'}} onClick={()=>majP(p.id,{items:{...p.items, [c]:n+1}})}>+</button></span>)}
+                <select value="" onChange={x=>{ const c = x.target.value; if(c) majP(p.id,{items:{...p.items, [c]:(p.items[c]||0)+1}}); }} style={{width:'auto',fontSize:12}}>
+                  <option value="">+ ajouter…</option>{codesTous.filter(c=>!(p.items||{})[c] && c!=='SO220' && c!=='SO220.2').map(c=><option key={c} value={c}>{MAISON_LIB[c]} ({c})</option>)}</select>
+              </div>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',fontSize:12.5}}>Chauffage :
+                <select value={p.chauf} onChange={x=>majP(p.id,{chauf:x.target.value})} style={{width:'auto',fontSize:12.5}}>{[['plinthe','Plinthe(s)'],['convecteur','Convecteur(s)'],['radiant','Plancher radiant'],['aero','Aérotherme (dragon)'],['aucun','Aucun']].map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
+                {['plinthe','convecteur'].includes(p.chauf) && <>fenêtres <input value={p.fenetres} onChange={x=>majP(p.id,{fenetres:x.target.value})} inputMode="numeric" style={{width:38}}/></>}
+                {p.chauf!=='aucun' && <>thermostats <input value={p.thermos} onChange={x=>majP(p.id,{thermos:x.target.value})} inputMode="numeric" style={{width:38}}/>
+                  <label style={{display:'flex',gap:3,alignItems:'center'}}><input type="checkbox" checked={!!p.intel} onChange={x=>majP(p.id,{intel:x.target.checked})} style={{width:'auto'}}/> intelligent</label></>}
+                {chf.txt && <span className="muted">→ {chf.txt} · {chf.so220} sortie{chf.so220>1?'s':''} SO220{cvNum(p.pi2) && ['plinthe','convecteur'].includes(p.chauf) ? ' ('+p.pi2+' pi² × 10 W)' : ''}</span>}
+              </div>
+            </div>}
+          </div>; })}
+      </div>; })}
+    {m.pieces.length>0 && <div style={{display:'grid',gap:6,border:'1px solid var(--border)',borderRadius:8,padding:'8px 10px',fontSize:13}}>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><b>Entrée électrique</b>
+        <select value={m.entree} onChange={e=>majM({entree:e.target.value})} style={{width:'auto'}}>{['','100 A','200 A','320 A','400 A'].map(x=><option key={x} value={x}>{x||'— aucune'}</option>)}</select>
+        <select value={m.entreeType} onChange={e=>majM({entreeType:e.target.value})} style={{width:'auto'}}>{['aérienne','souterraine'].map(x=><option key={x}>{x}</option>)}</select></div>
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><b>Appareils</b>
+        {MAISON_APPAREILS.map(([k,l])=><label key={k} style={{display:'flex',gap:3,alignItems:'center',fontSize:12.5}}>{l}
+          <input value={(m.appareils||{})[k]||''} onChange={e=>majM(x=>({appareils:{...(x.appareils||{}), [k]:e.target.value.replace(/\D/g,'')}}))} inputMode="numeric" placeholder="0" style={{width:34,padding:'2px 4px'}}/></label>)}</div>
+      {[['inclus','Inclus',MAISON_INCLUS],['exclus','Exclus',MAISON_EXCLUS]].map(([k,l,liste])=><div key={k} style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap'}}><b>{l}</b>
+        {liste.map(t=>{ const on = (m[k]||[]).includes(t); return <button key={t} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>majM(x=>({[k]: on ? (x[k]||[]).filter(y=>y!==t) : [...(x[k]||[]), t]}))}>{on?'✓ ':'+ '}{t}</button>; })}</div>)}
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:4}}>
+        <b>Total des sorties : {cvMoney(m.pieces.reduce((t,p)=>t+totalPiece(p),0))}</b><span className="muted" style={{fontSize:12}}>(tes prix SO, avant entrée, appareils sans code et buffer)</span>
+        <button className="btn btn-p" style={{marginLeft:'auto'}} onClick={appliquer}>↳ Remplir la soumission</button></div>
+    </div>}
+  </div>;
+}
 // v457 : où vont les photos dans le PDF — à la fin, au début (en amont de la soumission), seulement pour les gars (ordre de travail), ou pas du tout
 const PLAN_PLACES = [['fin','À la fin'],['debut','Au début (avant la soumission)'],['gars','Seulement pour les gars (ordre de travail)'],['aucune','Pas de photos']];
 function PlanPlace({d, setD, compact}){
@@ -10665,6 +10861,9 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       {d.evenement && <div className="muted" style={{fontSize:12}}>📅 Lié à « {d.evenement.titre} »{d.evenement.calId===SOUM_CAL_ID ? ' (agenda Soumission) — acceptée, il ira dans En Attente.' : ' ('+((SOUM_AGENDAS.find(x=>x[0]===d.evenement.calId)||[])[1]||'agenda')+')'}</div>}
     </div>
 
+    {d.type==='Soumission' && <div className="card" style={{marginBottom:10}}>
+      <Repli premier key={'mai'+(d.numero||'n')} titre="🏠 Maison — plan par étage et par pièce" info={(d.maison && d.maison.pieces && d.maison.pieces.length) ? d.maison.pieces.length+' pièces' : 'lis un plan PDF ou ajoute les pièces'} ouvert0={!!(d.maison && d.maison.pieces && d.maison.pieces.length)}>
+        <Parechoc nom="La soumission maison"><MaisonPlan d={d} setD={setD} C={C} toast={toast}/></Parechoc></Repli></div>}
     {/* v295 : Travaux (imprimé) avec Photos et plan, puis Notes privées (pas imprimées) */}
     <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
       <TravauxChamp d={d} maj={maj}/>
