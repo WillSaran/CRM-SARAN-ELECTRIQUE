@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v446';
+const APP_VERSION = 'v447';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7023,14 +7023,83 @@ function SoumNote({txt}){
 
 // v271 : section « Appels de service » (avant : « Soumissions ») — Soumissions (comme avant), Ordres de travail, Factures (brouillons).
 // Les Ordres de travail et Factures viennent de Comptabilité › Appels de service (même éditeur, même onglet « Documents CRM »).
+// v447 : Appels de service › Dépôts des gars — ce que les gars déposent avec « Dépôt rapide AP / OT » (PunchPro) :
+// le courriel « [AP] job — employé » (détails, note, fichiers) et le dossier partagé « 1-PAD SERVICE À TRAITER ».
+function depotLireCourriel(m){
+  const sujet = gmEntete(m, 'Subject'), c = gmCorps(m.payload), t = String(c.txt || String(c.html||'').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,' ')).replace(/\r/g,'');
+  const sm = sujet.match(/^\[(AP|OT)\]\s*(.*?)\s+—\s+(.+)$/) || [];
+  const champ = re => { const x = t.match(re); return x ? x[1].trim() : ''; };
+  const fichiers = []; const re = /-\s+([^\n]+)\n\s+(https:\/\/\S+)/g; let x; while((x = re.exec(t))) fichiers.push({nom:x[1].trim(), lien:x[2].trim()});
+  const note = (t.match(/\nNOTE :\n([\s\S]*?)(?:\n\n|$)/) || [])[1] || '';
+  return {id:m.id, thread:m.threadId, quand:+m.internalDate, type:sm[1] || champ(/\((AP|OT)\)/), job:sm[2] || champ(/pour la job :\n([^\n]+)/), employe:sm[3] || '',
+    adresse:champ(/Adresse : ([^\n]+)/), numero:champ(/Num[ée]ro : ([^\n]+)/), note:note.trim(), apprec:champ(/APPR[ÉE]CIATION DE LA JOB : ([^\n]+)/), blocage:/BLOCAGE/.test(t), fichiers};
+}
+function DepotsGarsView({refreshKey}){
+  const [depots,setDepots]=useState(null);
+  const [pad,setPad]=useState(null);
+  const [err,setErr]=useState('');
+  const [jours,setJours]=useState(30);
+  const [tick,setTick]=useState(0);
+  useEffect(()=>{ let ok=true; setDepots(null); setErr('');
+    (async()=>{ try{
+      const r = await gmReq('messages', {params:{q:'subject:("[AP]" OR "[OT]") "Envoyé depuis PunchPro" newer_than:'+jours+'d', maxResults:60}});
+      const L = []; for(const x of (r.messages||[])){ try{ L.push(depotLireCourriel(await gmReq('messages/'+x.id, {params:{format:'full'}}))); }catch(e){} }
+      if(ok) setDepots(L.sort((a,b)=>b.quand-a.quand)); }
+    catch(e){ if(ok){ setErr('Gmail : '+apiErrMsg(e)); setDepots([]); } } })();
+    lirePad(tick>0 || refreshKey>0).then(g=>{ if(ok) setPad(g); }).catch(e=>{ if(ok) setPad({err:e.message==='acces' ? 'Le CRM n\'a pas accès au Drive : déconnecte-toi puis reconnecte-toi.' : apiErrMsg(e)}); });
+    return ()=>{ ok=false; }; },[jours, refreshKey, tick]);
+  const dansPad = d => Array.isArray(pad) && d.fichiers.some(f=>pad.some(p=>p.fichiers.some(x=>x.nom===f.nom)));
+  const quand = ms => { const d = new Date(ms); return cvFmtDay(cvDay(d.toISOString()))+' '+d.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'}); };
+  return <div>
+    <div className="card">
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:6}}>
+        <b className="fh" style={{fontSize:16}}>Dépôts rapides AP / OT (PunchPro)</b>
+        <select value={jours} onChange={e=>setJours(+e.target.value)} style={{width:'auto',fontSize:12.5}}>{[7,30,90,365].map(n=><option key={n} value={n}>{n} derniers jours</option>)}</select>
+        <button className="btn btn-sm" onClick={()=>setTick(t=>t+1)}>↻</button>
+      </div>
+      <div className="muted" style={{fontSize:12.5,marginBottom:6}}>Ce que les gars envoient avec « 📋 Dépôt rapide AP / OT » dans PunchPro (courriel à info@ + fichiers dans le dossier PAD).</div>
+      {err && <div style={{color:'var(--danger)',fontSize:13}}>{err}</div>}
+      {depots===null ? <div style={{display:'flex',gap:8,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des courriels…</span></div>
+        : !depots.length ? <div className="muted" style={{fontSize:13}}>Aucun dépôt rapide dans les {jours} derniers jours.</div>
+        : depots.map(d=><div key={d.id} style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+          <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+            <div style={{minWidth:0}}>
+              <span className="badge" style={{background:'rgba(88,166,255,0.15)',color:'var(--accent)',marginRight:6}}>{d.type || '?'}{d.numero ? ' '+d.numero : ''}</span>
+              <b>{d.job || '—'}</b>{d.employe && <span className="muted"> · par {d.employe}</span>}
+              <div className="muted" style={{fontSize:12}}>{quand(d.quand)}{d.adresse ? ' · 📍 '+d.adresse : ''}{d.apprec ? ' · appréciation '+d.apprec : ''}{d.blocage ? '' : ''}
+                {d.blocage && <span style={{color:'var(--warning)'}}> · ⚠️ blocage</span>}
+                {Array.isArray(pad) && d.fichiers.length>0 && (dansPad(d) ? <span style={{color:'var(--warning)'}}> · encore dans le PAD (à traiter)</span> : <span style={{color:'var(--success)'}}> · sorti du PAD</span>)}</div>
+              {d.note && <div style={{fontSize:12.5,marginTop:3,whiteSpace:'pre-wrap'}}>{d.note}</div>}
+            </div>
+            <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'flex-start'}}>
+              {d.fichiers.map((f,k)=><a key={k} className="btn btn-sm" href={f.lien} target="_blank" rel="noopener" style={{textDecoration:'none'}} title={f.nom}>{/^VOCAL/i.test(f.nom) ? '🎤' : /^OT/i.test(f.nom) ? 'OT' : /^AP/i.test(f.nom) ? 'AP' : '📎'} ↗</a>)}
+              <a className="btn btn-sm" href={'https://mail.google.com/mail/?authuser=info@saranelectrique.com#all/'+d.thread} target="_blank" rel="noopener" style={{textDecoration:'none'}}>Courriel ↗</a>
+            </div>
+          </div>
+        </div>)}
+    </div>
+    <div className="card" style={{marginTop:10}}>
+      <b className="fh" style={{fontSize:16}}>Dans le dossier « 1-PAD SERVICE À TRAITER »</b> <a href={'https://drive.google.com/drive/folders/'+PAD_DOSSIER} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5}}>ouvrir ↗</a>
+      {pad===null ? <div className="muted" style={{fontSize:13,marginTop:6}}>Lecture du dossier…</div>
+        : pad.err ? <div style={{color:'var(--warning)',fontSize:13,marginTop:6}}>{pad.err}</div>
+        : !pad.length ? <div className="muted" style={{fontSize:13,marginTop:6}}>✅ Aucun papier en attente.</div>
+        : pad.map((p,i)=><div key={i} style={{padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+          <div><b>{p.titre}</b>{p.ap.length>0 && <b style={{color:'var(--accent)'}}> · AP {p.ap.join(', ')}</b>}{p.ot.length>0 && <b style={{color:'var(--accent)'}}> · OT {p.ot.join(', ')}</b>}
+            <div className="muted" style={{fontSize:12}}>Déposé le {cvFmtDay(String(p.depose).slice(0,10))}</div></div>
+          <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>{p.fichiers.map((f,k)=><a key={k} className="btn btn-sm" href={f.lien} target="_blank" rel="noopener" style={{textDecoration:'none'}} title={f.nom}>{/^VOCAL/i.test(f.nom) ? '🎤' : /^OT/i.test(f.nom) ? 'OT' : /^AP/i.test(f.nom) ? 'AP' : '📎'} ↗</a>)}</div>
+        </div>)}
+      <div className="muted" style={{fontSize:11.5,marginTop:6}}>Le suivi complet (facture inscrite ou non) reste dans Comptabilité › Bons de vente › Papiers.</div>
+    </div>
+  </div>;
+}
 function AppelsServiceSection({cfg, data, toast, refreshKey, onNavigate}){
-  const [sous,setSous]=useState(()=>{ if(navFocus('soumissions')) return 'soum'; try{ return localStorage.getItem('appels_sous')||'soum'; }catch(e){ return 'soum'; } });
+  const [sous,setSous]=useState(()=>{ try{ const x = localStorage.getItem('appels_sous'); return ['depots','ot','facture'].includes(x) ? x : 'depots'; }catch(e){ return 'depots'; } });   // v447 : Soumissions = son propre menu
   const choisir = k => { setSous(k); try{ localStorage.setItem('appels_sous', k); }catch(e){} };
   return <div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
-      {[['soum','Soumissions'],['ot','Ordres de travail'],['facture','Factures']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
+      {[['depots','Dépôts des gars'],['ot','Ordres de travail'],['facture','Factures']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
     </div>
-    {sous==='soum' && <SoumissionsView cfg={cfg} data={data} toast={toast} refreshKey={refreshKey} onNavigate={onNavigate}/>}
+    {sous==='depots' && <DepotsGarsView refreshKey={refreshKey}/>}
     {sous==='ot' && <AppelServiceView key="ot" cfg={cfg} toast={toast} mode="ot" contacts={data && data.contacts} onNavigate={onNavigate}/>}
     {sous==='facture' && <AppelServiceView key="facture" cfg={cfg} toast={toast} mode="facture" contacts={data && data.contacts} onNavigate={onNavigate}/>}
   </div>;
@@ -15413,7 +15482,8 @@ function App(){
     {id:'projets',label:'Projets'},
     {id:'compta',label:'Comptabilité'},   // v415 : le menu ouvre sur Comptes clients (« À facturer » du tableau de bord ouvre encore Bons de travail)
     {id:'commandes',label:'Commandes'},
-    {id:'soumissions',label:'Appels de service'},
+    {id:'soumissions',label:'Soumissions'},   // v447 : Soumissions dans son propre menu
+    {id:'appelsService',label:'Appels de service'},
     {id:'courriels',label:'Courriels'},
     {id:'heures',label:'Employés'},
     {id:'produits',label:'Inventaire'},   // v275 : Inventaire = Catalogue (ex-Produits) + Inventaire (ex-Stock)
@@ -15468,7 +15538,8 @@ function App(){
         {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
         {CPT_NAV[nav] && <VerrouCompta cfg={effectiveCfg}><ComptabiliteView key={'cpt'+navKey} onglet0={CPT_NAV[nav]} cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} toast={show} isDesktop={isDesktop}/></VerrouCompta>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
-        {nav==='soumissions' && <AppelsServiceSection key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
+        {nav==='soumissions' && <SoumissionsView key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
+        {nav==='appelsService' && <AppelsServiceSection key={'as'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
         {nav==='commandes' && <CommandesView key={'bc'+navKey} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {(nav==='produits' || nav==='stock') && <InventaireSection key={'inv'+navKey} initial={nav==='stock' ? 'inventaire' : ''} cfg={effectiveCfg} toast={show} data={data}/>}
         {nav==='reglages' && <SettingsView cfg={cfg} setCfg={setCfg} toast={show}/>}
