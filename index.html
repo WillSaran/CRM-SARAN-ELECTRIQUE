@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v444';
+const APP_VERSION = 'v445';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6914,6 +6914,103 @@ function SoumPhotos({dossier, tick}){
   </div>;
 }
 // Texte d'une note : 3 lignes, puis « Voir tout ».
+// v445 : fiche client avant la soumission — vérifier / compléter le contact (Répertoire), avec ce qui est dans ses courriels
+const SOUM_FICHES_LS = 'soum_fiches';
+function soumFicheLue(cle){ try{ return (JSON.parse(localStorage.getItem(SOUM_FICHES_LS)||'{}'))[cle] || null; }catch(e){ return null; } }
+function soumFicheGarder(cle, f){ try{ const m = JSON.parse(localStorage.getItem(SOUM_FICHES_LS)||'{}'); m[cle] = f; localStorage.setItem(SOUM_FICHES_LS, JSON.stringify(m)); }catch(e){} }
+const sfTel10 = t => String(t||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,'').slice(-10);
+const SF_NOTRE_TEL = '4384903412';
+function sfTrouverFiche(F, x){
+  const tel = sfTel10(x.tel), mail = String(x.courriel||'').toLowerCase().trim(), cle = persCle(x.nom||'');
+  const tous = [...(F.clients||[]), ...(F.masques||[])];
+  const parMail = mail && tous.find(f=>String(f.courriel||'').toLowerCase().split(/[\s,;]+/).includes(mail));
+  const parTel = tel.length===10 && tous.find(f=>sfTel10(f.tel)===tel);
+  const parNom = cle && tous.find(f=>[f.nom, ...(f.alias||[])].some(a=>persCle(a)===cle));
+  return parMail || parTel || parNom || null;
+}
+// Ce qu'on lit dans les courriels du client : téléphone(s) et adresse(s) (pas notre signature)
+function sfLireTexte(txt){
+  const t = String(txt||'').replace(/\r/g,'').split(/\n>|\nLe .{5,80}a écrit|\nOn .{5,80}wrote|\nDe :|\nFrom:/)[0];
+  const tels = [...t.matchAll(/(?:\+?1[\s.-]?)?\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g)].map(m=>m[0].trim()).filter(x=>{ const d = sfTel10(x); return d.length===10 && d!==SF_NOTRE_TEL; });
+  const adrs = [...t.matchAll(/\b\d{1,5}[\s,-]+(?:rue|boul(?:evard|\.)?|ch(?:emin|\.)|av(?:enue|\.)?|rang|mont[ée]e|place|croissant|route|terrasse|all[ée]e|impasse|carr[ée]|cour|promenade|rue\s+des?|rue\s+du)\b[^\n]{2,70}/gi)]
+    .map(m=>m[0].replace(/\s+/g,' ').replace(/[.;]\s*$/,'').trim()).filter(a=>!/J3B 4J6|S[ée]minaire/i.test(a));
+  return {tels:[...new Set(tels)], adrs:[...new Set(adrs)]};
+}
+function SoumFiche({cfg, infos, cle, onSauve, onFermer, toast}){
+  const [F,setF]=useState(null);
+  const [fiche,setFiche]=useState(null);       // fiche du Répertoire trouvée (ou choisie)
+  const [v,setV]=useState({nom:infos.nom||'', tel:infos.tel||'', courriel:infos.courriel||'', adresse:infos.adresse||'', ville:'', notes:''});
+  const [q,setQ]=useState('');
+  const [sugg,setSugg]=useState(null);         // {tels, adrs, noms}
+  const [etat,setEtat]=useState('');
+  const appliquer = f => { setFiche(f);
+    if(f) setV({nom:f.nom||infos.nom||'', tel:f.tel||infos.tel||'', courriel:f.courriel||infos.courriel||'', adresse:f.adresse||infos.adresse||'', ville:f.ville||'', notes:f.notes||''}); };
+  useEffect(()=>{ const id = cfg.memoireJobsSpreadsheetId; if(!id){ setF({clients:[],masques:[]}); return; }
+    lireCache(id, 'Fiches!A1:L', true).then(r=>{ const L = lireFiches(r.result.values||[]); setF(L); appliquer(sfTrouverFiche(L, infos)); })
+      .catch(e=>{ setF({clients:[],masques:[]}); setEtat('Répertoire : '+apiErrMsg(e)); }); },[]);
+  const set = (k, x) => setV(o=>({...o, [k]:x}));
+  const diff = (k, val) => val && String(val).trim() && cvNorm(val)!==cvNorm(v[k]) ? <button className="btn btn-sm" style={{fontSize:11}} onClick={()=>set(k, val)} title="Utiliser cette valeur">↳ {val}</button> : null;
+  const chercher = async () => { setEtat('Lecture des courriels…');
+    try{ const mail = String(v.courriel||'').trim(), qs = mail ? 'from:'+mail : '"'+String(v.nom||'').trim()+'"';
+      if(!mail && !String(v.nom||'').trim()){ setEtat('Écris au moins le nom ou le courriel.'); return; }
+      const r = await gmReq('messages', {params:{q:qs, maxResults:8}}); const ids = (r.messages||[]).map(m=>m.id);
+      const tels = [], adrs = [], noms = [];
+      for(const id of ids){ const m = await gmReq('messages/'+id, {params:{format:'full'}});
+        const de = gmEntete(m, 'From'); if(/saranelectrique/i.test(de)) continue;
+        const nm = de.replace(/<.*>/,'').replace(/"/g,'').trim(); if(nm && !/@/.test(nm)) noms.push(nm);
+        const c = gmCorps(m.payload), txt = c.txt || String(c.html||'').replace(/<br\s*\/?>|<\/(p|div|tr|li)>/gi,'\n').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&');
+        const x = sfLireTexte(txt); tels.push(...x.tels); adrs.push(...x.adrs); }
+      const u = a => [...new Map(a.map(x=>[cvNorm(x), x])).values()];
+      setSugg({tels:u(tels).filter(t=>sfTel10(t)!==sfTel10(v.tel)), adrs:u(adrs).filter(a=>cvNorm(a)!==cvNorm(v.adresse)), noms:u(noms).filter(n=>cvNorm(n)!==cvNorm(v.nom)), n:ids.length});
+      setEtat(''); }
+    catch(e){ setEtat('Gmail : '+apiErrMsg(e)); } };
+  const sauver = async () => { if(!String(v.nom||'').trim()){ setEtat('Le nom est requis.'); return; } setEtat('Enregistrement…');
+    try{ const base = fiche || {};
+      const masquee = base.row && !/^client$/i.test(base.type||'');
+      const alias = [...(base.alias||[])]; if(base.nom && cvNorm(base.nom)!==cvNorm(v.nom) && !alias.some(a=>cvNorm(a)===cvNorm(base.nom))) alias.push(base.nom);
+      await ficheEcrire(cfg, {...base, type:'Client', code:(!masquee && base.code) || 'PART', nom:v.nom.trim(), alias, adresse:v.adresse.trim(), ville:v.ville.trim(), tel:v.tel.trim(), courriel:v.courriel.trim(), notes:v.notes,
+        po:base.po||'', client:masquee ? '' : (base.client||''), row:base.row});
+      if(typeof CV_CACHE!=='undefined') Object.keys(CV_CACHE).forEach(k=>{ delete CV_CACHE[k]; });
+      const adresse = [v.adresse.trim(), v.ville.trim()].filter(Boolean).join(', ');
+      const res = {nom:v.nom.trim(), tel:v.tel.trim(), courriel:v.courriel.trim().toLowerCase(), adresse, le:cvDay(new Date().toISOString())};
+      if(cle) soumFicheGarder(cle, res);
+      toast && toast(masquee ? 'Fiche réactivée dans le Répertoire' : fiche ? 'Fiche mise à jour dans le Répertoire' : 'Fiche créée dans le Répertoire');
+      setEtat(''); onSauve && onSauve(res); }
+    catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
+  const nq = cvNorm(q), choix = nq.length>=2 && F ? [...F.clients, ...F.masques].filter(f=>cvNorm([f.nom, ...(f.alias||[]), f.courriel, f.tel].join(' ')).includes(nq)).slice(0,6) : [];
+  const champ = (k, ph, w) => <input value={v[k]} onChange={e=>set(k, e.target.value)} placeholder={ph} style={{flex:w||'1 1 160px',minWidth:0,padding:'5px 8px',fontSize:13}}/>;
+  return <div style={{marginTop:8,padding:10,border:'1px solid var(--accent)',borderRadius:8,display:'grid',gap:7,fontSize:13,background:'var(--bg2, transparent)'}}>
+    <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+      <b>Fiche client</b>
+      {!F ? <span className="muted">Lecture du Répertoire…</span>
+        : fiche ? <span className="badge" style={{background:'var(--bg3)'}}>{/^client$/i.test(fiche.type) ? 'Déjà dans le Répertoire' : 'Fiche inactive — sera réactivée'}</span>
+        : <span className="muted">Pas encore dans le Répertoire — elle sera créée</span>}
+      <span style={{marginLeft:'auto',display:'flex',gap:6}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="📇 Chercher une autre fiche…" style={{width:190,padding:'4px 8px',fontSize:12.5}}/>
+        {fiche && <button className="btn btn-sm" onClick={()=>appliquer(null)} title="Créer une nouvelle fiche plutôt">Nouvelle fiche</button>}
+      </span>
+    </div>
+    {choix.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{choix.map(f=><button key={f.row} className="btn btn-sm" onClick={()=>{ appliquer(f); setQ(''); }}>{f.nom}{f.tel ? ' · '+repTelFmt(f.tel) : ''}{!/^client$/i.test(f.type) ? ' (inactive)' : ''}</button>)}</div>}
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>{champ('nom','Nom','2 1 200px')}{fiche && diff('nom', infos.nom)}</div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>{champ('tel','Téléphone')}{fiche && diff('tel', infos.tel)}{champ('courriel','Courriel','1 1 200px')}{fiche && diff('courriel', infos.courriel)}</div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>{champ('adresse','Adresse (no et rue)','2 1 200px')}{champ('ville','Ville','1 1 120px')}{fiche && diff('adresse', infos.adresse)}</div>
+    {champ('notes','Notes (privées)','1 1 100%')}
+    {sugg && <div style={{padding:'6px 8px',background:'var(--bg3)',borderRadius:6,display:'grid',gap:4}}>
+      <span className="muted" style={{fontSize:12}}>Dans ses courriels ({sugg.n} lu{sugg.n>1?'s':''}) — clique pour utiliser :</span>
+      {!sugg.tels.length && !sugg.adrs.length && !sugg.noms.length && <span className="muted" style={{fontSize:12}}>Rien de nouveau trouvé.</span>}
+      {sugg.noms.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>Nom : {sugg.noms.map(x=><button key={x} className="btn btn-sm" onClick={()=>set('nom', x)}>{x}</button>)}</div>}
+      {sugg.tels.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>Tél. : {sugg.tels.map(x=><button key={x} className="btn btn-sm" onClick={()=>set('tel', repTelFmt(x))}>{repTelFmt(x)}</button>)}</div>}
+      {sugg.adrs.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>Adresse : {sugg.adrs.map(x=><button key={x} className="btn btn-sm" onClick={()=>{ const p = x.split(/\s*,\s*/); set('adresse', p[0]); if(p[1]) set('ville', p.slice(1).join(', ')); }}>{x}</button>)}</div>}
+    </div>}
+    <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+      <button className="btn btn-sm" onClick={chercher} disabled={etat==='Lecture des courriels…'} title="Lit ses derniers courriels (signature, réponses) pour trouver téléphone et adresse">✉ Chercher dans ses courriels</button>
+      <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} disabled={!F || etat==='Enregistrement…'} onClick={sauver}>{etat==='Enregistrement…' ? etat : 'Sauver la fiche'}</button>
+      <button className="btn btn-sm" onClick={onFermer}>Fermer</button>
+      {etat && !/…$/.test(etat) && <span style={{color:'var(--danger)',fontSize:12}}>{etat}</span>}
+      {etat==='Lecture des courriels…' && <span className="muted" style={{fontSize:12}}>{etat}</span>}
+    </div>
+  </div>;
+}
 function SoumNote({txt}){
   const [ouvert,setOuvert]=useState(false);
   if(!txt) return null;
@@ -6954,6 +7051,8 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const [occupe,setOccupe]=useState('');
   const [prepKey,setPrepKey]=useState(0);
   const [filtreAF,setFiltreAF]=useState('');
+  const [ficheOuv,setFicheOuv]=useState('');   // v445 : fiche client ouverte (clé de la demande, ou 'NOUV')
+  const [,setFicheTick]=useState(0);
   // v296 : soumission enregistrée (brouillon) depuis une demande « À faire » → reliée par « origine » ; la plus récente gagne
   const DC = useDocumentsCrm(cfg);
   const brouillons = useMemo(()=>{ const m = {}; DC.docs.forEach(x=>{ if(x.type!=='Soumission') return; let o=''; try{ o = (JSON.parse(x.donnees||'{}').origine)||''; }catch(e){} if(o && !m[o]) m[o]=x; }); return m; },[DC.docs]);
@@ -6980,10 +7079,13 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const infosDe = s => { const b = brouillons[s.cle], bi = b ? brouillonInfos(b) : {};
     if(b) return {nom:bi.nom || s.client || '', tel:bi.tel || '', courriel:(bi.courriel || s.courriel || '').toLowerCase(), adresse:bi.adresse || '', travaux:bi.travaux || '', demande:'',
       type: bi.typeProjet || s.typeProjet || soumTypeDevine([s.sujet, bi.travaux].join(' '))};
-    const i = s.infos || {};
+    const i = s.infos || {}, fs = soumFicheLue(s.cle) || {};   // v445 : la fiche client vérifiée l'emporte
+    if(fs.nom) return {nom:fs.nom, tel:fs.tel || i.tel || '', courriel:fs.courriel || (i.courriel || s.courriel || '').toLowerCase(), adresse:fs.adresse || i.adresse || '', travaux:i.travaux || s.extrait || '', demande:i.demande || '', fiche:fs.le,
+      type: s.typeProjet || i.type || soumTypeDevine([s.sujet, i.travaux || s.extrait].join(' '))};
     return {nom:i.nom || s.client || '', tel:i.tel || '', courriel:(i.courriel || s.courriel || '').toLowerCase(), adresse:i.adresse || '', travaux:i.travaux || s.extrait || '', demande:i.demande || '',
       type: s.typeProjet || i.type || soumTypeDevine([s.sujet, i.travaux || s.extrait].join(' '))}; };
   const preparer = s => { const b = brouillons[s.cle];
+    if(!b && !soumFicheLue(s.cle) && confirm('La fiche client n\'a pas été vérifiée.\n\nOK = ouvrir la fiche client d\'abord\nAnnuler = faire la soumission quand même')){ setFicheOuv(s.cle); setOuverte(''); return; }
     if(b){ DOC_OUVRIR = b; DOC_PREFILL = null; setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); return; }
     const i = infosDe(s), sujet = (s.sujet||'').replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'').replace(/^\s*soumission\s*[-:–]?\s*/i,'').replace(/^Contact depuis votre site\s*:\s*/i,'');
     DOC_PREFILL = {type:'Soumission', typeProjet:i.type, origine:s.cle, nom:i.nom, tel:i.tel, courriel:i.courriel, adresse:i.adresse,
@@ -7025,6 +7127,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
         <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
           {lienGmail(s)}
           {!fini ? <>
+            <button className={'btn btn-sm'+(i.fiche ? '' : '')} onClick={()=>setFicheOuv(ficheOuv===s.cle?'':s.cle)} title="Vérifier et sauver le contact dans le Répertoire avant la soumission">{i.fiche ? '📇 Fiche ✓' : '📇 Fiche client'}</button>
             <button className="btn btn-sm btn-p" onClick={()=>preparer(s)} title={b ? 'Rouvre le brouillon '+b.numero+' là où tu l\'as laissé' : 'Ouvre la soumission déjà remplie (client, téléphone, courriel, adresse, travaux)'}>{b ? 'Continuer la soumission' : '📝 Faire la soumission'}</button>
             {i.courriel && !s.accuse && <button className="btn btn-sm" onClick={()=>accuse(s)} title="« Nous avons bien reçu votre demande… » — Gmail s'ouvre, tu n'as qu'à envoyer">✉️ Accusé de réception</button>}
             <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, attente ? '' : 'En attente', s.note)} title={attente ? 'Remettre à faire' : 'En attente (ex. visite à faire, info du client)'}>{attente ? '↩ Reprendre' : '⏳ En attente'}</button>
@@ -7036,6 +7139,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
           </>}
         </div>
       </div>
+      {!fini && ficheOuv===s.cle && <SoumFiche cfg={cfg} cle={s.cle} infos={i} toast={toast} onFermer={()=>setFicheOuv('')} onSauve={()=>{ setFicheOuv(''); setFicheTick(t=>t+1); }}/>}
       {ouverte!==s.cle ? (s.extrait && <div className="muted" onClick={()=>setOuverte(s.cle)} style={{fontSize:12,marginTop:3,cursor:'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.extrait.split('\n')[0]}{(s.pdf||s.photos) ? '  · 📎 PDF / photos' : ''}</div>) : <>
       <SoumNote txt={s.extrait}/>
       {s.pdf && <SoumPhotos dossier={s.pdf}/>}
@@ -7135,13 +7239,18 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     {onglet==='afaire' && <div className="card">
       <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:4}}>
         <button className="btn btn-sm btn-p" onClick={()=>setNouveau(nouveau===null?'':null)}>+ Ajouter</button>
-        <button className="btn btn-sm" onClick={()=>{ DOC_PREFILL = null; DOC_OUVRIR = null; setPrepKey(k=>k+1); setOnglet('preparer'); }}>✏️ Nouvelle soumission</button>
+        <button className="btn btn-sm" onClick={()=>setFicheOuv(ficheOuv==='NOUV'?'':'NOUV')} title="Choisis ou crée le client dans le Répertoire, puis la soumission s'ouvre remplie">✏️ Nouvelle soumission</button>
         {pill('','Toutes',null,filtreAF,setFiltreAF)}
         {pill('nouvelles','Nouvelles',ouvertes.filter(s=>s.statut!=='En attente').length,filtreAF,setFiltreAF)}
         {pill('attente','⏳ En attente',ouvertes.filter(s=>s.statut==='En attente').length,filtreAF,setFiltreAF)}
         {typesAF.length>1 && <select value={TYPES_PROJET.includes(filtreAF)?filtreAF:''} onChange={e=>setFiltreAF(e.target.value)} style={{fontSize:12}}><option value="">Tous les types</option>{typesAF.map(t=><option key={t}>{t}</option>)}</select>}
         <label className="muted" style={{fontSize:12,display:'flex',gap:4,alignItems:'center',marginLeft:'auto'}}><input type="checkbox" checked={voirFinies} onChange={e=>setVoirFinies(e.target.checked)}/> Voir les terminées ({aFaire.length-ouvertes.length})</label>
       </div>
+      {ficheOuv==='NOUV' && <>
+        <SoumFiche cfg={cfg} infos={{}} toast={toast} onFermer={()=>setFicheOuv('')}
+          onSauve={f=>{ setFicheOuv(''); DOC_OUVRIR = null; DOC_PREFILL = {type:'Soumission', nom:f.nom, tel:f.tel, courriel:f.courriel, adresse:f.adresse}; setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); }}/>
+        <div style={{marginTop:4}}><button className="btn btn-sm" onClick={()=>{ setFicheOuv(''); DOC_PREFILL = null; DOC_OUVRIR = null; setPrepKey(k=>k+1); setOnglet('preparer'); }}>Passer — soumission vide</button></div>
+      </>}
       {nouveau!==null && <div style={{margin:'6px 0',display:'grid',gap:6}}>
         <input autoFocus value={nouveau} onChange={e=>setNouveau(e.target.value)} placeholder="Pour qui / où — ex. : Borne — Jean Tremblay, 12 rue X"/>
         <textarea value={details} onChange={e=>setDetails(e.target.value)} rows={4} placeholder={"Ce qu'il faut faire et le stock nécessaire (une ligne par article)…"} style={{resize:'vertical',fontFamily:'inherit'}}/>
