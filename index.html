@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v445';
+const APP_VERSION = 'v446';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3104,7 +3104,7 @@ function ProjetsSuivi({cfg, refreshKey}){
           {(()=>{ const gens=[...new Set(((j.po && (courriels||{})[j.po])||[]).map(f=>f.de).filter(n=>n && !/saran|william/i.test(n)))]; return gens.length ? <div className="muted" style={{fontSize:12}}>Dans les courriels de cette job : {gens.join(', ')}</div> : null; })()}</div>}
         <PjPassages events={j.events} today={today} ajouter={<CvAjouterPassage job={j} onDone={()=>setTick(t=>t+1)}/>} ligne={(e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
           {e.attente ? <b style={{color:'var(--warning)'}}>En attente</b> : <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b>} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span>
-          {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac==='**' ? <span className="muted"> · pas à facturer</span> : e.fac ? <>{' · facture '+e.fac}{e.facEnvoyee===false && <span style={{color:'var(--warning)'}}> (pas envoyée)</span>}</> : (e.day<today && !e.attente ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
+          {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac==='**' ? <span className="muted"> · pas à facturer</span> : e.fac ? <>{' · facture '}<FacNos txt={e.fac} factures={factures}/>{e.facEnvoyee===false && <span style={{color:'var(--warning)'}}> (pas envoyée)</span>}</> : (e.day<today && !e.attente ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
           {e.day<=today && <CvInscrirePassage cfg={cfg} e={e} onDone={()=>setTick(t=>t+1)}/>}
         </div>}/>
         <div style={{marginTop:10,paddingTop:8,borderTop:'1px solid var(--border)'}}>   {/* v388 : à la fin, sous les passages — les étapes d'abord */}
@@ -12101,6 +12101,15 @@ function cvVisites(job){
     v.label = v.phase.charAt(0)+v.phase.slice(1).toLowerCase()+' ('+cvFmtDay(v.debut)+(v.fin!==v.debut?'–'+cvFmtDay(v.fin):'')+')'; });
   return out;
 }
+// v446 : numéro de facture cliquable — le PDF du registre (La mémoire — Factures), sinon le courriel « Facture #N » dans Gmail
+function facLien(n, factures){ const f = (factures||{})[n];
+  return f && f.pdf ? 'https://drive.google.com/file/d/'+f.pdf+'/view' : 'https://mail.google.com/mail/?authuser=info@saranelectrique.com#search/'+encodeURIComponent('"Facture #'+n+'"'); }
+function FacNo({n, factures, style}){ const f = (factures||{})[n];
+  return <a href={facLien(n, factures)} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} title={f && f.pdf ? 'Ouvrir le PDF de la facture '+n : 'Chercher le courriel de la facture '+n+' dans Gmail'}
+    style={{color:'var(--accent)',fontWeight:700,...(style||{})}}>{n} ↗</a>; }
+function FacNos({txt, factures}){ const t = String(txt||''), nums = t.split(/[\s,;–-]+/).filter(x=>/^\d{3,6}$/.test(x));
+  if(!nums.length) return <>{t}</>;
+  return <>{nums.map((n,i)=><React.Fragment key={n+i}>{i>0 ? ', ' : ''}<FacNo n={n} factures={factures}/></React.Fragment>)}</>; }
 // v377 : appels de service d'une job — numéro du bloc Suivi des passages, registre « La mémoire — Appels de service » (numéro, PO, facture)
 // et fichiers AP_… attachés aux événements de l'agenda. [{as, url, nom, jour, factures}]
 function cvJobAppels(job, appels){
@@ -12117,7 +12126,7 @@ function CvAppelsLiens({liste, factures}){
   if(!liste.length) return <span className="muted">aucun appel de service trouvé</span>;
   return <>{liste.map((a,k)=><span key={k} style={{marginRight:12,display:'inline-block'}}>
     {a.url ? <a href={a.url} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>AP {a.as} ↗</a> : <b>AP {a.as}</b>}
-    <span className="muted" style={{fontSize:11.5}}>{a.jour ? ' · '+cvFmtDay(a.jour) : ''}{a.factures.length ? ' · facture '+a.factures.map(n=>n+(factures && factures[n] && (factures[n].envoi || factures[n].pdf) ? '' : factures ? ' (pas envoyée)' : '')).join(', ') : ''}{!a.url ? ' · document pas trouvé' : ''}</span></span>)}</>; }
+    <span className="muted" style={{fontSize:11.5}}>{a.jour ? ' · '+cvFmtDay(a.jour) : ''}{a.factures.length ? <> · facture {a.factures.map((n,i)=><React.Fragment key={n}>{i>0?', ':''}<FacNo n={n} factures={factures}/>{factures && !(factures[n] && (factures[n].envoi || factures[n].pdf)) ? ' (pas envoyée)' : ''}</React.Fragment>)}</> : ''}{!a.url ? ' · document pas trouvé' : ''}</span></span>)}</>; }
 // v393 : passages d'un projet — repliés (total des visites), flèche pour voir la liste
 function PjPassages({events, today, ajouter, ligne}){
   const [ouv,setOuv]=useState(false);
@@ -12153,7 +12162,7 @@ function PjAppels({liste, factures}){
       <div key={k} style={{display:'grid',gridTemplateColumns:'86px 58px 1fr',gap:8,fontSize:12.5,padding:'2px 0',borderBottom:'1px dashed var(--border)',alignItems:'baseline'}}>
         {a.url ? <a href={a.url} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>AP {a.as} ↗</a> : <b>AP {a.as}</b>}
         <span className="muted" style={{fontVariantNumeric:'tabular-nums'}}>{a.jour ? cvFmtDay(a.jour) : ''}</span>
-        <span>{a.factures.length ? <>facture {a.factures.map((n,i)=><React.Fragment key={n}>{i>0?', ':''}{n}{!env(n) && <span style={{color:'var(--warning)'}}> (pas envoyée)</span>}</React.Fragment>)}</> : <span className="muted">pas de facture</span>}
+        <span>{a.factures.length ? <>facture {a.factures.map((n,i)=><React.Fragment key={n}>{i>0?', ':''}<FacNo n={n} factures={factures}/>{!env(n) && <span style={{color:'var(--warning)'}}> (pas envoyée)</span>}</React.Fragment>)}</> : <span className="muted">pas de facture</span>}
 </span></div>)}</div>}
   </div>;
 }
@@ -12518,7 +12527,7 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
             {e.ot && <span>OT {appels.parNumero[e.ot]
               ? <a href={photo(appels.parNumero[e.ot])} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>{e.ot} ↗</a>
               : <b style={{color:'var(--text)'}}>{e.ot}</b>}</span>}
-            {e.fac==='**' ? <span>Pas à facturer</span> : e.fac ? <span>Facture <b style={{color:'var(--text)'}}>{e.fac}</b>{String(e.fac).split(/[\s,–-]+/).filter(n=>factures[n]&&factures[n].ht!=null).map(n=><span key={n}> · <b style={{color:'var(--text)'}}>{cvMoney(factures[n].ht)}</b></span>)}</span>
+            {e.fac==='**' ? <span>Pas à facturer</span> : e.fac ? <span>Facture <FacNos txt={e.fac} factures={factures}/>{String(e.fac).split(/[\s,–-]+/).filter(n=>factures[n]&&factures[n].ht!=null).map(n=><span key={n}> · <b style={{color:'var(--text)'}}>{cvMoney(factures[n].ht)}</b></span>)}</span>
               : (e.day<today ? <span style={{color:'var(--danger)',fontWeight:700}}>Pas de facture inscrite</span> : <span>Planifié</span>)}
             {e.day<=today && <CvInscrirePassage cfg={cfg} e={e} onDone={onChanged}/>}
           </div>
