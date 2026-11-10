@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v448';
+const APP_VERSION = 'v449';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4653,11 +4653,87 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
 
 // v435 : l'agenda revient où tu étais (vue, date, défilement) quand tu reviens d'un autre onglet du menu
 let AGENDA_POS = (()=>{ try{ return JSON.parse(sessionStorage.getItem('agenda_pos')||'null'); }catch(e){ return null; } })();
-function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
+function ChoisirEvenement({e, onChoisir, onClear}){ useEffect(()=>{ onChoisir(e); onClear(); },[]); return null; }
+// v449 : Dépôt AP / OT au bureau (William, Isabelle) — la feuille papier des gars, scannée ou photographiée, liée à sa job choisie dans l'agenda du CRM.
+// Même nommage que PunchPro (AP_1850_JOB.jpg) → dossier 1-PAD SERVICE À TRAITER ; joint à l'événement ; numéro inscrit au passage (Suivi Travaux + agenda).
+const DEPOT_BUREAU_SECOURS = 'Saran CRM — Dépôts AP-OT (bureau)';
+const depotNettoyer = t => String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9 _-]+/g,'').trim().replace(/\s+/g,' ');
+function DepotBureau({cfg, data, toast, onDepose}){
+  const [ouvert,setOuvert]=useState(false);
+  const [type,setType]=useState('AP');
+  const [num,setNum]=useState('');
+  const [job,setJob]=useState(null);
+  const [choix,setChoix]=useState(false);
+  const [fichiers,setFichiers]=useState([]);
+  const [inscrire,setInscrire]=useState(true);
+  const [etat,setEtat]=useState('');
+  const [fait,setFait]=useState(null);
+  const [ok,setOk]=useState(peutDeposer());
+  const ref = useRef(null);
+  const reset = () => { setNum(''); setJob(null); setFichiers([]); setEtat(''); };
+  const deposer = async () => {
+    if(!job){ setEtat('Choisis la job dans l\'agenda.'); return; }
+    if(!fichiers.length){ setEtat('Ajoute la feuille (photo ou scan).'); return; }
+    try{
+      const base = type+'_'+(num.trim() || 'sans-numero')+'_'+depotNettoyer(job.title);
+      let dossier = PAD_DOSSIER, secours = false; const deposes = [];
+      for(let i=0;i<fichiers.length;i++){ const f = fichiers[i], ext = (f.name.match(/\.[a-z0-9]{2,5}$/i)||['.jpg'])[0].toLowerCase();
+        setEtat('Envoi '+(i+1)+'/'+fichiers.length+'…');
+        const nom = base+(i>0 ? '_'+(i+1) : '')+(/^image\//.test(f.type) ? '.jpg' : ext), fic = new File([f], nom, {type:f.type});
+        let r; try{ r = await driveDeposer(fic, dossier); }
+        catch(e){ if(dossier!==PAD_DOSSIER) throw e; secours = true; dossier = await driveDossier(DEPOT_BUREAU_SECOURS); r = await driveDeposer(fic, dossier); }
+        deposes.push({id:r.id, nom:(await reduirePhoto(fic)).name, type:/^image\//.test(f.type) ? 'image/jpeg' : f.type}); }
+      // Joindre à l'événement (on garde les pièces jointes déjà là)
+      setEtat('Agenda…'); let joint = false;
+      try{ const ev = (await window.gapi.client.calendar.events.get({calendarId:job.calendarId, eventId:job.id})).result;
+        const att = [...(ev.attachments||[]), ...deposes.map(d=>({fileUrl:'https://drive.google.com/file/d/'+d.id+'/view', title:d.nom, mimeType:d.type}))];
+        await window.gapi.client.calendar.events.patch({calendarId:job.calendarId, eventId:job.id, supportsAttachments:true, resource:{attachments:att}}); joint = true; }catch(e){}
+      let insc = null;
+      if(inscrire && num.trim()){ setEtat('Suivi Travaux…'); try{ insc = await inscrirePassage(cfg, {id:job.id, calId:job.calendarId}, type==='AP' ? {as:num.trim()} : {ot:num.trim()}); }catch(e){ insc = 'erreur'; } }
+      if(typeof PAD_CACHE!=='undefined') PAD_CACHE = null;
+      setFait({type, num:num.trim(), job:job.title, n:deposes.length, secours, joint, insc});
+      toast && toast(type+' '+(num.trim()||'')+' déposé pour '+job.title, 'ok');
+      reset(); onDepose && onDepose(); }
+    catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
+  const jour = job && job.start ? cvFmtDay(String(job.start).slice(0,10)) : '';
+  if(!ouvert) return <div style={{marginBottom:10}}><button className="btn btn-p" onClick={()=>{ setOuvert(true); setFait(null); }}>📥 Déposer un AP / OT papier (bureau)</button></div>;
+  return <div className="card" style={{marginBottom:10,display:'grid',gap:10}}>
+    <div style={{display:'flex',alignItems:'center',gap:8}}><b className="fh" style={{fontSize:16}}>Déposer un AP / OT papier</b>
+      <span className="muted" style={{fontSize:12}}>la feuille que les gars t'ont remise, liée à leur job</span>
+      <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>{ setOuvert(false); reset(); }}>Fermer</button></div>
+    {fait && <div style={{fontSize:13,color:'var(--success)'}}>✅ {fait.type} {fait.num} — {fait.job} : {fait.n} fichier{fait.n>1?'s':''} {fait.secours ? <span style={{color:'var(--warning)'}}>dans « {DEPOT_BUREAU_SECOURS} » (le CRM n'a pas pu écrire dans le dossier PAD)</span> : 'dans le dossier PAD'}{fait.joint ? ' · joint à l\'événement' : ''}{fait.insc===true ? ' · inscrit au Suivi Travaux' : fait.insc===false ? ' · inscrit dans l\'agenda (ligne du Suivi introuvable)' : fait.insc==='erreur' ? ' · numéro pas inscrit (erreur)' : ''}</div>}
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+      {[['AP','Appel de service'],['OT','Ordre de travail']].map(([k,l])=><button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>setType(k)}>{l}</button>)}
+      <input value={num} onChange={e=>setNum(e.target.value.replace(/[^\d]/g,''))} inputMode="numeric" placeholder={'No '+type+' (ex. 1850)'} style={{width:150}}/>
+    </div>
+    <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+      <button className="btn btn-sm" onClick={()=>setChoix(true)}>📅 {job ? 'Changer de job' : 'Choisir la job dans l\'agenda'}</button>
+      {job ? <span style={{fontSize:13}}><b>{job.title}</b> <span className="muted">· {jour}{job.location ? ' · '+job.location : ''}</span></span> : <span className="muted" style={{fontSize:12.5}}>clique sur l'événement de la job (n'importe quel jour)</span>}
+    </div>
+    <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+      <input ref={ref} type="file" accept="image/*,application/pdf" multiple style={{display:'none'}} onChange={e=>{ setFichiers(l=>[...l, ...Array.from(e.target.files||[])]); e.target.value=''; }}/>
+      {ok ? <button className="btn btn-sm" onClick={()=>ref.current && ref.current.click()}>📷 Ajouter la feuille (photo / scan / PDF)</button>
+        : <button className="btn btn-sm" onClick={async()=>{ try{ await requestToken('consent'); setOk(peutDeposer()); }catch(e){} }}>Autoriser le Drive (une fois)</button>}
+      {fichiers.map((f,i)=><span key={i} className="badge" style={{background:'var(--bg3)'}}>{f.name} <span style={{cursor:'pointer'}} onClick={()=>setFichiers(l=>l.filter((_,j)=>j!==i))}>✕</span></span>)}
+    </div>
+    <label style={{display:'flex',gap:6,alignItems:'center',fontSize:13}}><input type="checkbox" checked={inscrire} onChange={e=>setInscrire(e.target.checked)}/> Inscrire le numéro au passage (Suivi Travaux + agenda)</label>
+    <div style={{display:'flex',gap:8,alignItems:'center'}}>
+      <button className="btn btn-p" disabled={/…$/.test(etat)} onClick={deposer}>{/…$/.test(etat) ? etat : 'Déposer'}</button>
+      {etat && !/…$/.test(etat) && <span style={{color:'var(--danger)',fontSize:12.5}}>{etat}</span>}
+    </div>
+    {choix && <div style={{position:'fixed',inset:0,zIndex:1000,background:'var(--bg)',overflow:'auto',padding:'10px 12px'}}>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,position:'sticky',top:0,background:'var(--bg)',zIndex:5,padding:'4px 0'}}>
+        <b className="fh" style={{fontSize:17}}>Clique sur l'événement de la job</b><span className="muted" style={{fontSize:12.5}}>change de jour ou de semaine au besoin</span>
+        <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>setChoix(false)}>✕ Annuler</button></div>
+      <AgendaView cfg={cfg} data={data} toast={toast} isDesktop={window.innerWidth>=900} refreshKey={0} onChoisir={e=>{ setJob({id:e.id, calendarId:e.calendarId, title:e.title||e.summary||'', location:e.location||'', start:e.start}); setChoix(false); }}/>
+    </div>}
+  </div>;
+}
+function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // v449 : onChoisir = mode « choisir une job » (clic sur un événement)
   const [viewMode,setViewMode]=useState(()=>AGENDA_POS && AGENDA_POS.viewMode || 'semaine'); // 'jour'|'semaine'|'mois'
   const [anchor,setAnchor]=useState(()=>AGENDA_POS && AGENDA_POS.anchor ? new Date(AGENDA_POS.anchor) : new Date());
   useEffect(()=>{ AGENDA_POS = {...(AGENDA_POS||{}), viewMode, anchor:anchor.getTime()}; try{ sessionStorage.setItem('agenda_pos', JSON.stringify(AGENDA_POS)); }catch(e){} },[viewMode, anchor]);
-  useEffect(()=>{ const y = AGENDA_POS && AGENDA_POS.scrollY; if(y) setTimeout(()=>window.scrollTo(0, y), 60);
+  useEffect(()=>{ if(onChoisir) return; const y = AGENDA_POS && AGENDA_POS.scrollY; if(y) setTimeout(()=>window.scrollTo(0, y), 60);
     const garder = () => { AGENDA_POS = {...(AGENDA_POS||{}), scrollY:window.scrollY}; try{ sessionStorage.setItem('agenda_pos', JSON.stringify(AGENDA_POS)); }catch(e){} };
     window.addEventListener('scroll', garder, {passive:true}); return ()=>window.removeEventListener('scroll', garder); },[]);
   // Commandes de la semaine (même semaine que l'agenda) : jobs, heures, équipe, OT et commande placée ou non.
@@ -5221,7 +5297,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey}){
     </Modal>}
     {showJobModal && data && <NouvelleJobAgenda cfg={cfg} addProjet={data.addProjet} toast={toast} initialDate={jobDate} initialHeure={jobHeure}
       clients={cdClients} fiches={cd.fiches} onClose={()=>setShowJobModal(false)} onDone={()=>setReloadKey(k=>k+1)}/>}
-    {editEvent && <EditEventModal event={editEvent} job={jobDeEvenement(editEvent)} toast={toast} onClose={()=>setEditEvent(null)} onSaved={()=>setReloadKey(k=>k+1)}/>}
+    {editEvent && onChoisir && <ChoisirEvenement e={editEvent} onChoisir={onChoisir} onClear={()=>setEditEvent(null)}/>}
+    {editEvent && !onChoisir && <EditEventModal event={editEvent} job={jobDeEvenement(editEvent)} toast={toast} onClose={()=>setEditEvent(null)} onSaved={()=>setReloadKey(k=>k+1)}/>}
   </div>;
 }
 
@@ -7147,7 +7224,7 @@ function AppelsServiceSection({cfg, data, toast, refreshKey, onNavigate}){
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
       {[['depots','Dépôts des gars'],['ot','Ordres de travail'],['facture','Factures']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
     </div>
-    {sous==='depots' && <DepotsGarsView refreshKey={refreshKey}/>}
+    {sous==='depots' && <><DepotBureau cfg={cfg} data={data} toast={toast}/><DepotsGarsView refreshKey={refreshKey}/></>}
     {sous==='ot' && <AppelServiceView key="ot" cfg={cfg} toast={toast} mode="ot" contacts={data && data.contacts} onNavigate={onNavigate}/>}
     {sous==='facture' && <AppelServiceView key="facture" cfg={cfg} toast={toast} mode="facture" contacts={data && data.contacts} onNavigate={onNavigate}/>}
   </div>;
