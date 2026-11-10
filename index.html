@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v451';
+const APP_VERSION = 'v452';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7192,6 +7192,17 @@ function SoumFiche({cfg, infos, cle, sujet, typeProjet, onType, dossier, onDossi
     </div>
   </div>;
 }
+// v452 : « c'est quoi la job » en quelques mots — 1re ligne utile des travaux, sinon le sujet sans « À faire / Soumission / nom / adresse »
+function soumQuoi(s, i){
+  const lignes = String(i.travaux || s.extrait || '').split('\n').map(l=>l.replace(/^[\s>*•-]+/,'').trim())
+    .filter(l=>l && !/^(travaux|client|nom|adresse|t[ée]l|courriel|soumission [àa] pr[ée]parer|bonjour|merci)\b/i.test(l) && !/saran|438.?490/i.test(l));
+  let q = lignes[0] || '';
+  if(!q){ q = String(s.sujet||'').replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'').replace(/^(à|a)\s*faire\s*[-–:]?\s*/i,'').replace(/^soumission\s*[-–:]?\s*/i,'');
+    [i.nom, ...(String(i.nom||'').split(/\s+/)), String(i.adresse||'').split(',')[0]].filter(x=>x && x.length>2).forEach(x=>{ q = q.replace(new RegExp(x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'ig'),''); });
+    q = q.replace(/[()]/g,' ').replace(/^[\s–—:-]+|[\s–—:-]+$/g,'').replace(/\s{2,}/g,' '); }
+  if(i.type && cvNorm(q)===cvNorm(i.type)) q = '';
+  return q.length>90 ? q.slice(0,88)+'…' : q;
+}
 function SoumNote({txt}){
   const [ouvert,setOuvert]=useState(false);
   if(!txt) return null;
@@ -7359,7 +7370,10 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     return <div style={{padding:'10px 0',borderBottom:'1px solid var(--border)',opacity:fini?.6:1}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
         <div style={{minWidth:0,flex:'1 1 220px'}}>
-          <div onClick={()=>setOuverte(o=>o===s.cle?'':s.cle)} style={{fontWeight:700,fontSize:14,cursor:'pointer'}}>{ouverte===s.cle?'▾ ':'▸ '}{s.titre || s.client || s.sujet}</div>
+          {/* v452 : comme les courriels des contracteurs — le nom, puis en sous-titre : c'est quoi la job, c'est où */}
+          <div onClick={()=>setOuverte(o=>o===s.cle?'':s.cle)} style={{fontWeight:700,fontSize:14,cursor:'pointer'}}>{ouverte===s.cle?'▾ ':'▸ '}{(s.titre && s.titre.split(' — ')[0]) || i.nom || s.client || s.sujet}</div>
+          {(()=>{ const quoi = soumQuoi(s, i), adr = String(i.adresse||'').split(',')[0];
+            return (i.type || adr || quoi) ? <div style={{fontSize:12.5,color:'var(--accent)',fontWeight:600}}>{[i.type, adr && '📍 '+adr, quoi].filter(Boolean).join(' · ')}</div> : null; })()}
           {s.client && s.sujet && !cvNorm(s.sujet).includes(cvNorm(s.client)) && <div><SoumRef txt={s.sujet.replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'')}/></div>}
           <div className="muted" style={{fontSize:11.5}}>{cvFmtDay(s.date)}{j!=null && j>0 && <> · il y a {j} jour{j>1?'s':''}</>}{s.cle.startsWith('M-') && <> · ajoutée à la main</>}</div>
           {(i.tel || i.courriel || i.adresse) && <div style={{fontSize:12,marginTop:2,display:'flex',gap:10,flexWrap:'wrap'}}>
