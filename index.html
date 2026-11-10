@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v459';
+const APP_VERSION = 'v460';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8382,7 +8382,7 @@ function ChoixProduit({produits, onChoix, defaut}){
   const l = q.trim().length<2 ? [] : produits.filter(p=>rechercheOk(texteProduit(p), q)).slice(0,8);
   return <div style={{marginTop:6}}>
     <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher le produit (ex. prise 15A, BC1110)…" style={{width:'100%',boxSizing:'border-box'}}/>
-    {l.map(p=><div key={p.cat+p.code} onClick={()=>onChoix(p)} style={{padding:'5px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}><b>{p.code}</b> · {p.desc} <span className="muted" style={{fontSize:11}}>· {p.cat}</span></div>)}
+    {l.map(p=><div key={p.cat+p.code} onClick={()=>onChoix(p)} style={{padding:'5px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13,background:estSortie(p)?SORTIE_TEINTE:undefined}}><b>{p.code}</b> · {p.desc} <span className="muted" style={{fontSize:11}}>· {p.cat}</span></div>)}
   </div>;
 }
 
@@ -8523,7 +8523,7 @@ function ProduitsView({cfg, toast}){
           const min = parF.length ? Math.min(...parF.map(x=>x.px)) : null;
           const vente = mp && mp.prix!=null && mp.prix!=='' ? cvNum(mp.prix) : sug;
           return <div key={k} onClick={()=>setEdit({k, code:p.code, desc:p.desc, unite:p.unite, cat:p.cat, sous:p.sous||'', photo:p.photo||'', notes:p.notes||'', alias:p.alias||''})}
-            style={{display:'grid',gridTemplateColumns:'38px 1fr auto',gap:8,alignItems:'center',padding:'6px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer'}}>
+            style={{display:'grid',gridTemplateColumns:'38px 1fr auto',gap:8,alignItems:'center',padding:'6px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',background:estSortie(p)?SORTIE_TEINTE:undefined}}>
             <ProdPhoto src={photoDe(p)}/>
             <div style={{minWidth:0,fontSize:12.5,lineHeight:1.25}}><b>{p.code}</b><div style={{overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{p.desc}</div></div>
             <div style={{textAlign:'right',fontSize:12,lineHeight:1.3,whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>
@@ -8541,7 +8541,7 @@ function ProduitsView({cfg, toast}){
             {liste.slice(0,lim).map((p,i)=>[entete(i, 7+fourn.length), (()=>{ const k=p.cat+'|'+p.code, f=C.factureDe(p.code), sug=C.suggereDe(p.code), mp=C.monPrix(p.code), couts=C.coutsDe(p.code);
               if(edit && edit.k===k) return <tr key={k}><td colSpan={7+fourn.length}><FicheEdit p={p} edit={edit} setEdit={setEdit} C={C} toast={toast} err={err} photoDe={photoDe}/></td></tr>;
               const ouvrir = ()=>setEdit({k, code:p.code, desc:p.desc, unite:p.unite, cat:p.cat, sous:p.sous||'', photo:p.photo||'', notes:p.notes||'', alias:p.alias||''});
-              return <tr key={k} style={{cursor:'pointer'}} title="Cliquer pour modifier" onClick={e=>{ if(e.target.closest('input,button,a,select,label,textarea')) return; ouvrir(); }}>
+              return <tr key={k} style={{cursor:'pointer',background:estSortie(p)?SORTIE_TEINTE:undefined}} title={estSortie(p) ? 'Sortie maison (À la sortie) — cliquer pour modifier' : 'Cliquer pour modifier'} onClick={e=>{ if(e.target.closest('input,button,a,select,label,textarea')) return; ouvrir(); }}>
                 <td style={{width:46}}><ProdPhoto src={photoDe(p)}/></td>
                 <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}{codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>PunchPro : {codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).join(' · ')}</div>}
                   {(p.membres||[]).filter(m=>m.src!=='punch').length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400,whiteSpace:'normal',maxWidth:170}}>Aussi : {(p.membres||[]).filter(m=>m.src!=='punch').map(m=>m.code).join(' · ')}</div>}<div style={{fontSize:10.5,fontWeight:400,marginTop:2}}>{(!cat || q) && <span className="muted">{p.cat} · </span>}{p.sous
@@ -10687,12 +10687,13 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       {!catCache && <>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
         <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>setCat('')}>Tous</button>
-        {C.cats.filter(c=>c!=='DIVERS').map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(c)}>{c}</button>)}
+        {[...C.cats.filter(c=>c===SORTIE_CAT), ...C.cats.filter(c=>c!=='DIVERS' && c!==SORTIE_CAT)].map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(c)}
+          style={c===SORTIE_CAT && cat!==c ? {background:SORTIE_TEINTE,borderColor:SORTIE_BORD,color:SORTIE_TEXTE} : null}>{c}</button>)}
       </div>
       <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un article (code ou description)…" style={{width:'100%',boxSizing:'border-box',marginBottom:6}}/>
       <div style={{maxHeight:360,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
-        {produits.map(p=>{ const n=qteDe(p.code); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:n?'var(--bg3)':undefined}}>
-          <b style={{minWidth:100}}>{p.code}</b><span style={{flex:1}} className={n?'':'muted'}>{p.desc}</span>
+        {produits.map(p=>{ const n=qteDe(p.code); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:n?'var(--bg3)':estSortie(p)?SORTIE_TEINTE:undefined}}>
+          <b style={{minWidth:100,color:estSortie(p)?SORTIE_TEXTE:undefined}}>{p.code}</b><span style={{flex:1}} className={n?'':'muted'}>{p.desc}</span>
           <button className="btn btn-sm" onClick={()=>changerQte(p,-1)} disabled={!n} style={{width:32}}>−</button>
           <span style={{width:28,textAlign:'center',fontWeight:700}}>{n||''}</span>
           <button className="btn btn-sm" onClick={()=>changerQte(p,1)} style={{width:32}}>+</button>
@@ -12058,14 +12059,51 @@ function CamionsView({cfg, toast}){
   </div>;
 }
 
+// v460 : « À la sortie » — tes sorties maison (SO…) : des assemblages préconçus (prise, interrupteur, encastré…), pas du stock.
+// Prix de vente dans La mémoire — Jobs › Prix (jamais dans le code). Teinte mauve partout dans le catalogue.
+const SORTIE_CAT = 'À LA SORTIE';
+const SORTIE_TEINTE = 'rgba(155,89,182,0.11)', SORTIE_BORD = 'rgba(155,89,182,0.55)', SORTIE_TEXTE = '#8e44ad';
+function estSortie(p){ return !!p && (cvNorm(p.cat||'')===cvNorm(SORTIE_CAT) || /^SO(\d|RDC$|SS$|LUMINAIRE$|2IEME$)/i.test(String(p.code||''))); }
+const SORTIE_SOUS_ORDRE = ['Prises','Interrupteurs','Éclairage','Sécurité et ventilation','Basse tension','240 V','Chauffage','Forfaits par étage','Autres'];
+function SortiesView({cfg, toast}){
+  const C = useCatalogue(cfg);
+  const [q,setQ]=useState('');
+  const [occupe,setOccupe]=useState('');
+  const liste = C.produits.filter(estSortie).filter(p=>!q || rechercheOk(texteProduit(p), q));
+  const groupes = {}; liste.forEach(p=>{ const s = p.sous || 'Autres'; (groupes[s] = groupes[s] || []).push(p); });
+  const ordre = Object.keys(groupes).sort((a,b)=>{ const ia = SORTIE_SOUS_ORDRE.indexOf(a), ib = SORTIE_SOUS_ORDRE.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib) || a.localeCompare(b,'fr'); });
+  const num = c => { const m = String(c).match(/^SO(\d+)(?:\.(\d+))?/i); return m ? (+m[1])*1000 + (+(m[2]||0)) : 1e9; };
+  const sauver = async (p, val) => { const mp = C.monPrix(p.code); if(String(val).trim()===String(mp && mp.prix!=null ? mp.prix : '').trim()) return;
+    setOccupe(p.code); try{ await C.majPrix(p.code, String(val).trim().replace(',','.')); toast && toast(p.code+' : '+(String(val).trim() ? cvMoney(cvNum(val)) : 'prix effacé')); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOccupe(''); };
+  return <div>
+    <div className="card" style={{marginBottom:10,background:SORTIE_TEINTE,borderColor:SORTIE_BORD}}>
+      <b className="fh" style={{fontSize:17,color:SORTIE_TEXTE}}>À la sortie</b>
+      <div className="muted" style={{fontSize:12.5,marginTop:2}}>Tes sorties maison : des assemblages préconçus (la sortie complète, matériel et pose), pas du stock. Prix de vente modifiables ici ; ils sortent dans les soumissions. Elles sont en mauve partout dans le catalogue.</div>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (SO01, prise, encastré…)" style={{width:'100%',boxSizing:'border-box',marginTop:8}}/>
+    </div>
+    {!C.lu && <div className="muted">Chargement…</div>}
+    {C.lu && !liste.length && <div className="muted">Aucune sortie.</div>}
+    {ordre.map(s=><div key={s} className="card" style={{marginBottom:10,padding:0,borderColor:SORTIE_BORD}}>
+      <div style={{padding:'8px 12px',fontWeight:700,background:SORTIE_TEINTE,color:SORTIE_TEXTE}}>{s} <span className="muted" style={{fontWeight:400}}>· {groupes[s].length}</span></div>
+      {groupes[s].sort((a,b)=>num(a.code)-num(b.code) || a.code.localeCompare(b.code)).map(p=>{ const mp = C.monPrix(p.code), f = C.factureDe(p.code);
+        return <div key={p.code} style={{display:'grid',gridTemplateColumns:'90px 1fr auto',gap:8,alignItems:'center',padding:'6px 12px',borderTop:'1px solid var(--border)',fontSize:13}}>
+          <b style={{color:SORTIE_TEXTE}}>{p.code}</b>
+          <span style={{minWidth:0}}>{p.desc}{f && <span className="muted" style={{fontSize:11}}> · dernier facturé {cvMoney(f.prix)}</span>}</span>
+          <span style={{display:'flex',gap:4,alignItems:'center'}}><input key={p.code+'|'+(mp && mp.prix)} defaultValue={mp && mp.prix!=null ? mp.prix : ''} inputMode="decimal" placeholder="—" disabled={occupe===p.code}
+            onBlur={e=>sauver(p, e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') e.target.blur(); }} style={{width:80,textAlign:'right',fontWeight:700,padding:'3px 6px'}}/> $</span>
+        </div>; })}
+    </div>)}
+  </div>;
+}
 function InventaireSection({initial, cfg, toast, data}){
   const [sous,setSous]=useState(()=>{ if(initial) return initial; try{ return localStorage.getItem('inv_sous')||'catalogue'; }catch(e){ return 'catalogue'; } });
   const choisir = k => { setSous(k); try{ localStorage.setItem('inv_sous', k); }catch(e){} };
   return <div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
-      {[['catalogue','Catalogue'],['inventaire','Inventaire'],['camions','Camions']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
+      {[['catalogue','Catalogue'],['sortie','À la sortie'],['inventaire','Inventaire'],['camions','Camions']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}
+        style={k==='sortie' && sous!==k ? {background:SORTIE_TEINTE,borderColor:SORTIE_BORD,color:SORTIE_TEXTE} : null}>{l}</button>)}
     </div>
-    {sous==='catalogue' ? <ProduitsView cfg={cfg} toast={toast}/> : sous==='camions' ? <CamionsView cfg={cfg} toast={toast}/> : <StockView data={data}/>}
+    {sous==='catalogue' ? <ProduitsView cfg={cfg} toast={toast}/> : sous==='sortie' ? <SortiesView cfg={cfg} toast={toast}/> : sous==='camions' ? <CamionsView cfg={cfg} toast={toast}/> : <StockView data={data}/>}
   </div>;
 }
 function StockView({data}){
