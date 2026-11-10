@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v455';
+const APP_VERSION = 'v456';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6830,7 +6830,7 @@ function useSoumissions(cfg, refreshKey){
     }catch(e){}
     setEtat({lu:true, existe, liste, recues, err:''});
   },[id, idA]);
-  useEffect(()=>{ lire(); },[lire, refreshKey]);
+  useEffect(()=>{ lire(refreshKey>0); },[lire, refreshKey]);   // v456 : le ⟳ du haut relit vraiment
   // Statut / note d'une ligne (colonnes M–O seulement).
   const marquer = async (s, statut, note)=>{
     const le = new Date().toLocaleString('fr-CA');
@@ -7348,7 +7348,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   };
   const lienGmail = s => s.lien && <a href={s.lien} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5,whiteSpace:'nowrap'}}>Courriel ↗</a>;
   const lienPdf = id => id && <a href={'https://drive.google.com/file/d/'+id+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5,whiteSpace:'nowrap'}}>PDF ↗</a>;
-  const pill = (k, label, n, cur, set) => <button key={k} className={'btn btn-sm'+(cur===k?' btn-p':'')} onClick={()=>set(k)}>{label}{n!=null && <> ({n})</>}</button>;
+  const pill = (k, label, n, cur, set) => <button key={k} className={'btn btn-sm'+(cur===k?' btn-p':'')} onClick={()=>set(k)} style={{whiteSpace:'nowrap',flexShrink:0}}>{label}{n!=null && <> ({n})</>}</button>;
   const vieux = (data && data.soums) || [];
 
   // Infos d'une demande : lues par soumissions.gs (colonne Q), sinon ce qu'on a ; type = le tien (R), sinon deviné.
@@ -7482,19 +7482,18 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const recuesTout = [...S.recues, ...S.liste.filter(s=>s.type==='Reçue').map(s=>({fournisseur:s.client||'Éclairage Saran', num:'', date:s.date, ref:s.sujet, total:s.montant, pdf:s.pdf, fichier:s.extrait, lien:s.lien}))];
   const recues = recuesTout.filter(d=>cherche([d.fournisseur,d.num,d.ref,d.fichier].join(' '))).sort((a,b)=>b.date.localeCompare(a.date));
   const nEnv = k => envoyees.filter(s=>etatEnv(s)===k).length;
+  const petit = typeof window!=='undefined' && window.innerWidth < 700;
   const totalAttente = envoyees.filter(s=>etatEnv(s)==='attente').reduce((t,s)=>t+(s.montant||0),0);
 
   return <div>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
-      <h2 className="fh" style={{margin:0,fontSize:20}}>Soumissions</h2>
-      <button className="btn btn-sm" onClick={()=>S.relire()}>⟳</button>
-    </div>
-    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+    {/* v456 : sur le cell — un seul bouton ⟳ (celui du haut), onglets sur une ligne qui glisse, libellés courts */}
+    <h2 className="fh" style={{margin:'0 0 8px',fontSize:20}}>Soumissions</h2>
+    <div className="defile-x" style={{display:'flex',gap:6,flexWrap:petit?'nowrap':'wrap',overflowX:petit?'auto':'visible',marginBottom:10,paddingBottom:petit?4:0,WebkitOverflowScrolling:'touch'}}>
       {pill('afaire','📝 À faire',ouvertes.length,onglet,setOnglet)}
       {pill('envoyees','📤 Envoyées',envoyees.filter(s=>['aclasser','attente'].includes(etatEnv(s))).length,onglet,setOnglet)}
-      {pill('recues','📥 Reçues des fournisseurs',recuesTout.length,onglet,setOnglet)}
-      {pill('miennes','🗂 Mes soumissions (CRM)',DC.docs.filter(x=>x.type==='Soumission').length,onglet,setOnglet)}
-      {pill('preparer','✏️ Préparer une soumission',null,onglet,k=>{ setOnglet(k); })}
+      {pill('recues',petit ? '📥 Reçues' : '📥 Reçues des fournisseurs',recuesTout.length,onglet,setOnglet)}
+      {pill('miennes',petit ? '🗂 Les miennes' : '🗂 Mes soumissions (CRM)',DC.docs.filter(x=>x.type==='Soumission').length,onglet,setOnglet)}
+      {pill('preparer',petit ? '✏️ Préparer' : '✏️ Préparer une soumission',null,onglet,k=>{ setOnglet(k); })}
     </div>
     {onglet==='preparer' && <AppelServiceView key={'prep'+prepKey} cfg={cfg} toast={toast} mode="soumission" contacts={data && data.contacts} onNavigate={onNavigate} onEnregistre={()=>DC.lire(true)} onEnvoye={doc=>{
       const s = doc.origine && S.liste.find(x=>x.cle===doc.origine);
@@ -7524,14 +7523,16 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
             <button className="btn btn-sm" title={x.ferme ? 'La remettre dans la liste' : 'Je n\'en ai plus besoin : elle disparaît des listes (rien n\'est effacé)'} onClick={()=>DC.fermer(x, !x.ferme)}>{x.ferme ? 'Rouvrir' : 'Fermer'}</button></span></div>; })}
       </div>; })()}
     {onglet==='afaire' && <div className="card">
-      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:4}}>
+      <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:6}}>
         <button className="btn btn-sm btn-p" onClick={()=>setNouveau(nouveau===null?'':null)}>+ Ajouter</button>
         <button className="btn btn-sm" onClick={()=>setFicheOuv(ficheOuv==='NOUV'?'':'NOUV')} title="Choisis ou crée le client dans le Répertoire, puis la soumission s'ouvre remplie">✏️ Nouvelle soumission</button>
+      </div>
+      <div style={{display:'flex',gap:6,flexWrap:petit?'nowrap':'wrap',overflowX:petit?'auto':'visible',alignItems:'center',marginBottom:4,paddingBottom:petit?4:0}}>
         {pill('','Toutes',null,filtreAF,setFiltreAF)}
         {pill('nouvelles','Nouvelles',ouvertes.filter(s=>s.statut!=='En attente').length,filtreAF,setFiltreAF)}
         {pill('attente','⏳ En attente',ouvertes.filter(s=>s.statut==='En attente').length,filtreAF,setFiltreAF)}
         {typesAF.length>1 && <select value={TYPES_PROJET.includes(filtreAF)?filtreAF:''} onChange={e=>setFiltreAF(e.target.value)} style={{fontSize:12}}><option value="">Tous les types</option>{typesAF.map(t=><option key={t}>{t}</option>)}</select>}
-        <label className="muted" style={{fontSize:12,display:'flex',gap:4,alignItems:'center',marginLeft:'auto'}}><input type="checkbox" checked={voirFinies} onChange={e=>setVoirFinies(e.target.checked)}/> Voir les terminées ({aFaire.length-ouvertes.length})</label>
+        <label className="muted" style={{fontSize:12,display:'flex',gap:4,alignItems:'center',marginLeft:'auto',whiteSpace:'nowrap'}}><input type="checkbox" checked={voirFinies} onChange={e=>setVoirFinies(e.target.checked)}/> {petit ? 'Terminées' : 'Voir les terminées'} ({aFaire.length-ouvertes.length})</label>
       </div>
       {ficheOuv==='NOUV' && <>
         <SoumFiche cfg={cfg} infos={{}} toast={toast} onFermer={()=>setFicheOuv('')}
