@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v454';
+const APP_VERSION = 'v455';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9971,6 +9971,35 @@ function CalculRapide({C, d, setD, toast, onRempli}){
 // Prends une photo (panneau, chemin, emplacement de la borne…) ou un croquis, trace par-dessus (trait rouge = câble,
 // pointillé = encastré / sous terre, carré = borne / prise / panneau, flèche + étiquette), ajoute des notes.
 // L'image annotée va dans le dossier Drive de la soumission ; le PDF de la soumission (🖨️) ajoute une page « Plan des travaux ».
+// v455 : section Travaux — la boîte s'ouvre en grand au clic (tout le texte d'un coup), bouton pour tout effacer
+// (souvent c'est ta note à toi, pas ce qui doit apparaître sur la facture : « Effacer » la garde dans les notes privées)
+function TravauxChamp({d, maj}){
+  const [grand,setGrand]=useState(false);
+  const [focus,setFocus]=useState(false);
+  const t = String(d.travaux||''), lignes = t.split('\n').reduce((n,l)=>n+Math.max(1, Math.ceil(l.length/90)), 0);
+  const effacer = garder => { if(!t.trim()) return;
+    if(garder) maj({travaux:'', visite:[String(d.visite||'').trim(), '— Note de départ (travaux) —\n'+t.trim()].filter(Boolean).join('\n\n')});
+    else maj({travaux:''}); };
+  return <>
+    <div style={{display:'flex',gap:8,alignItems:'baseline',flexWrap:'wrap'}}><b style={{fontSize:13.5}}>Travaux</b><span className="muted" style={{fontSize:11.5}}>imprimé sur le document</span>
+      <span style={{marginLeft:'auto',display:'flex',gap:6}}>
+        <button className="btn btn-sm" onClick={()=>setGrand(true)} title="Ouvrir en grand pour voir tout le texte">⤢ Agrandir</button>
+        {t.trim() && <button className="btn btn-sm" onClick={()=>effacer(true)} title="Vide la description ; le texte est gardé dans les notes privées (pas imprimées)">🗑 Effacer (garder en note)</button>}
+        {t.trim() && <button className="btn btn-sm" style={{color:'var(--muted)'}} onClick={()=>effacer(false)} title="Vide la description complètement">Tout effacer</button>}
+      </span></div>
+    <textarea value={t} onChange={e=>maj({travaux:e.target.value})} onFocus={()=>setFocus(true)} onBlur={()=>setFocus(false)}
+      rows={focus ? Math.min(30, Math.max(6, lignes+2)) : (t.length>160 ? 5 : 3)} placeholder="Description des travaux…" style={{resize:'vertical',fontFamily:'inherit',transition:'height .15s'}}/>
+    {grand && <div style={{position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,.45)',display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>setGrand(false)}>
+      <div className="card" style={{width:'min(1100px, 96vw)',height:'min(80vh, 900px)',display:'flex',flexDirection:'column',gap:8}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}><b className="fh" style={{fontSize:16}}>Travaux</b><span className="muted" style={{fontSize:12}}>imprimé sur le document</span>
+          <span style={{marginLeft:'auto',display:'flex',gap:6}}>
+            {t.trim() && <button className="btn btn-sm" onClick={()=>effacer(true)}>🗑 Effacer (garder en note)</button>}
+            {t.trim() && <button className="btn btn-sm" style={{color:'var(--muted)'}} onClick={()=>effacer(false)}>Tout effacer</button>}
+            <button className="btn btn-sm btn-p" onClick={()=>setGrand(false)}>Fermer</button></span></div>
+        <textarea autoFocus value={t} onChange={e=>maj({travaux:e.target.value})} placeholder="Description des travaux…" style={{flex:1,resize:'none',fontFamily:'inherit',fontSize:14,lineHeight:1.5}}/>
+      </div></div>}
+  </>;
+}
 // v301 : étiquettes rapides pour identifier les photos du plan (titre imprimé au-dessus de la photo)
 const PLAN_ROLES = {'Borne de recharge':['EMPLACEMENT DE LA BORNE','PANNEAU ÉLECTRIQUE','CHEMIN DU CÂBLE','SORTIE DU MUR'],
   'Panneau / entrée électrique':['PANNEAU ACTUEL','MÂT / COMPTEUR','NOUVEAU PANNEAU']};
@@ -10525,8 +10554,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
 
     {/* v295 : Travaux (imprimé) avec Photos et plan, puis Notes privées (pas imprimées) */}
     <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
-      <div style={{display:'flex',gap:8,alignItems:'baseline'}}><b style={{fontSize:13.5}}>Travaux</b><span className="muted" style={{fontSize:11.5}}>imprimé sur le document</span></div>
-      <textarea value={d.travaux} onChange={e=>maj({travaux:e.target.value})} rows={d.travaux && d.travaux.length>160 ? 5 : 3} placeholder="Description des travaux…" style={{resize:'vertical',fontFamily:'inherit'}}/>
+      <TravauxChamp d={d} maj={maj}/>
       {d.type!=='Facture' && <Repli key={'ph'+(d.numero||'n')+((d.plan||[]).length?'p':'')} titre="Photos et plan" info={(d.plan||[]).length ? (d.plan||[]).length+' photo'+((d.plan||[]).length>1?'s':'')+' — page à part dans le PDF' : 'photos annotées — page à part dans le PDF'} ouvert0={(d.plan||[]).length>0 || !!d.dossier}>
         {d.dossier && <div style={{marginBottom:6}}><span className="muted" style={{fontSize:12}}>PDF et photos du client :</span><SoumPhotos dossier={d.dossier}/></div>}
         <Parechoc nom="Le plan des travaux"><PlanTravaux d={d} setD={setD} toast={toast} dansCarte/></Parechoc>
