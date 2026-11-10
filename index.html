@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v465';
+const APP_VERSION = 'v466';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7746,6 +7746,7 @@ const sousDoublons = (cat, produits) => { const d = DOUBLONS[cat]; return d ? Ob
 // v357 : sous-catégories à DEUX niveaux quand elles contiennent « · » (CONDUIT : PVC / EMT, puis Tuyau, Coude, LB…).
 // Niveau 1 trié selon CONDUIT_MAT (PVC en premier), niveau 2 selon CONDUIT_TYPES ; le reste en dernier.
 function niveauxSous(cat, sousCats){
+  if(cvNorm(cat)===cvNorm(SORTIE_CAT)){ const r = x => { const i = SORTIE_SOUS_ORDRE.indexOf(x); return i<0 ? 99 : i; }; return {n1:[...sousCats].sort((a,b)=>r(a)-r(b) || a.localeCompare(b,'fr')), n2:{}, deuxNiveaux:false}; }   // v466
   const O1 = [...CONDUIT_MAT, ...DISJ_MARQUES, ...CHAUF_N1], O2 = [...CONDUIT_TYPES, ...DISJ_TYPES, ...Object.values(CHAUF_N2).flat()];   // v365, v372
   const rang1 = x => { const i = O1.indexOf(x); return i<0 ? 50 : i; }, rang2 = x => { const i = O2.indexOf(x); return i<0 ? 50 : i; };
   const n1 = [...new Set(sousCats.map(x=>sousConduit(x)[0]))].sort((a,b)=>rang1(a)-rang1(b) || a.localeCompare(b));
@@ -7817,7 +7818,8 @@ const SOUS_SUGG = {
   'DISJONCTEURS':DISJ_MARQUES.flatMap(m=>DISJ_TYPES.map(t=>m+' · '+t)),   // v365 : Marque · Type (Standard, CAFI, PAF, GFI, PDF, Tandem / quad, Accessoires)
   'CONNEXIONS / MALT':['MALT','Raccordement'],
   'DÉCORA':['Prises','Interrupteurs','Gradateurs','Intelligent','Plaques','Minuteries et détecteurs','Fiches','Carillons'],
-  'CHAUFFAGE':CHAUF_N1.flatMap(a=>CHAUF_N2[a].map(b=>a+' · '+b))};
+  'CHAUFFAGE':CHAUF_N1.flatMap(a=>CHAUF_N2[a].map(b=>a+' · '+b)),
+  'À LA SORTIE':['Prises','Interrupteurs','Éclairage','Chauffage','240 V','Sécurité et ventilation','Télécommunication','Basse tension','Forfaits par étage','Autres']};
 // v131 : Décora par sous-catégorie (on ne change pas la catégorie, seulement la sous-catégorie)
 function sousDecora(T){
   if(/CASETA|PICO\b|^PICO|WI-?FI|SMART|INTELLIGENT|ZIGBEE|Z-?WAVE|\bRA2\b|MYQ|HOMEKIT|KIT PICO|KSC2V|\bKSC/.test(T)) return 'Intelligent';
@@ -8385,7 +8387,7 @@ function ChoixProduit({produits, onChoix, defaut}){
   const l = q.trim().length<2 ? [] : produits.filter(p=>rechercheOk(texteProduit(p), q)).slice(0,8);
   return <div style={{marginTop:6}}>
     <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher le produit (ex. prise 15A, BC1110)…" style={{width:'100%',boxSizing:'border-box'}}/>
-    {l.map(p=><div key={p.cat+p.code} onClick={()=>onChoix(p)} style={{padding:'5px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13,background:estSortie(p)?SORTIE_TEINTE:undefined}}><b>{p.code}</b> · {p.desc} <span className="muted" style={{fontSize:11}}>· {p.cat}</span></div>)}
+    {l.map(p=><div key={p.cat+p.code} onClick={()=>onChoix(p)} style={{padding:'5px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',fontSize:13}}><b>{p.code}</b> · {p.desc} <span className="muted" style={{fontSize:11}}>· {p.cat}</span></div>)}
   </div>;
 }
 
@@ -8526,7 +8528,7 @@ function ProduitsView({cfg, toast}){
           const min = parF.length ? Math.min(...parF.map(x=>x.px)) : null;
           const vente = mp && mp.prix!=null && mp.prix!=='' ? cvNum(mp.prix) : sug;
           return <div key={k} onClick={()=>setEdit({k, code:p.code, desc:p.desc, unite:p.unite, cat:p.cat, sous:p.sous||'', photo:p.photo||'', notes:p.notes||'', alias:p.alias||''})}
-            style={{display:'grid',gridTemplateColumns:'38px 1fr auto',gap:8,alignItems:'center',padding:'6px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer',background:estSortie(p)?SORTIE_TEINTE:undefined}}>
+            style={{display:'grid',gridTemplateColumns:'38px 1fr auto',gap:8,alignItems:'center',padding:'6px 8px',borderBottom:'1px solid var(--border)',cursor:'pointer'}}>
             <ProdPhoto src={photoDe(p)}/>
             <div style={{minWidth:0,fontSize:12.5,lineHeight:1.25}}><b>{p.code}</b><div style={{overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{p.desc}</div></div>
             <div style={{textAlign:'right',fontSize:12,lineHeight:1.3,whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>
@@ -8544,7 +8546,7 @@ function ProduitsView({cfg, toast}){
             {liste.slice(0,lim).map((p,i)=>[entete(i, 7+fourn.length), (()=>{ const k=p.cat+'|'+p.code, f=C.factureDe(p.code), sug=C.suggereDe(p.code), mp=C.monPrix(p.code), couts=C.coutsDe(p.code);
               if(edit && edit.k===k) return <tr key={k}><td colSpan={7+fourn.length}><FicheEdit p={p} edit={edit} setEdit={setEdit} C={C} toast={toast} err={err} photoDe={photoDe}/></td></tr>;
               const ouvrir = ()=>setEdit({k, code:p.code, desc:p.desc, unite:p.unite, cat:p.cat, sous:p.sous||'', photo:p.photo||'', notes:p.notes||'', alias:p.alias||''});
-              return <tr key={k} style={{cursor:'pointer',background:estSortie(p)?SORTIE_TEINTE:undefined}} title={estSortie(p) ? 'Sortie maison (À la sortie) — cliquer pour modifier' : 'Cliquer pour modifier'} onClick={e=>{ if(e.target.closest('input,button,a,select,label,textarea')) return; ouvrir(); }}>
+              return <tr key={k} style={{cursor:'pointer'}} title={estSortie(p) ? 'Sortie maison (À la sortie) — cliquer pour modifier' : 'Cliquer pour modifier'} onClick={e=>{ if(e.target.closest('input,button,a,select,label,textarea')) return; ouvrir(); }}>
                 <td style={{width:46}}><ProdPhoto src={photoDe(p)}/></td>
                 <td style={{fontWeight:600,whiteSpace:'nowrap'}}>{p.code}{codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400}}>PunchPro : {codesPunch(p).filter(c=>codeNorm(c)!==codeNorm(p.code)).join(' · ')}</div>}
                   {(p.membres||[]).filter(m=>m.src!=='punch').length>0 && <div className="muted" style={{fontSize:10.5,fontWeight:400,whiteSpace:'normal',maxWidth:170}}>Aussi : {(p.membres||[]).filter(m=>m.src!=='punch').map(m=>m.code).join(' · ')}</div>}<div style={{fontSize:10.5,fontWeight:400,marginTop:2}}>{(!cat || q) && <span className="muted">{p.cat} · </span>}{p.sous
@@ -10947,7 +10949,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       </div>
       <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un article (code ou description)…" style={{width:'100%',boxSizing:'border-box',marginBottom:6}}/>
       <div style={{maxHeight:360,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
-        {produits.map(p=>{ const n=qteDe(p.code); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:n?'var(--bg3)':estSortie(p)?SORTIE_TEINTE:undefined}}>
+        {produits.map(p=>{ const n=qteDe(p.code); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:n?'var(--bg3)':undefined}}>
           <b style={{minWidth:100,color:estSortie(p)?SORTIE_TEXTE:undefined}}>{p.code}</b><span style={{flex:1}} className={n?'':'muted'}>{p.desc}</span>
           <button className="btn btn-sm" onClick={()=>changerQte(p,-1)} disabled={!n} style={{width:32}}>−</button>
           <span style={{width:28,textAlign:'center',fontWeight:700}}>{n||''}</span>
@@ -12319,7 +12321,8 @@ function CamionsView({cfg, toast}){
 const SORTIE_CAT = 'À LA SORTIE';
 const SORTIE_TEINTE = 'rgba(155,89,182,0.11)', SORTIE_BORD = 'rgba(155,89,182,0.55)', SORTIE_TEXTE = '#8e44ad';
 function estSortie(p){ return !!p && (cvNorm(p.cat||'')===cvNorm(SORTIE_CAT) || /^SO(\d|RDC$|SS$|LUMINAIRE$|2IEME$)/i.test(String(p.code||''))); }
-const SORTIE_SOUS_ORDRE = ['Prises','Interrupteurs','Éclairage','Sécurité et ventilation','Basse tension','240 V','Chauffage','Forfaits par étage','Autres'];
+// v466 : ordre demandé par William — après Chauffage le 240 V, puis Télécommunication (sorties télécom, téléphonie) et Basse tension (filage LED, transfos) avant les forfaits
+const SORTIE_SOUS_ORDRE = ['Prises','Interrupteurs','Éclairage','Chauffage','240 V','Sécurité et ventilation','Télécommunication','Basse tension','Forfaits par étage','Autres'];
 function SortiesView({cfg, toast}){
   const C = useCatalogue(cfg);
   const [q,setQ]=useState('');
