@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v456';
+const APP_VERSION = 'v457';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8932,14 +8932,20 @@ function docCalcul(d, prixDe){
 }
 
 // v112 : page « Plan des travaux » (photos annotées, titre et notes), 2 par rangée
-function planHtml(d, plan, esc){
+function planHtml(d, plan, esc, debut){
   if(!plan.length) return '';
-  return '<div style="page-break-before:always"></div><h1 style="text-align:center;font-size:17px">PLAN DES TRAVAUX'+(d.titre?' — '+esc(d.titre).toUpperCase():'')+'</h1>'+
+  return (debut ? '' : '<div style="page-break-before:always"></div>')+'<h1 style="text-align:center;font-size:17px">PLAN DES TRAVAUX'+(d.titre?' — '+esc(d.titre).toUpperCase():'')+'</h1>'+
     '<p style="text-align:center;margin:2px 0 12px">'+esc(d.adresse)+'</p><div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px">'+
     plan.map(p=>'<div style="border:1.5px solid #111;padding:8px;break-inside:avoid;box-sizing:border-box;min-width:0"><img src="'+p.src+'" style="width:100%;height:3.1in;object-fit:contain;display:block;background:#f4f4f4"/>'+
       (p.titre?'<div style="font-weight:bold;margin-top:6px">'+esc(p.titre)+'</div>':'')+
-      (p.notes?'<div style="margin-top:4px"><u>NOTES :</u><br>'+esc(p.notes).split('\n').filter(Boolean).map((l,i)=>(i+1)+'. '+l).join('<br>')+'</div>':'')+'</div>').join('')+'</div>';
+      (p.notes?'<div style="margin-top:4px"><u>NOTES :</u><br>'+esc(p.notes).split('\n').filter(Boolean).map((l,i)=>(i+1)+'. '+l).join('<br>')+'</div>':'')+'</div>').join('')+'</div>'+
+    (debut ? '<div style="page-break-after:always"></div>' : '');
 }
+// v457 : les photos vont-elles dans ce PDF, et où ?
+function planPlaceDe(d){ const k = d.planPlace || 'fin';
+  if(k==='aucune') return '';
+  if(k==='gars') return d.type==='Ordre de travail' ? 'fin' : '';
+  return k; }
 // Version imprimable (« Enregistrer en PDF » dans la fenêtre d'impression). L'ordre de travail n'a jamais de prix.
 // v114 : même présentation que les soumissions de ton logiciel (logo, en-tête, boîte client, tampon, clauses, signature).
 // Le logo est lu dans ton Drive (fichier « logo fond blanc JPEG ») — il n'est pas dans le code.
@@ -9010,6 +9016,7 @@ function docHtml(d, calc, plan, imprimer){
     '.cl{font-size:9.5px;margin-top:10px}.cl p{margin:0 0 6px}.sg{display:grid;grid-template-columns:1fr 1fr;gap:12px 40px;margin-top:4px;font-size:12px}.sg div{border-bottom:1px solid #ddd;padding:8px 4px 3px}.sg div:empty{border:0}'+
     '.rq{margin-top:10px;font-size:11px}'+
     '@page{size:letter;margin:12mm}@media print{body{margin:0}}</style></head><body>'+
+    (planPlaceDe(d)==='debut' ? planHtml(d, plan||[], esc, true) : '')+
     '<div class="ent">'+logo+'<div class="c"><h1>Saran Électrique Inc.</h1>582 boul. du Séminaire Nord<br>Saint-Jean-Sur-Richelieu QC J3B 7E3<br>438-490-3412<br>info@saranelectrique.com &nbsp;&nbsp;&nbsp; www.saranelectrique.com<br>RBQ 5819-9274-01</div></div>'+
     '<div class="hd"><div><table class="bar"><tr><th>'+nom+'</th><th>Date</th><th>Travaux prévus le</th><th>Commande du client</th></tr>'+
       '<tr><td class="b" style="font-size:13px">'+esc(d.numero||'')+'</td><td>'+dateFr(date)+'</td><td>'+(d.prevu?dateFr(d.prevu):'')+'</td><td>'+esc(d.commande||'')+'</td></tr>'+
@@ -9023,7 +9030,7 @@ function docHtml(d, calc, plan, imprimer){
       mat+autres+(sections || sommaire)+'</table>'+taxes+
     (d.remarques?'<div class="rq"><b>Remarques :</b><br>'+esc(d.remarques).replace(/\n/g,'<br>')+'</div>':'')+
     '<div style="break-inside:avoid"><div class="cl">'+clauses+'</div>'+signature+'</div>'+
-    planHtml(d, plan||[], esc)+
+    (planPlaceDe(d)==='fin' ? planHtml(d, plan||[], esc) : '')+
     (imprimer ? '<scr'+'ipt>window.onload=()=>setTimeout(()=>window.print(),600)</scr'+'ipt>' : '')+'</body></html>';
   return html;
 }
@@ -9083,7 +9090,7 @@ function docImprimer(d, calc, plan, w0){
   return true;
 }
 // v113 : aperçu du PDF dans le CRM — se met à jour pendant que tu modifies la soumission
-function ApercuPdf({d, prixDe, onImprimer, onFermer}){
+function ApercuPdf({d, setD, prixDe, onImprimer, onFermer}){
   const [html,setHtml]=useState('');
   const cle = JSON.stringify(d);
   useEffect(()=>{ let vivant=true;
@@ -9095,6 +9102,7 @@ function ApercuPdf({d, prixDe, onImprimer, onFermer}){
       <b style={{fontSize:13.5}}>👁 Aperçu du PDF</b><span className="muted" style={{fontSize:12}}>ce que le client va recevoir — modifie plus haut, l'aperçu suit</span>
       <span style={{marginLeft:'auto',display:'flex',gap:5}}><button className="btn btn-sm btn-p" onClick={onImprimer}>🖨️ PDF / Imprimer</button><button className="btn btn-sm" onClick={onFermer}>Fermer</button></span>
     </div>
+    {setD && (d.plan||[]).length>0 && <div style={{marginBottom:6}}><PlanPlace d={d} setD={setD} compact/></div>}
     {html ? <iframe title="Aperçu" srcDoc={html} style={{width:'100%',height:'78vh',border:'1px solid var(--border2)',borderRadius:6,background:'#fff'}}/> : <div className="muted" style={{padding:20}}>Préparation…</div>}
   </div>;
 }
@@ -10011,7 +10019,11 @@ function planDessiner(ctx, W, formes){
   const lw = Math.max(3, W*0.006);
   formes.forEach(f=>{
     ctx.save(); ctx.strokeStyle = f.c; ctx.fillStyle = f.c; ctx.lineWidth = lw; ctx.lineCap='round'; ctx.lineJoin='round';
-    if(f.t==='ligne' || f.t==='pointille'){ ctx.setLineDash(f.t==='pointille' ? [lw*2.2, lw*1.6] : []); ctx.beginPath(); ctx.moveTo(f.x1,f.y1); ctx.lineTo(f.x2,f.y2); ctx.stroke(); }
+    if(f.t==='ligne' || f.t==='pointille'){ ctx.setLineDash(f.t==='pointille' ? [lw*2.2, lw*1.6] : []); ctx.beginPath(); ctx.moveTo(f.x1,f.y1); ctx.lineTo(f.x2,f.y2); ctx.stroke();
+      // v457 : pointe de flèche au bout touché deux fois (suit la direction de la ligne)
+      ctx.setLineDash([]); const tete = (xa,ya,xb,yb) => { const a = Math.atan2(yb-ya, xb-xa), h = lw*4.2; ctx.beginPath(); ctx.moveTo(xb,yb);
+        ctx.lineTo(xb-h*Math.cos(a-0.45), yb-h*Math.sin(a-0.45)); ctx.lineTo(xb-h*Math.cos(a+0.45), yb-h*Math.sin(a+0.45)); ctx.closePath(); ctx.fill(); };
+      if(f.a2) tete(f.x1,f.y1,f.x2,f.y2); if(f.a1) tete(f.x2,f.y2,f.x1,f.y1); }
     else if(f.t==='rect'){ ctx.strokeRect(Math.min(f.x1,f.x2), Math.min(f.y1,f.y2), Math.abs(f.x2-f.x1), Math.abs(f.y2-f.y1)); }
     else if(f.t==='fleche'){ ctx.lineWidth = lw*0.6; ctx.beginPath(); ctx.moveTo(f.x1,f.y1); ctx.lineTo(f.x2,f.y2); ctx.stroke();
       const a = Math.atan2(f.y2-f.y1, f.x2-f.x1), h = lw*4; ctx.beginPath(); ctx.moveTo(f.x2,f.y2);
@@ -10068,7 +10080,7 @@ async function planCharger(image){
   try{ return await createImageBitmap(b, {imageOrientation:'from-image'}); }
   catch(e){ const u = URL.createObjectURL(b), im = new Image(); im.src = u; await im.decode(); if(!im.naturalWidth) throw new Error('image vide'); return im; }
 }
-function PlanAnnoter({image, onSave, onClose}){
+function PlanAnnoter({image:image0, dossier, onSave, onClose}){   // v457 : dossier = photos du client (fond du croquis)
   const ref = useRef(null), imgRef = useRef(null), srcRef = useRef(null);
   const [rot,setRot]=useState(0);
   const [errImg,setErrImg]=useState('');
@@ -10078,6 +10090,15 @@ function PlanAnnoter({image, onSave, onClose}){
   const [texte,setTexte]=useState('');
   const [prete,setPrete]=useState(false);
   const enCours = useRef(null);
+  const [image,setImage]=useState(image0);          // v457 : le croquis peut prendre une photo en fond
+  const [listeFond,setListeFond]=useState(null);
+  const refFond = useRef(null), dernier = useRef(null);
+  const choisirFond = async () => { if(listeFond){ setListeFond(null); return; }
+    try{ const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+      const q = encodeURIComponent("'"+dossier+"' in parents and trashed=false and mimeType contains 'image/'");
+      const r = await fetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id,name,thumbnailLink)&pageSize=50&supportsAllDrives=true&includeItemsFromAllDrives=true', {headers:{Authorization:'Bearer '+tok}});
+      setListeFond(r.ok ? ((await r.json()).files||[]) : []); }catch(e){ setListeFond([]); } };
+  const fermer = () => { if(formes.length && !confirm('Fermer sans garder ce que tu as tracé ?')) return; onClose(); };
   // Image de fond (photo) ou feuille blanche quadrillée (croquis)
   useEffect(()=>{ let vivant=true;
     (async()=>{ const c = ref.current; if(!c) return; setPrete(false); setErrImg('');   // (une photo HEIC prend quelques secondes à convertir)
@@ -10100,6 +10121,13 @@ function PlanAnnoter({image, onSave, onClose}){
   useEffect(()=>{ rendre(); },[rendre]);
   const pos = e => { const c = ref.current, r = c.getBoundingClientRect(); return {x:(e.clientX-r.left)*c.width/r.width, y:(e.clientY-r.top)*c.height/r.height}; };
   const bas = e => { e.preventDefault(); const p = pos(e);
+    // v457 : toucher deux fois le bout d'une ligne = flèche à ce bout (re-toucher deux fois l'enlève)
+    const c = ref.current, tol = Math.max(18, (c ? c.width : 1000)*0.03), maintenant = Date.now(), d0 = dernier.current;
+    dernier.current = {t:maintenant, x:p.x, y:p.y};
+    if(d0 && maintenant-d0.t < 450 && Math.hypot(p.x-d0.x, p.y-d0.y) < tol){
+      let best = null; formes.forEach((f,i)=>{ if(f.t!=='ligne' && f.t!=='pointille') return;
+        [[1,f.x1,f.y1],[2,f.x2,f.y2]].forEach(([b,x,y])=>{ const dd = Math.hypot(p.x-x, p.y-y); if(dd<tol && (!best || dd<best.dd)) best = {i, b, dd}; }); });
+      if(best){ enCours.current = null; dernier.current = null; setFormes(fs=>fs.map((f,i)=>i===best.i ? {...f, ['a'+best.b]: !f['a'+best.b]} : f)); return; } }
     if(outil==='texte'){ if(!texte.trim()) return; setFormes(f=>[...f, {t:'texte', c:'#111', x1:p.x, y1:p.y, txt:texte.trim()}]); setTexte(''); return; }
     enCours.current = {t:outil, c:coul, x1:p.x, y1:p.y, x2:p.x, y2:p.y}; try{ e.target.setPointerCapture(e.pointerId); }catch(x){} };
   const bouge = e => { if(!enCours.current) return; const p = pos(e); enCours.current = {...enCours.current, x2:p.x, y2:p.y}; rendre(enCours.current); };
@@ -10111,10 +10139,19 @@ function PlanAnnoter({image, onSave, onClose}){
       {btn('ligne','━ Câble')}{btn('pointille','┅ Encastré / sous terre')}{btn('rect','▢ Borne / prise / panneau')}{btn('fleche','➜ Flèche')}{btn('texte','T Étiquette')}
       {outil==='texte' && <input autoFocus value={texte} onChange={e=>setTexte(e.target.value)} placeholder="Texte, puis touche la photo" style={{width:200}}/>}
       {outil!=='texte' && PLAN_COULEURS.map(([c,n])=><button key={c} title={n} onClick={()=>setCoul(c)} style={{width:24,height:24,borderRadius:12,background:c,border:coul===c?'3px solid var(--accent)':'1px solid #999'}}/>)}
-      <button className="btn btn-sm" disabled={!formes.length} onClick={()=>setFormes(f=>f.slice(0,-1))}>↶ Annuler</button>
+      <button className="btn btn-sm" disabled={!formes.length} onClick={()=>setFormes(f=>f.slice(0,-1))} title="Défaire le dernier trait">↶ Défaire</button>
+      {!image0 && <><input ref={refFond} type="file" accept="image/*" style={{display:'none'}} onChange={e=>{ const f=e.target.files[0]; e.target.value=''; if(f) setImage(URL.createObjectURL(f)); }}/>
+        <button className="btn btn-sm" onClick={()=>refFond.current && refFond.current.click()} title="Dessiner par-dessus une photo">🖼 Photo de fond</button>
+        {dossier && <button className="btn btn-sm" onClick={choisirFond}>🗂 Photos du client</button>}
+        {image && <button className="btn btn-sm" onClick={()=>setImage(null)} title="Revenir à la feuille quadrillée">▦ Feuille blanche</button>}</>}
+      <span className="muted" style={{fontSize:11.5,color:'#ccc'}}>2 touches sur le bout d'une ligne = flèche</span>
       {image && <><button className="btn btn-sm" disabled={!prete} title="Tourner à gauche" onClick={()=>tourner(-1)}>⟲</button><button className="btn btn-sm" disabled={!prete} title="Tourner à droite" onClick={()=>tourner(1)}>⟳</button></>}
-      <span style={{marginLeft:'auto',display:'flex',gap:5}}><button className="btn btn-sm" onClick={onClose}>Fermer</button><button className="btn btn-sm btn-p" disabled={!prete} onClick={garder}>✓ Garder</button></span>
+      <span style={{marginLeft:'auto',display:'flex',gap:5}}><button className="btn btn-sm" onClick={fermer}>✕ Annuler</button><button className="btn btn-sm btn-p" disabled={!prete} onClick={garder}>✓ Sauver</button></span>
     </div>
+    {listeFond && <div style={{display:'flex',gap:6,flexWrap:'wrap',background:'var(--bg2)',padding:6,borderRadius:8}}>
+      {listeFond.map(f=><img key={f.id} src={f.thumbnailLink} alt={f.name} referrerPolicy="no-referrer" title="Dessiner sur cette photo" onClick={async()=>{ try{ setImage(await planImage(f.id)); setListeFond(null); }catch(e){} }}
+        style={{width:64,height:64,objectFit:'cover',borderRadius:6,cursor:'pointer'}}/>)}
+      {!listeFond.length && <span className="muted" style={{fontSize:12.5}}>Aucune photo dans le dossier du client.</span>}</div>}
     <div style={{flex:1,overflow:'auto',display:'flex',justifyContent:'center',alignItems:'flex-start'}}>
       {errImg && <div className="card" style={{maxWidth:420,margin:'20px auto',fontSize:13.5}}>{errImg}<div style={{marginTop:8}}><button className="btn btn-sm" onClick={onClose}>Fermer</button></div></div>}
       {!errImg && !prete && image && <div className="muted" style={{margin:20,display:'flex',gap:8,alignItems:'center',color:'#fff'}}><div className="spin"></div> Ouverture de la photo…</div>}
@@ -10253,7 +10290,16 @@ function PlanTravaux({d, setD, toast, dansCarte}){
         <button className="btn btn-sm" title="Enlever du plan (l'image reste dans le Drive)" onClick={()=>setD(o=>({...o, plan:(o.plan||[]).filter((x,k)=>k!==i)}))}>✕</button>
       </div>
     </div>)}
-    {annoter && <PlanAnnoter image={annoter.image} onClose={()=>setAnnoter(null)} onSave={garder}/>}
+    {annoter && <PlanAnnoter image={annoter.image} dossier={d.dossier} onClose={()=>setAnnoter(null)} onSave={garder}/>}
+    {plan.length>0 && <PlanPlace d={d} setD={setD}/>}
+  </div>;
+}
+// v457 : où vont les photos dans le PDF — à la fin, au début (en amont de la soumission), seulement pour les gars (ordre de travail), ou pas du tout
+const PLAN_PLACES = [['fin','À la fin'],['debut','Au début (avant la soumission)'],['gars','Seulement pour les gars (ordre de travail)'],['aucune','Pas de photos']];
+function PlanPlace({d, setD, compact}){
+  return <div style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap',marginTop:compact?0:8,fontSize:12.5}}>
+    <span className="muted">Photos dans le PDF :</span>
+    {PLAN_PLACES.map(([k,l])=><button key={k} className={'btn btn-sm'+((d.planPlace||'fin')===k?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>setD(o=>({...o, planPlace:k}))}>{l}</button>)}
   </div>;
 }
 // Page « Plan des travaux » pour le PDF (images déjà chargées en data:)
@@ -10713,7 +10759,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       {d.type==='Facture' && <div className="muted" style={{fontSize:11.5,marginTop:6,textAlign:'right'}}>Facture = brouillon : « Envoyer la facture à faire » l'envoie à info@ avec le PDF, pour la faire dans le logiciel comptable (numéro officiel).</div>}
     </div>
 
-    {apercu && <ApercuPdf d={d} prixDe={C.prixDe} onImprimer={imprimer} onFermer={()=>setApercu(false)}/>}
+    {apercu && <ApercuPdf d={d} setD={setD} prixDe={C.prixDe} onImprimer={imprimer} onFermer={()=>setApercu(false)}/>}
 
     {D.docs.some(x=>!typeFixe || x.type===typeFixe) && <div className="card">
       <div style={{fontWeight:700,marginBottom:6}}>{soumMode ? 'Dernières soumissions faites ici' : typeFixe==='Ordre de travail' ? 'Derniers ordres de travail' : typeFixe==='Facture' ? 'Dernières factures (brouillons)' : 'Derniers documents'}</div>
