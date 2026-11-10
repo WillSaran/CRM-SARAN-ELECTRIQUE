@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v459';
+const APP_VERSION = 'v460';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9547,7 +9547,7 @@ const CALC_SOUMISSION = {
       ['GEN-PI-TUYAU','Fil jusqu\'à la prise d\'entrée, dehors en tuyau ($/pi)'],
       ['GEN-CORDON-30','Cordon de génératrice 30 A préparé, base ($)'],['GEN-CORDON-50','Cordon de génératrice 50 A préparé, base ($)'],['GEN-CORDON-PI','Cordon de génératrice, par pied ($/pi)']],
     defaut:{amp:'30', cote:'gauche', liaison:'NMD', longLiaison:'3', principal:'QO', jb:'100',
-      circ:{frigo:{on:true,t:'1P15'}}, autres:[], parcours:'int', dist:'', cableInt:'', entree50:'cs6375',
+      circ:{frigo:{on:true,t:'1P15'}}, autres:[], parcours:'int', dist:'', cableInt:'', entree50:'gen6338',
       cordon:false, longCordon:'25', priseGen:'1450', note:''},
     deviner(txt){ const t=String(txt||''), v={};
       if(/\b(50|60)\s*a\b/i.test(t)) v.amp='60';
@@ -9593,7 +9593,7 @@ const CALC_SOUMISSION = {
           <b>4. Fil jusqu'à la prise d'entrée dehors</b>
           <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Passe {r('parcours',[['int','par l\'intérieur (on ouvre des murs au besoin)'],['ext','par l\'extérieur, en câble TECK au mur'],['tuyau','par l\'extérieur, en tuyau PVC']])} distance {n('dist',56,'pi')} pi</div>
           {v.parcours==='int' && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Câble : <input value={v.cableInt||''} placeholder={trente?'NMD 3C8':'NMD 3C6'} onChange={e=>maj({cableInt:e.target.value})} style={{width:180}}/> <span className="muted">(vide = {trente?'NMD 3C8':'NMD 3C6'})</span></div>}
-          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Prise d'entrée : {trente ? <b>Kit Leviton 37830-KIT (boîtier, prise L14-30, couvercle)</b> : r('entree50',[['cs6375','Leviton CS6375 dans une boîte RJB PVC 5×5×4 + couvercle rond'],['pb50','Reliance PB50 (boîtier tout assemblé, CS6375)']])}</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Prise d'entrée : {trente ? <b>Kit Leviton 37830-KIT (boîtier, prise L14-30, couvercle)</b> : sel(v.entree50||'gen6338', x=>maj({entree50:x}), [['gen6338','Generac 6338 — boîtier 50 A twistlock, résine, branché par le bas (Lumen)'],['gen6347','Generac 6347 — boîtier 50 A twistlock, aluminium, couvercle à ressort (Lumen)'],['cs6375','Leviton CS6375 dans une boîte RJB PVC 5×5×4 + couvercle rond'],['pb50','Reliance PB50 (boîtier tout assemblé, CS6375)']])}</div>
         </div>
         <div style={{display:'grid',gap:6,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
           {c('cordon','5. Option : préparer le cordon de génératrice (SOOW 8/4)')}
@@ -9613,7 +9613,7 @@ const CALC_SOUMISSION = {
       const pr = {QO:'QO2', HOM:'CHOM2', BR:'BR2', SIE:'SIEQ2'}[v.principal], a = trente ? '30' : '60';
       ajout(pr ? pr+a : 'DISJ-2P'+a, 'Disjoncteur 2P '+a+' A pour le panneau principal ('+({QO:'Square D QO',HOM:'Square D Homeline',BR:'Eaton BR',SIE:'Siemens',AUTRE:'marque à confirmer'}[v.principal]||'')+')', 1, 'un', !pr);
       g.lignesLiaison.forEach(l=>ajout(...l));
-      ajout('SCEJB446','Boîte de jonction 4×4×6 + marrettes pour allonger les fils (au besoin)', 1);
+      ajout('RJB664','Boîte de jonction PVC 6×6×4 (RJB) + marrettes pour allonger les fils (au besoin)', 1);   // v460 : 6×6×4 au lieu de la 4×4×6
       // Disjoncteurs des circuits transférés (QO)
       const parType = {}; g.circuits.forEach(x=>{ (parType[x.t] = parType[x.t]||[]).push(x.nom); });
       Object.entries(parType).forEach(([ty, noms])=>{ const d = (PANNEAU_DISJ.QO60||{})[ty];
@@ -9622,6 +9622,8 @@ const CALC_SOUMISSION = {
       g.lignesFil.forEach(l=>ajout(...l));
       // Prise d'entrée dehors
       if(trente) ajout('37830-KIT','Kit d\'entrée de génératrice Leviton 30 A (boîtier, prise L14-30, couvercle)', 1);
+      else if((v.entree50||'gen6338')==='gen6338') ajout('GEN6338','Boîtier d\'entrée de génératrice Generac 6338, 50 A 125/250 V twistlock (CS6365), résine NEMA 3R', 1);   // v460 : Lumen, le moins cher
+      else if(v.entree50==='gen6347') ajout('GEN6347','Boîtier d\'entrée de génératrice Generac 6347, 50 A 125/250 V twistlock (CS6365), aluminium NEMA 3R, couvercle à ressort', 1);
       else if(v.entree50==='pb50') ajout('PB50','Boîtier d\'entrée de génératrice Reliance PB50 (50 A, CS6375)', 1, 'un', true);
       else { ajout('CS6375','Prise d\'entrée Leviton CS6375 50 A twistlock', 1); ajout('RJB554','Boîte de jonction PVC 5×5×4 (RJB)', 1, 'un', true); ajout('COUV-CS6375','Couvercle rond étanche pour la CS6375 (code à confirmer)', 1, 'un', true); }
       // Cordon (option)
