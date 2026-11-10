@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v466';
+const APP_VERSION = 'v467';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10452,11 +10452,26 @@ function MaisonPlan({d, setD, C, toast}){
   const [pages,setPages]=useState([]);   // vignettes du plan : en mémoire seulement (pas dans la soumission sauvée)
   const [ajout,setAjout]=useState({etage:'Rez-de-chaussée', type:'chambre'});
   const ref = useRef(null);
-  const lire = async f => { if(!f) return; setEtat('Lecture du plan…');
+  // v467 : PDF déjà dans le dossier du client (« PDF et photos du client ») → on peut le lire directement comme plan de maison
+  const [pdfs,setPdfs]=useState([]);
+  useEffect(()=>{ let vivant=true; if(!d.dossier){ setPdfs([]); return; }
+    (async()=>{ try{ const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+      const q = encodeURIComponent("'"+d.dossier+"' in parents and trashed=false and mimeType='application/pdf'");
+      const r = await fetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id,name)&orderBy=modifiedTime desc&pageSize=20&supportsAllDrives=true&includeItemsFromAllDrives=true', {headers:{Authorization:'Bearer '+tok}});
+      const f = r.ok ? ((await r.json()).files||[]) : []; if(vivant) setPdfs(f); }catch(e){ if(vivant) setPdfs([]); } })();
+    return ()=>{ vivant=false; }; },[d.dossier]);
+  const lireDrive = async x => { setEtat('Ouverture de « '+x.name+' »…');
+    try{ const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+      const r = await fetch('https://www.googleapis.com/drive/v3/files/'+x.id+'?alt=media&supportsAllDrives=true', {headers:{Authorization:'Bearer '+tok}});
+      if(!r.ok) throw new Error('Drive '+r.status);
+      const f = new File([await r.blob()], x.name, {type:'application/pdf'});
+      majM({planId:x.id, planNom:x.name}); await lire(f, true); }
+    catch(e){ setEtat(''); toast && toast('Plan illisible : '+(e && e.message || e)); } };
+  const lire = async (f, dejaDansDrive) => { if(!f) return; setEtat('Lecture du plan…');
     try{ const r = await maisonLirePlan(f, setEtat);
       setPages(r.pages.filter(p=>p.etage)); majM(x=>({pieces:[...x.pieces, ...r.pieces]}));
       setEtat(''); toast && toast(r.pieces.length ? r.pieces.length+' pièces trouvées sur le plan' : 'Aucune pièce lue (plan scanné ?) — ajoute-les à la main');
-      if(peutDeposer()){ try{ let dos = d.dossier; if(!dos){ dos = await driveDossier((d.nom||'Client')+(d.adresse?' — '+d.adresse.split(',')[0]:''), await driveDossier(PHOTOS_RACINE)); setD(o=>({...o, dossier:dos})); } await driveDeposer(f, dos); }catch(e){} } }
+      if(!dejaDansDrive && peutDeposer()){ try{ let dos = d.dossier; if(!dos){ dos = await driveDossier((d.nom||'Client')+(d.adresse?' — '+d.adresse.split(',')[0]:''), await driveDossier(PHOTOS_RACINE)); setD(o=>({...o, dossier:dos})); } await driveDeposer(f, dos); }catch(e){} } }
     catch(e){ setEtat(''); toast && toast('Plan illisible : '+(e && e.message || e)); } };
   const prix = c => C && C.prixDe ? (C.prixDe(c)||0) : 0;
   const totalPiece = p => { const ch = maisonChauffage(p); return Object.entries(p.items||{}).reduce((t,[c,q])=>t+prix(c)*q,0) + ch.so220*prix('SO220') + ch.intel*prix('SO220.2') + (ch.prod||[]).reduce((t,[c,q])=>t+prix(c)*q,0); };
@@ -10487,7 +10502,9 @@ function MaisonPlan({d, setD, C, toast}){
   return <div style={{display:'grid',gap:8}}>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
       <input ref={ref} type="file" accept="application/pdf" style={{display:'none'}} onChange={e=>{ const f = e.target.files[0]; e.target.value=''; lire(f); }}/>
-      <button className="btn btn-sm btn-p" disabled={!!etat} onClick={()=>ref.current && ref.current.click()}>📄 Lire un plan (PDF)</button>
+      <button className={'btn btn-sm'+(pdfs.length?'':' btn-p')} disabled={!!etat} onClick={()=>ref.current && ref.current.click()}>📄 {pdfs.length ? 'Autre plan (PDF)…' : 'Lire un plan (PDF)'}</button>
+      {!etat && pdfs.map(x=><button key={x.id} className={'btn btn-sm'+(m.planId===x.id?' btn-p':'')} title="Lire ce PDF du dossier du client comme plan de maison" onClick={()=>{ if(m.planId===x.id && m.pieces.length && !confirm('Ce plan a déjà été lu ('+m.pieces.length+' pièces). Le relire ajoute les pièces une 2e fois. Continuer ?')) return; lireDrive(x); }}>
+        🏠 {m.planId===x.id ? 'Plan de maison : ' : 'Lire '}{x.name.length>34 ? x.name.slice(0,32)+'…' : x.name}</button>)}
       {etat && <span className="muted" style={{fontSize:12.5}}>{etat}</span>}
       <span className="muted" style={{fontSize:12}}>ou ajoute les pièces à la main :</span>
       <select value={ajout.etage} onChange={e=>setAjout({...ajout, etage:e.target.value})} style={{width:'auto',fontSize:12.5}}>{MAISON_ETAGES.map(x=><option key={x}>{x}</option>)}</select>
