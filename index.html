@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v463';
+const APP_VERSION = 'v464';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8076,8 +8076,10 @@ function useCatalogue(cfg){
       const taille = p => (p.cat==='CONDUIT' || p.cat==='CONNECTEURS') ? tailleConduit(p.code+' '+p.desc) : 0;   // v370 : conduit et connecteurs du plus petit au plus gros
       produits.sort((a,b)=>ordre(a.cat)-ordre(b.cat) || (a.sous||'').localeCompare(b.sous||'') || taille(a)-taille(b) || String(a.code).localeCompare(String(b.code)));
       // Mes prix + réglages (onglet « Prix » : PROFIL = profil de profit) et correspondances fournisseur → produit
-      const prix = {}; let profil = 'Base';
-      try{ const p = await att(pPrix); (p.result.values||[]).slice(1).forEach((r,i)=>{ if(!r[0]) return; if(r[0]==='PROFIL'){ profil = r[1]||'Base'; prix.PROFIL={row:i+2}; return; } prix[codeNorm(r[0])] = {prix:cvNum(r[1]), row:i+2, code:r[0]}; }); }catch(e){}
+      const prix = {}; let profil = 'Base', bufferPol = '';
+      try{ const p = await att(pPrix); (p.result.values||[]).slice(1).forEach((r,i)=>{ if(!r[0]) return; if(r[0]==='PROFIL'){ profil = r[1]||'Base'; prix.PROFIL={row:i+2}; return; }
+        if(r[0]==='BUFFER'){ bufferPol = r[1]||''; prix.BUFFER={row:i+2}; return; }   /* v464 : politique de buffer */
+        prix[codeNorm(r[0])] = {prix:cvNum(r[1]), row:i+2, code:r[0]}; }); }catch(e){}
       const liens = {};
       try{ const l = await att(pLiens); (l.result.values||[]).slice(1).forEach((r,i)=>{ if(r[0]) liens[codeNorm(r[0])] = {produit:r[2]||'', row:i+2, fournisseur:r[1]||''}; }); }catch(e){}
       // Dernier prix facturé à tes clients : chaque jeton de la colonne Codes (registre des factures › Lignes)
@@ -8093,7 +8095,7 @@ function useCatalogue(cfg){
         achats = (lig||[]).slice(1).map(r=>{ const q=cvNum(r[4])||0, m=cvNum(r[5]); return {fournisseur:r[0]||'', facture:r[1]||'', code:r[2]||'', desc:r[3]||'', qte:q, cout: q>0 && m!=null ? arrondi(m/q) : null, date:dates[(r[0]||'')+'|'+(r[1]||'')]||''}; })
           .filter(a=>a.code && a.cout!=null && a.cout>0);
       }catch(e){}
-      setEtat({lu:true, produits, cats, toutesCats, prix, liens, facture, achats, offres, profil, err:''});
+      setEtat({lu:true, produits, cats, toutesCats, prix, liens, facture, achats, offres, profil, bufferPol, err:''});
     }catch(e){ setEtat(s=>({...s, lu:true, err:apiErrMsg(e)})); }
   },[idS, idJ, cfg.memoireFacturesSpreadsheetId, cfg.memoireAchatsSpreadsheetId]);
   useEffect(()=>{ lire(); },[lire]);
@@ -8201,6 +8203,7 @@ function useCatalogue(cfg){
     suivreEcritures();
     await window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:idJ, range:qSheet('Prix fournisseurs')+'!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:[l]}});
     await lire(true); };
+  const majBufferPol = async (txt)=>{ setEtat(s=>({...s, bufferPol:txt})); await ecrirePrix('BUFFER', txt, etat.prix.BUFFER && etat.prix.BUFFER.row); if(!etat.prix.BUFFER) await lire(true); };
   const majProfil = async (profil)=>{
     setEtat(s=>({...s, profil}));
     await ecrirePrix('PROFIL', profil, etat.prix.PROFIL && etat.prix.PROFIL.row);
@@ -8373,7 +8376,7 @@ function useCatalogue(cfg){
   const retirerDuGroupe = async p=>{ await marquer(p, ''); };
   return {...etat, lire, coutDe, coutsDe, factureDe, suggereDe, prixDe, produitDe, aConfirmer, majPrix, majPrixAmi, ajouterPrixAmi, majProfil, ajouterProduit, lier, modifierProduit,
     offresDe, meilleureOffre, monPrix, codeMaitre, offresLibres:liensOffres.libres, fournisseurs, comparaison, importerProduits, importerOffres, ajouterFiche, modifierFiche, supprimerFiche,
-    propositions, trouverProduit, regrouper, pasPareil, retirerDuGroupe, aClasser, classerEnLot, lierEnLot, ajouterFichesEnLot};
+    propositions, trouverProduit, regrouper, pasPareil, retirerDuGroupe, aClasser, classerEnLot, lierEnLot, ajouterFichesEnLot, majBufferPol};
 }
 
 // Choisir un produit du catalogue (pour lier un code fournisseur)
@@ -9905,9 +9908,9 @@ function CalculRapide({C, d, setD, toast, onRempli}){
   const [gars,setGars]=useState(1);
   const [heures,setHeures]=useState('');          // vide = l'estimé du calcul
   const [monPrix,setMonPrix]=useState('');        // v395 : ton prix (vide = le prix calculé)
-  const [buffer,setBuffer0]=useState(()=>lsGet('calc_buffer','10'));
+  const [buffer,setBuffer0]=useState('');   // v464 : vide = politique de buffer
   const setMode = x => { setMode0(x); lsSet('calc_mode', x); };
-  const setBuffer = x => { setBuffer0(x); lsSet('calc_buffer', x); };
+  const setBuffer = x => setBuffer0(x);
   useEffect(()=>{ setHeures(''); setGars((CALC_SOUMISSION[type]||{}).gars || 1); },[type]);
   const H = r ? (heures!=='' && cvNum(heures)!=null ? cvNum(heures) : r.heures) : 0;
   // Lignes avec leur prix (catalogue ; la borne « autre » prend le prix tapé)
@@ -9918,14 +9921,14 @@ function CalculRapide({C, d, setD, toast, onRempli}){
   const moH = H*(C.prixDe('SA01')||0) + (gars===2 ? H*(C.prixDe('SA02')||0) : 0);
   const dqH = (C.prixDe('DEPL')||0) + (C.prixDe('QUIN')||0);
   const borneH = lignesPx.filter(l=>DOC_BORNE_RE.test(String(l.code||''))).reduce((a,l)=>a+(pxL(l)||0)*(cvNum(l.qte)||0),0);   // v394 : pas de buffer sur la borne
-  const baseH = matH+moH+dqH, bufH = (baseH-borneH)*((cvNum(buffer)||0)/100), totalH = arr5(baseH+bufH);
+  const baseH = matH+moH+dqH, bufPct = String(buffer).trim()!=='' ? (cvNum(buffer)||0) : bufferAuto(baseH-borneH, C.bufferPol), bufH = (baseH-borneH)*(bufPct/100), totalH = arr5(baseH+bufH);
   const remplir = () => {
     if(d.lignes.some(l=>cvNum(l.qte)) && !confirm('Remplacer le matériel, les heures et le prix par le calcul ?')) return;
     const enHeures = mode==='heures';
     const forfait = cvNum(monPrix) ? String(cvNum(monPrix)) : enHeures ? (totalH>0 ? String(totalH) : '') : (r.forfait!=='' ? String(r.forfait) : null);   // v395 : ton prix d'abord
     const garde = String(d.remarques||'').split('\n').filter(x=>!/^(Détail :|Ne comprend pas la réfection)/.test(x)).join('\n').trim();   // v395 : tes remarques restent les tiennes
     const remarques = [garde, r.remarques && !String(garde).includes(r.remarques) ? r.remarques : ''].filter(Boolean).join('\n');
-    const resume = enHeures ? '— Calcul du '+cvFmtDay(cvDay(new Date().toISOString()))+' : matériel '+cvMoney(matH)+' + main-d\'œuvre '+cvMoney(moH)+' ('+H+' h × '+gars+' gars) + dépl./quinc. '+cvMoney(dqH)+' = '+cvMoney(baseH)+' ; buffer '+(cvNum(buffer)||0)+' % = '+cvMoney(bufH)+' ; total '+cvMoney(totalH)+' avant taxes —' : '';
+    const resume = enHeures ? '— Calcul du '+cvFmtDay(cvDay(new Date().toISOString()))+' : matériel '+cvMoney(matH)+' + main-d\'œuvre '+cvMoney(moH)+' ('+H+' h × '+gars+' gars) + dépl./quinc. '+cvMoney(dqH)+' = '+cvMoney(baseH)+' ; buffer '+bufPct+' % = '+cvMoney(bufH)+' ; total '+cvMoney(totalH)+' avant taxes —' : '';
     setD(o=>({...o, buffer:String(buffer), ...(resume ? {visite:[String(o.visite||'').split('\n').filter(x=>!/^— Calcul du /.test(x)).join('\n').trim(), resume].filter(Boolean).join('\n\n')} : {}), typeProjet:def.typeProjet, titre: o.titre || r.titre, travaux:r.travaux, remarques, forfait: forfait!=null ? forfait : o.forfait,
       lignes: enHeures ? lignesPx : r.lignes.filter(l=>!l.outil), depl:true, quin:true, jours:[{...(o.jours[0]||{}), date:(o.jours[0]&&o.jours[0].date)||cvDay(new Date().toISOString()),
         sa01:String(enHeures ? H : r.heures), sa02: enHeures && gars===2 ? String(H) : ''}, ...o.jours.slice(1)]}));
@@ -9951,13 +9954,13 @@ function CalculRapide({C, d, setD, toast, onRempli}){
           {[1,2].map(n=><button key={n} className={'btn btn-sm'+(gars===n?' btn-p':'')} onClick={()=>setGars(n)}>{n} gars</button>)}
           × <input value={heures!=='' ? heures : String(r.heures)} onChange={e=>setHeures(e.target.value)} inputMode="decimal" style={{width:64}}/> h
           {heures!=='' && cvNum(heures)!==r.heures && <button className="btn btn-sm" onClick={()=>setHeures('')} title="Revenir à l'estimé du calcul">estimé : {r.heures} h</button>}
-          <span style={{marginLeft:8}}>Buffer</span> <input value={buffer} onChange={e=>setBuffer(e.target.value)} inputMode="decimal" style={{width:54}}/> %</div>
+          <span style={{marginLeft:8}}><BufferChamp valeur={buffer} base={baseH-borneH} C={C} onChange={setBuffer}/></span></div>
         <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:'2px 16px',maxWidth:420,fontSize:13.5}}>
           <span>Matériel ({lignesPx.length} articles, quantités exactes)</span><b style={{textAlign:'right'}}>{cvMoney(matH)}</b>
           <span>Main-d'œuvre <span className="muted">({H} h × {gars} gars)</span></span><b style={{textAlign:'right'}}>{cvMoney(moH)}</b>
           <span>Déplacement et quincaillerie</span><b style={{textAlign:'right'}}>{cvMoney(dqH)}</b>
           <span style={{borderTop:'1px solid var(--border2)',paddingTop:2}}>Sous-total</span><b style={{textAlign:'right',borderTop:'1px solid var(--border2)',paddingTop:2}}>{cvMoney(baseH)}</b>
-          <span>Buffer {cvNum(buffer)||0} %{borneH>0 ? <span className="muted" style={{fontSize:12}}> (pas sur la borne)</span> : null}</span><b style={{textAlign:'right'}}>{cvMoney(bufH)}</b>
+          <span>Buffer {bufPct} %{borneH>0 ? <span className="muted" style={{fontSize:12}}> (pas sur la borne)</span> : null}</span><b style={{textAlign:'right'}}>{cvMoney(bufH)}</b>
           <span style={{fontSize:15}}>Prix calculé <span className="muted" style={{fontSize:12}}>avant taxes</span></span><b style={{textAlign:'right',fontSize:15}}>{cvMoney(totalH)}</b>
           <span style={{fontSize:15}}>Ton prix <span className="muted" style={{fontSize:12}}>(vide = le prix calculé)</span></span><span style={{textAlign:'right'}}><input value={monPrix} onChange={e=>setMonPrix(e.target.value)} inputMode="decimal" placeholder={String(totalH)} style={{width:90,textAlign:'right',fontWeight:700}}/> $</span>
         </div>
@@ -10307,6 +10310,36 @@ const CLAUSES_RAPIDES = [
   ['finis','Réfection non comprise','Ne comprend pas la réfection des murs, plafonds et finis (plâtre, peinture).'],
   ['coffrage','Coffrage du panneau à refaire','Le coffrage autour du panneau électrique (boîte, soufflage, portes) devra être défait, puis refait ou réaménagé par le client, en raison des modifications à cet endroit.'],   // v462
 ];
+// v464 : politique de buffer par paliers (sous-total avant buffer) — modifiable, gardée dans La mémoire › Prix (ligne BUFFER)
+const BUFFER_POL_DEF = '1000:35;2000:30;3000:25;4000:20;*:15';
+function bufferPaliers(txt){ const L = String(txt||BUFFER_POL_DEF).split(/[;\n]+/).map(x=>x.split(':')).filter(x=>x.length===2 && cvNum(x[1])!=null)
+    .map(([a,b])=>({max: /^\s*\*\s*$/.test(a) ? Infinity : cvNum(a), pct:cvNum(b)})).filter(x=>x.max!=null).sort((a,b)=>a.max-b.max);
+  return L.length ? L : bufferPaliers(BUFFER_POL_DEF); }
+function bufferAuto(base, txt){ const L = bufferPaliers(txt); const x = L.find(p=>base < p.max) || L[L.length-1]; return x ? x.pct : 15; }
+// Champ buffer : vide = la politique (affichée en gris) ; tu peux écrire n'importe quel chiffre, même 0 ; ⚙ pour changer la politique
+function BufferChamp({valeur, base, C, onChange}){
+  const [pol,setPol]=useState(false);
+  const auto = bufferAuto(base, C && C.bufferPol), manuel = valeur!=null && String(valeur).trim()!=='';
+  const [brouillon,setBrouillon]=useState(null);
+  const L = brouillon || bufferPaliers(C && C.bufferPol).map(p=>({max:p.max===Infinity ? '' : String(p.max), pct:String(p.pct)}));
+  return <span style={{display:'inline-flex',gap:5,alignItems:'center',flexWrap:'wrap',position:'relative'}}>
+    Buffer <input value={manuel ? valeur : ''} placeholder={String(auto)} onChange={e=>onChange(e.target.value.replace(/[^\d.,]/g,''))} inputMode="decimal" style={{width:50}} title="Vide = la politique de buffer ; écris n'importe quel chiffre, même 0"/> %
+    {manuel ? <button className="btn btn-sm" style={{padding:'1px 6px',fontSize:11}} onClick={()=>onChange('')} title="Revenir à la politique">↺ politique {auto} %</button>
+      : <span className="muted" style={{fontSize:11.5}}>(politique)</span>}
+    <button className="btn btn-sm" style={{padding:'1px 6px',fontSize:11}} onClick={()=>{ setPol(!pol); setBrouillon(null); }} title="Changer la politique de buffer">⚙</button>
+    {pol && <div className="card" style={{position:'absolute',top:'100%',left:0,zIndex:30,marginTop:4,padding:10,minWidth:250,fontSize:12.5,display:'grid',gap:4}}>
+      <b>Politique de buffer</b><span className="muted" style={{fontSize:11.5}}>selon le sous-total avant buffer (pas sur la borne)</span>
+      {L.map((p,i)=><div key={i} style={{display:'flex',gap:4,alignItems:'center'}}>
+        {i===L.length-1 ? <span style={{width:110}}>au-delà</span> : <>moins de <input value={p.max} onChange={e=>setBrouillon(L.map((x,j)=>j===i?{...x, max:e.target.value}:x))} style={{width:62}} inputMode="decimal"/> $</>}
+        <input value={p.pct} onChange={e=>setBrouillon(L.map((x,j)=>j===i?{...x, pct:e.target.value}:x))} style={{width:42,marginLeft:'auto'}} inputMode="decimal"/> %</div>)}
+      <div style={{display:'flex',gap:6,marginTop:4}}>
+        <button className="btn btn-sm" onClick={()=>setBrouillon(bufferPaliers(BUFFER_POL_DEF).map(p=>({max:p.max===Infinity?'':String(p.max), pct:String(p.pct)})))}>Défaut</button>
+        <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={async()=>{ const txt = L.map((p,i)=>(i===L.length-1 ? '*' : (cvNum(p.max)||0))+':'+(cvNum(p.pct)||0)).join(';');
+          try{ C && C.majBufferPol && await C.majBufferPol(txt); }catch(e){} setPol(false); setBrouillon(null); }}>Sauver</button>
+        <button className="btn btn-sm" onClick={()=>{ setPol(false); setBrouillon(null); }}>Annuler</button></div>
+    </div>}
+  </span>;
+}
 // v457 : où vont les photos dans le PDF — à la fin, au début (en amont de la soumission), seulement pour les gars (ordre de travail), ou pas du tout
 const PLAN_PLACES = [['fin','À la fin'],['debut','Au début (avant la soumission)'],['gars','Seulement pour les gars (ordre de travail)'],['aucune','Pas de photos']];
 function PlanPlace({d, setD, compact}){
@@ -10728,9 +10761,9 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
     </div>
 
     {prix && d.type==='Soumission' && (()=>{   // v394 : prix « heures + matériel » en direct, sous le matériel (ajoute des articles → le buffer et le prix suivent)
-      const lsB = (()=>{ try{ return localStorage.getItem('calc_buffer'); }catch(e){ return null; } })();
-      const bufP = d.buffer!=null && d.buffer!=='' ? d.buffer : (lsB || '10');
-      const base = calc.mat+calc.mo+calc.depl+calc.quin, B = docBorne(d, calc), buf = (base-B.prix)*((cvNum(bufP)||0)/100), sug = arr5(base+buf);
+      // v464 : buffer vide = politique par paliers ; n'importe quel chiffre tapé (même 0) est gardé tel quel
+      const base = calc.mat+calc.mo+calc.depl+calc.quin, B = docBorne(d, calc), manuelB = d.buffer!=null && String(d.buffer).trim()!=='';
+      const bufPct = manuelB ? (cvNum(d.buffer)||0) : bufferAuto(base-B.prix, C.bufferPol), buf = (base-B.prix)*(bufPct/100), sug = arr5(base+buf);
       const fo = cvNum(d.forfait), aForfait = d.forfait!=='' && d.forfait!=null && fo!=null;
       if(!base) return null;
       return <div className="card" style={{marginBottom:10}}>
@@ -10740,7 +10773,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
           <span>Main-d'œuvre <span className="muted">({calc.h1} h SA01{calc.h2 ? ' + '+calc.h2+' h SA02' : ''})</span></span><b style={{textAlign:'right'}}>{cvMoney(calc.mo)}</b>
           <span>Déplacement et quincaillerie</span><b style={{textAlign:'right'}}>{cvMoney(calc.depl+calc.quin)}</b>
           <span style={{borderTop:'1px solid var(--border2)',paddingTop:2}}>Sous-total</span><b style={{textAlign:'right',borderTop:'1px solid var(--border2)',paddingTop:2}}>{cvMoney(base)}</b>
-          <span style={{display:'flex',gap:6,alignItems:'center'}}>Buffer <input value={bufP} onChange={e=>maj({buffer:e.target.value})} inputMode="decimal" style={{width:50}}/> %{B.prix>0 ? <span className="muted" style={{fontSize:12}}>(pas sur la borne)</span> : null}</span><b style={{textAlign:'right'}}>{cvMoney(buf)}</b>
+          <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><BufferChamp valeur={d.buffer} base={base-B.prix} C={C} onChange={x=>maj({buffer:x})}/>{bufPct!=null && <span className="muted" style={{fontSize:12}}>= {bufPct} %</span>}{B.prix>0 ? <span className="muted" style={{fontSize:12}}>(pas sur la borne)</span> : null}</span><b style={{textAlign:'right'}}>{cvMoney(buf)}</b>
           <span style={{fontSize:15}}>Prix suggéré <span className="muted" style={{fontSize:12}}>avant taxes, arrondi à 5 $</span></span><b style={{textAlign:'right',fontSize:15}}>{cvMoney(sug)}</b>
           {B.prix>0 && <><span className="muted" style={{paddingLeft:10}}>dont la borne ({B.nom})</span><span className="muted" style={{textAlign:'right'}}>{cvMoney(B.prix)}</span>
             <span className="muted" style={{paddingLeft:10}}>dont les travaux électriques</span><span className="muted" style={{textAlign:'right'}}>{cvMoney(sug-B.prix)}</span></>}
