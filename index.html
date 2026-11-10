@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v450';
+const APP_VERSION = 'v451';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6775,8 +6775,8 @@ const TYPES_PROJET = ['Borne de recharge','Panneau / entrée électrique','Prise
 function soumTypeDevine(t){
   const x = cvNorm(t||'');
   // Même ordre que soumissions.gs : le premier qui correspond gagne (une borne ou un spa parle souvent aussi du panneau).
-  const r = [[/borne|recharge|vehiculeelectrique|flox|tesla|wallbox|grizzl/,'Borne de recharge'],[/spa|piscine/,'Spa / piscine'],
-    [/thermopompe|chauffage|plinthe|calorifere|climatis|airclim|convecteur|aerotherme/,'Chauffage / climatisation'],[/generatrice|generac|generateur/,'Génératrice'],
+  const r = [[/borne|recharge|vehiculeelectrique|flox|tesla|wallbox|grizzl/,'Borne de recharge'],[/spa|piscine/,'Spa / piscine'],[/generatrice|generac|generateur|interlock/,'Génératrice'],   // v451 : la génératrice avant le chauffage (« chauffage d'urgence »)
+    [/thermopompe|chauffage|plinthe|calorifere|climatis|airclim|convecteur|aerotherme/,'Chauffage / climatisation'],
     [/plans|emispourconstruction|constructionneuve|chantier|multilog|unifamil|prixbudget|demandedeprix(pour)?(l)?electricite|projet\d{3}/,'Construction neuve'],
     [/panneau|entreeelectrique|200a|100a|400a|miseaniveau|compteur/,'Panneau / entrée électrique'],[/localcommercial|commerce|restaurant|commercial/,'Commercial'],
     [/eclairage|luminaire|plafonnier|encastr|potlight|led|lumiere/,'Éclairage'],[/prise|circuit|1430|1450|240v|sortie/,'Prises et circuits'],
@@ -7075,7 +7075,7 @@ function sfMotsTitre(sujet){
 }
 const sfTexteMsg = m => { const c = gmCorps(m.payload); return c.txt || String(c.html||'').replace(/<br\s*\/?>|<\/(p|div|tr|li)>/gi,'\n').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&'); };
 const sfSansSignature = t => String(t||'').split('\n').filter(l=>!/saran|438.?490.?3412|J3B 4J6|pr[ée]sident|cordialement|RBQ/i.test(l)).join('\n');
-function SoumFiche({cfg, infos, cle, sujet, typeProjet, dossier, onDossier, titreDossier, onSauve, onFermer, toast}){
+function SoumFiche({cfg, infos, cle, sujet, typeProjet, onType, dossier, onDossier, titreDossier, onSauve, onFermer, toast}){
   const [F,setF]=useState(null);
   const [fiche,setFiche]=useState(null);       // fiche du Répertoire trouvée (ou choisie)
   const [v,setV]=useState({nom:infos.nom||'', tel:infos.tel||'', courriel:infos.courriel||'', adresse:infos.adresse||'', ville:'', notes:''});
@@ -7165,6 +7165,9 @@ function SoumFiche({cfg, infos, cle, sujet, typeProjet, dossier, onDossier, titr
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>{champ('nom','Nom','2 1 200px')}{fiche && diff('nom', infos.nom)}{lu && diff('nom', lu.nom)}</div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>{champ('tel','Téléphone')}{fiche && diff('tel', infos.tel)}{lu && lu.tel && sfTel10(lu.tel)!==sfTel10(v.tel) && diff('tel', repTelFmt(lu.tel))}{champ('courriel','Courriel','1 1 200px')}{fiche && diff('courriel', infos.courriel)}{lu && diff('courriel', lu.courriel)}</div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>{champ('adresse','Adresse (no et rue)','2 1 200px')}{champ('ville','Ville','1 1 120px')}{fiche && diff('adresse', infos.adresse)}{lu && lu.adresse && !cvNorm(lu.adresse).startsWith(cvNorm(v.adresse||'#')) && diff('adresse', lu.adresse)}</div>
+    {onType && <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>Catégorie :
+      <select value={typeProjet||''} onChange={e=>onType(e.target.value)} style={{fontSize:13,padding:'4px 6px'}}><option value="">Type de projet…</option>{TYPES_PROJET.map(t=><option key={t}>{t}</option>)}</select>
+      <span className="muted" style={{fontSize:12}}>le titre de la demande devient « {(v.nom||'Nom').trim()}{typeProjet ? ' — '+typeProjet : ''} »</span></div>}
     {champ('notes','Notes (privées)','1 1 100%')}
     {sugg && <div style={{padding:'6px 8px',background:'var(--bg3)',borderRadius:6,display:'grid',gap:4}}>
       <span className="muted" style={{fontSize:12}}>Dans ses courriels ({sugg.n} lu{sugg.n>1?'s':''}) — clique pour utiliser :</span>
@@ -7325,12 +7328,12 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   // Infos d'une demande : lues par soumissions.gs (colonne Q), sinon ce qu'on a ; type = le tien (R), sinon deviné.
   const infosDe = s => { const b = brouillons[s.cle], bi = b ? brouillonInfos(b) : {};
     if(b) return {nom:bi.nom || s.client || '', tel:bi.tel || '', courriel:(bi.courriel || s.courriel || '').toLowerCase(), adresse:bi.adresse || '', travaux:bi.travaux || '', demande:'',
-      type: bi.typeProjet || s.typeProjet || soumTypeDevine([s.sujet, bi.travaux].join(' '))};
+      type: bi.typeProjet || s.typeProjet || soumTypeDevine(s.sujet) || soumTypeDevine(bi.travaux)};
     const i = s.infos || {}, fs = soumFicheLue(s.cle) || {};   // v445 : la fiche client vérifiée l'emporte
     if(fs.nom) return {nom:fs.nom, tel:fs.tel || i.tel || '', courriel:fs.courriel || (i.courriel || s.courriel || '').toLowerCase(), adresse:fs.adresse || i.adresse || '', travaux:i.travaux || s.extrait || '', demande:i.demande || '', fiche:fs.le,
-      type: s.typeProjet || i.type || soumTypeDevine([s.sujet, i.travaux || s.extrait].join(' '))};
+      type: s.typeProjet || soumTypeDevine(s.sujet) || i.type || soumTypeDevine([i.travaux || s.extrait].join(' '))};
     return {nom:i.nom || s.client || '', tel:i.tel || '', courriel:(i.courriel || s.courriel || '').toLowerCase(), adresse:i.adresse || '', travaux:i.travaux || s.extrait || '', demande:i.demande || '',
-      type: s.typeProjet || i.type || soumTypeDevine([s.sujet, i.travaux || s.extrait].join(' '))}; };
+      type: s.typeProjet || soumTypeDevine(s.sujet) || i.type || soumTypeDevine([i.travaux || s.extrait].join(' '))}; };
   const preparer = s => { const b = brouillons[s.cle];
     if(!b && !soumFicheLue(s.cle) && confirm('La fiche client n\'a pas été vérifiée.\n\nOK = ouvrir la fiche client d\'abord\nAnnuler = faire la soumission quand même')){ setFicheOuv(s.cle); setOuverte(''); return; }
     if(b){ DOC_OUVRIR = b; DOC_PREFILL = null; setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); return; }
@@ -7344,7 +7347,9 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     const corps = 'Bonjour'+(i.nom ? ' '+i.nom.split(' ')[0] : '')+',\n\nNous avons bien reçu votre demande de soumission et nous vous revenons très bientôt.\n\nCordialement,\n\nSaran Électrique inc.\nWilliam Saran, Président\n(438) 490-3412\ninfo@saranelectrique.com';
     window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com&view=cm&fs=1&to='+encodeURIComponent(i.courriel)+'&su='+encodeURIComponent(sujet)+'&body='+encodeURIComponent(corps), '_blank');
     try{ await S.majCol(s, 'S', cvDay(new Date().toISOString()), 'accuse'); }catch(e){} };
-  const choisirType = async (s, t) => { try{ await S.majCol(s, 'R', t, 'typeProjet'); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } };
+  const choisirType = async (s, t) => { try{ await S.majCol(s, 'R', t, 'typeProjet');
+      if(s.titre){ const nom = s.titre.split(' — ')[0]; const nt = nom+(t ? ' — '+t : ''); if(nt!==s.titre) await S.majCol(s, 'T', nt, 'titre'); }   // v451 : le titre suit la catégorie
+    }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } };
 
   // Devis envoyés à la même personne après la demande : proposés (jamais cochés tout seuls).
   const proposes = s => !s.courriel ? [] : envoyees.filter(e=>e.courriel===s.courriel && e.date>=s.date && e.no && !aFaire.some(x=>x!==s && x.note==='Devis #'+e.no)).slice(0,3);
@@ -7388,7 +7393,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
           </>}
         </div>
       </div>
-      {!fini && ficheOuv===s.cle && <SoumFiche cfg={cfg} cle={s.cle} sujet={s.sujet} infos={i} toast={toast} dossier={s.photos} titreDossier={(s.titre||s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'}
+      {!fini && ficheOuv===s.cle && <SoumFiche cfg={cfg} cle={s.cle} sujet={s.sujet} infos={i} toast={toast} dossier={s.photos} typeProjet={i.type} onType={t=>choisirType(s, t)} titreDossier={(s.titre||s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'}
         onDossier={async(d, fin)=>{ if(fin) setTick(t=>t+1); else await S.dossierPhotos(s, d); }}
         onFermer={()=>setFicheOuv('')} onSauve={async f=>{ setFicheOuv(''); setFicheTick(t=>t+1);
           const ty = s.typeProjet || i.type || ''; const t = f.nom+(ty ? ' — '+ty : '');   // v450 : le titre de la demande devient « Nom — Catégorie »
