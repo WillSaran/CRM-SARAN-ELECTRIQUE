@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v458';
+const APP_VERSION = 'v459';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9579,7 +9579,10 @@ const CALC_SOUMISSION = {
           <b>3. Circuits transférés à la génératrice</b> <span className="muted" style={{fontSize:12}}>chaque circuit coché = un disjoncteur QO dans le panneau de transfert + 15 min</span>
           {GEN_CIRCUITS.map(([k,l,d0])=>{ const x = circ[k]||{}; return <div key={k} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
             <label style={{display:'flex',gap:4,alignItems:'center',minWidth:170}}><input type="checkbox" checked={!!x.on} onChange={e=>majC(k,{on:e.target.checked})}/> {l}</label>
-            {x.on && sel(x.t||d0, y=>majC(k,{t:y}), typesC)}</div>; })}
+            {x.on && sel(x.t||d0, y=>majC(k,{t:y}), typesC)}
+            {x.on && <span style={{display:'inline-flex',gap:2,alignItems:'center'}} title="Combien de circuits pareils (ex. 2 frigos)">
+              {[1,2,3].map(n=><button key={n} className={'btn btn-sm'+((+x.q||1)===n?' btn-p':'')} style={{padding:'1px 7px',fontSize:11.5}} onClick={()=>majC(k,{q:n})}>×{n}</button>)}
+              <input value={(+x.q||1)>3 ? x.q : ''} placeholder="…" inputMode="numeric" onChange={e=>majC(k,{q:Math.max(1, Math.min(9, +e.target.value.replace(/\D/g,'')||1))})} style={{width:30,padding:'1px 4px',fontSize:11.5}}/></span>}</div>; })}
           {autres.map((a,i)=><div key={'a'+i} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
             <input value={a.nom||''} placeholder="Autre circuit (ex. fournaise)" onChange={e=>majA(i,{nom:e.target.value})} style={{width:170}}/>
             {sel(a.t||'1P15', y=>majA(i,{t:y}), typesC)} <button className="btn btn-sm" onClick={()=>maj({autres:autres.filter((_,j)=>j!==i)})}>✕</button></div>)}
@@ -9614,7 +9617,7 @@ const CALC_SOUMISSION = {
       // Disjoncteurs des circuits transférés (QO)
       const parType = {}; g.circuits.forEach(x=>{ (parType[x.t] = parType[x.t]||[]).push(x.nom); });
       Object.entries(parType).forEach(([ty, noms])=>{ const d = (PANNEAU_DISJ.QO60||{})[ty];
-        L.push({code: d ? d[0] : 'QO-'+ty, desc:(d ? d[1] : 'Disjoncteur QO '+ty)+' (panneau de génératrice) — '+noms.join(', '), unite:'un', qte:String(noms.length), prix:'', ...(d ? {} : {verifier:true})}); });
+        L.push({code: d ? d[0] : 'QO-'+ty, desc:(d ? d[1] : 'Disjoncteur QO '+ty)+' (panneau de génératrice) — '+Object.entries(noms.reduce((m,n)=>{ m[n]=(m[n]||0)+1; return m; },{})).map(([n,q])=>n+(q>1?' ×'+q:'')).join(', '), unite:'un', qte:String(noms.length), prix:'', ...(d ? {} : {verifier:true})}); });
       // Fil jusqu'à la prise d'entrée
       g.lignesFil.forEach(l=>ajout(...l));
       // Prise d'entrée dehors
@@ -9638,7 +9641,7 @@ const CALC_SOUMISSION = {
       const coteTxt = {gauche:'à gauche du panneau principal', droite:'à droite du panneau principal', bas:'sous le panneau principal', autre:'près du panneau principal'}[v.cote] || 'près du panneau principal';
       const parcoursTxt = v.parcours==='int' ? 'passé par l\'intérieur (ouverture de murs au besoin, réparation des finis par le client)' : v.parcours==='tuyau' ? 'passé à l\'extérieur dans un tuyau PVC fixé au mur' : 'passé à l\'extérieur en câble TECK fixé au mur';
       const txt = ['Installation d\'un panneau de transfert manuel pour génératrice portative ('+(trente?'30':'60')+' A) : panneau secondaire Square D QO avec interlock (verrouillage mécanique), installé '+coteTxt+' et relié à celui-ci '+g.liaisonClient+'.',
-        g.circuits.length ? 'Transfert des circuits suivants vers le panneau de génératrice : '+g.circuits.map(x=>x.nom.toLowerCase()).join(', ')+' ('+g.circuits.length+' circuit'+(g.circuits.length>1?'s':'')+').' : '',
+        g.circuits.length ? 'Transfert des circuits suivants vers le panneau de génératrice : '+Object.entries(g.circuits.reduce((m,x)=>{ m[x.nom] = (m[x.nom]||0)+1; return m; },{})).map(([n,q])=>n.toLowerCase()+(q>1 ? ' (×'+q+')' : '')).join(', ')+' ('+g.circuits.length+' circuit'+(g.circuits.length>1?'s':'')+').' : '',
         'Prise d\'entrée de génératrice '+(trente ? '30 A (L14-30)' : '50 A twistlock')+' installée à l\'extérieur'+(D ? ', fil de '+Math.ceil(D)+' pi ' : ', fil ')+parcoursTxt+'.',
         'Boîte de jonction pour prolonger les fils incluse au besoin.',
         v.cordon && lc ? 'Cordon de génératrice de '+lc+' pi préparé ('+(trente ? 'fiches L14-30' : 'fiches 50 A')+').' : '',
@@ -9658,7 +9661,9 @@ const GEN_CIRCUITS = [['frigo','Frigo','1P15',/fri(go|gidaire|gidère)|r[ée]fri
   ['puisard','Pompe de puisard','1P15',/puisard|sump/i],['fournaise','Fournaise','1P15',/fournaise/i]];
 function genCalcul(v){
   const trente = v.amp!=='60', circ = v.circ||{};
-  const circuits = [...GEN_CIRCUITS.filter(([k])=>circ[k] && circ[k].on).map(([k,l,d0])=>({nom:l, t:circ[k].t||d0})),
+  // v459 : quantité par circuit (ex. 2 frigos = 2 circuits)
+  const circuits = [...GEN_CIRCUITS.filter(([k])=>circ[k] && circ[k].on).flatMap(([k,l,d0])=>{ const q = Math.max(1, Math.min(9, +circ[k].q||1));
+      return Array.from({length:q}, ()=>({nom:l, t:circ[k].t||d0})); }),
     ...(v.autres||[]).filter(a=>String(a.nom||'').trim()).map(a=>({nom:String(a.nom).trim(), t:a.t||'1P15'}))];
   const poles = circuits.reduce((n,x)=>n + (/^2P/.test(x.t) ? 2 : /^T/.test(x.t) ? 2 : 1), 0);
   // Liaison panneau principal → panneau de transfert
