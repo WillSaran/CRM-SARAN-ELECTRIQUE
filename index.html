@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v467';
+const APP_VERSION = 'v468';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10365,7 +10365,7 @@ const MAISON_TYPES = {
   ssnonfini:{nom:'Sous-sol non fini', items:{SO04:4, SO01:4}, chauf:'plinthe'},
   garage:{nom:'Garage', items:{SO01:4, "SO02.1":2, SO04:2}, chauf:'aero'},
   exterieur:{nom:'Extérieur', items:{SO08:2, SO07:1}, chauf:'aucun'},
-  autre:{nom:'Autre', items:{}, chauf:'aucun'},
+  autre:{nom:'Autre pièce', items:{}, chauf:'aucun'},
 };
 function maisonTypeDe(nom){ const n = cvNorm(nom).replace(/[^a-z0-9 ]/g,' ');
   if(/chambre|ch\s*\d|master/.test(n)) return 'chambre'; if(/bureau/.test(n)) return 'bureau';
@@ -10396,11 +10396,11 @@ function maisonChauffage(p){ const c = p.chauf || 'aucun', th = Math.max(1, Math
   if(c==='aucun') return {so220:0, plinthes:[], txt:'', libres:[], intel:0};
   if(c==='aero'){ const g = maisonDragons(p);
     const prod = [[g.code, g.n]]; if(g.relais) prod.push([DRAGON_RELAIS, g.relais]); prod.push([p.intel ? DRAGON_THERMO_INTEL : DRAGON_THERMO, th]);
-    return {so220:g.n+th, plinthes:[], txt:(g.n>1 ? g.n+' × ' : '')+'aérotherme Dragon '+g.lib+(g.relais ? ' + relais RC840T' : '')+' + '+(th>1 ? th+' thermostats' : 'thermostat')+' basse tension', libres:[], prod, intel:p.intel ? th : 0}; }
+    return {w:g.n*g.w, so220:g.n+th, plinthes:[], txt:(g.n>1 ? g.n+' × ' : '')+'aérotherme Dragon '+g.lib+(g.relais ? ' + relais RC840T' : '')+' + '+(th>1 ? th+' thermostats' : 'thermostat')+' basse tension', libres:[], prod, intel:p.intel ? th : 0}; }
   if(c==='radiant') return {so220:1+th, plinthes:[], txt:'plancher radiant + thermostat', libres:[], intel:p.intel ? th : 0};
   const pl = maisonPlinthes(p.pi2, p.fenetres);
   if(!pl.length) return {so220:1+th, plinthes:[], txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+' (entre les pi² pour le wattage) + thermostat', libres:[], intel:p.intel ? th : 0};
-  return {so220:pl.length+th, plinthes:pl, txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+(pl.length>1?'s':'')+' '+pl.map(w=>w+' W').join(' + ')+' + '+(th>1 ? th+' thermostats' : 'thermostat'), libres:[], intel:p.intel ? th : 0}; }
+  return {w:pl.reduce((t,x)=>t+x,0), so220:pl.length+th, plinthes:pl, txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+(pl.length>1?'s':'')+' '+pl.map(w=>w+' W').join(' + ')+' + '+(th>1 ? th+' thermostats' : 'thermostat'), libres:[], intel:p.intel ? th : 0}; }
 // Résumé client d'une pièce (« 4 prises 15 A, 1 interrupteur, … »)
 function maisonResume(p){ const it = p.items||{}, ch = maisonChauffage(p);
   const L = Object.entries(it).filter(([,q])=>q>0).map(([c,q])=>q+' '+(q>1 ? String(MAISON_LIB[c]||c).replace(/^(\S+?)([sx]?)(?=\s|$)/, (w,a,b)=>a+(b||'s')) : (MAISON_LIB[c]||c)));
@@ -10437,11 +10437,14 @@ async function maisonLirePlan(file, onEtat){
   }
   return {pages, pieces};
 }
+// v468 : appareils tous à 1 de base ; sortie extérieure prévue (cabanon / spa futur) ; borne 40 A de base, 48 A conseillé
 const MAISON_APPAREILS = [['thermopompe','Thermopompe','SO223'],['borne','Borne de recharge','SO225'],['chauffeeau','Chauffe-eau 60 gal (30 A)','SO224'],['fournaise','Fournaise électrique (80 A)',''],
-  ['lavage2','2e laveuse-sécheuse','SO222'],['spa','Spa',''],['echangeur','Échangeur d\'air','SO01']];
-const MAISON_INCLUS = ['Permis et inspection','Raccordement des appareils de chauffage','Détecteurs de fumée interconnectés','Pose des luminaires fournis par le client','Plaques décoratives blanches'];
+  ['ext240','Sortie extérieure prévue (cabanon / spa futur)',''],['echangeur','Échangeur d\'air','SO01']];
+const MAISON_INCLUS = ['Fourniture et pose des plinthes et thermostats','Raccordement des appareils de chauffage','Détecteurs de fumée interconnectés','Plaques blanches standard (avec vis)','Pose des luminaires fournis par le client'];
 const MAISON_EXCLUS = ['Luminaires (fournis par le client)','Réfection des murs, plafonds et finis','Frais d\'Hydro-Québec','Câblage d\'alarme et caméras','Plinthes et thermostats (fournis par le client)'];
-function maisonVide(){ return {pieces:[], entree:'200 A', entreeType:'aérienne', appareils:{}, inclus:MAISON_INCLUS.slice(0,3), exclus:MAISON_EXCLUS.slice(0,3)}; }
+const MAISON_TEMPORAIRE = 750;
+function maisonVide(){ return {pieces:[], entree:'200 A', entreeType:'aérienne', temporaire:false, borneA:'40', appareils:Object.fromEntries(MAISON_APPAREILS.map(([k])=>[k,'1'])), inclus:MAISON_INCLUS.slice(0,4), exclus:MAISON_EXCLUS.slice(0,3)}; }
+const maisonAppLib = (m, k, l) => k==='borne' ? l+' '+(m.borneA==='48' ? '48 A (circuit 60 A)' : '40 A') : l;
 function MaisonPlan({d, setD, C, toast}){
   const m = d.maison || maisonVide();
   const majM = patch => setD(o=>({...o, maison:{...(o.maison||maisonVide()), ...(typeof patch==='function' ? patch(o.maison||maisonVide()) : patch)}}));
@@ -10485,18 +10488,22 @@ function MaisonPlan({d, setD, C, toast}){
     const app = m.appareils||{};
     MAISON_APPAREILS.forEach(([k,l,c])=>{ const n = cvNum(app[k])||0; if(!n) return; if(c) aj(c, n); else libres.push(l+(n>1?' ×'+n:'')); });
     if(m.entree) libres.push('Entrée électrique '+m.entree+' '+(m.entreeType||''));
-    const lignesM = [...Object.entries(q).map(([c,n])=>{ const pr = C && C.produitDe ? C.produitDe(c) : null; return {code:c, desc:(pr && pr.desc) || ('Sortie '+(MAISON_LIB[c]||c)), unite:'un', qte:String(n), prix:'', maison:true}; }),
+    const lignesM0 = [...Object.entries(q).map(([c,n])=>{ const pr = C && C.produitDe ? C.produitDe(c) : null; return {code:c, desc:(pr && pr.desc) || ('Sortie '+(MAISON_LIB[c]||c)), unite:'un', qte:String(n), prix:'', maison:true}; }),
       ...libres.map(t=>({code:'', desc:t, unite:'un', qte:'1', prix:'', maison:true}))];
+    const lignesM = lignesM0.map(l=>l.code==='SO225' && m.borneA==='48' ? {...l, desc:l.desc+' — borne 48 A (circuit 60 A)'} : l);
+    if(m.temporaire) lignesM.push({code:'', desc:'Entrée temporaire (chantier)', unite:'un', qte:'1', prix:String(MAISON_TEMPORAIRE), maison:true});
+    const chauf = m.pieces.map(p=>[p, maisonChauffage(p)]).filter(([,c])=>c.txt);
     const txt = ['Installation électrique complète — '+(m.pieces.length)+' pièces, par étage :', '',
       ...etages.flatMap(e=>[e.toUpperCase(), ...m.pieces.filter(p=>p.etage===e).map(p=>'• '+p.nom+(cvNum(p.pi2) ? ' ('+p.pi2+' pi²)' : '')+' : '+(maisonResume(p)||'—')), '']),
-      m.entree ? 'ENTRÉE ÉLECTRIQUE : '+m.entree+' '+(m.entreeType||'') : '',
-      MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).length ? 'APPAREILS RACCORDÉS : '+MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).map(([k,l])=>l+(cvNum(app[k])>1?' ×'+app[k]:'')).join(', ') : ''].filter((x,i,a)=>x!=='' || a[i-1]!=='').join('\n').trim();
+      chauf.length ? 'CHAUFFAGE PRÉVU : '+chauf.map(([p,c])=>p.nom+' — '+c.txt).join(' ; ')+'.' : '',
+      m.entree ? 'ENTRÉE ÉLECTRIQUE : '+m.entree+' '+(m.entreeType||'')+(m.temporaire ? ' + entrée temporaire de chantier' : '') : '',
+      MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).length ? 'APPAREILS RACCORDÉS : '+MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).map(([k,l])=>maisonAppLib(m,k,l)+(cvNum(app[k])>1?' ×'+app[k]:'')).join(', ') : ''].filter((x,i,a)=>x!=='' || a[i-1]!=='').join('\n').trim();
     const incl = (m.inclus||[]).length ? 'INCLUS : '+m.inclus.join(' ; ')+'.' : '', excl = (m.exclus||[]).length ? 'EXCLUS : '+m.exclus.join(' ; ')+'.' : '';
     setD(o=>{ const rem = String(o.remarques||'').split('\n').filter(x=>!/^(INCLUS|EXCLUS) :/.test(x)).join('\n').trim();
       const vis = String(o.visite||'').split('\n').filter(x=>!/^— Liste chauffage/.test(x)).join('\n').trim();
       return {...o, typeProjet:o.typeProjet || 'Construction neuve', titre:o.titre || 'Installation électrique — maison', travaux:txt,
         lignes:[...o.lignes.filter(l=>!l.maison), ...lignesM], remarques:[rem, incl, excl].filter(Boolean).join('\n'),
-        visite:[vis, plinthes.length ? '— Liste chauffage ('+plinthes.length+' plinthes) : '+plinthes.join(' ; ') : ''].filter(Boolean).join('\n')}; });
+        visite:[vis, chauf.length ? '— Liste chauffage ('+chauf.reduce((t,[,c])=>t+(c.w||0),0)+' W) : '+chauf.map(([p,c])=>p.nom+' : '+c.txt).join(' ; ') : ''].filter(Boolean).join('\n')}; });
     toast && toast('Soumission remplie par étage et par pièce — vérifie le matériel et le prix'); };
   const ch = l => <input type="checkbox" checked={l} readOnly style={{width:'auto'}}/>;
   return <div style={{display:'grid',gap:8}}>
@@ -10506,11 +10513,7 @@ function MaisonPlan({d, setD, C, toast}){
       {!etat && pdfs.map(x=><button key={x.id} className={'btn btn-sm'+(m.planId===x.id?' btn-p':'')} title="Lire ce PDF du dossier du client comme plan de maison" onClick={()=>{ if(m.planId===x.id && m.pieces.length && !confirm('Ce plan a déjà été lu ('+m.pieces.length+' pièces). Le relire ajoute les pièces une 2e fois. Continuer ?')) return; lireDrive(x); }}>
         🏠 {m.planId===x.id ? 'Plan de maison : ' : 'Lire '}{x.name.length>34 ? x.name.slice(0,32)+'…' : x.name}</button>)}
       {etat && <span className="muted" style={{fontSize:12.5}}>{etat}</span>}
-      <span className="muted" style={{fontSize:12}}>ou ajoute les pièces à la main :</span>
-      <select value={ajout.etage} onChange={e=>setAjout({...ajout, etage:e.target.value})} style={{width:'auto',fontSize:12.5}}>{MAISON_ETAGES.map(x=><option key={x}>{x}</option>)}</select>
-      <select value={ajout.type} onChange={e=>setAjout({...ajout, type:e.target.value})} style={{width:'auto',fontSize:12.5}}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select>
-      <button className="btn btn-sm" onClick={()=>{ const n = MAISON_TYPES[ajout.type].nom.split(' /')[0]; const k = m.pieces.filter(p=>p.type===ajout.type).length+1;
-        const p = maisonNouvellePiece(n+(['chambre','sdb'].includes(ajout.type) ? ' #'+k : ''), ajout.etage, ajout.type, ''); majM(x=>({pieces:[...x.pieces, p]})); setOuverte(p.id); }}>+ Pièce</button>
+      {!m.pieces.length && <span className="muted" style={{fontSize:12}}>ou ajoute les pièces à la main (en bas)</span>}
     </div>
     {pages.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{pages.map(pg=><div key={pg.no} onClick={()=>setGrand(pg)} style={{cursor:'pointer',textAlign:'center',fontSize:11}}>
       <img src={pg.img} alt="" style={{height:70,border:'1px solid var(--border2)',borderRadius:4}}/><div className="muted">{pg.etage || 'p. '+pg.no}</div></div>)}</div>}
@@ -10524,11 +10527,12 @@ function MaisonPlan({d, setD, C, toast}){
             <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setOuverte(o?'':p.id)}>
               <b>{o?'▾':'▸'} {p.nom}</b><span className="muted" style={{fontSize:12}}>{MAISON_TYPES[p.type] ? MAISON_TYPES[p.type].nom : ''}{cvNum(p.pi2) ? ' · '+p.pi2+' pi²' : ''}</span>
               <span style={{marginLeft:'auto',fontWeight:600}}>{cvMoney(totalPiece(p))}</span></div>
-            {!o && <div className="muted" style={{fontSize:12,marginTop:2}}>{maisonResume(p) || '—'}</div>}
+            {!o && <div className="muted" style={{fontSize:12,marginTop:2}}>{maisonResume({...p, chauf:'aucun'}) || '—'}</div>}
+            <div style={{fontSize:12,marginTop:2,color:chf.txt?'var(--warning)':'var(--muted)'}}>Chauffage prévu : {chf.txt ? chf.txt+(chf.w ? ' ('+chf.w+' W)' : '') : 'aucun'}</div>
             {o && <div style={{display:'grid',gap:6,marginTop:6}}>
               <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-                <input value={p.nom} onChange={x=>majP(p.id,{nom:x.target.value})} style={{width:170}}/>
-                <select value={p.type} onChange={x=>{ const t = MAISON_TYPES[x.target.value]; majP(p.id,{type:x.target.value, items:{...t.items}, chauf:t.chauf}); }} style={{width:'auto'}}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select>
+                <select value={p.type} title="Type de pièce (remet les sorties de base de ce type)" onChange={x=>{ const k = x.target.value, t = MAISON_TYPES[k], n = m.pieces.filter(y=>y.type===k && y.id!==p.id).length+1;
+                  majP(p.id,{type:k, nom:t.nom.split(' /')[0]+(['chambre','sdb'].includes(k) ? ' #'+n : ''), items:{...t.items}, chauf:t.chauf}); }} style={{width:'auto'}}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select>
                 <select value={p.etage} onChange={x=>majP(p.id,{etage:x.target.value})} style={{width:'auto'}}>{MAISON_ETAGES.map(x=><option key={x}>{x}</option>)}</select>
                 <input value={p.pi2} onChange={x=>majP(p.id,{pi2:x.target.value})} inputMode="decimal" placeholder="pi²" style={{width:60}}/> pi²
                 <button className="btn btn-sm" style={{marginLeft:'auto',color:'var(--muted)'}} onClick={()=>majM(x=>({pieces:x.pieces.filter(y=>y.id!==p.id)}))}>✕ Enlever</button>
@@ -10549,17 +10553,30 @@ function MaisonPlan({d, setD, C, toast}){
                 {['plinthe','convecteur'].includes(p.chauf) && <>fenêtres <input value={p.fenetres} onChange={x=>majP(p.id,{fenetres:x.target.value})} inputMode="numeric" style={{width:38}}/></>}
                 {p.chauf!=='aucun' && <>thermostats <input value={p.thermos} onChange={x=>majP(p.id,{thermos:x.target.value})} inputMode="numeric" style={{width:38}}/>
                   <label style={{display:'flex',gap:3,alignItems:'center'}}><input type="checkbox" checked={!!p.intel} onChange={x=>majP(p.id,{intel:x.target.checked})} style={{width:'auto'}}/> intelligent</label></>}
-                {chf.txt && <span className="muted">→ {chf.txt} · {chf.so220} sortie{chf.so220>1?'s':''} SO220{cvNum(p.pi2) && ['plinthe','convecteur'].includes(p.chauf) ? ' ('+p.pi2+' pi² × 10 W)' : ''}</span>}
+                {chf.txt && <span style={{color:'var(--warning)'}}>→ {chf.txt}{chf.w ? ' ('+chf.w+' W)' : ''} · {chf.so220} sortie{chf.so220>1?'s':''} SO220{cvNum(p.pi2) && ['plinthe','convecteur'].includes(p.chauf) ? ' ('+p.pi2+' pi² × 10 W)' : ''}</span>}
               </div>
             </div>}
           </div>; })}
       </div>; })}
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',fontSize:12.5}}>
+      <b>＋ Ajouter une pièce</b>
+      <select value={ajout.etage} onChange={e=>setAjout({...ajout, etage:e.target.value})} style={{width:'auto',fontSize:12.5}}>{MAISON_ETAGES.map(x=><option key={x}>{x}</option>)}</select>
+      <select value={ajout.type} onChange={e=>setAjout({...ajout, type:e.target.value})} style={{width:'auto',fontSize:12.5}}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select>
+      <input value={ajout.nom||''} onChange={e=>setAjout({...ajout, nom:e.target.value})} placeholder="nom (optionnel)" style={{width:150,fontSize:12.5}}/>
+      <button className="btn btn-sm" onClick={()=>{ const n = MAISON_TYPES[ajout.type].nom.split(' /')[0]; const k = m.pieces.filter(p=>p.type===ajout.type).length+1;
+        const p = maisonNouvellePiece((ajout.nom||'').trim() || n+(['chambre','sdb'].includes(ajout.type) ? ' #'+k : ''), ajout.etage, ajout.type, ''); majM(x=>({pieces:[...x.pieces, p]})); setOuverte(p.id); setAjout({...ajout, nom:''}); }}>Ajouter</button>
+    </div>
     {m.pieces.length>0 && <div style={{display:'grid',gap:6,border:'1px solid var(--border)',borderRadius:8,padding:'8px 10px',fontSize:13}}>
+      {(()=>{ const c = m.pieces.map(p=>[p, maisonChauffage(p)]).filter(([,x])=>x.txt); if(!c.length) return null;
+        return <div><b>Chauffage prévu</b> <span className="muted" style={{fontSize:12}}>· {c.reduce((t,[,x])=>t+(x.w||0),0)} W au total</span>
+          <div style={{fontSize:12.5,display:'grid',gap:1,marginTop:3}}>{c.map(([p,x])=><div key={p.id}>• <b>{p.nom}</b> <span className="muted">({p.etage})</span> : {x.txt}{x.w ? ' — '+x.w+' W' : ''}</div>)}</div></div>; })()}
       <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><b>Entrée électrique</b>
         <select value={m.entree} onChange={e=>majM({entree:e.target.value})} style={{width:'auto'}}>{['','100 A','200 A','320 A','400 A'].map(x=><option key={x} value={x}>{x||'— aucune'}</option>)}</select>
-        <select value={m.entreeType} onChange={e=>majM({entreeType:e.target.value})} style={{width:'auto'}}>{['aérienne','souterraine'].map(x=><option key={x}>{x}</option>)}</select></div>
+        <select value={m.entreeType} onChange={e=>majM({entreeType:e.target.value})} style={{width:'auto'}}>{['aérienne','souterraine'].map(x=><option key={x}>{x}</option>)}</select>
+        <label style={{display:'flex',gap:4,alignItems:'center',fontSize:12.5}}><input type="checkbox" checked={!!m.temporaire} onChange={e=>majM({temporaire:e.target.checked})} style={{width:'auto'}}/> Entrée temporaire ({MAISON_TEMPORAIRE} $)</label></div>
       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><b>Appareils</b>
         {MAISON_APPAREILS.map(([k,l])=><label key={k} style={{display:'flex',gap:3,alignItems:'center',fontSize:12.5}}>{l}
+          {k==='borne' && <select value={m.borneA||'40'} onChange={e=>majM({borneA:e.target.value})} style={{width:'auto',fontSize:12,padding:'2px 4px'}}><option value="40">40 A</option><option value="48">48 A (conseillé)</option></select>}
           <input value={(m.appareils||{})[k]||''} onChange={e=>majM(x=>({appareils:{...(x.appareils||{}), [k]:e.target.value.replace(/\D/g,'')}}))} inputMode="numeric" placeholder="0" style={{width:34,padding:'2px 4px'}}/></label>)}</div>
       {[['inclus','Inclus',MAISON_INCLUS],['exclus','Exclus',MAISON_EXCLUS]].map(([k,l,liste])=><div key={k} style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap'}}><b>{l}</b>
         {liste.map(t=>{ const on = (m[k]||[]).includes(t); return <button key={t} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>majM(x=>({[k]: on ? (x[k]||[]).filter(y=>y!==t) : [...(x[k]||[]), t]}))}>{on?'✓ ':'+ '}{t}</button>; })}</div>)}
