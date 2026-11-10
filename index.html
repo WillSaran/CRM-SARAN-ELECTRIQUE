@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v468';
+const APP_VERSION = 'v469';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10408,7 +10408,9 @@ function maisonResume(p){ const it = p.items||{}, ch = maisonChauffage(p);
 function maisonNouvellePiece(nom, etage, type, pi2){ const t = MAISON_TYPES[type] || MAISON_TYPES.autre;
   return {id:'P'+Date.now()+Math.random().toString(36).slice(2,6), nom, etage, type, pi2:pi2!=null ? String(pi2) : '', fenetres:'1', thermos:'1', intel:false, chauf:t.chauf, items:{...t.items}}; }
 // Lecture du PDF : pages, étage de chaque page, pièces (nom + dimensions)
-async function maisonLirePlan(file, onEtat){
+// v469 : pages gardées par sorte (étages, façades, certificat / arpentage) ; chaque pièce garde sa position sur la page (fx, fy) pour y afficher les sorties prévues
+const MAISON_SORTES = [['etage','Plans des étages'],['facade','Façades (élévations)'],['terrain','Certificat de localisation / arpentage']];
+async function maisonLirePlan(file, onEtat, src){
   if(!window.pdfjsLib){ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }
   const doc = await window.pdfjsLib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise, pages = [], pieces = [];
@@ -10423,9 +10425,14 @@ async function maisonLirePlan(file, onEtat){
     const etage = ets.length===1 ? ets[0] : '', titre = etage;   // une page index (plusieurs plans) : on saute
     const dims = L.filter(x=>/^±?\s*\d+\s*'\s*-?\s*\d*.*[xX×]\s*\d+\s*'/.test(x.t));
     const noms = L.filter(x=>/^[A-ZÉÈÀÂÎÔÛÇ][A-ZÉÈÀÂÎÔÛÇ0-9 #.'’\-]{1,30}$/.test(x.t) && !/^(SCALE|PLAN|SOLIVES|COUPE|DÉTAIL|DETAIL|NOTE|LÉGENDE|MUR |POUTRE|COLONNE)/.test(x.t) && !/^([A-Z]\d*|\d+)$/.test(x.t) && maisonTypeDe(x.t)!=='autre');
-    if(etage || noms.length){ const vp = pg.getViewport({scale:0.35}), c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
-      try{ await pg.render({canvasContext:c.getContext('2d'), viewport:vp}).promise; }catch(e){}
-      pages.push({no:i, etage, titre:titre.trim(), img:c.toDataURL('image/jpeg', 0.7)}); }
+    const terrain = /CERTIFICAT DE LOCALISATION|PLAN D.IMPLANTATION|IMPLANTATION|ARPENT|PLAN D.EMPLACEMENT|CADASTR/.test(tout);
+    const facade = /[ÉE]L[ÉE]VATION|FA[ÇC]ADE/.test(tout);
+    const sorte = etage ? 'etage' : terrain ? 'terrain' : facade ? 'facade' : (/^(1|01)$/.test(String(doc.numPages)) ? 'terrain' : '');
+    const vp1 = pg.getViewport({scale:1});
+    if(sorte){ const vp = pg.getViewport({scale:Math.min(1.3, 1700/vp1.width)}), c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+      try{ const cx = c.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0,0,c.width,c.height); await pg.render({canvasContext:cx, viewport:vp}).promise; }catch(e){}
+      const fac = sorte==='facade' ? ((tout.match(/(AVANT|ARRI[ÈE]RE|LAT[ÉE]RAL[ E]+(DROIT|GAUCHE)|DROITE|GAUCHE)/)||[])[0]||'') : '';
+      pages.push({no:i, src:src||file.name, sorte, etage, titre:(etage || fac || (sorte==='terrain' ? 'Certificat / arpentage' : 'p. '+i)).trim(), img:c.toDataURL('image/jpeg', 0.8)}); }
     if(!etage) continue;
     // chaque dimension va au nom le plus proche ; une pièce sans dimension n'est gardée que si c'est clairement une pièce
     const proche = d => noms.map(n=>({n, k:Math.hypot(d.x-n.x, d.y-n.y)})).sort((a,b)=>a.k-b.k)[0];
@@ -10433,7 +10440,8 @@ async function maisonLirePlan(file, onEtat){
       if(!d && !['mecanique','garage','chambre','cuisine','salon','lavage'].includes(maisonTypeDe(n.t))) return;
       let pi2 = null; if(d){ const [a,b] = d.d.t.replace(/^±/,'').split(/[xX×]/); const fa = ft(a), fb = ft(b); if(fa && fb) pi2 = Math.round(fa*fb); }
       const type = maisonTypeDe(n.t), et = type==='exterieur' ? 'Extérieur' : type==='garage' ? 'Garage' : etage;
-      pieces.push(maisonNouvellePiece(n.t.charAt(0)+n.t.slice(1).toLowerCase(), et, type, pi2)); });
+      const [vx, vy] = vp1.convertToViewportPoint(n.x, n.y);
+      pieces.push({...maisonNouvellePiece(n.t.charAt(0)+n.t.slice(1).toLowerCase(), et, type, pi2), src:src||file.name, pg:i, fx:+(vx/vp1.width).toFixed(4), fy:+(vy/vp1.height).toFixed(4)}); });
   }
   return {pages, pieces};
 }
@@ -10445,6 +10453,27 @@ const MAISON_EXCLUS = ['Luminaires (fournis par le client)','Réfection des murs
 const MAISON_TEMPORAIRE = 750;
 function maisonVide(){ return {pieces:[], entree:'200 A', entreeType:'aérienne', temporaire:false, borneA:'40', appareils:Object.fromEntries(MAISON_APPAREILS.map(([k])=>[k,'1'])), inclus:MAISON_INCLUS.slice(0,4), exclus:MAISON_EXCLUS.slice(0,3)}; }
 const maisonAppLib = (m, k, l) => k==='borne' ? l+' '+(m.borneA==='48' ? '48 A (circuit 60 A)' : '40 A') : l;
+// Petits symboles par sorte de sortie (sur le plan)
+const MAISON_SYMB = [[/^SO0(0|1)/,'🔌','prises'],[/^SO07/,'🔌ext','prise ext.'],[/^SO02/,'S','interrupteurs'],[/^SO0(3|4)|^SO08/,'💡','lumières'],[/^SO05/,'◉','détecteur'],[/^SO06/,'🌀','ventilation'],[/^SO1[0-3]/,'📶','réseau / télé'],[/^SO220/,'🔥','chauffage'],[/^SO22[1-5]/,'⚡','240 V'],[/^SO09/,'🔔','carillon']];
+function maisonSymboles(p){ const t = {}, ch = maisonChauffage(p);
+  const aj = (c, n) => { const s = MAISON_SYMB.find(([r])=>r.test(c)); const k = s ? s[1] : '•'; t[k] = (t[k]||0)+n; };
+  Object.entries(p.items||{}).forEach(([c,n])=>{ if(n>0) aj(c, n); }); if(ch.so220) aj('SO220', ch.so220);
+  return Object.entries(t).map(([k,n])=>k+(n>1?n:'')).join(' '); }
+function MaisonVue({pg, pieces, onClose}){
+  const ps = pg.sorte==='etage' ? pieces.filter(p=>p.pg===pg.no && (p.src||'')===(pg.src||'') && p.fx!=null) : [];
+  const [mode,setMode]=useState('symb');
+  return <div style={{position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,.85)',overflow:'auto',padding:10}} onClick={onClose}>
+    <div onClick={e=>e.stopPropagation()} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',color:'#fff',marginBottom:6,fontSize:13}}>
+      <b>{pg.titre}</b>{ps.length>0 && <><span style={{opacity:.7}}>· {ps.length} pièce{ps.length>1?'s':''}</span>
+        <button className="btn btn-sm" onClick={()=>setMode(mode==='symb'?'texte':mode==='texte'?'rien':'symb')}>{mode==='symb'?'Symboles':mode==='texte'?'Texte':'Plan seul'} ⇄</button>
+        <span style={{opacity:.8,fontSize:11.5}}>{MAISON_SYMB.filter((x,i,a)=>a.findIndex(y=>y[1]===x[1])===i).map(([,k,l])=>k+' '+l).join(' · ')}</span></>}
+      <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={onClose}>✕ Fermer</button></div>
+    <div onClick={e=>e.stopPropagation()} style={{position:'relative',maxWidth:1700,margin:'0 auto'}}>
+      <img src={pg.img} alt="" style={{width:'100%',display:'block',background:'#fff',borderRadius:4}}/>
+      {mode!=='rien' && ps.map(p=><div key={p.id} style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',background:'rgba(255,255,255,.93)',border:'1.5px solid #c0392b',borderRadius:6,padding:'2px 5px',fontSize:11,lineHeight:1.25,color:'#111',maxWidth:mode==='texte'?190:150,textAlign:'center',boxShadow:'0 1px 4px rgba(0,0,0,.35)',pointerEvents:'none'}}>
+        <b>{p.nom}</b><div>{mode==='texte' ? maisonResume(p) : maisonSymboles(p)}</div></div>)}
+    </div></div>;
+}
 function MaisonPlan({d, setD, C, toast}){
   const m = d.maison || maisonVide();
   const majM = patch => setD(o=>({...o, maison:{...(o.maison||maisonVide()), ...(typeof patch==='function' ? patch(o.maison||maisonVide()) : patch)}}));
@@ -10468,14 +10497,22 @@ function MaisonPlan({d, setD, C, toast}){
       const r = await fetch('https://www.googleapis.com/drive/v3/files/'+x.id+'?alt=media&supportsAllDrives=true', {headers:{Authorization:'Bearer '+tok}});
       if(!r.ok) throw new Error('Drive '+r.status);
       const f = new File([await r.blob()], x.name, {type:'application/pdf'});
-      majM({planId:x.id, planNom:x.name}); await lire(f, true); }
+      majM(o=>({planId:x.id, planNom:x.name, plans:[...(o.plans||[]).filter(y=>y.id!==x.id), {id:x.id, name:x.name}]})); await lire(f, true, x.id); }
     catch(e){ setEtat(''); toast && toast('Plan illisible : '+(e && e.message || e)); } };
-  const lire = async (f, dejaDansDrive) => { if(!f) return; setEtat('Lecture du plan…');
-    try{ const r = await maisonLirePlan(f, setEtat);
-      setPages(r.pages.filter(p=>p.etage)); majM(x=>({pieces:[...x.pieces, ...r.pieces]}));
+  const garderPages = (srcId, pp) => setPages(x=>[...x.filter(p=>p.src!==srcId), ...pp]);
+  const lire = async (f, dejaDansDrive, srcId) => { if(!f) return; setEtat('Lecture du plan…');
+    try{ const r = await maisonLirePlan(f, setEtat, srcId);
+      garderPages(srcId||f.name, r.pages); majM(x=>({pieces:[...x.pieces, ...r.pieces]}));
       setEtat(''); toast && toast(r.pieces.length ? r.pieces.length+' pièces trouvées sur le plan' : 'Aucune pièce lue (plan scanné ?) — ajoute-les à la main');
-      if(!dejaDansDrive && peutDeposer()){ try{ let dos = d.dossier; if(!dos){ dos = await driveDossier((d.nom||'Client')+(d.adresse?' — '+d.adresse.split(',')[0]:''), await driveDossier(PHOTOS_RACINE)); setD(o=>({...o, dossier:dos})); } await driveDeposer(f, dos); }catch(e){} } }
+      if(!dejaDansDrive && peutDeposer()){ try{ let dos = d.dossier; if(!dos){ dos = await driveDossier((d.nom||'Client')+(d.adresse?' — '+d.adresse.split(',')[0]:''), await driveDossier(PHOTOS_RACINE)); setD(o=>({...o, dossier:dos})); } const up = await driveDeposer(f, dos);
+        if(up && up.id){ majM(o=>({plans:[...(o.plans||[]), {id:up.id, name:f.name}], pieces:o.pieces.map(p=>p.src===f.name ? {...p, src:up.id} : p)})); setPages(x=>x.map(p=>p.src===f.name ? {...p, src:up.id} : p)); } }catch(e){} } }
     catch(e){ setEtat(''); toast && toast('Plan illisible : '+(e && e.message || e)); } };
+  // Les images des plans ne sont pas sauvées dans la soumission : on les relit du Drive à l'ouverture
+  useEffect(()=>{ let vivant=true; const ids = [...new Set([...(m.plans||[]).map(x=>x.id), m.planId].filter(Boolean))]; if(!ids.length || pages.length) return;
+    (async()=>{ for(const id of ids){ try{ const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+      const r = await fetch('https://www.googleapis.com/drive/v3/files/'+id+'?alt=media&supportsAllDrives=true', {headers:{Authorization:'Bearer '+tok}}); if(!r.ok) continue;
+      const res = await maisonLirePlan(new File([await r.blob()], 'plan.pdf', {type:'application/pdf'}), null, id); if(vivant) garderPages(id, res.pages); }catch(e){} } })();
+    return ()=>{ vivant=false; }; },[]);
   const prix = c => C && C.prixDe ? (C.prixDe(c)||0) : 0;
   const totalPiece = p => { const ch = maisonChauffage(p); return Object.entries(p.items||{}).reduce((t,[c,q])=>t+prix(c)*q,0) + ch.so220*prix('SO220') + ch.intel*prix('SO220.2') + (ch.prod||[]).reduce((t,[c,q])=>t+prix(c)*q,0); };
   const etages = MAISON_ETAGES.filter(e=>m.pieces.some(p=>p.etage===e));
@@ -10515,10 +10552,11 @@ function MaisonPlan({d, setD, C, toast}){
       {etat && <span className="muted" style={{fontSize:12.5}}>{etat}</span>}
       {!m.pieces.length && <span className="muted" style={{fontSize:12}}>ou ajoute les pièces à la main (en bas)</span>}
     </div>
-    {pages.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{pages.map(pg=><div key={pg.no} onClick={()=>setGrand(pg)} style={{cursor:'pointer',textAlign:'center',fontSize:11}}>
-      <img src={pg.img} alt="" style={{height:70,border:'1px solid var(--border2)',borderRadius:4}}/><div className="muted">{pg.etage || 'p. '+pg.no}</div></div>)}</div>}
-    {grand && <div onClick={()=>setGrand(null)} style={{position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,.8)',display:'flex',alignItems:'center',justifyContent:'center',padding:10}}>
-      <img src={grand.img} alt="" style={{maxWidth:'96vw',maxHeight:'92vh',background:'#fff',borderRadius:6}}/></div>}
+    {MAISON_SORTES.map(([k,l])=>{ const pp = pages.filter(p=>p.sorte===k); if(!pp.length) return null;
+      return <div key={k}><div className="muted" style={{fontSize:11.5,fontWeight:700,marginBottom:3}}>{l}{k==='etage' ? ' — clique pour voir les sorties prévues dans chaque pièce' : ''}</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{pp.map(pg=><div key={pg.src+'-'+pg.no} onClick={()=>setGrand(pg)} style={{cursor:'pointer',textAlign:'center',fontSize:11}}>
+          <img src={pg.img} alt="" style={{height:k==='etage'?90:70,border:'1px solid var(--border2)',borderRadius:4,background:'#fff'}}/><div className="muted">{pg.titre}</div></div>)}</div></div>; })}
+    {grand && <MaisonVue pg={grand} pieces={m.pieces} onClose={()=>setGrand(null)}/>}
     {etages.map(e=>{ const ps = m.pieces.filter(p=>p.etage===e), st = ps.reduce((t,p)=>t+totalPiece(p),0);
       return <div key={e} style={{border:'1px solid var(--border)',borderRadius:8}}>
         <div style={{display:'flex',padding:'6px 10px',background:'var(--bg3)',borderRadius:'8px 8px 0 0',fontWeight:700}}>{e} <span className="muted" style={{fontWeight:400,marginLeft:6}}>· {ps.length} pièce{ps.length>1?'s':''}</span><span style={{marginLeft:'auto'}}>{cvMoney(st)}</span></div>
