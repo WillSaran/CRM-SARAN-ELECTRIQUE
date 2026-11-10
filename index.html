@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v442';
+const APP_VERSION = 'v443';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9132,9 +9132,154 @@ const CALC_SOUMISSION = {
       return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(px), installation:arr5(px), borne:0,
         titre:'Mise à niveau de l\'entrée électrique 100A → 200A', travaux:txt.join('\n'), remarques:r2.remarques, lignes:L, heures:h};
     }
+  },  // v443 : catégorie Génératrice — panneau de transfert manuel (panneau secondaire Square D QO avec interlock)
+  genManuel: {
+    nom:'Panneau de transfert manuel (interlock)', cat:'gen', sous:'Transfert manuel (interlock)', typeProjet:'Génératrice', gars:1,
+    tarifs:[['GEN-BASE-30','Panneau de transfert 30 A, base ($) — panneau QO + interlock, disjoncteur, liaison, prise d\'entrée 30 A, installation'],
+      ['GEN-BASE-60','Panneau de transfert 60 A, base ($) — panneau QO + interlock, disjoncteur, liaison, prise d\'entrée 50 A, installation'],
+      ['GEN-CIRCUIT','Par circuit déplacé dans le panneau de transfert ($)'],
+      ['GEN-PI-INT','Fil jusqu\'à la prise d\'entrée, par l\'intérieur ($/pi)'],['GEN-PI-EXT','Fil jusqu\'à la prise d\'entrée, dehors en câble ($/pi)'],
+      ['GEN-PI-TUYAU','Fil jusqu\'à la prise d\'entrée, dehors en tuyau ($/pi)'],
+      ['GEN-CORDON-30','Cordon de génératrice 30 A préparé, base ($)'],['GEN-CORDON-50','Cordon de génératrice 50 A préparé, base ($)'],['GEN-CORDON-PI','Cordon de génératrice, par pied ($/pi)']],
+    defaut:{amp:'30', cote:'gauche', liaison:'NMD', longLiaison:'3', principal:'QO', jb:'100',
+      circ:{frigo:{on:true,t:'1P15'}}, autres:[], parcours:'int', dist:'', cableInt:'', entree50:'cs6375',
+      cordon:false, longCordon:'25', priseGen:'1450', note:''},
+    deviner(txt){ const t=String(txt||''), v={};
+      if(/\b(50|60)\s*a\b/i.test(t)) v.amp='60';
+      const m=t.match(/(\d+(?:[.,]\d+)?)\s*(pi\b|pieds?|')/i); if(m) v.dist=m[1].replace(',','.');
+      const circ={}; GEN_CIRCUITS.forEach(([k,l,d0,re])=>{ if(re.test(t)) circ[k]={on:true,t:d0}; });
+      if(Object.keys(circ).length) v.circ=circ;
+      return v; },
+    champs(v, maj){
+      const sel = (val, on, opts) => <select value={val} onChange={e=>on(e.target.value)}>{opts.map(([a,b])=><option key={a} value={a}>{b}</option>)}</select>;
+      const r = (k, opts) => sel(v[k], x=>maj({[k]:x}), opts);
+      const n = (k, w, ph) => <input value={v[k]||''} inputMode="decimal" placeholder={ph||''} onChange={e=>maj({[k]:e.target.value})} style={{width:w||60}}/>;
+      const c = (k, l) => <label style={{display:'flex',gap:4,alignItems:'center',fontSize:13}}><input type="checkbox" checked={!!v[k]} onChange={e=>maj({[k]:e.target.checked})}/> {l}</label>;
+      const trente = v.amp!=='60', circ = v.circ||{}, autres = v.autres||[];
+      const majC = (k, p) => maj({circ:{...circ, [k]:{...(circ[k]||{t:(GEN_CIRCUITS.find(x=>x[0]===k)||[])[2]}), ...p}}});
+      const majA = (i, p) => maj({autres:autres.map((a,j)=>j===i?{...a,...p}:a)});
+      const typesC = PANNEAU_DISJ_TYPES.filter(([k])=>/^(1P15|1P20|2P15|2P20|2P25|2P30|2P40|T1515|T2020)$/.test(k));
+      const g = genCalcul(v);
+      return <div style={{display:'grid',gap:10,fontSize:13}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}><b>1. Calibre</b> {r('amp',[['30','30 A — panneau CQO48M30DSGP, prise L14-30'],['60','60 A — panneau CQO48M60DSGP, prise 50 A']])}</div>
+        <div style={{display:'grid',gap:6,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+          <b>2. Panneau secondaire avec interlock</b>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Emplacement : {r('cote',[['gauche','à gauche du panneau principal'],['droite','à droite du panneau principal'],['bas','sous le panneau principal'],['autre','ailleurs (voir la note)']])}</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Relié au panneau principal {r('liaison',[['TUYAU','en tuyau EMT (fils RW90)'],['NMD','en câble NMD'],['TECK','en câble TECK'],['AC90','en câble AC90 (BX)']])} longueur {n('longLiaison',50)} pi
+            <span className="muted">({g.liaisonTxt})</span></div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Disjoncteur dans le panneau principal : 2P {trente?'30':'60'} A {r('principal',[['QO','Square D QO'],['HOM','Square D Homeline'],['BR','Eaton BR / CHOM'],['SIE','Siemens'],['AUTRE','Autre']])}</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Boîte de jonction pour allonger les fils (toujours incluse) : montant prévu {n('jb',60)} $ <span className="muted">(100 $ par défaut ; monte-le si tu sais qu'il en faudra plus)</span></div>
+        </div>
+        <div style={{display:'grid',gap:4,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+          <b>3. Circuits transférés à la génératrice</b> <span className="muted" style={{fontSize:12}}>chaque circuit coché = un disjoncteur QO dans le panneau de transfert + 15 min</span>
+          {GEN_CIRCUITS.map(([k,l,d0])=>{ const x = circ[k]||{}; return <div key={k} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+            <label style={{display:'flex',gap:4,alignItems:'center',minWidth:170}}><input type="checkbox" checked={!!x.on} onChange={e=>majC(k,{on:e.target.checked})}/> {l}</label>
+            {x.on && sel(x.t||d0, y=>majC(k,{t:y}), typesC)}</div>; })}
+          {autres.map((a,i)=><div key={'a'+i} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+            <input value={a.nom||''} placeholder="Autre circuit (ex. fournaise)" onChange={e=>majA(i,{nom:e.target.value})} style={{width:170}}/>
+            {sel(a.t||'1P15', y=>majA(i,{t:y}), typesC)} <button className="btn btn-sm" onClick={()=>maj({autres:autres.filter((_,j)=>j!==i)})}>✕</button></div>)}
+          <div><button className="btn btn-sm" onClick={()=>maj({autres:[...autres,{nom:'',t:'1P15'}]})}>+ Autre circuit</button></div>
+          <div className="muted" style={{fontSize:12}}>{g.circuits.length} circuit{g.circuits.length>1?'s':''} · {g.poles} pôle{g.poles>1?'s':''} sur 8 max (4 espaces, jumelés permis){g.poles>8 ? ' — TROP POUR LE PANNEAU 4 ESPACES' : ''}</div>
+        </div>
+        <div style={{display:'grid',gap:6,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+          <b>4. Fil jusqu'à la prise d'entrée dehors</b>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Passe {r('parcours',[['int','par l\'intérieur (on ouvre des murs au besoin)'],['ext','par l\'extérieur, en câble TECK au mur'],['tuyau','par l\'extérieur, en tuyau PVC']])} distance {n('dist',56,'pi')} pi</div>
+          {v.parcours==='int' && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Câble : <input value={v.cableInt||''} placeholder={trente?'NMD 3C8':'NMD 3C6'} onChange={e=>maj({cableInt:e.target.value})} style={{width:180}}/> <span className="muted">(vide = {trente?'NMD 3C8':'NMD 3C6'})</span></div>}
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Prise d'entrée : {trente ? <b>Kit Leviton 37830-KIT (boîtier, prise L14-30, couvercle)</b> : r('entree50',[['cs6375','Leviton CS6375 dans une boîte RJB PVC 5×5×4 + couvercle rond'],['pb50','Reliance PB50 (boîtier tout assemblé, CS6375)']])}</div>
+        </div>
+        <div style={{display:'grid',gap:6,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+          {c('cordon','5. Option : préparer le cordon de génératrice (SOOW 8/4)')}
+          {v.cordon && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',paddingLeft:12}}>Longueur {sel(['10','15','20','25','30','50'].includes(String(v.longCordon)) ? String(v.longCordon) : 'autre', x=>maj({longCordon: x==='autre' ? '' : x}), [['10','10 pi'],['15','15 pi'],['20','20 pi'],['25','25 pi'],['30','30 pi'],['50','50 pi'],['autre','autre']])}
+            {!['10','15','20','25','30','50'].includes(String(v.longCordon)) && <>{n('longCordon',50)} pi</>}
+            {trente ? <span className="muted">fiches L14-30 : femelle 2713 + mâle 2711</span>
+              : <>prise sur la génératrice {r('priseGen',[['1450','14-50 droite (mâle 14-50P)'],['cs','twistlock 50 A (mâle CS6365)']])} <span className="muted">+ femelle CS6364</span></>}</div>}
+        </div>
+        <div style={{display:'flex',gap:6,alignItems:'center'}}><input value={v.note||''} onChange={e=>maj({note:e.target.value})} placeholder="Note (emplacement exact, obstacles…)" style={{flex:1,minWidth:0}}/></div>
+      </div>; },
+    calculer(v, t){
+      const manque = []; const T = key => { const x = t(key); if(x==null) manque.push(key); return x||0; };
+      const g = genCalcul(v), trente = v.amp!=='60', L = [];
+      const ajout = (code, desc, qte, unite, verifier) => { if(qte>0){ const ex = L.find(l=>l.code===code); if(ex) ex.qte = String(+ex.qte + qte); else L.push({code, desc, unite:unite||'un', qte:String(qte), prix:'', ...(verifier ? {verifier:true} : {})}); } };
+      // Panneau de transfert + disjoncteur d'alimentation dans le panneau principal
+      ajout(trente ? 'CQO48M30DSGP' : 'CQO48M60DSGP', 'Panneau de génératrice Square D QO '+(trente?'30':'60')+' A avec interlock (4 espaces / 8 circuits)', 1);
+      const pr = {QO:'QO2', HOM:'CHOM2', BR:'BR2', SIE:'SIEQ2'}[v.principal], a = trente ? '30' : '60';
+      ajout(pr ? pr+a : 'DISJ-2P'+a, 'Disjoncteur 2P '+a+' A pour le panneau principal ('+({QO:'Square D QO',HOM:'Square D Homeline',BR:'Eaton BR',SIE:'Siemens',AUTRE:'marque à confirmer'}[v.principal]||'')+')', 1, 'un', !pr);
+      g.lignesLiaison.forEach(l=>ajout(...l));
+      ajout('RJB664','Boîte de jonction + marrettes pour allonger les fils (au besoin)', 1, 'un', true);
+      // Disjoncteurs des circuits transférés (QO)
+      const parType = {}; g.circuits.forEach(x=>{ (parType[x.t] = parType[x.t]||[]).push(x.nom); });
+      Object.entries(parType).forEach(([ty, noms])=>{ const d = (PANNEAU_DISJ.QO60||{})[ty];
+        L.push({code: d ? d[0] : 'QO-'+ty, desc:(d ? d[1] : 'Disjoncteur QO '+ty)+' (panneau de génératrice) — '+noms.join(', '), unite:'un', qte:String(noms.length), prix:'', ...(d ? {} : {verifier:true})}); });
+      // Fil jusqu'à la prise d'entrée
+      g.lignesFil.forEach(l=>ajout(...l));
+      // Prise d'entrée dehors
+      if(trente) ajout('LEV37830KIT','Kit d\'entrée de génératrice Leviton 30 A (boîtier, prise L14-30, couvercle)', 1);
+      else if(v.entree50==='pb50') ajout('PB50','Boîtier d\'entrée de génératrice Reliance PB50 (50 A, CS6375)', 1, 'un', true);
+      else { ajout('CS6375','Prise d\'entrée Leviton CS6375 50 A twistlock', 1); ajout('RJB554','Boîte de jonction PVC 5×5×4 (RJB)', 1, 'un', true); ajout('COUV-CS6375','Couvercle rond étanche pour la CS6375 (code à confirmer)', 1, 'un', true); }
+      // Cordon (option)
+      const lc = Math.max(0, Math.round(cvNum(v.longCordon)||0));
+      if(v.cordon && lc){
+        ajout('84SOOW','Cordon souple SOOW 8/4 (code à confirmer)', lc, 'pi', true);
+        if(trente){ ajout('2713','Fiche femelle twistlock L14-30R (Leviton 2713)', 1); ajout('2711','Fiche mâle twistlock L14-30P (Leviton 2711)', 1); }
+        else { ajout('CS6364','Fiche femelle twistlock 50 A (Leviton CS6364)', 1);
+          if(v.priseGen==='cs') ajout('CS6365','Fiche mâle twistlock 50 A (Leviton CS6365)', 1);
+          else ajout('1450P','Fiche mâle 14-50P 50 A (code à confirmer)', 1, 'un', true); } }
+      // Prix (onglet Prix)
+      const D = Math.max(0, cvNum(v.dist)||0);
+      let px = T(trente ? 'GEN-BASE-30' : 'GEN-BASE-60') + g.circuits.length*T('GEN-CIRCUIT') + (cvNum(v.jb)!=null ? cvNum(v.jb) : 100);
+      if(D) px += D*T(v.parcours==='int' ? 'GEN-PI-INT' : v.parcours==='tuyau' ? 'GEN-PI-TUYAU' : 'GEN-PI-EXT');
+      if(v.cordon && lc) px += T(trente ? 'GEN-CORDON-30' : 'GEN-CORDON-50') + lc*T('GEN-CORDON-PI');
+      const h = Math.round((3 + 0.25*g.circuits.length)*4)/4;
+      const coteTxt = {gauche:'à gauche du panneau principal', droite:'à droite du panneau principal', bas:'sous le panneau principal', autre:'près du panneau principal'}[v.cote] || 'près du panneau principal';
+      const parcoursTxt = v.parcours==='int' ? 'passé par l\'intérieur (ouverture de murs au besoin, réparation des finis par le client)' : v.parcours==='tuyau' ? 'passé à l\'extérieur dans un tuyau PVC fixé au mur' : 'passé à l\'extérieur en câble TECK fixé au mur';
+      const txt = ['Installation d\'un panneau de transfert manuel pour génératrice portative ('+(trente?'30':'60')+' A) : panneau secondaire Square D QO avec interlock (verrouillage mécanique), installé '+coteTxt+' et relié à celui-ci '+g.liaisonClient+'.',
+        g.circuits.length ? 'Transfert des circuits suivants vers le panneau de génératrice : '+g.circuits.map(x=>x.nom.toLowerCase()).join(', ')+' ('+g.circuits.length+' circuit'+(g.circuits.length>1?'s':'')+').' : '',
+        'Prise d\'entrée de génératrice '+(trente ? '30 A (L14-30)' : '50 A twistlock')+' installée à l\'extérieur'+(D ? ', fil de '+Math.ceil(D)+' pi ' : ', fil ')+parcoursTxt+'.',
+        'Boîte de jonction pour prolonger les fils incluse au besoin.',
+        v.cordon && lc ? 'Cordon de génératrice de '+lc+' pi préparé ('+(trente ? 'fiches L14-30' : 'fiches 50 A')+').' : '',
+        'Raccordement et vérification selon les normes en vigueur.'].filter(Boolean);
+      const rem = [v.note ? 'Note : '+v.note : '', g.poles>8 ? 'ATTENTION : '+g.poles+' pôles pour un panneau de 4 espaces / 8 circuits.' : ''].filter(Boolean).join('\n');
+      return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(px), installation:arr5(px), borne:0,
+        titre:'Panneau de transfert manuel pour génératrice ('+(trente?'30':'60')+' A)', travaux:txt.join('\n'), remarques:rem, lignes:L, heures:h};
+    }
   },
 };
 
+// v443 : circuits proposés pour la génératrice — [clé, nom, disjoncteur par défaut, mots pour deviner]
+const GEN_CIRCUITS = [['frigo','Frigo','1P15',/fri(go|gidaire|gidère)|r[ée]frig/i],['congel','Congélateur','1P15',/cong[ée]l/i],
+  ['pompe','Pompe à eau','2P15',/pompe\s*(à|a)\s*eau|puits/i],['thermo','Thermopompe','2P30',/thermopompe|heat ?pump/i],
+  ['chauf','Chauffage du sous-sol','2P20',/chauffage|plinthe/i],['micro','Micro-ondes','1P20',/micro[- ]?onde/i],
+  ['eclair','Éclairage','1P15',/[ée]clairage|lumi[eè]re/i],['wifi','Prise Wi-Fi / routeur','1P15',/wi-?fi|routeur|internet/i],
+  ['puisard','Pompe de puisard','1P15',/puisard|sump/i],['fournaise','Fournaise','1P15',/fournaise/i]];
+function genCalcul(v){
+  const trente = v.amp!=='60', circ = v.circ||{};
+  const circuits = [...GEN_CIRCUITS.filter(([k])=>circ[k] && circ[k].on).map(([k,l,d0])=>({nom:l, t:circ[k].t||d0})),
+    ...(v.autres||[]).filter(a=>String(a.nom||'').trim()).map(a=>({nom:String(a.nom).trim(), t:a.t||'1P15'}))];
+  const poles = circuits.reduce((n,x)=>n + (/^2P/.test(x.t) ? 2 : /^T/.test(x.t) ? 2 : 1), 0);
+  // Liaison panneau principal → panneau de transfert
+  const lg = Math.max(1, Math.ceil(cvNum(v.longLiaison)||3)) + 2, g = trente ? 10 : 6, lignesLiaison = [];
+  let liaisonTxt = '', liaisonClient = '';
+  if(v.liaison==='TUYAU'){ const po = trente ? '1/2' : '3/4';
+    lignesLiaison.push(['EMT'+(trente?'12':'34'),'Tuyau EMT '+po+' po', lg, 'pi', true], ['EMTC'+(trente?'12':'34'),'Connecteur EMT '+po+' po', 2, 'un', true],
+      ['RW90'+g+'BLK','Fil RW90 #'+g+' noir', lg, 'pi'], ['RW90'+g+'RED','Fil RW90 #'+g+' rouge', lg, 'pi', true], ['RW90'+g+'WHT','Fil RW90 #'+g+' blanc', lg, 'pi', true], ['RW9010GRN','Fil RW90 #10 vert (mise à la terre)', lg, 'pi']);
+    liaisonTxt = 'EMT '+po+' po + 3 × #'+g+' + terre #10'; liaisonClient = 'par un tuyau EMT'; }
+  else { const nom = {NMD:'NMD',TECK:'TECK',AC90:'AC90'}[v.liaison]||'NMD';
+    const code = v.liaison==='TECK' ? 'CAB'+g+'TECK3C1KV' : v.liaison==='AC90' ? 'AC90'+g+'-3' : 'NMD3C'+g;
+    const con = v.liaison==='NMD' ? ['CI7'+(trente?'1':'3'),'Connecteur NMD '+(trente?'1/2':'1')+' po'] : ['CI22'+(trente?'14':'16'),'Connecteur '+nom+' '+(trente?'3/4':'1')+' po'];
+    lignesLiaison.push([code,'Câble '+nom+' 3C #'+g, lg, 'pi', v.liaison!=='NMD'], [con[0], con[1], 2, 'un', true]);
+    liaisonTxt = nom+' 3C #'+g+' + 2 connecteurs'; liaisonClient = 'par un câble '+nom; }
+  // Fil jusqu'à la prise d'entrée (+10 % de jeu)
+  const D = Math.max(0, cvNum(v.dist)||0), pi = D ? Math.ceil(D*1.1) : 0, gf = trente ? 8 : 6, lignesFil = [];
+  if(pi){
+    if(v.parcours==='int'){ const txt = String(v.cableInt||'').trim() || ('NMD 3C'+gf), m = txt.replace(/\s/g,'').toUpperCase().match(/^NMD(?:90)?3C(\d+)$/);
+      lignesFil.push([m ? 'NMD3C'+m[1] : 'FIL-GEN', 'Câble '+txt+' jusqu\'à la prise d\'entrée', pi, 'pi', !m], [m && +m[1]>=8 ? 'CI73' : 'CI73','Connecteur NMD 1 po', 2, 'un', true]); }
+    else if(v.parcours==='ext'){ lignesFil.push(['CAB'+gf+'TECK3C1KV','Câble TECK 3C #'+gf+' 1 kV jusqu\'à la prise d\'entrée', pi, 'pi', true], ['CI2216','Connecteur câble TECK 1 po', 2], ['RCS15-1','Sangle pour câble TECK', Math.ceil(D/5)+1]); }
+    else { const P = BORNE_PVC[0], barres = Math.ceil(pi/10);
+      lignesFil.push(['RW90'+gf+'BLK','Fil RW90 #'+gf+' noir (2 conducteurs)', 2*pi, 'pi'], ['RW90'+gf+'WHT','Fil RW90 #'+gf+' blanc', pi, 'pi', true], ['RW9010GRN','Fil RW90 #10 vert (mise à la terre)', pi, 'pi'],
+        [P.tuyau,'Conduit PVC rigide '+P.nom+' (longueurs de 10 pi)', barres*10, 'pi'], [P.coupl,'Coupling PVC '+P.nom, Math.max(0,barres-1)], [P.adapt,'Adaptateur de boîte PVC '+P.nom, 2],
+        [P.sangle,'Sangle PVC '+P.nom, Math.ceil(D/3)+1], ['RVOC475','Colle à solvant pour PVC', 1]); } }
+  return {circuits, poles, lignesLiaison, liaisonTxt, liaisonClient, lignesFil};
+}
 // v429 : longueur du fil d'entrée (par conducteur) — 1 m qui sort de la tête + tête → embase + embase → panneau + 2 pi de raccord
 function maj100Fil(v){ const N = (x, d0) => { const y = cvNum(x); return y==null || String(x).trim()==='' ? d0 : Math.max(0,y); };
   const pvc = v.mat==='pvc', lm = pvc ? N(v.longMat, 16) : (String(v.longMat)==='10' ? 10 : 12), D = N(v.dist, 10);
@@ -9174,7 +9319,7 @@ function surtensionCalc(v, ajout, T){
   return {px:0, texte:'', option:''};
 }
 // v348 : choix du calcul — Borne, puis la catégorie « Entrée électrique » et ses sous-catégories
-const CALC_CATS = {entree:{nom:'Entrée électrique', avenir:'sous-panneau, panneau secondaire, panneau de génératrice manuel'}};
+const CALC_CATS = {entree:{nom:'Entrée électrique', avenir:'sous-panneau, panneau secondaire'}, gen:{nom:'Génératrice', avenir:''}};
 function ChoixCalcul({type, onChoisir, avecAvenir}){
   const [cat,setCat]=useState(()=>(CALC_SOUMISSION[type]||{}).cat || '');
   useEffect(()=>{ const c = (CALC_SOUMISSION[type]||{}).cat; if(c) setCat(c); },[type]);
