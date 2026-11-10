@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v457';
+const APP_VERSION = 'v458';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10294,6 +10294,11 @@ function PlanTravaux({d, setD, toast, dansCarte}){
     {plan.length>0 && <PlanPlace d={d} setD={setD}/>}
   </div>;
 }
+// v458 : phrases à ajouter d'un clic (Remarques de la soumission, courriel au client)
+const CLAUSES_RAPIDES = [
+  ['espace','Libérer l\'espace de travail','Le client doit libérer l\'espace de travail (accès dégagé au panneau électrique et aux endroits des travaux) avant notre arrivée.'],
+  ['finis','Réfection non comprise','Ne comprend pas la réfection des murs, plafonds et finis (plâtre, peinture).'],
+];
 // v457 : où vont les photos dans le PDF — à la fin, au début (en amont de la soumission), seulement pour les gars (ordre de travail), ou pas du tout
 const PLAN_PLACES = [['fin','À la fin'],['debut','Au début (avant la soumission)'],['gars','Seulement pour les gars (ordre de travail)'],['aucune','Pas de photos']];
 function PlanPlace({d, setD, compact}){
@@ -10723,6 +10728,8 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
 
     <div className="card" style={{marginBottom:10}}>
       <textarea value={d.remarques} onChange={e=>maj({remarques:e.target.value})} rows={2} placeholder="Remarques…" style={{width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
+      <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:5}}>{CLAUSES_RAPIDES.map(([k,l,t])=>{ const on = String(d.remarques||'').includes(t);
+        return <button key={k} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} title={t} onClick={()=>maj({remarques: on ? String(d.remarques||'').replace(t,'').replace(/\n{2,}/g,'\n').trim() : [String(d.remarques||'').trim(), t].filter(Boolean).join('\n')})}>{on ? '✓ ' : '+ '}{l}</button>; })}</div>
       {prix && <div style={{marginTop:8,fontSize:13.5,display:'grid',gap:2,justifyItems:'end'}}>
         {!(d.forfait!=='' && d.forfait!=null) && <>
           {calc.mo>0 && <div>Main-d'œuvre ({calc.h1} h SA01{calc.h2?' + '+calc.h2+' h SA02':''}) : <b>{cvMoney(calc.mo)}</b></div>}
@@ -10746,6 +10753,10 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
             {[['tu','Tutoyer'],['delai','« Désolé du délai »']].map(([k,l])=><label key={k} style={{display:'flex',gap:4,alignItems:'center'}}><input type="checkbox" checked={!!courrielEdit[k]} style={{width:'auto'}}
               onChange={e=>setCourrielEdit(x=>{ const n = {...x, [k]:e.target.checked}; if(x.modifie && !confirm('Refaire le texte ? Tes changements seront perdus.')) return x; return {...n, corps:texteCourriel(x.doc, n), modifie:false}; })}/> {l}</label>)}
           </div>
+          <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:6}}>{CLAUSES_RAPIDES.map(([k,l,t])=>{ const on = String(courrielEdit.corps||'').includes(t);
+            return <button key={k} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} title={t} onClick={()=>setCourrielEdit(x=>{ const c = String(x.corps||'');
+              if(on) return {...x, corps:c.replace('\n\n'+t,'').replace(t,''), modifie:true};
+              const i = c.search(/\n\s*(Cordialement|Merci|Bonne journée)/i); return {...x, corps: i>0 ? c.slice(0,i)+'\n\n'+t+c.slice(i) : c+'\n\n'+t, modifie:true}; })}>{on ? '✓ ' : '+ '}{l}</button>; })}</div>
           <div className="field"><label>Message</label><textarea value={courrielEdit.corps} onChange={e=>setCourrielEdit(x=>({...x, corps:e.target.value, modifie:true}))} rows={14} style={{fontFamily:'var(--font-body)',lineHeight:1.4}}/></div>
           <div className="muted" style={{fontSize:12,marginBottom:10}}>Le PDF est fait comme l'aperçu et joint au brouillon. Rien n'est envoyé : tu vérifies et tu envoies dans Gmail.</div>
           <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
