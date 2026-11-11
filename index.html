@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v477';
+const APP_VERSION = 'v478';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10483,7 +10483,7 @@ function MaisonVue({pg, pieces, onClose}){
 const MAISON_OUTILS = [
   ['SO01','P','prise 15 A','#2563eb','P','SO01'],['SO02','S','interrupteur','#16a34a','S','SO02'],['SO02.1','S3','3 voies','#15803d','W','SO02.1'],
   ['SO04','L','plafonnier','#d97706','L','SO04'],['MUR','M','murale','#ea580c','M','SO04'],['PL','PL','plinthe','#e11d48','C','PL','rect'],['TH','T','thermostat','#9f1239','T','TH'],
-  ['SO03','E','encastré','#b45309','E','SO03'],['SO05','F','détecteur de fumée','#dc2626','F','SO05'],['SO06','V','ventilateur de salle de bain','#7c3aed','V','SO06'],['SO06H','H','hotte','#6d28d9','H','SO06'],
+  ['SO03','E','encastré','#b45309','E','SO03'],['SO05','F','détecteur de fumée','#dc2626','F','SO05'],['SO06','F','fan de salle de bain','#7c3aed','V','SO06'],['SO06H','H','hotte','#6d28d9','H','SO06'],
   ['SO01.1','DF','prise DDFT','#0891b2','D','SO01.1'],['SO01.2','P20','prise 20 A','#1e40af','','SO01.2'],['SO01.21','DF20','prise 20 A DDFT','#0e7490','','SO01.21'],
   ['SO02.2','G','gradateur','#166534','G','SO02.2'],['SO11','R','réseau / télé','#475569','R','SO11'],
   ['SO00','PD','circuit dédié (extra)','#4338ca','','SO00'],
@@ -10524,7 +10524,7 @@ const MAISON_SYM = {
   SO01:['prise',''], 'SO01.2':['prise','20'], 'SO01.1':['prise','GFI'], 'SO01.21':['prise','20 GFI'], SO07:['prise','EXT'], SO00:['prise','D'], X240:['prise','240'],
   SO02:['inter',''], 'SO02.1':['inter','3'], 'SO02.2':['inter','G'],
   SO03:['encastre',''], SO04:['plafonnier',''], MUR:['murale',''], SO08:['plafonnier','EXT'],
-  TH:['thermo',''], SO05:['fumee',''], SO06:['boite','V'], SO06H:['boite','H'], SO11:['reseau',''], PL:['plinthe','']};
+  TH:['thermo',''], SO05:['fumee',''], SO06:['boite','F'], SO06H:['boite','H'], SO11:['reseau',''], PL:['plinthe','']};
 function maisonSymSvg(c, txt){
   const o = maisonOutil(c), col = o[3], [forme, ind0] = MAISON_SYM[c] || ['rond', o[1]], ind = forme==='plinthe' ? '' : ind0;
   let w = 40, h = 40, g = '';
@@ -10636,13 +10636,13 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
       const v = emp.filter(x=>MAISON_INTER.includes(x.c) && x.pg===e.pg).map(x=>({x, k:Math.hypot((x.x-e.x)*W, (x.y-e.y)*H)})).sort((a,b)=>a.k-b.k)[0];
       if(v && v.k < 34) e = {...e, x:v.x.x, y:v.x.y}; }
     emp.push(e);
-    if(e.c==='SO03'){ const ici = emp.filter(x=>x.c==='SO03' && x.pg===e.pg), autres = emp.filter(x=>!(x.c==='SO03' && x.pg===e.pg)); emp = [...autres, ...maisonGrille(ici, (pg && pg.w && pg.h) ? pg.w/pg.h : 1.4)]; }
+    // v478 : plus de grille symétrique automatique pour les encastrés (posés où on touche)
     const so = maisonCompte(e.c);
     if(MAISON_LIB[so] && !/^SO220/.test(so)){ const n = emp.filter(x=>maisonCompte(x.c)===so).length; if(n > (it[so]||0)) it[so] = n; }   // jamais sous le minimum ; plus d'emplacements → le récap monte
     majP(p.id, {emp, items:it, ...(p.fx==null && pg ? {pg:pg.no, src:pg.src||''} : {})}); };
   const enlever = k => { memo(); majP(p.id, {emp:(p.emp||[]).filter((x,j)=>j!==k)}); };
   const deplacer = (k, x, y) => { memo(); let emp = (p.emp||[]).map((e,j)=>j===k ? {...e, x, y} : e);
-    if(emp[k] && emp[k].c==='SO03'){ const pgn = emp[k].pg, ici = emp.filter(e=>e.c==='SO03' && e.pg===pgn); emp = [...emp.filter(e=>!(e.c==='SO03' && e.pg===pgn)), ...maisonGrille(ici, (pg && pg.w && pg.h) ? pg.w/pg.h : 1.4)]; }
+
     majP(p.id, {emp}); };
   // En un clic : plafonnier au centre, ou 4 encastrés en carré autour du centre (glisse un coin pour agrandir, la grille suit)
   const centre = () => ({x:p.fx!=null ? p.fx : .5, y:p.fy!=null ? p.fy : .5, pg:pg ? pg.no : p.pg, src:pg ? pg.src||'' : ''});
@@ -10668,6 +10668,7 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
       if(/^[1-7]$/.test(k)){ setOutil(MAISON_NUMEROS[+k-1]); return; }
       if(k.toLowerCase()==='x'){ setOutil('gomme'); return; }
       if(k.toLowerCase()==='a'){ setOutil('PORTE'); return; }
+      if(p.type==='sdb' && k.toLowerCase()==='f'){ setOutil('SO06'); return; }   // v478 : en salle de bain, F = fan
       const o = MAISON_OUTILS.find(x=>x[4] && x[4].toLowerCase()===k.toLowerCase() && maisonOutilPermis(x, p)); if(o){ setOutil(o[0]); if(!MAISON_NUMEROS.includes(o[0])) setExtras(true); } };
     window.addEventListener('keydown', f); return ()=>window.removeEventListener('keydown', f); });
   if(!p) return null;
@@ -10679,12 +10680,12 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
   // Outils de la pièce : les 7 de base + ce qui est prévu ou placé ici ; le reste dans Extras
   const permis = MAISON_OUTILS.filter(o=>maisonOutilPermis(o, p));
   const ctx = MAISON_CONTEXTE[p.type] || [];
-  const utiles = permis.filter(o=>MAISON_BASE.includes(o[0]) || ctx.includes(o[0]) || (o[0]!=='MUR' && lignes.some(([so,a,b])=>so===o[5] && (a||b) && !MAISON_OUTILS.some(x=>x[5]===so && x!==o && (MAISON_BASE.includes(x[0]) || ctx.includes(x[0]))))) || o[0]===outil);
+  const utiles = permis.filter(o=>!(p.type==='sdb' && o[0]==='SO05' && !(p.emp||[]).some(x=>x.c==='SO05') && outil!=='SO05')).filter(o=>MAISON_BASE.includes(o[0]) || ctx.includes(o[0]) || (o[0]!=='MUR' && lignes.some(([so,a,b])=>so===o[5] && (a||b) && !MAISON_OUTILS.some(x=>x[5]===so && x!==o && (MAISON_BASE.includes(x[0]) || ctx.includes(x[0]))))) || o[0]===outil);
   const reste = permis.filter(o=>!utiles.includes(o));
   const bouton = o => { const n = MAISON_NUMEROS.indexOf(o[0]);
     return <button key={o[0]} onClick={()=>setOutil(o[0])} onDoubleClick={()=>{ if(o[0]==='SO01' || o[0]==='SO04') setOutil('SO00'); }} title={o[2]+(o[4] ? ' — touche '+o[4] : '')+(o[0]==='SO01' || o[0]==='SO04' ? ' (2 fois = circuit dédié)' : '')} style={{display:'inline-flex',gap:4,alignItems:'center',padding:'3px 7px 3px 3px',borderRadius:14,cursor:'pointer',fontSize:11.5,
       border:outil===o[0] ? '2px solid var(--accent)' : '1px solid var(--border2)',background:outil===o[0] ? 'rgba(88,166,255,.15)' : 'var(--bg2)',color:'var(--text)'}}>
-      <MaisonMarque c={o[0]} petit/>{o[2]}<span className="muted" style={{fontSize:10,fontFamily:'monospace'}}>{[n>=0 ? n+1 : '', o[4]].filter(Boolean).join('·')}</span></button>; };
+      <MaisonMarque c={o[0]} petit/>{o[2]}<span className="muted" style={{fontSize:10,fontFamily:'monospace'}}>{[n>=0 ? n+1 : '', p.type==='sdb' && o[0]==='SO06' ? 'F' : p.type==='sdb' && o[0]==='SO05' ? '' : o[4]].filter(Boolean).join('·')}</span></button>; };
   const large = window.innerWidth >= 900;
   const btnO = (actif, rouge) => ({padding:'4px 9px',borderRadius:14,cursor:'pointer',fontSize:11.5,border:actif ? '2px solid var(--'+(rouge?'danger':'accent')+')' : '1px solid var(--border2)',background:actif && !rouge ? 'rgba(88,166,255,.15)' : 'var(--bg2)',color:'var(--text)'});
   return <div style={{position:'fixed',inset:0,zIndex:1000,background:'var(--bg)',padding:8,display:'flex',flexDirection:'column',gap:6,overflow:'hidden',boxSizing:'border-box'}}>
@@ -10835,7 +10836,8 @@ function MaisonPlan({d, setD, C, toast}){
     MAISON_APPAREILS.forEach(([k,l,c])=>{ const n = cvNum(app[k])||0; if(!n) return; if(c) aj(c, n); else libres.push(l+(n>1?' ×'+n:'')); });
     if(m.entree) libres.push('Entrée électrique '+m.entree+' '+(m.entreeType||''));
     const lignesM0 = [...Object.entries(q).map(([k,n])=>{ const [e,c] = k.includes('|') ? k.split('|') : ['',k]; const pr = C && C.produitDe ? C.produitDe(c) : null;
-        return {code:c, desc:(e ? e+' — ' : '')+((pr && pr.desc) || ('Sortie '+(MAISON_LIB[c]||c))), unite:'un', qte:String(n), prix:'', maison:true}; }),
+        const v = C && C.prixDe ? C.prixDe(c, 'un') : null;   // v478 : prix mis tout de suite (ton prix SO de La mémoire)
+        return {code:c, desc:(e ? e+' — ' : '')+((pr && pr.desc) || ('Sortie '+(MAISON_LIB[c]||c))), unite:'un', qte:String(n), prix:v!=null ? String(v) : '', maison:true}; }),
       ...libres.map(t=>({code:'', desc:t, unite:'un', qte:'1', prix:'', maison:true}))];
     const lignesM = lignesM0.map(l=>l.code==='SO225' && m.borneA==='48' ? {...l, desc:l.desc+' — borne 48 A (circuit 60 A)'} : l);
     if(m.temporaire) lignesM.push({code:'', desc:'Entrée temporaire (chantier)', unite:'un', qte:'1', prix:String(MAISON_TEMPORAIRE), maison:true});
@@ -10937,6 +10939,8 @@ function MaisonPlan({d, setD, C, toast}){
       {[['inclus','Inclus',MAISON_INCLUS],['exclus','Exclus',MAISON_EXCLUS]].map(([k,l,liste])=><div key={k} style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap'}}><b>{l}</b>
         {liste.map(t=>{ const on = (m[k]||[]).includes(t); return <button key={t} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>majM(x=>({[k]: on ? (x[k]||[]).filter(y=>y!==t) : [...(x[k]||[]), t]}))}>{on?'✓ ':'+ '}{t}</button>; })}</div>)}
       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:4}}>
+        {(()=>{ const cs = [...new Set(m.pieces.flatMap(p=>[...Object.entries(p.items||{}).filter(([,n])=>n>0).map(([c])=>c), ...(maisonChauffage(p).so220 ? ['SO220'] : []), ...((maisonChauffage(p).prod||[]).map(([c])=>c))]))].filter(c=>!(C && C.prixDe && C.prixDe(c)));
+          return cs.length ? <div style={{width:'100%',color:'var(--danger)',fontSize:12.5}}>⚠ Pas de prix dans le catalogue pour : {cs.join(', ')} — ces lignes arriveront à 0 $ (mets le prix dans Inventaire › À la sortie).</div> : null; })()}
         <b>Total des sorties : {cvMoney(m.pieces.reduce((t,p)=>t+totalPiece(p),0))}</b><span className="muted" style={{fontSize:12}}>(tes prix SO, avant entrée, appareils sans code et buffer)</span>
         <button className="btn" style={{marginLeft:'auto'}} disabled={!!etat || !m.pieces.some(p=>(p.emp||[]).length)} title="Un plan par étage avec les emplacements placés pendant le tour — va dans le plan des travaux (PDF du client)" onClick={plansClient}>📎 Plans annotés → PDF</button>
         <button className="btn btn-p" onClick={appliquer}>↳ Remplir la soumission</button></div>
