@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v492b';
+const APP_VERSION = 'v493';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5691,6 +5691,30 @@ async function relevePdfPages(file){
 }
 function paiMots(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3 && !PAI_MOTS_VIDES.has(w) && !/^\d+$/.test(w)); }
 function paiJours(d){ const t = Date.parse(String(d||'').slice(0,10)); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
+// v493 : le vrai montant d'une facture = le bloc des totaux du PDF envoyé au client (escompte compris).
+// Les factures importées du logiciel sans PDF ont un montant recalculé avec les lignes : il ne voit jamais l'escompte (ce n'est pas une ligne).
+const facNbr = s => { const v = cvNum(String(s||'').replace(/[\s\u00a0$]/g,'').replace(',', '.')); return v==null ? null : v; };
+async function facturePdfMontant(num){
+  const r = await gmReq('messages?maxResults=6&q='+encodeURIComponent('in:sent subject:"Facture #'+num+'" has:attachment'));
+  for(const m0 of (r.messages||[])){ const m = await gmReq('messages/'+m0.id+'?format=full');
+    const pj = gmPiecesJointes(m.payload).filter(p=>/pdf|octet/i.test(p.type) || /\.pdf$/i.test(p.nom||''));
+    for(const p of pj){ try{ const d = await gmReq('messages/'+m.id+'/attachments/'+p.att); const bin = atob(String(d.data||'').replace(/-/g,'+').replace(/_/g,'/'));
+      const pages = await relevePdfPages(new Blob([Uint8Array.from(bin, c=>c.charCodeAt(0))], {type:'application/pdf'}));
+      const txt = pages.map(pg=>pg.map(x=>x.str).join(' ')).join(' ').replace(/\s+/g,' ');
+      if(!new RegExp('FACTURE\\s*'+num+'\\b|\\b'+num+'\\s+\\d{2}/\\d{2}/\\d{4}').test(txt)) continue;   // bon numéro de facture
+      // bloc des totaux : la rangée de chiffres juste sous l'en-tête « … MONTANT DÛ » (lue par position, pas dans l'ordre du texte)
+      let tot = null, esc = null, plein = null;
+      for(const pg of [...pages].reverse()){ const h = pg.find(x=>/MONTANT\s*D[ÛU]/i.test(x.str)); if(!h || tot) continue;
+        const n = pg.filter(x=>x.y < h.y-3 && x.y > h.y-28 && /^-?\$?\s*\d[\d  ]*,\d{2}$/.test(x.str.trim())).sort((a,b)=>a.x-b.x).map(x=>facNbr(x.str));
+        if(n.length >= 6) tot = n;
+        const ligne = re => { const e = pg.find(x=>re.test(x.str)); if(!e) return null; const v = pg.filter(x=>Math.abs(x.y-e.y)<4 && x.x>e.x && /\d,\d{2}/.test(x.str)).sort((a,b)=>a.x-b.x)[0]; return v ? {e:e.str, v:facNbr(v.str)} : null; };
+        esc = ligne(/Escompte accord/i); plein = ligne(/Montant total/i); }
+      if(!tot) continue;
+      const [vente, retenue, sousTotal, tps, tvq, total] = tot, du = tot.length>=9 ? tot[8] : null;
+      if(!(total > 0) || Math.abs((sousTotal||0) + (tps||0) + (tvq||0) - total) > 0.05) continue;   // le bloc doit se tenir
+      return {num, sousTotal, total, du, escomptePct:esc ? (facNbr((esc.e.match(/(\d+(?:[.,]\d+)?)\s*%/)||[])[1])||0) : 0, escompte:esc ? esc.v : 0, plein:plein ? plein.v : null,
+        date:new Date(+m.internalDate).toISOString().slice(0,10), msg:m.id}; }catch(e){} } }
+  return null; }
 function paiLireFactures(rows){
   const fh=(rows[0]||[]).map(h=>cvNorm(h)), fc=re=>fh.findIndex(h=>re.test(h));
   const fx={num:fc(/^facture/),date:fc(/^date/),cli:fc(/^client/),po:fc(/^po$/),nom:fc(/^nom/),desc:fc(/^description/),ht:fc(/^montant/),ttc:fc(/^total/),env:fc(/^envoyee/),pdf:fc(/^pdf/),st:fc(/^statut/),esc:fc(/^escompte/),plog:fc(/^payelogiciel/)};   // v230 : Escompte (lu dans le PDF par le script)
@@ -5699,7 +5723,7 @@ function paiLireFactures(rows){
   Object.defineProperty(out,'__vieilles',{value:vieilles, enumerable:false});   // v229 : factures d'avant le 1er juillet, gardées à part (payées par un virement d'après le 1er juillet qui les nomme)
   rows.slice(1).forEach((r,i)=>{ const n=g(r,'num'); if(!n) return; tous.add(n);
     const d = g(r,'date'), env = g(r,'env'), dest = (d && d.slice(0,10) < PAI_DEBUT && !(env && env.slice(0,10) >= PAI_DEBUT)) ? vieilles : out;   // v190-191 : facture datée ET envoyée avant le 1er juillet = pas dans le CRM
-    dest[n]={num:n, row:i+2, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, escompte:Math.max(0, cvNum(g(r,'esc'))||0), payeLog:Math.max(0, cvNum(g(r,'plog'))||0), envoi:g(r,'env'), pdf:g(r,'pdf'), annulee:/^annul/.test(cvNorm(g(r,'st'))), statut:g(r,'st'),
+    dest[n]={num:n, row:i+2, date:g(r,'date'), client:g(r,'cli'), po:g(r,'po'), nom:g(r,'nom'), desc:g(r,'desc'), ttc:cvNum(g(r,'ttc'))||0, escompte:Math.max(0, cvNum(g(r,'esc'))||0), payeLog:Math.max(0, cvNum(g(r,'plog'))||0), envoi:g(r,'env'), pdf:g(r,'pdf'), st:g(r,'st'), annulee:/^annul/.test(cvNorm(g(r,'st'))), statut:g(r,'st'),
       ouverte:/^ouverte/i.test(g(r,'st')) && !g(r,'pdf') && !g(r,'env'), estime:/^montant calcul/i.test(g(r,'st')) && !g(r,'pdf'),
       // v250 : importée du logiciel (export 2000-2673) sans preuve = pas encore une vraie facture pour le CRM (ni à recevoir, ni dans les totaux)
       aDeposer:/^(montant calcul|ouverte)/i.test(g(r,'st')) && !g(r,'pdf') && !g(r,'env')}; });   // v187 : importées du logiciel comptable
@@ -6055,6 +6079,22 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees,
   const facturesX = useMemo(()=>data ? auxFusionner(data.factures, aux) : null,[data, aux]);
   const essayes = useRef(new Set());
   const [autoConf,setAutoConf]=useState([]);   // [{de, montant, factures}]
+  const [verif,setVerif]=useState({fait:[], cours:false});   // v493 : montants estimés vérifiés contre le PDF envoyé
+  const verifEssais = useRef(new Set());
+  useEffect(()=>{ if(!id || !data || verif.cours) return;
+    const F = data.factures, cols = F.__cols || {};
+    const cand = Object.values(F).filter(f=>/^(montant calcul|ouverte)/i.test(f.st||'') && !f.pdf && !verifEssais.current.has(f.num)).slice(0, 20);
+    if(!cand.length || !(cols.ht>=0 && cols.ttc>=0 && cols.st>=0)) return;
+    cand.forEach(f=>verifEssais.current.add(f.num)); setVerif(v=>({...v, cours:true}));
+    const L = i => String.fromCharCode(65+i);
+    (async()=>{ const maj = [], fait = [];
+      for(const f of cand){ let r = null; try{ r = await facturePdfMontant(f.num); }catch(e){} if(!r) continue;
+        const note = 'Montant du PDF envoyé'+(r.escompte>0 ? ' — escompte '+String(r.escomptePct).replace('.',',')+' % ('+cvMoney(r.escompte)+')' : '')+' (vérifié le '+paiAujourdhui()+')';
+        maj.push({range:L(cols.ht)+f.row, values:[[r.sousTotal.toFixed(2)]]}, {range:L(cols.ttc)+f.row, values:[[r.total.toFixed(2)]]}, {range:L(cols.st)+f.row, values:[[note]]});
+        if(cols.env>=0 && !f.envoi) maj.push({range:L(cols.env)+f.row, values:[[r.date]]});
+        fait.push({num:f.num, nom:f.nomAffiche || f.nom || f.client, avant:f.ttc, apres:r.total, esc:r.escompte, pct:r.escomptePct}); }
+      if(maj.length){ try{ await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:maj}}); }catch(e){ setErr('Vérification des PDF : '+apiErrMsg(e)); } }
+      setVerif(v=>({fait:[...v.fait, ...fait], cours:false})); if(maj.length) setTick(t=>t+1); })(); },[id, data]);
   useEffect(()=>{ if(!data || !data.onglet || !id) return;
     const A0 = paiementsAnalyser(facturesX, data.paiements, nomDe, separes, adr), pris = new Set(), lot = [];
     A0.attente.forEach(p=>{ if(essayes.current.has(p.row)) return; const o = A0.propositions[p.row]||[]; const surs = o.filter(x=>x.niveau==='sur');
@@ -6271,6 +6311,11 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees,
       <span style={{display:'flex',gap:8,alignItems:'center'}}><span style={{color:'var(--success)'}}>→ {p.confirmees.map(n=>'#'+n).join(', ')}</span>
         {p.lien && <a href={p.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>↗</a>}</span></div>)}</div>; }
   return <div>
+    {(verif.cours || verif.fait.length>0) && <div className="card" style={{marginBottom:10,borderColor:'var(--accent)'}}>
+      <b>🔎 Montants vérifiés avec les PDF envoyés</b>{verif.cours && <span className="muted"> — lecture des factures en cours…</span>}
+      <div className="muted" style={{fontSize:12,marginTop:2}}>Les factures importées du logiciel sans PDF avaient un montant recalculé avec les lignes (sans l'escompte). Le CRM lit maintenant le bloc des totaux du PDF envoyé au client.</div>
+      {verif.fait.map(x=><div key={x.num} style={{fontSize:13,marginTop:3}}>#{x.num} {x.nom} : <span style={{textDecoration:'line-through',opacity:.6}}>{cvMoney(x.avant)}</span> → <b>{cvMoney(x.apres)}</b>{x.esc>0 && <span className="muted"> · escompte {String(x.pct).replace('.',',')} % ({cvMoney(x.esc)})</span>}</div>)}
+    </div>}
     {!data.onglet && <div className="card" style={{marginBottom:10,borderColor:'var(--warning)'}}>
       <b>L'onglet « Paiements » n'existe pas encore dans La mémoire — Factures.</b>
       <div className="muted" style={{fontSize:12.5,marginTop:4}}>Colle le script « paiements.gs » dans La mémoire et exécute « paiementsInteracInstaller » : les virements Interac reçus vont s'ajouter tout seuls toutes les heures. En attendant, tu peux déjà marquer une facture payée à la main (chèque, comptant).</div>
