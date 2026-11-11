@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v473';
+const APP_VERSION = 'v474';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10490,6 +10490,9 @@ const MAISON_INTER = ['SO02','SO02.1','SO02.2'];
 const maisonOutil = c => MAISON_OUTILS.find(o=>o[0]===c) || [c, c, MAISON_LIB[c]||c, '#555', '', c];
 const maisonCompte = c => maisonOutil(c)[5];
 // v473 : V (ventilateur) seulement en salle de bain, H (hotte) seulement dans la cuisine
+// v474 : outils montrés selon la sorte de pièce ; tout le reste est dans le « Catalogue de sorties »
+const MAISON_BASE = ['SO01','SO02','SO02.1','SO04','MUR','PL','TH','SO03','SO05'];
+const MAISON_CONTEXTE = {cuisine:['SO01.2','SO01.21','SO06H','SO01.1','X240'], sdb:['SO01.1','SO06'], lavage:['SO01.1','X240'], exterieur:['SO07','SO08'], garage:['SO07','SO01.1'], mecanique:['X240']};
 const maisonOutilPermis = (o, p) => o[0]==='SO06' ? (!p || p.type==='sdb') : o[0]==='SO06H' ? (!p || p.type==='cuisine') : true;
 // Quantité prévue (récap) pour un code compté
 function maisonPrevu(p, so){ const it = p.items||{}, ch = maisonChauffage(p);
@@ -10521,7 +10524,9 @@ function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}
   const [tire,setTire]=useState(null);   // marque qu'on glisse {k, x, y}
   const [vue,setVue]=useState({z:2.5, cx:piece && piece.fx!=null ? piece.fx : .5, cy:piece && piece.fy!=null ? piece.fy : .5});
   useEffect(()=>{ setVue(v=>({...v, cx:piece && piece.fx!=null ? piece.fx : .5, cy:piece && piece.fy!=null ? piece.fy : .5, z:piece && piece.fx!=null ? 2.5 : 1})); },[piece && piece.id]);
-  useEffect(()=>{ const m = () => boite.current && setTaille({w:boite.current.clientWidth, h:boite.current.clientHeight}); m(); window.addEventListener('resize', m); return ()=>window.removeEventListener('resize', m); },[]);
+  useEffect(()=>{ const m = () => boite.current && setTaille({w:boite.current.clientWidth||600, h:boite.current.clientHeight||420}); m();
+    const ro = window.ResizeObserver ? new ResizeObserver(m) : null; if(ro && boite.current) ro.observe(boite.current); window.addEventListener('resize', m);
+    return ()=>{ window.removeEventListener('resize', m); ro && ro.disconnect(); }; },[]);
   const W = taille.w*vue.z, H = W*((pg.h||1000)/(pg.w||1400)), left = taille.w/2 - vue.cx*W, top = taille.h/2 - vue.cy*H;
   const pos = e => { const r = boite.current.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; };
   const versPage = p => ({x:vue.cx + (p.x - taille.w/2)/W, y:vue.cy + (p.y - taille.h/2)/H});
@@ -10542,9 +10547,9 @@ function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}
     if(outil) onPlacer({c:outil, x:+x.toFixed(4), y:+y.toFixed(4), pg:pg.no, src:pg.src||''}, W, H); };
   const zoom = f => setVue(v=>({...v, z:Math.max(.6, Math.min(8, v.z*f))}));
   const autres = pieces.filter(p=>(p.emp||[]).length || p.fx!=null);
-  return <div style={{position:'relative'}}>
+  return <div style={{position:'relative',height:'100%'}}>
     <div ref={boite} onPointerDown={bas} onPointerMove={bouge} onPointerUp={haut} onPointerCancel={()=>{ geste.current = null; }} onWheel={e=>zoom(e.deltaY<0 ? 1.15 : 1/1.15)}
-      style={{position:'relative',overflow:'hidden',height:'min(58vh, 560px)',background:'#e5e7eb',borderRadius:8,touchAction:'none',cursor:outil==='gomme' ? 'not-allowed' : outil ? 'crosshair' : 'grab',userSelect:'none'}}>
+      style={{position:'relative',overflow:'hidden',height:'100%',minHeight:240,background:'#e5e7eb',borderRadius:8,touchAction:'none',cursor:outil==='gomme' ? 'not-allowed' : outil ? 'crosshair' : 'grab',userSelect:'none'}}>
       <div style={{position:'absolute',left,top,width:W,height:H}}>
         <img src={pg.img} alt="" draggable={false} style={{width:'100%',height:'100%',display:'block',background:'#fff'}}/>
         {autres.map(p=>{ const em0 = (p.emp||[]).map((m,i)=>piece && p.id===piece.id && tire && tire.k===i ? {...m, x:tire.x, y:tire.y} : m), em = em0.filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')), dec = maisonDecalages(em);
@@ -10627,56 +10632,64 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
   const manque = lignes.reduce((t,[,a,b])=>t+Math.max(0,a-b),0);
   // Outils de la pièce : les 7 de base + ce qui est prévu ou placé ici ; le reste dans Extras
   const permis = MAISON_OUTILS.filter(o=>maisonOutilPermis(o, p));
-  const utiles = permis.filter(o=>MAISON_NUMEROS.includes(o[0]) || lignes.some(([so])=>so===o[5]) || o[0]===outil);
+  const ctx = MAISON_CONTEXTE[p.type] || [];
+  const utiles = permis.filter(o=>MAISON_BASE.includes(o[0]) || ctx.includes(o[0]) || (o[0]!=='MUR' && lignes.some(([so,a,b])=>so===o[5] && (a||b) && !MAISON_OUTILS.some(x=>x[5]===so && x!==o && (MAISON_BASE.includes(x[0]) || ctx.includes(x[0]))))) || o[0]===outil);
   const reste = permis.filter(o=>!utiles.includes(o));
   const bouton = o => { const n = MAISON_NUMEROS.indexOf(o[0]);
     return <button key={o[0]} onClick={()=>setOutil(o[0])} title={o[2]+(o[4] ? ' — touche '+o[4] : '')} style={{display:'inline-flex',gap:4,alignItems:'center',padding:'3px 7px 3px 3px',borderRadius:14,cursor:'pointer',fontSize:11.5,
       border:outil===o[0] ? '2px solid var(--accent)' : '1px solid var(--border2)',background:outil===o[0] ? 'rgba(88,166,255,.15)' : 'var(--bg2)',color:'var(--text)'}}>
       <MaisonMarque c={o[0]} petit/>{o[2]}<span className="muted" style={{fontSize:10,fontFamily:'monospace'}}>{[n>=0 ? n+1 : '', o[4]].filter(Boolean).join('·')}</span></button>; };
-  return <div style={{position:'fixed',inset:0,zIndex:1000,background:'var(--bg)',overflow:'auto',padding:10}}>
-    <div style={{maxWidth:1200,margin:'0 auto',display:'grid',gap:8}}>
-      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-        <b style={{fontSize:15}}>🧭 Tour — {p.etage} › {p.nom}</b><span className="muted" style={{fontSize:12.5}}>{i+1} / {ordre.length} · {faits} vérifiée{faits>1?'s':''}{cvNum(p.pi2) ? ' · '+p.pi2+' pi²' : ''}</span>
-        <button className="btn btn-sm" style={{marginLeft:'auto'}} disabled={!hist.current.length} onClick={retour} title="Défaire la dernière action (Ctrl+Z ou ⌫)">↶ Retour</button>
-        <button className="btn btn-sm" onClick={onClose}>✕ Fermer</button></div>
-      <div style={{display:'flex',gap:3,flexWrap:'wrap'}}>{ordre.map((x,k)=><button key={x.id} onClick={()=>aller(k)} title={x.etage+' › '+x.nom} style={{width:k===i?26:14,height:10,borderRadius:5,border:'none',cursor:'pointer',padding:0,
-        background:k===i ? 'var(--accent)' : x.ok ? 'var(--success)' : (x.emp||[]).length ? 'var(--warning)' : 'var(--border2)'}}/>)}</div>
-      {demande && <div style={{border:'2px solid var(--accent)',borderRadius:8,padding:'10px 12px',display:'grid',gap:6,fontSize:13.5}}>
-        <b>Avant de partir le tour : qu'est-ce que je place automatiquement ?</b>
-        {[['s','Un interrupteur à l\'entrée de chaque pièce'],['f','Un détecteur de fumée à l\'entrée des chambres'],['t','Un thermostat à l\'entrée des pièces chauffées'+(chauffe?'':' (aucun chauffage prévu)')],['pl','Les plinthes sous les fenêtres (ou sur un mur s\'il n\'y a pas de fenêtre)'+(chauffe?'':' (aucun chauffage prévu)')]].map(([k,l])=>
-          <label key={k} style={{display:'flex',gap:6,alignItems:'center'}}><input type="checkbox" checked={!!aut[k]} onChange={e=>setAut({...aut, [k]:e.target.checked})} style={{width:'auto'}}/>{l}</label>)}
-        <div className="muted" style={{fontSize:12}}>Dans chaque pièce, tu touches l'entrée de la porte une fois : tout ce qui est coché se place là (glisse-les ensuite où tu veux). Puis tu touches sous chaque fenêtre pour les plinthes.</div>
-        <div><button className="btn btn-p" onClick={()=>{ majM({auto:aut}); setDemande(false); }}>C'est parti</button></div></div>}
-      {!demande && (outil==='PORTE' || (outil==='PL' && plAFaire(p))) && <div style={{background:'rgba(88,166,255,.12)',border:'1px solid var(--accent)',borderRadius:8,padding:'6px 10px',fontSize:13.5}}>
-        {outil==='PORTE' ? <>👉 Touche <b>l'entrée de la porte</b> : {porteItems(p).map(c=>maisonOutil(c)[2]).join(' + ')} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>{ majP(p.id,{porte:true}); setOutil(plAFaire(p) ? 'PL' : 'SO01'); }}>Passer</button></>
-          : <>👉 Touche <b>sous chaque fenêtre</b> (ou un mur) : {Math.max(0, plAFaire(p) - (p.emp||[]).filter(x=>x.c==='PL').length)} plinthe(s) à placer{ch.plinthes.length ? ' — '+ch.plinthes.map(w=>w+' W').join(', ') : ''} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>setOutil('SO01')}>Passer</button></>}</div>}
-      {pg ? <MaisonCarte pg={pg} pieces={m.pieces} piece={p} outil={outil} onPlacer={placer} onEnlever={enlever} onDeplacer={deplacer}/>
-        : <div className="muted" style={{padding:20,textAlign:'center',border:'1px dashed var(--border2)',borderRadius:8}}>Le plan se charge (ou aucun plan lu) — lis le plan PDF pour placer les sorties dessus.</div>}
-      <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
-        <button onClick={()=>setOutil('PORTE')} title="Entrée de la porte (touche A)" style={{padding:'4px 9px',borderRadius:14,cursor:'pointer',fontSize:11.5,border:outil==='PORTE' ? '2px solid var(--accent)' : '1px solid var(--border2)',background:outil==='PORTE' ? 'rgba(88,166,255,.15)' : 'var(--bg2)',color:'var(--text)'}}>🚪 Entrée <span className="muted" style={{fontSize:10}}>A</span></button>
-        <button className="btn btn-sm" disabled={!pg} onClick={()=>rapide('L')} title="Un plafonnier au centre de la pièce">💡 Plafonnier au centre</button>
-        <button className="btn btn-sm" disabled={!pg} onClick={()=>rapide('E')} title="4 encastrés en carré au centre — glisse un coin, la grille reste symétrique">▦ 4 encastrés</button>
-        {utiles.map(bouton)}
-        <button onClick={()=>setOutil('gomme')} title="Touche X" style={{padding:'4px 9px',borderRadius:14,cursor:'pointer',fontSize:11.5,border:outil==='gomme' ? '2px solid var(--danger)' : '1px solid var(--border2)',background:'var(--bg2)',color:'var(--text)'}}>⌫ Enlever <span className="muted" style={{fontSize:10}}>X</span></button>
-        {reste.length>0 && <button className="btn btn-sm" onClick={()=>setExtras(!extras)}>{extras ? '▾' : '▸'} Extras ({reste.length})</button>}
-        {extras && reste.map(bouton)}
+  const large = window.innerWidth >= 900;
+  const btnO = (actif, rouge) => ({padding:'4px 9px',borderRadius:14,cursor:'pointer',fontSize:11.5,border:actif ? '2px solid var(--'+(rouge?'danger':'accent')+')' : '1px solid var(--border2)',background:actif && !rouge ? 'rgba(88,166,255,.15)' : 'var(--bg2)',color:'var(--text)'});
+  return <div style={{position:'fixed',inset:0,zIndex:1000,background:'var(--bg)',padding:8,display:'flex',flexDirection:'column',gap:6,overflow:'hidden',boxSizing:'border-box'}}>
+    <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+      <b style={{fontSize:15}}>🧭 {p.etage} › {p.nom}</b><span className="muted" style={{fontSize:12.5}}>{i+1} / {ordre.length} · {faits} vérifiée{faits>1?'s':''}{cvNum(p.pi2) ? ' · '+p.pi2+' pi²' : ''}</span>
+      <span style={{display:'flex',gap:3,flexWrap:'wrap',flex:1,minWidth:120}}>{ordre.map((x,k)=><button key={x.id} onClick={()=>aller(k)} title={x.etage+' › '+x.nom} style={{width:k===i?22:12,height:9,borderRadius:5,border:'none',cursor:'pointer',padding:0,
+        background:k===i ? 'var(--accent)' : x.ok ? 'var(--success)' : (x.emp||[]).length ? 'var(--warning)' : 'var(--border2)'}}/>)}</span>
+      <button className="btn btn-sm" disabled={!hist.current.length} onClick={retour} title="Défaire la dernière action (Ctrl+Z ou ⌫)">↶ Retour</button>
+      <button className="btn btn-sm" onClick={onClose}>✕ Fermer</button></div>
+    {demande && <div style={{border:'2px solid var(--accent)',borderRadius:8,padding:'8px 12px',display:'grid',gap:4,fontSize:13.5}}>
+      <b>Avant de partir le tour : qu'est-ce que je place automatiquement ?</b>
+      {[['s','Un interrupteur à l\'entrée de chaque pièce'],['f','Un détecteur de fumée à l\'entrée des chambres'],['t','Un thermostat à l\'entrée des pièces chauffées'+(chauffe?'':' (aucun chauffage prévu)')],['pl','Les plinthes sous les fenêtres (ou sur un mur s\'il n\'y a pas de fenêtre)'+(chauffe?'':' (aucun chauffage prévu)')]].map(([k,l])=>
+        <label key={k} style={{display:'flex',gap:6,alignItems:'center'}}><input type="checkbox" checked={!!aut[k]} onChange={e=>setAut({...aut, [k]:e.target.checked})} style={{width:'auto'}}/>{l}</label>)}
+      <div className="muted" style={{fontSize:12}}>Dans chaque pièce, tu touches l'entrée de la porte une fois : tout ce qui est coché se place là (glisse-les ensuite où tu veux). Puis tu touches sous chaque fenêtre pour les plinthes.</div>
+      <div><button className="btn btn-p" onClick={()=>{ majM({auto:aut}); setDemande(false); }}>C'est parti</button></div></div>}
+    {!demande && (outil==='PORTE' || (outil==='PL' && plAFaire(p))) && <div style={{background:'rgba(88,166,255,.12)',border:'1px solid var(--accent)',borderRadius:8,padding:'4px 10px',fontSize:13.5}}>
+      {outil==='PORTE' ? <>👉 Touche <b>l'entrée de la porte</b> : {porteItems(p).map(c=>maisonOutil(c)[2]).join(' + ')} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>{ majP(p.id,{porte:true}); setOutil(plAFaire(p) ? 'PL' : 'SO01'); }}>Passer</button></>
+        : <>👉 Touche <b>sous chaque fenêtre</b> (ou un mur) : {Math.max(0, plAFaire(p) - (p.emp||[]).filter(x=>x.c==='PL').length)} plinthe(s) à placer{ch.plinthes.length ? ' — '+ch.plinthes.map(w=>w+' W').join(', ') : ''} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>setOutil('SO01')}>Passer</button></>}</div>}
+    <div style={{flex:1,minHeight:0,display:'flex',flexDirection:large ? 'row' : 'column',gap:8}}>
+      <div style={{flex:1,minHeight:large ? 0 : '42vh',minWidth:0}}>
+        {pg ? <MaisonCarte pg={pg} pieces={m.pieces} piece={p} outil={outil} onPlacer={placer} onEnlever={enlever} onDeplacer={deplacer}/>
+          : <div className="muted" style={{padding:20,textAlign:'center',border:'1px dashed var(--border2)',borderRadius:8,height:'100%',boxSizing:'border-box'}}>Le plan se charge (ou aucun plan lu) — lis le plan PDF pour placer les sorties dessus.</div>}
       </div>
-      <div className="muted" style={{fontSize:11.5}}>Touche le plan pour placer · glisse pour te déplacer · 1-7 ou les lettres pour changer d'outil · glisse une marque pour la déplacer · les encastrés se mettent en grille symétrique · les interrupteurs près l'un de l'autre se regroupent</div>
-      <div style={{display:'grid',gap:2,border:'1px solid var(--border)',borderRadius:8,padding:'6px 10px',fontSize:13}}>
-        <div style={{display:'flex',gap:6}}><b>Placées / prévues</b>{manque>0 ? <span style={{color:'var(--warning)'}}>· il en reste {manque} à placer</span> : lignes.length ? <span style={{color:'var(--success)'}}>· tout est placé</span> : null}</div>
-        {lignes.map(([so,a,b])=>{ const o = MAISON_OUTILS.find(x=>x[5]===so && maisonOutilPermis(x, p)) || MAISON_OUTILS.find(x=>x[5]===so); return <div key={so} style={{display:'flex',gap:6,alignItems:'center'}}><MaisonMarque c={o ? o[0] : so} petit/><span style={{minWidth:170}}>{so==='SO04' ? 'plafonnier / murale' : o ? o[2] : so}</span>
-          <b style={{color:b<a ? 'var(--warning)' : 'var(--success)'}}>{b} / {a}</b>
-          {MAISON_LIB[so] && <span style={{display:'inline-flex',gap:2}}><button className="btn btn-sm" style={{padding:'0 6px'}} onClick={()=>{ memo(); majP(p.id,{items:{...p.items, [so]:Math.max(0,(p.items[so]||0)-1)}}); }}>−</button>
-            <button className="btn btn-sm" style={{padding:'0 6px'}} onClick={()=>{ memo(); majP(p.id,{items:{...p.items, [so]:(p.items[so]||0)+1}}); }}>+</button></span>}</div>; })}
-        {ch.txt && <div style={{color:'var(--warning)',fontSize:12.5}}>Chauffage prévu : {ch.txt}{ch.w ? ' ('+ch.w+' W)' : ''}</div>}
+      <div style={{width:large ? 330 : 'auto',flexShrink:0,overflow:'auto',display:'flex',flexDirection:'column',gap:8,maxHeight:large ? 'none' : '34vh'}}>
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+          <button onClick={()=>setOutil('PORTE')} title="Entrée de la porte (touche A)" style={btnO(outil==='PORTE')}>🚪 Entrée <span className="muted" style={{fontSize:10}}>A</span></button>
+          <button className="btn btn-sm" disabled={!pg} onClick={()=>rapide('L')} title="Un plafonnier au centre de la pièce">💡 Plafonnier au centre</button>
+          <button className="btn btn-sm" disabled={!pg} onClick={()=>rapide('E')} title="4 encastrés en carré au centre — glisse un coin, la grille reste symétrique">▦ 4 encastrés</button>
+          {utiles.map(bouton)}
+          <button onClick={()=>setOutil('gomme')} title="Touche X" style={btnO(outil==='gomme', true)}>⌫ Enlever <span className="muted" style={{fontSize:10}}>X</span></button>
+        </div>
+        {reste.length>0 && <div><button className="btn btn-sm" onClick={()=>setExtras(!extras)}>{extras ? '▾' : '▸'} Catalogue de sorties ({reste.length})</button>
+          {extras && <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:4}}>{reste.map(bouton)}</div>}</div>}
+        <div style={{display:'grid',gap:2,border:'1px solid var(--border)',borderRadius:8,padding:'6px 10px',fontSize:13}}>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}><b>Placées / prévues</b>{manque>0 ? <span style={{color:'var(--warning)'}}>· il en reste {manque} à placer</span> : lignes.length ? <span style={{color:'var(--success)'}}>· tout est placé</span> : null}</div>
+          {lignes.map(([so,a,b])=>{ const o = MAISON_OUTILS.find(x=>x[5]===so && maisonOutilPermis(x, p)) || MAISON_OUTILS.find(x=>x[5]===so); return <div key={so} style={{display:'flex',gap:6,alignItems:'center'}}><MaisonMarque c={o ? o[0] : so} petit/><span style={{flex:1}}>{so==='SO04' ? 'plafonnier / murale' : o ? o[2] : so}</span>
+            <b style={{color:b<a ? 'var(--warning)' : 'var(--success)'}}>{b} / {a}</b>
+            {MAISON_LIB[so] ? <span style={{display:'inline-flex',gap:2}}><button className="btn btn-sm" style={{padding:'0 6px'}} onClick={()=>{ memo(); majP(p.id,{items:{...p.items, [so]:Math.max(0,(p.items[so]||0)-1)}}); }}>−</button>
+              <button className="btn btn-sm" style={{padding:'0 6px'}} onClick={()=>{ memo(); majP(p.id,{items:{...p.items, [so]:(p.items[so]||0)+1}}); }}>+</button></span> : <span style={{width:52}}/>}</div>; })}
+          {ch.txt && <div style={{color:'var(--warning)',fontSize:12.5}}>Chauffage prévu : {ch.txt}{ch.w ? ' ('+ch.w+' W)' : ''}</div>}
+        </div>
+        <div className="muted" style={{fontSize:11}}>Touche le plan pour placer · glisse le plan pour te déplacer, une marque pour la déplacer · 1-7 ou les lettres pour changer d'outil · ← → pièce précédente / suivante</div>
       </div>
-      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-        <button className="btn" disabled={i===0} onClick={()=>aller(i-1)}>◀ Précédente</button>
-        <button className={'btn'+(p.ok?'':' btn-p')} onClick={()=>{ majP(p.id, {ok:!p.ok}); if(!p.ok && i<ordre.length-1) aller(i+1); }}>{p.ok ? '✓ Vérifiée (annuler)' : '✓ Pièce vérifiée → suivante'}</button>
-        <button className="btn" disabled={i>=ordre.length-1} onClick={()=>aller(i+1)}>Suivante ▶</button>
-        {faits===ordre.length && <button className="btn btn-p" style={{marginLeft:'auto'}} onClick={onPlansClient}>📎 Plans annotés dans la soumission</button>}
-      </div>
-    </div></div>;
+    </div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+      <button className="btn" disabled={i===0} onClick={()=>aller(i-1)}>◀ Précédente</button>
+      <button className={'btn'+(p.ok?'':' btn-p')} onClick={()=>{ majP(p.id, {ok:!p.ok}); if(!p.ok && i<ordre.length-1) aller(i+1); }}>{p.ok ? '✓ Vérifiée (annuler)' : '✓ Pièce vérifiée → suivante'}</button>
+      <button className="btn" disabled={i>=ordre.length-1} onClick={()=>aller(i+1)}>Suivante ▶</button>
+      {faits===ordre.length && <button className="btn btn-p" style={{marginLeft:'auto'}} onClick={onPlansClient}>📎 Plans annotés dans la soumission</button>}
+    </div>
+  </div>;
 }
 // Plans annotés (un par étage) : image du plan + emplacements + légende → images du « Plan des travaux » (PDF client)
 async function maisonPlansAnnotes(pages, pieces){
