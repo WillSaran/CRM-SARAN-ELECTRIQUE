@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v491';
+const APP_VERSION = 'v492';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10428,6 +10428,8 @@ const MAISON_TYPES = {
   sdb:{nom:'Salle de bain', items:{"SO01.1":1, SO02:1, SO04:1, SO06:1}, chauf:'plinthe'},
   lavage:{nom:'Salle de lavage', items:{SO01:1, SO02:1, SO04:1}, chauf:'plinthe'},
   corridor:{nom:'Corridor / hall', items:{SO04:1, "SO02.1":2}, chauf:'aucun'},
+  entree:{nom:'Entrée', items:{SO04:1, SO02:1, SO01:1}, chauf:'aucun'},   // v492
+  vestibule:{nom:'Vestibule', items:{SO04:1, SO02:1, SO01:1}, chauf:'plinthe'},
   escalier:{nom:'Escalier', items:{SO04:1, "SO02.1":2}, chauf:'aucun'},   // v485 : luminaire + 3 voies en haut et en bas
   rangement:{nom:'Walk-in / rangement', items:{SO04:1, SO02:1}, chauf:'aucun'},
   mecanique:{nom:'Salle mécanique', items:{SO04:1, SO01:1, SO02:1}, chauf:'aucun'},
@@ -10444,6 +10446,7 @@ function maisonTypeDe(nom){ const n = cvNorm(nom).replace(/[^a-z0-9 ]/g,' ');
   if(/salon|sejour|familiale|boudoir|cinema|salle de jeu/.test(n)) return 'salon';
   if(/sdb|bain|salle d eau|douche|toilette|\bwc\b|powder/.test(n)) return 'sdb';
   if(/escalier|stair/.test(n)) return 'escalier';
+  if(/vestibule/.test(n)) return 'vestibule'; if(/^entree|\bentree\b|entrance|foyer/.test(n) && !/garde/.test(n)) return 'entree';
   if(/buanderie|lavage|lavoir/.test(n)) return 'lavage'; if(/garage/.test(n)) return 'garage';
   if(/mec|mecanique|fournaise|chaufferie/.test(n)) return 'mecanique';
   if(/atelier|workshop/.test(n)) return 'atelier';
@@ -10912,14 +10915,14 @@ function maisonAvecCadres(p, cs, pg, ech){ if(!cs.length) return {...p, cadres:[
 // v487 : en encadrant, les sortes de pièces de l'étage, numérotées (touche 1-9, 0) — pas de cuisine au sous-sol, etc.
 const MAISON_TYPES_ETAGE = {
   'Sous-sol':['salon','chambre','sdb','lavage','mecanique','debarras','atelier','corridor','escalier','bureau'],
-  'Rez-de-chaussée':['cuisine','salon','sam','sdb','bureau','corridor','rangement','lavage','escalier','debarras'],
+  'Rez-de-chaussée':['cuisine','salon','sam','sdb','entree','vestibule','bureau','corridor','escalier','rangement'],
   'Étage':['chambre','sdb','lavage','rangement','corridor','bureau','salon','escalier','debarras','autre'],
   'Garage':['garage','atelier','debarras','autre'], 'Extérieur':['exterieur','autre']};
 function maisonPi2Cadre(c, pg, ech){ if(!ech || !c) return null; const wU = Math.abs(c[2]-c[0]), hU = Math.abs(c[3]-c[1])*((pg.h||1)/(pg.w||1)); return Math.round(wU*ech*hU*ech); }
 // v489 : sorties d'une pièce, + / − directement sur la vue du plan
 const maisonOutilDe = c => MAISON_OUTILS.find(o=>o[5]===c) || null;
 // v490 : sorties proposées selon la pièce (escalier → 3 voies, encastrés ; corridor → détecteur ; atelier → prises 20 A…) ; 240 V à part (palette du plan)
-const MAISON_SUGG = {escalier:['SO02.1','SO03','SO04','SO05'], corridor:['SO05','SO02.1','SO03','SO01'], chambre:['SO01','SO03','SO02.1','SO11','SO00'], bureau:['SO01','SO11','SO03','SO00'],
+const MAISON_SUGG = {entree:['SO02.1','SO08','SO07','SO03','SO05'], vestibule:['SO03','SO02.1','SO01','SO08'], escalier:['SO02.1','SO03','SO04','SO05'], corridor:['SO05','SO02.1','SO03','SO01'], chambre:['SO01','SO03','SO02.1','SO11','SO00'], bureau:['SO01','SO11','SO03','SO00'],
   salon:['SO01','SO03','SO11','SO02.2','SO00'], sam:['SO03','SO01','SO02.2'], cuisine:['SO01.2','SO01.21','SO03','SO06','SO00','SO02.2'], sdb:['SO01.1','SO06','SO03','SO02'],
   lavage:['SO01','SO01.1','SO03'], rangement:['SO01','SO03'], debarras:['SO01','SO03'], atelier:['SO01.2','SO01','SO03','SO00','SO04'], mecanique:['SO01','SO00','SO04'],
   garage:['SO01','SO01.2','SO00','SO07','SO08'], exterieur:['SO07','SO08'], ssnonfini:['SO01','SO04','SO00']};
