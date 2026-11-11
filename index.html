@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v486';
+const APP_VERSION = 'v487';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10887,6 +10887,12 @@ function maisonAvecCadres(p, cs, pg, ech){ if(!cs.length) return {...p, cadres:[
   const gros = [...cs].sort((a,b)=>(b[2]-b[0])*(b[3]-b[1]) - (a[2]-a[0])*(a[3]-a[1]))[0];
   const pi = ech ? cs.reduce((t,c)=>t+(maisonPi2Cadre(c, pg, ech)||0),0) : null;
   return {...p, cadres:cs, cadre:bb, fx:+((gros[0]+gros[2])/2).toFixed(4), fy:+((gros[1]+gros[3])/2).toFixed(4), ...(pi ? {pi2:String(pi)} : {})}; }
+// v487 : en encadrant, les sortes de pièces de l'étage, numérotées (touche 1-9, 0) — pas de cuisine au sous-sol, etc.
+const MAISON_TYPES_ETAGE = {
+  'Sous-sol':['salon','chambre','sdb','lavage','mecanique','rangement','bureau','corridor','escalier','ssnonfini'],
+  'Rez-de-chaussée':['cuisine','salon','sam','sdb','bureau','corridor','rangement','lavage','escalier','autre'],
+  'Étage':['chambre','sdb','lavage','rangement','corridor','bureau','salon','escalier','autre'],
+  'Garage':['garage','rangement','autre'], 'Extérieur':['exterieur','autre']};
 function maisonPi2Cadre(c, pg, ech){ if(!ech || !c) return null; const wU = Math.abs(c[2]-c[0]), hU = Math.abs(c[3]-c[1])*((pg.h||1)/(pg.w||1)); return Math.round(wU*ech*hU*ech); }
 function MaisonEncadrer({pg, m, majM, onClose}){
   const boite = useRef(null), geste = useRef(null);
@@ -10916,7 +10922,7 @@ function MaisonEncadrer({pg, m, majM, onClose}){
   const zoom = f => setVue(v=>({...v, z:Math.max(.5, Math.min(10, v.z*f))}));
   const etageDe = t => t==='garage' ? 'Garage' : t==='exterieur' ? 'Extérieur' : (pg.etage || 'Rez-de-chaussée');
   const nomAuto = t => { const n = (MAISON_TYPES[t]||MAISON_TYPES.autre).nom.split(' /')[0], k = m.pieces.filter(p=>p.type===t).length+1; return n+(['chambre','sdb'].includes(t) ? ' #'+k : ''); };
-  const garder = suite => { const ch = choix; if(!ch) return; let id = ch.id;
+  const garder = (suite, typeForce) => { const ch = typeForce ? {...choix, type:typeForce} : choix; if(!ch) return; let id = ch.id;
     const fin = p => { const q = maisonAvecCadres({...p, src:pg.src||'', pg:pg.no}, [...(ch.id ? maisonCadres(p) : []), ch.c], pg, ech); return ch.pi2!=='' && ch.pi2!=null && !ech ? {...q, pi2:String(ch.pi2)} : q; };
     if(id) majM(x=>({pieces:x.pieces.map(p=>p.id===id ? fin(p) : p)}));
     else { const p = fin(maisonNouvellePiece((ch.nom||'').trim() || nomAuto(ch.type), etageDe(ch.type), ch.type, ch.pi2!=='' ? ch.pi2 : null)); id = p.id; majM(x=>({pieces:[...x.pieces, p]})); }
@@ -10924,6 +10930,12 @@ function MaisonEncadrer({pg, m, majM, onClose}){
   const garderMesure = () => { const pi = maisonPieds(mesure.txt); if(!pi) return; const c = mesure.c, u = Math.hypot(c[2]-c[0], (c[3]-c[1])*((pg.h||1)/(pg.w||1)));
     const e = +(pi/u).toFixed(3); majM(x=>({echelles:{...(x.echelles||{}), [cle]:e}, pieces:x.pieces.map(p=>p.pg===pg.no && (p.src||'')===(pg.src||'') && p.cadre && !cvNum(p.pi2) ? {...p, pi2:String(maisonPi2Cadre(p.cadre, pg, e))} : p)}));
     setMesure(null); setMode('cadre'); };
+  const typesEt = MAISON_TYPES_ETAGE[pg.etage] || Object.keys(MAISON_TYPES);
+  useEffect(()=>{ if(!choix || choix.existe || choix.id) return;
+    const f = e => { const t = e.target; if(t && /INPUT|TEXTAREA|SELECT/.test(t.tagName) && t.value) return;
+      const k = e.code && /^Digit\d$/.test(e.code) ? e.code.slice(5) : e.key; if(!/^\d$/.test(k)) return;
+      const ty = typesEt[k==='0' ? 9 : +k-1]; if(!ty) return; e.preventDefault(); garder(e.shiftKey, ty); };
+    window.addEventListener('keydown', f); return ()=>window.removeEventListener('keydown', f); });
   const large = window.innerWidth >= 900;
   const btn = (k, l) => <button className={'btn btn-sm'+(mode===k?' btn-p':'')} onClick={()=>setMode(k)}>{l}</button>;
   return <div style={{position:'fixed',inset:0,zIndex:1000,background:'var(--bg)',padding:8,display:'flex',flexDirection:'column',gap:6,boxSizing:'border-box'}}>
@@ -10966,14 +10978,19 @@ function MaisonEncadrer({pg, m, majM, onClose}){
           <b>{choix.existe ? 'Pièce encadrée' : 'Nouvelle pièce'}</b>
           {!choix.existe && ici.filter(p=>!p.cadre).length>0 && <label style={{display:'grid',gap:2}}>Pièce déjà lue :<select value={choix.id} onChange={e=>{ const p = ici.find(x=>x.id===e.target.value); setChoix({...choix, id:e.target.value, ...(p ? {type:p.type, nom:p.nom} : {})}); }}>
             <option value="">— nouvelle pièce —</option>{ici.filter(p=>!p.cadre).map(p=><option key={p.id} value={p.id}>{p.nom}</option>)}</select></label>}
-          {!choix.existe && <><label style={{display:'grid',gap:2}}>Type<select value={choix.type} disabled={!!choix.id} onChange={e=>setChoix({...choix, type:e.target.value})}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select></label>
+          {!choix.existe && !choix.id && <div style={{display:'grid',gap:3}}>
+            <span className="muted" style={{fontSize:12}}>Touche le chiffre (ou clique) — la pièce s'ajoute tout de suite · Maj + chiffre = forme en L</span>
+            {typesEt.map((k,i)=><button key={k} className="btn btn-sm" style={{justifyContent:'flex-start'}} onClick={e=>garder(e.shiftKey, k)}>
+              <b style={{fontFamily:'monospace',minWidth:14}}>{i===9 ? 0 : i+1}</b> {MAISON_TYPES[k].nom}</button>)}
+            <label style={{display:'grid',gap:2,marginTop:3}}>Autre sorte<select value="" onChange={e=>{ if(e.target.value) garder(false, e.target.value); }}><option value="">…</option>{Object.entries(MAISON_TYPES).filter(([k])=>!typesEt.includes(k)).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select></label></div>}
+          {!choix.existe && <><label style={{display:'none'}}>Type<select value={choix.type} disabled={!!choix.id} onChange={e=>setChoix({...choix, type:e.target.value})}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select></label>
             {!choix.id && <label style={{display:'grid',gap:2}}>Nom (optionnel)<input value={choix.nom} onChange={e=>setChoix({...choix, nom:e.target.value})} placeholder={nomAuto(choix.type)}/></label>}</>}
           <label style={{display:'grid',gap:2}}>Pi²{ech ? ' (calculé — modifiable)' : ''}<input value={choix.pi2} onChange={e=>setChoix({...choix, pi2:e.target.value.replace(/[^0-9.,]/g,'')})} inputMode="decimal" placeholder={ech ? '' : 'ex. 143'}/></label>
           <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
             {choix.existe ? <><button className="btn btn-sm btn-p" onClick={()=>{ majM(x=>({pieces:x.pieces.map(p=>p.id===choix.id ? {...p, pi2:String(choix.pi2||'')} : p)})); setChoix(null); }}>OK</button>
                 <button className="btn btn-sm" onClick={()=>{ setCible(choix.id); setChoix(null); }}>▭+ Ajouter un rectangle</button>
                 <button className="btn btn-sm" onClick={()=>{ majM(x=>({pieces:x.pieces.map(p=>p.id===choix.id ? maisonAvecCadres(p, maisonCadres(p).filter(k=>k.join()!==choix.c.join()), pg, ech) : p)})); setChoix(null); }}>Enlever ce rectangle</button></>
-              : <><button className="btn btn-sm btn-p" onClick={()=>garder(false)}>＋ Ajouter la pièce</button>
+              : !choix.id ? null : <><button className="btn btn-sm btn-p" onClick={()=>garder(false)}>＋ Encadrer cette pièce</button>
                 <button className="btn btn-sm" title="Pour une pièce en L : garde ce rectangle et trace les autres parties" onClick={()=>garder(true)}>▭+ Ajouter et continuer (forme en L)</button></>}
             <button className="btn btn-sm" onClick={()=>setChoix(null)}>Annuler</button></div></div>}
         {!choix && !mesure && <div className="muted" style={{fontSize:12.5}}>{mode==='cadre' ? 'Trace un rectangle autour d\'une pièce (du coin au coin opposé). Clique sur un cadre pour le revoir.' : mode==='mesure' ? 'Trace un trait le long d\'une cote écrite sur le plan, puis entre sa longueur.' : 'Glisse pour te déplacer. La roulette (ou ＋ －) pour zoomer.'}</div>}
