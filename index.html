@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v490';
+const APP_VERSION = 'v491';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10947,7 +10947,7 @@ function MaisonCompteur({p, majP}){ const ch = maisonChauffage(p), it = p.items|
 function MaisonEtiquette({p, actif, onClick}){ const it = p.items||{}, ch = maisonChauffage(p);
   const l = Object.entries(it).filter(([c,n])=>n>0 && !/^SO22/.test(c)).map(([c,n])=>[maisonOutilDe(c), n, c]).filter(([o])=>o);
   const nPl = ['plinthe','convecteur'].includes(p.chauf) ? (ch.plinthes.length||1) : ['radiant','aero'].includes(p.chauf) ? 1 : 0, nTh = p.chauf && p.chauf!=='aucun' ? Math.max(1, Math.round(cvNum(p.thermos)||1)) : 0;
-  return <div onPointerDown={e=>{ e.stopPropagation(); onClick && onClick(); }} style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',zIndex:2,cursor:'pointer',
+  return <div style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',zIndex:2,pointerEvents:'none',
     background:actif ? '#fde047' : 'rgba(255,255,255,.94)',border:actif ? '2px solid #ca8a04' : '1.5px solid #2563eb',borderRadius:6,padding:'2px 5px',color:'#111',boxShadow:'0 1px 4px rgba(0,0,0,.35)',maxWidth:190}}>
     <div style={{fontSize:11,fontWeight:800,whiteSpace:'nowrap',textAlign:'center'}}>{p.nom}{cvNum(p.pi2) ? <span style={{fontWeight:400}}> · {p.pi2} pi²</span> : null}</div>
     <div style={{display:'flex',gap:3,flexWrap:'wrap',justifyContent:'center',alignItems:'center',fontSize:10.5,fontWeight:700}}>
@@ -10967,24 +10967,33 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
   const [choix,setChoix]=useState(null);         // cadre en attente : {c, type, nom, pi2, id?}
   const [mesure,setMesure]=useState(null);       // trait d'échelle en attente : {c, txt}
   const [cible,setCible]=useState('');           // v485 : pièce à qui on ajoute des rectangles (forme en L)
-  const [pose,setPose]=useState('');             // v490 : appareil 240 V qu'on dépose au prochain clic
+  const [pose,setPose]=useState('');
+  const [derniere,setDerniere]=useState('');     // v491 : dernière pièce créée — un rectangle qui la chevauche l'agrandit (forme en L) sans bouton             // v490 : appareil 240 V qu'on dépose au prochain clic
   const cle = maisonCleP(pg), ech = (m.echelles||{})[cle] || null;
   const ici = m.pieces.filter(p=>p.pg===pg.no && (p.src||'')===(pg.src||''));
   useEffect(()=>{ const f = () => boite.current && setTaille({w:boite.current.clientWidth||800, h:boite.current.clientHeight||500}); f();
     const ro = window.ResizeObserver ? new ResizeObserver(f) : null; if(ro && boite.current) ro.observe(boite.current); return ()=>ro && ro.disconnect(); },[]);
   const W = taille.w*vue.z, H = W*((pg.h||1000)/(pg.w||1400)), left = taille.w/2 - vue.cx*W, top = taille.h/2 - vue.cy*H;
   const versPage = e => { const r = boite.current.getBoundingClientRect(); return {x:vue.cx + (e.clientX-r.left - taille.w/2)/W, y:vue.cy + (e.clientY-r.top - taille.h/2)/H, px:e.clientX, py:e.clientY}; };
-  const bas = e => { if(choix || mesure) return; boite.current.setPointerCapture && boite.current.setPointerCapture(e.pointerId); const q = versPage(e); geste.current = {q, cx:vue.cx, cy:vue.cy, pan: mode==='main' || e.button===1 || e.button===2}; };
+  const bas = e => { if(mesure || (choix && !choix.existe)) return; if(choix && choix.existe) setChoix(null); boite.current.setPointerCapture && boite.current.setPointerCapture(e.pointerId); const q = versPage(e); geste.current = {q, cx:vue.cx, cy:vue.cy, pan: mode==='main' || e.button===1 || e.button===2}; };
   const bouge = e => { const g = geste.current; if(!g) return; const q = versPage(e);
     if(g.pan){ setVue(v=>({...v, cx:g.cx - (e.clientX-g.q.px)/W, cy:g.cy - (e.clientY-g.q.py)/H})); return; }
     setDessin([g.q.x, g.q.y, q.x, q.y]); };
   const haut = e => { const g = geste.current; geste.current = null; if(!g || g.pan){ return; } const q = versPage(e), c = [g.q.x, g.q.y, q.x, q.y]; setDessin(null);
     if(Math.hypot((c[2]-c[0])*W, (c[3]-c[1])*H) < 12){
+      if(!pose && !cible){   // v491 : un clic (sans glisser) sur une pièce l'ouvre ; glisser = tracer
+        const dedans = ici.filter(p=>maisonCadres(p).some(k=>q.x>=k[0] && q.x<=k[2] && q.y>=k[1] && q.y<=k[3])).sort((a,b)=>(a.cadre[2]-a.cadre[0])*(a.cadre[3]-a.cadre[1]) - (b.cadre[2]-b.cadre[0])*(b.cadre[3]-b.cadre[1]))[0]
+          || ici.filter(p=>p.fx!=null).map(p=>({p, d:Math.hypot((p.fx-q.x)*W, (p.fy-q.y)*H)})).filter(x=>x.d<40).sort((a,b)=>a.d-b.d).map(x=>x.p)[0];
+        if(dedans){ setDerniere(dedans.id); setChoix({c:maisonCadres(dedans)[0]||null, type:dedans.type, nom:dedans.nom, pi2:dedans.pi2||'', id:dedans.id, etage:dedans.etage, existe:true}); }
+        return; }
       if(pose){ const k = pose, nb = (m.app240||[]).filter(a=>a.k===k).length, tot = Math.round(cvNum((m.appareils||{})[k])||0);
         majM(x=>({app240:[...(x.app240||[]), {k, x:+q.x.toFixed(4), y:+q.y.toFixed(4), pg:pg.no, src:pg.src||''}], ...(nb>=tot ? {appareils:{...(x.appareils||{}), [k]:String(nb+1)}} : {})})); setPose(''); }
       return; }
     if(mode==='mesure'){ setMesure({c, txt:''}); return; }
     const r = [Math.min(c[0],c[2]), Math.min(c[1],c[3]), Math.max(c[0],c[2]), Math.max(c[1],c[3])].map(v=>+Math.min(1,Math.max(0,v)).toFixed(4));
+    const touche = (a, b) => { const t = .004; return a[0] <= b[2]+t && b[0] <= a[2]+t && a[1] <= b[3]+t && b[1] <= a[3]+t; };
+    const prec = !cible && derniere && m.pieces.find(p=>p.id===derniere && p.pg===pg.no && (p.src||'')===(pg.src||''));
+    if(prec && maisonCadres(prec).some(k=>touche(k, r))){ majM(x=>({pieces:x.pieces.map(p=>p.id===prec.id ? maisonAvecCadres(p, [...maisonCadres(p), r], pg, ech) : p)})); return; }
     if(cible){ majM(x=>({pieces:x.pieces.map(p=>p.id===cible ? maisonAvecCadres({...p, src:pg.src||'', pg:pg.no}, [...maisonCadres(p), r], pg, ech) : p)})); return; }
     setChoix({c:r, type:'chambre', nom:'', pi2:maisonPi2Cadre(r, pg, ech) ?? '', id:''}); };
   const zoom = f => setVue(v=>({...v, z:Math.max(.5, Math.min(10, v.z*f))}));
@@ -10994,7 +11003,7 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
     const fin = p => { const q = maisonAvecCadres({...p, src:pg.src||'', pg:pg.no}, [...(ch.id ? maisonCadres(p) : []), ch.c], pg, ech); return ch.pi2!=='' && ch.pi2!=null && !ech ? {...q, pi2:String(ch.pi2)} : q; };
     if(id) majM(x=>({pieces:x.pieces.map(p=>p.id===id ? fin(p) : p)}));
     else { const p = fin(maisonNouvellePiece((ch.nom||'').trim() || nomAuto(ch.type), etageDe(ch.type), ch.type, ch.pi2!=='' ? ch.pi2 : null)); id = p.id; majM(x=>({pieces:[...x.pieces, p]})); }
-    setChoix(null); if(suite) setCible(id); };
+    setChoix(null); setDerniere(id); if(suite) setCible(id); };
   const garderMesure = () => { const pi = maisonPieds(mesure.txt); if(!pi) return; const c = mesure.c, u = Math.hypot(c[2]-c[0], (c[3]-c[1])*((pg.h||1)/(pg.w||1)));
     const e = +(pi/u).toFixed(3); majM(x=>({echelles:{...(x.echelles||{}), [cle]:e}, pieces:x.pieces.map(p=>p.pg===pg.no && (p.src||'')===(pg.src||'') && p.cadre && !cvNum(p.pi2) ? {...p, pi2:String(maisonPi2Cadre(p.cadre, pg, e))} : p)}));
     setMesure(null); setMode('cadre'); };
@@ -11022,9 +11031,9 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
             {(m.app240||[]).filter(a=>a.pg===pg.no && (a.src||'')===(pg.src||'')).map((a,i)=><div key={'a'+i} style={{position:'absolute',left:(a.x*100)+'%',top:(a.y*100)+'%',transform:'translate(-50%,-50%)',zIndex:3,pointerEvents:'none'}}><MaisonApp k={a.k}/></div>)}
             {ici.map(p=>maisonCadres(p).length ? <React.Fragment key={p.id}><MaisonContour cs={maisonCadres(p)} col={p.id===cible ? '#16a34a' : '#2563eb'}/>{maisonCadres(p).map((k,j)=>{ const vise = p.id===cible, col = vise ? '#16a34a' : '#2563eb';
               return <div key={j} onPointerDown={e=>{ if(mode!=='cadre' || cible) return; e.stopPropagation(); setChoix({c:k, type:p.type, nom:p.nom, pi2:p.pi2||'', id:p.id, etage:p.etage, existe:true}); }}
-              style={{position:'absolute',left:(k[0]*100)+'%',top:(k[1]*100)+'%',width:((k[2]-k[0])*100)+'%',height:((k[3]-k[1])*100)+'%',boxSizing:'border-box',cursor:cible ? 'crosshair' : 'pointer',pointerEvents:cible ? 'none' : 'auto'}}>
+              style={{position:'absolute',left:(k[0]*100)+'%',top:(k[1]*100)+'%',width:((k[2]-k[0])*100)+'%',height:((k[3]-k[1])*100)+'%',boxSizing:'border-box',pointerEvents:'none'}}>
               </div>; })}</React.Fragment> : null)}
-            {ici.filter(p=>p.fx!=null).map(p=><MaisonEtiquette key={'e'+p.id} p={p} actif={choix && choix.id===p.id} onClick={()=>{ if(cible) return; setChoix({c:maisonCadres(p)[0]||null, type:p.type, nom:p.nom, pi2:p.pi2||'', id:p.id, etage:p.etage, existe:true}); }}/>)}
+            {ici.filter(p=>p.fx!=null).map(p=><MaisonEtiquette key={'e'+p.id} p={p} actif={choix && choix.id===p.id} onClick={()=>{ if(cible) return; setDerniere(p.id); setChoix({c:maisonCadres(p)[0]||null, type:p.type, nom:p.nom, pi2:p.pi2||'', id:p.id, etage:p.etage, existe:true}); }}/>)}
             {(dessin || (choix && choix.c) || (mesure && mesure.c)) && (()=>{ const c = dessin || (mesure ? mesure.c : choix.c);
               if(mode==='mesure' || mesure) return <svg style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}} viewBox="0 0 1 1" preserveAspectRatio="none"><line x1={c[0]} y1={c[1]} x2={c[2]} y2={c[3]} stroke="#dc2626" strokeWidth="3" vectorEffect="non-scaling-stroke"/></svg>;
               const r = [Math.min(c[0],c[2]), Math.min(c[1],c[3]), Math.max(c[0],c[2]), Math.max(c[1],c[3])];
@@ -11062,7 +11071,7 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
           {!choix.existe && ici.filter(p=>!p.cadre).length>0 && <label style={{display:'grid',gap:2}}>Pièce déjà lue :<select value={choix.id} onChange={e=>{ const p = ici.find(x=>x.id===e.target.value); setChoix({...choix, id:e.target.value, ...(p ? {type:p.type, nom:p.nom} : {})}); }}>
             <option value="">— nouvelle pièce —</option>{ici.filter(p=>!p.cadre).map(p=><option key={p.id} value={p.id}>{p.nom}</option>)}</select></label>}
           {!choix.existe && !choix.id && <div style={{display:'grid',gap:3}}>
-            <span className="muted" style={{fontSize:12}}>Touche le chiffre (ou clique) — la pièce s'ajoute tout de suite · Maj + chiffre = forme en L</span>
+            <span className="muted" style={{fontSize:12}}>Touche le chiffre (ou clique) — la pièce s'ajoute tout de suite. Ensuite, un rectangle qui touche la pièce l'agrandit (forme en L) ; ailleurs = nouvelle pièce</span>
             {typesEt.map((k,i)=><button key={k} className="btn btn-sm" style={{justifyContent:'flex-start'}} onClick={e=>garder(e.shiftKey, k)}>
               <b style={{fontFamily:'monospace',minWidth:14}}>{i===9 ? 0 : i+1}</b> {MAISON_TYPES[k].nom}</button>)}
             <details style={{marginTop:3}}><summary style={{cursor:'pointer',fontSize:12.5}}>▸ Autres sortes (tous les étages)</summary>
