@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v489';
+const APP_VERSION = 'v490';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10424,13 +10424,15 @@ const MAISON_TYPES = {
   bureau:{nom:'Bureau', items:{SO01:4, SO02:1, SO04:1, SO11:1}, chauf:'plinthe'},
   salon:{nom:'Salon / séjour', items:{SO01:3, SO02:1, SO04:1}, chauf:'plinthe'},
   sam:{nom:'Salle à manger', items:{SO01:2, SO02:1, SO04:1}, chauf:'plinthe'},
-  cuisine:{nom:'Cuisine', items:{"SO01.2":5, "SO01.21":1, SO01:1, SO221:1, SO06:1, SO02:1, SO03:4}, chauf:'plinthe'},
+  cuisine:{nom:'Cuisine', items:{"SO01.2":5, "SO01.21":1, SO01:1, SO06:1, SO02:1, SO03:4}, chauf:'plinthe'},   // v490 : cuisinière, sécheuse, chauffe-eau = appareils 240 V à placer sur le plan
   sdb:{nom:'Salle de bain', items:{"SO01.1":1, SO02:1, SO04:1, SO06:1}, chauf:'plinthe'},
-  lavage:{nom:'Salle de lavage', items:{SO222:1, SO01:1, SO02:1, SO04:1}, chauf:'plinthe'},
+  lavage:{nom:'Salle de lavage', items:{SO01:1, SO02:1, SO04:1}, chauf:'plinthe'},
   corridor:{nom:'Corridor / hall', items:{SO04:1, "SO02.1":2}, chauf:'aucun'},
   escalier:{nom:'Escalier', items:{SO04:1, "SO02.1":2}, chauf:'aucun'},   // v485 : luminaire + 3 voies en haut et en bas
   rangement:{nom:'Walk-in / rangement', items:{SO04:1, SO02:1}, chauf:'aucun'},
-  mecanique:{nom:'Salle mécanique', items:{SO04:1, SO01:1, SO224:1}, chauf:'aucun'},
+  mecanique:{nom:'Salle mécanique', items:{SO04:1, SO01:1, SO02:1}, chauf:'aucun'},
+  debarras:{nom:'Pièce de rangement', items:{SO02:1, SO04:1, SO01:1}, chauf:'aucun'},
+  atelier:{nom:'Atelier', items:{SO02:1, SO03:2}, chauf:'plinthe'},
   ssnonfini:{nom:'Sous-sol non fini', items:{SO04:4, SO01:4}, chauf:'plinthe'},
   garage:{nom:'Garage', items:{SO01:4, "SO02.1":2, SO04:2}, chauf:'aero'},
   exterieur:{nom:'Extérieur', items:{SO08:2, SO07:1}, chauf:'aucun'},
@@ -10444,7 +10446,9 @@ function maisonTypeDe(nom){ const n = cvNorm(nom).replace(/[^a-z0-9 ]/g,' ');
   if(/escalier|stair/.test(n)) return 'escalier';
   if(/buanderie|lavage|lavoir/.test(n)) return 'lavage'; if(/garage/.test(n)) return 'garage';
   if(/mec|mecanique|fournaise|chaufferie/.test(n)) return 'mecanique';
-  if(/walk|w i c|wic|g m|garde|rangement|pantry|range|depense|cellier/.test(n)) return 'rangement';
+  if(/atelier|workshop/.test(n)) return 'atelier';
+  if(/storage|debarras|remise|rangement|range\b/.test(n) && !/walk|wic|garde/.test(n)) return 'debarras';
+  if(/walk|w i c|wic|g m|garde|pantry|depense|cellier/.test(n)) return 'rangement';
   if(/corridor|hall|passage|vestibule|entree|escalier|mezzanine/.test(n)) return 'corridor';
   if(/balcon|galerie|terrasse|patio|perron|exterieur/.test(n)) return 'exterieur';
   return 'autre'; }
@@ -10470,7 +10474,8 @@ function maisonChauffage(p){ const c = p.chauf || 'aucun', th = Math.max(1, Math
     return {w:g.n*g.w, so220:g.n+th, plinthes:[], txt:(g.n>1 ? g.n+' × ' : '')+'aérotherme Dragon '+g.lib+(g.relais ? ' + relais RC840T' : '')+' + '+(th>1 ? th+' thermostats' : 'thermostat')+' basse tension', libres:[], prod, intel:p.intel ? th : 0}; }
   if(c==='radiant') return {so220:1+th, plinthes:[], txt:'plancher radiant + thermostat', libres:[], intel:p.intel ? th : 0};
   const plac = (p.emp||[]).filter(x=>x.c==='PL' && cvNum(x.w));   // v475 : plinthes placées avec leur wattage → elles font foi
-  const pl = plac.length ? plac.map(x=>+x.w) : maisonPlinthes(p.pi2, p.fenetres);
+  const nPl = Math.max(1, Math.round(cvNum(p.fenetres)||1));
+  const pl = plac.length ? plac.map(x=>+x.w) : cvNum(p.plW) ? Array.from({length:nPl}, ()=>cvNum(p.plW)) : maisonPlinthes(p.pi2, p.fenetres);   // v490 : wattage tapé à côté de la plinthe
   if(!pl.length) return {so220:1+th, plinthes:[], txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+' + thermostat', libres:[], intel:p.intel ? th : 0};
   return {w:pl.reduce((t,x)=>t+x,0), so220:pl.length+th, plinthes:pl, txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+(pl.length>1?'s':'')+' '+pl.map(w=>w+' W').join(' + ')+' + '+(th>1 ? th+' thermostats' : 'thermostat'), libres:[], intel:p.intel ? th : 0}; }
 // Résumé client d'une pièce (« 4 prises 15 A, 1 interrupteur, … »)
@@ -10482,12 +10487,12 @@ function maisonNouvellePiece(nom, etage, type, pi2){ const t = MAISON_TYPES[type
 // Lecture du PDF : pages, étage de chaque page, pièces (nom + dimensions)
 // v469 : pages gardées par sorte (étages, façades, certificat / arpentage) ; chaque pièce garde sa position sur la page (fx, fy) pour y afficher les sorties prévues
 const MAISON_SORTES = [['etage','Plans des étages'],['facade','Façades (élévations)'],['terrain','Certificat de localisation / arpentage'],['autre','Autres pages — identifie ici tes plans d\'étage (menu sous la vignette)']];
-async function maisonLirePlan(file, onEtat, src){
+async function maisonLirePlan(file, onEtat, src, sauter){
   if(!window.pdfjsLib){ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }
   const doc = await window.pdfjsLib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise, pages = [], pieces = [];
   const ft = s => { const m = String(s).match(/(\d+)\s*'\s*-?\s*(\d+(?:\s+\d+\/\d+)?)?/); if(!m) return null; let po = 0; if(m[2]){ const [a,b] = m[2].split(/\s+/); po = +a + (b ? (+b.split('/')[0])/(+b.split('/')[1]||1) : 0); } return +m[1] + po/12; };
-  for(let i=1;i<=doc.numPages;i++){ onEtat && onEtat('Page '+i+' / '+doc.numPages+'…');
+  for(let i=1;i<=doc.numPages;i++){ if(sauter && sauter(i)) continue; onEtat && onEtat('Page '+i+' / '+doc.numPages+'…');
     const pg = await doc.getPage(i), an = await pg.getAnnotations().catch(()=>[]), tc = await pg.getTextContent().catch(()=>({items:[]}));
     const L = [...an.filter(a=>a.contents || (a.contentsObj && a.contentsObj.str)).map(a=>({t:String(a.contents || a.contentsObj.str).trim(), x:(a.rect[0]+a.rect[2])/2, y:(a.rect[1]+a.rect[3])/2})),
       ...tc.items.filter(t=>String(t.str).trim()).map(t=>({t:String(t.str).trim(), x:t.transform[4], y:t.transform[5]}))];
@@ -10518,7 +10523,7 @@ async function maisonLirePlan(file, onEtat, src){
   return {pages, pieces};
 }
 // v468 : appareils tous à 1 de base ; sortie extérieure prévue (cabanon / spa futur) ; borne 40 A de base, 48 A conseillé
-const MAISON_APPAREILS = [['thermopompe','Thermopompe','SO223'],['borne','Borne de recharge','SO225'],['chauffeeau','Chauffe-eau 60 gal (30 A)','SO224'],['fournaise','Fournaise électrique (80 A)',''],
+const MAISON_APPAREILS = [['cuisiniere','Cuisinière','SO221'],['secheuse','Sécheuse','SO222'],['thermopompe','Thermopompe / air climatisé','SO223'],['borne','Borne de recharge','SO225'],['chauffeeau','Chauffe-eau 60 gal (30 A)','SO224'],['fournaise','Fournaise électrique (80 A)',''],
   ['ext240','Sortie extérieure prévue (cabanon / spa futur)',''],['echangeur','Échangeur d\'air','SO01']];
 const MAISON_INCLUS = ['Fourniture et pose des plinthes et thermostats','Raccordement des appareils de chauffage','Détecteurs de fumée interconnectés','Plaques blanches standard (avec vis)','Pose des luminaires fournis par le client'];
 const MAISON_EXCLUS = ['Luminaires (fournis par le client)','Réfection des murs, plafonds et finis','Frais d\'Hydro-Québec','Câblage d\'alarme et caméras','Plinthes et thermostats (fournis par le client)'];
@@ -10629,21 +10634,21 @@ function maisonSymSvg(c, txt){
     case 'fumee': g = '<circle cx="20" cy="20" r="12"/><circle cx="20" cy="20" r="4" fill="'+col+'"/>'; break;
     case 'boite': g = '<rect x="7" y="7" width="26" height="26"/>'; break;
     case 'reseau': g = '<path d="M20,6 L35,32 L5,32 Z"/>'; break;
-    case 'plinthe': w = 84; h = 26; g = '<rect x="3" y="4" width="78" height="18" fill="#fff"/><line x1="3" y1="13" x2="10" y2="13"/><line x1="74" y1="13" x2="81" y2="13"/>'; break;
+    case 'plinthe': w = txt ? 40 + txt.length*8 : 40; h = 40; g = '<rect x="4" y="12" width="32" height="16" fill="#fff"/><path d="M8,20 L11,15 L15,25 L19,15 L23,25 L27,15 L31,25 L33,20"/>'; break;   // v490 : signe de chauffage (résistance), wattage à côté
     default: g = '<circle cx="20" cy="20" r="12"/>';
   }
   let t = '';
-  if(forme==='thermo') t += T(20, 22.5, 14, 'T');
+  if(forme==='thermo') t += T(20, 22.5, 12, 'TH');
   if(forme==='boite') t += T(20, 20.5, 17, ind);
   if(forme==='reseau') t += T(20, 24, 12, 'R');
-  if(forme==='plinthe') t += T(42, 13.5, 13, txt || 'PL');
+  if(forme==='plinthe' && txt) t += T(40, 20.5, 12, txt, 'start');
   const sous = forme!=='boite' && forme!=='plinthe' && ind;
   if(sous){ const lg = ind.length; w = 40 + Math.max(10, lg*7.5); t += T(29, 35, lg>3 ? 10 : 12, ind, 'start'); }
   const traits = (st, sw, fillBlanc) => '<g fill="'+(fillBlanc ? '#fff' : 'none')+'" stroke="'+st+'" stroke-width="'+sw+'" stroke-linecap="round" stroke-linejoin="round">'+g+'</g>';
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+w+' '+h+'" width="'+w+'" height="'+h+'">'+traits('#fff', 7, true)+traits(col, 2.6, false)+t+'</svg>';
   return {svg, w, h}; }
 const maisonSymUrl = (c, txt) => 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(maisonSymSvg(c, txt).svg);
-function MaisonMarque({c, actif, petit, texte}){ const s = maisonSymSvg(c, texte), ht = (petit ? 20 : 30) * (s.h/40) * (c==='PL' ? 1.3 : 1);
+function MaisonMarque({c, actif, petit, texte}){ const s = maisonSymSvg(c, texte), ht = (petit ? 20 : 30) * (s.h/40);
   return <img src={maisonSymUrl(c, texte)} alt={maisonOutil(c)[2]} draggable={false} style={{height:ht, width:ht*s.w/s.h, display:'block', opacity:actif===false ? .45 : 1, filter:actif===false ? 'none' : 'drop-shadow(0 0 1px rgba(0,0,0,.35))'}}/>; }
 const MAISON_SYM_IMG = {};
 function maisonSymImage(c, txt){ const k = c+'|'+(txt||''); if(MAISON_SYM_IMG[k]) return MAISON_SYM_IMG[k];
@@ -10691,7 +10696,7 @@ function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}
           {p.fx!=null && p.pg===pg.no && (p.src||'')===(pg.src||'') && <div style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none',
             fontSize:11,fontWeight:700,padding:'1px 5px',borderRadius:4,whiteSpace:'nowrap',background:piece && p.id===piece.id ? '#fde047' : 'rgba(255,255,255,.75)',color:'#111',border:piece && p.id===piece.id ? '1.5px solid #ca8a04' : '1px solid #bbb'}}>{p.nom}</div>}
           {em.map((m,i)=><div key={i} style={{position:'absolute',left:'calc('+(m.x*100)+'% + '+(dec[i]*27)+'px)',top:(m.y*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none'}}>
-            <MaisonMarque c={m.c} actif={!piece || p.id===piece.id} texte={m.c==='PL' && m.w ? String(m.w) : ''}/></div>)}
+            <MaisonMarque c={m.c} actif={!piece || p.id===piece.id} texte={m.c==='PL' && m.w ? m.w+' W' : ''}/></div>)}
         </React.Fragment>; })}
       </div>
     </div>
@@ -10845,20 +10850,23 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
   </div>;
 }
 // Plans annotés (un par étage) : image du plan + emplacements + légende → images du « Plan des travaux » (PDF client)
-async function maisonPlansAnnotes(pages, pieces){
+async function maisonPlansAnnotes(pages, pieces, apps){
   const out = [];
   for(const pg of pages.filter(x=>x.sorte==='etage')){
     const emps = pieces.flatMap(p=>(p.emp||[]).filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')));
-    if(!emps.length) continue;
+    const aps = (apps||[]).filter(a=>a.pg===pg.no && (a.src||'')===(pg.src||''));
+    if(!emps.length && !aps.length) continue;
     const img = await new Promise((ok,ko)=>{ const im = new Image(); im.onload = ()=>ok(im); im.onerror = ko; im.src = pg.img; });
     const W = img.width, H = img.height, codes = [...new Set(emps.map(m=>m.c))], lh = Math.round(W/70), leg = lh*2 + Math.ceil(codes.length/5)*lh*1.6;
     const c = document.createElement('canvas'); c.width = W; c.height = H + leg; const x = c.getContext('2d');
     x.fillStyle = '#fff'; x.fillRect(0,0,c.width,c.height); x.drawImage(img, 0, 0);
     const r = Math.max(9, Math.round(W/140));
-    const marque = async (cx, cy, code, rr, txt, gauche) => { const s = maisonSymSvg(code, txt), hh = rr*2.6*(s.h/40)*(code==='PL' ? 1.3 : 1), ww = hh*s.w/s.h;
+    const marque = async (cx, cy, code, rr, txt, gauche) => { const s = maisonSymSvg(code, txt), hh = rr*2.6*(s.h/40), ww = hh*s.w/s.h;
       try{ const im = await maisonSymImage(code, txt); x.drawImage(im, gauche ? cx - rr*1.3 : cx - ww/2, cy - hh/2, ww, hh); }catch(e){} };
     for(const p of pieces){ const em = (p.emp||[]).filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')), dec = maisonDecalages(em);
       for(let k=0; k<em.length; k++){ const m = em[k]; await marque(m.x*W + dec[k]*r*2.4, m.y*H, m.c, r, m.c==='PL' && m.w ? m.w+' W' : ''); } }
+    for(const a of aps){ await marque(a.x*W, a.y*H, 'X240', r, ''); x.fillStyle = '#111'; x.font = 'bold '+Math.round(r*1.1)+'px sans-serif'; x.textAlign = 'left'; x.textBaseline = 'middle';
+      x.lineWidth = r/3; x.strokeStyle = '#fff'; const t = MAISON_APP_COURT[a.k]||a.k; x.strokeText(t, a.x*W + r*2.2, a.y*H); x.fillText(t, a.x*W + r*2.2, a.y*H); }
     x.fillStyle = '#111'; x.font = 'bold '+lh+'px sans-serif'; x.textAlign = 'left'; x.textBaseline = 'middle';
     x.fillText((pg.etage||pg.titre)+' — emplacements prévus (approximatifs, à confirmer sur le chantier)', lh, H + lh);
     x.font = Math.round(lh*.85)+'px sans-serif';
@@ -10903,34 +10911,52 @@ function maisonAvecCadres(p, cs, pg, ech){ if(!cs.length) return {...p, cadres:[
   return {...p, cadres:cs, cadre:bb, fx:+((gros[0]+gros[2])/2).toFixed(4), fy:+((gros[1]+gros[3])/2).toFixed(4), ...(pi ? {pi2:String(pi)} : {})}; }
 // v487 : en encadrant, les sortes de pièces de l'étage, numérotées (touche 1-9, 0) — pas de cuisine au sous-sol, etc.
 const MAISON_TYPES_ETAGE = {
-  'Sous-sol':['salon','chambre','sdb','lavage','mecanique','rangement','bureau','corridor','escalier','ssnonfini'],
-  'Rez-de-chaussée':['cuisine','salon','sam','sdb','bureau','corridor','rangement','lavage','escalier','autre'],
-  'Étage':['chambre','sdb','lavage','rangement','corridor','bureau','salon','escalier','autre'],
-  'Garage':['garage','rangement','autre'], 'Extérieur':['exterieur','autre']};
+  'Sous-sol':['salon','chambre','sdb','lavage','mecanique','debarras','atelier','corridor','escalier','bureau'],
+  'Rez-de-chaussée':['cuisine','salon','sam','sdb','bureau','corridor','rangement','lavage','escalier','debarras'],
+  'Étage':['chambre','sdb','lavage','rangement','corridor','bureau','salon','escalier','debarras','autre'],
+  'Garage':['garage','atelier','debarras','autre'], 'Extérieur':['exterieur','autre']};
 function maisonPi2Cadre(c, pg, ech){ if(!ech || !c) return null; const wU = Math.abs(c[2]-c[0]), hU = Math.abs(c[3]-c[1])*((pg.h||1)/(pg.w||1)); return Math.round(wU*ech*hU*ech); }
 // v489 : sorties d'une pièce, + / − directement sur la vue du plan
 const maisonOutilDe = c => MAISON_OUTILS.find(o=>o[5]===c) || null;
+// v490 : sorties proposées selon la pièce (escalier → 3 voies, encastrés ; corridor → détecteur ; atelier → prises 20 A…) ; 240 V à part (palette du plan)
+const MAISON_SUGG = {escalier:['SO02.1','SO03','SO04','SO05'], corridor:['SO05','SO02.1','SO03','SO01'], chambre:['SO01','SO03','SO02.1','SO11','SO00'], bureau:['SO01','SO11','SO03','SO00'],
+  salon:['SO01','SO03','SO11','SO02.2','SO00'], sam:['SO03','SO01','SO02.2'], cuisine:['SO01.2','SO01.21','SO03','SO06','SO00','SO02.2'], sdb:['SO01.1','SO06','SO03','SO02'],
+  lavage:['SO01','SO01.1','SO03'], rangement:['SO01','SO03'], debarras:['SO01','SO03'], atelier:['SO01.2','SO01','SO03','SO00','SO04'], mecanique:['SO01','SO00','SO04'],
+  garage:['SO01','SO01.2','SO00','SO07','SO08'], exterieur:['SO07','SO08'], ssnonfini:['SO01','SO04','SO00']};
+const maisonSortieOk = (c, type) => !/^SO22/.test(c) && !(c==='SO06' && !['cuisine','sdb','lavage'].includes(type));
 function MaisonCompteur({p, majP}){ const ch = maisonChauffage(p), it = p.items||{};
-  const codes = Object.keys(it).filter(c=>it[c]>0), mettre = (c, n) => majP(p.id, {items:{...it, [c]:Math.max(0, n)}});
+  const codes = Object.keys(it).filter(c=>it[c]>0 && !/^SO22/.test(c)), mettre = (c, n) => majP(p.id, {items:{...it, [c]:Math.max(0, n)}});
+  const sugg = (MAISON_SUGG[p.type]||[]).filter(c=>!(it[c]>0));
+  const plOn = ['plinthe','convecteur'].includes(p.chauf), nPl = plOn ? (ch.plinthes.length || 1) : 0, nTh = p.chauf && p.chauf!=='aucun' ? Math.max(1, Math.round(cvNum(p.thermos)||1)) : 0;
+  const ligne = (c, lib, n, moins, plus, extra) => <div style={{display:'flex',gap:6,alignItems:'center'}}><MaisonMarque c={c} petit/><span style={{flex:1}}>{lib}{extra}</span>
+    <button className="btn btn-sm" style={{padding:'0 7px'}} onClick={moins}>−</button><b style={{minWidth:18,textAlign:'center'}}>{n}</b><button className="btn btn-sm" style={{padding:'0 7px'}} onClick={plus}>+</button></div>;
   return <div style={{display:'grid',gap:3}}>
     {codes.map(c=>{ const o = maisonOutilDe(c); return <div key={c} style={{display:'flex',gap:6,alignItems:'center'}}>{o ? <MaisonMarque c={o[0]} petit/> : <span style={{width:20}}>•</span>}
       <span style={{flex:1}}>{MAISON_LIB[c]||c}</span><button className="btn btn-sm" style={{padding:'0 7px'}} onClick={()=>mettre(c, it[c]-1)}>−</button><b style={{minWidth:18,textAlign:'center'}}>{it[c]}</b><button className="btn btn-sm" style={{padding:'0 7px'}} onClick={()=>mettre(c, it[c]+1)}>+</button></div>; })}
+    {ligne('PL', 'plinthe', nPl, ()=>majP(p.id, nPl<=1 ? {chauf:'aucun'} : {fenetres:String(nPl-1)}), ()=>majP(p.id, plOn ? {fenetres:String(nPl+1)} : {chauf:'plinthe', fenetres:'1'}),
+      plOn ? <span> <input value={p.plW||''} onChange={x=>majP(p.id,{plW:x.target.value.replace(/\D/g,'')})} inputMode="numeric" placeholder={String(maisonPlinthes(p.pi2, p.fenetres)[0]||'')} style={{width:52,padding:'1px 4px',fontSize:12}}/> W</span> : null)}
+    {ligne('TH', 'thermostat', nTh, ()=>majP(p.id, nTh<=1 ? {chauf:'aucun'} : {thermos:String(nTh-1)}), ()=>majP(p.id, p.chauf && p.chauf!=='aucun' ? {thermos:String(nTh+1)} : {chauf:'plinthe', fenetres:'1', thermos:'1'}))}
+    {sugg.length>0 && <div style={{display:'flex',gap:3,flexWrap:'wrap'}}>{sugg.map(c=>{ const o = maisonOutilDe(c); return <button key={c} className="btn btn-sm" style={{padding:'1px 6px',fontSize:11.5,display:'inline-flex',flexDirection:'row',alignItems:'center',gap:3,whiteSpace:'nowrap'}} onClick={()=>mettre(c, 1)}>＋{o ? <MaisonMarque c={o[0]} petit/> : null}{MAISON_LIB[c]||c}</button>; })}</div>}
     <select value="" onChange={e=>{ if(e.target.value) mettre(e.target.value, (it[e.target.value]||0)+1); }} style={{fontSize:12.5}}>
-      <option value="">＋ Ajouter une sortie…</option>{Object.entries(MAISON_LIB).filter(([c])=>!(it[c]>0) && !/^SO220/.test(c)).map(([c,l])=><option key={c} value={c}>{l} ({c})</option>)}</select>
-    <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:3}}>🔥
-      <select value={p.chauf} onChange={x=>majP(p.id,{chauf:x.target.value})} style={{width:'auto',fontSize:12.5}}>{[['plinthe','Plinthe(s)'],['convecteur','Convecteur(s)'],['radiant','Plancher radiant'],['aero','Aérotherme (dragon)'],['aucun','Aucun chauffage']].map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
-      {['plinthe','convecteur'].includes(p.chauf) && <>fenêtres <input value={p.fenetres||''} onChange={x=>majP(p.id,{fenetres:x.target.value.replace(/\D/g,'')})} inputMode="numeric" style={{width:38,padding:'2px 4px'}}/></>}</div>
+      <option value="">＋ Autre sortie…</option>{Object.entries(MAISON_LIB).filter(([c])=>!(it[c]>0) && !/^SO220/.test(c) && maisonSortieOk(c, p.type) && !sugg.includes(c)).map(([c,l])=><option key={c} value={c}>{l} ({c})</option>)}</select>
+    <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:2,fontSize:12}}>Chauffage
+      <select value={p.chauf} onChange={x=>majP(p.id,{chauf:x.target.value})} style={{width:'auto',fontSize:12}}>{[['plinthe','Plinthe(s)'],['convecteur','Convecteur(s)'],['radiant','Plancher radiant'],['aero','Aérotherme (dragon)'],['aucun','Aucun']].map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></div>
     {ch.txt && <div style={{color:'var(--warning)',fontSize:12}}>{ch.txt}{ch.w ? ' ('+ch.w+' W)' : ''} · {ch.so220} sortie{ch.so220>1?'s':''} chauffage</div>}
   </div>; }
 // Petit résumé en symboles d'une pièce, posé sur le plan
 function MaisonEtiquette({p, actif, onClick}){ const it = p.items||{}, ch = maisonChauffage(p);
-  const l = Object.entries(it).filter(([,n])=>n>0).map(([c,n])=>[maisonOutilDe(c), n, c]).filter(([o])=>o);
+  const l = Object.entries(it).filter(([c,n])=>n>0 && !/^SO22/.test(c)).map(([c,n])=>[maisonOutilDe(c), n, c]).filter(([o])=>o);
+  const nPl = ['plinthe','convecteur'].includes(p.chauf) ? (ch.plinthes.length||1) : ['radiant','aero'].includes(p.chauf) ? 1 : 0, nTh = p.chauf && p.chauf!=='aucun' ? Math.max(1, Math.round(cvNum(p.thermos)||1)) : 0;
   return <div onPointerDown={e=>{ e.stopPropagation(); onClick && onClick(); }} style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',zIndex:2,cursor:'pointer',
     background:actif ? '#fde047' : 'rgba(255,255,255,.94)',border:actif ? '2px solid #ca8a04' : '1.5px solid #2563eb',borderRadius:6,padding:'2px 5px',color:'#111',boxShadow:'0 1px 4px rgba(0,0,0,.35)',maxWidth:190}}>
     <div style={{fontSize:11,fontWeight:800,whiteSpace:'nowrap',textAlign:'center'}}>{p.nom}{cvNum(p.pi2) ? <span style={{fontWeight:400}}> · {p.pi2} pi²</span> : null}</div>
     <div style={{display:'flex',gap:3,flexWrap:'wrap',justifyContent:'center',alignItems:'center',fontSize:10.5,fontWeight:700}}>
       {l.map(([o,n,c])=><span key={c} style={{display:'inline-flex',alignItems:'center',gap:1}}><MaisonMarque c={o[0]} petit/>{n}</span>)}
-      {ch.so220>0 && <span style={{display:'inline-flex',alignItems:'center',gap:1}}><MaisonMarque c="PL" petit/>{ch.so220}</span>}</div></div>; }
+      {nPl>0 && <span style={{display:'inline-flex',alignItems:'center',gap:1}}><MaisonMarque c="PL" petit/>{nPl}</span>}
+      {nTh>0 && <span style={{display:'inline-flex',alignItems:'center',gap:1}}><MaisonMarque c="TH" petit/>{nTh}</span>}</div></div>; }
+// v490 : appareils 240 V (cuisinière, sécheuse, chauffe-eau, AC, borne…) — palette en haut du plan, on les dépose à leur place
+const MAISON_APP_COURT = {cuisiniere:'CUIS.', secheuse:'SÉCH.', thermopompe:'AC', borne:'BORNE', chauffeeau:'C-EAU', fournaise:'FOURN.', ext240:'EXT.', echangeur:'ÉCH.'};
+function MaisonApp({k, actif}){ return <span style={{display:'inline-flex',alignItems:'center',gap:2,background:'rgba(255,255,255,.95)',border:'1.5px solid #111827',borderRadius:5,padding:'0 4px 0 1px',fontSize:10.5,fontWeight:800,color:'#111',opacity:actif===false ? .4 : 1,whiteSpace:'nowrap'}}><MaisonMarque c="X240" petit/>{MAISON_APP_COURT[k]||k}</span>; }
 function MaisonEncadrer({pg, m, majM, onClose, integre}){
   const majP = (id, patch) => majM(x=>({pieces:x.pieces.map(q=>q.id===id ? {...q, ...patch} : q)}));
   const boite = useRef(null), geste = useRef(null);
@@ -10941,6 +10967,7 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
   const [choix,setChoix]=useState(null);         // cadre en attente : {c, type, nom, pi2, id?}
   const [mesure,setMesure]=useState(null);       // trait d'échelle en attente : {c, txt}
   const [cible,setCible]=useState('');           // v485 : pièce à qui on ajoute des rectangles (forme en L)
+  const [pose,setPose]=useState('');             // v490 : appareil 240 V qu'on dépose au prochain clic
   const cle = maisonCleP(pg), ech = (m.echelles||{})[cle] || null;
   const ici = m.pieces.filter(p=>p.pg===pg.no && (p.src||'')===(pg.src||''));
   useEffect(()=>{ const f = () => boite.current && setTaille({w:boite.current.clientWidth||800, h:boite.current.clientHeight||500}); f();
@@ -10952,7 +10979,10 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
     if(g.pan){ setVue(v=>({...v, cx:g.cx - (e.clientX-g.q.px)/W, cy:g.cy - (e.clientY-g.q.py)/H})); return; }
     setDessin([g.q.x, g.q.y, q.x, q.y]); };
   const haut = e => { const g = geste.current; geste.current = null; if(!g || g.pan){ return; } const q = versPage(e), c = [g.q.x, g.q.y, q.x, q.y]; setDessin(null);
-    if(Math.hypot((c[2]-c[0])*W, (c[3]-c[1])*H) < 12) return;
+    if(Math.hypot((c[2]-c[0])*W, (c[3]-c[1])*H) < 12){
+      if(pose){ const k = pose, nb = (m.app240||[]).filter(a=>a.k===k).length, tot = Math.round(cvNum((m.appareils||{})[k])||0);
+        majM(x=>({app240:[...(x.app240||[]), {k, x:+q.x.toFixed(4), y:+q.y.toFixed(4), pg:pg.no, src:pg.src||''}], ...(nb>=tot ? {appareils:{...(x.appareils||{}), [k]:String(nb+1)}} : {})})); setPose(''); }
+      return; }
     if(mode==='mesure'){ setMesure({c, txt:''}); return; }
     const r = [Math.min(c[0],c[2]), Math.min(c[1],c[3]), Math.max(c[0],c[2]), Math.max(c[1],c[3])].map(v=>+Math.min(1,Math.max(0,v)).toFixed(4));
     if(cible){ majM(x=>({pieces:x.pieces.map(p=>p.id===cible ? maisonAvecCadres({...p, src:pg.src||'', pg:pg.no}, [...maisonCadres(p), r], pg, ech) : p)})); return; }
@@ -10970,7 +11000,7 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
     setMesure(null); setMode('cadre'); };
   const typesEt = MAISON_TYPES_ETAGE[pg.etage] || Object.keys(MAISON_TYPES);
   useEffect(()=>{ if(!choix || choix.existe || choix.id) return;
-    const f = e => { const t = e.target; if(t && /INPUT|TEXTAREA|SELECT/.test(t.tagName) && t.value) return;
+    const f = e => { const t = e.target; if(t && /INPUT|TEXTAREA|SELECT/.test(t.tagName)) return;
       const k = e.code && /^Digit\d$/.test(e.code) ? e.code.slice(5) : e.key; if(!/^\d$/.test(k)) return;
       const ty = typesEt[k==='0' ? 9 : +k-1]; if(!ty) return; e.preventDefault(); garder(e.shiftKey, ty); };
     window.addEventListener('keydown', f); return ()=>window.removeEventListener('keydown', f); });
@@ -10989,6 +11019,7 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
           style={{position:'absolute',inset:0,overflow:'hidden',background:'#e5e7eb',borderRadius:8,touchAction:'none',cursor:mode==='main' ? 'grab' : 'crosshair',userSelect:'none'}}>
           <div style={{position:'absolute',left,top,width:W,height:H}}>
             <img src={pg.img} alt="" draggable={false} style={{width:'100%',height:'100%',display:'block',background:'#fff'}}/>
+            {(m.app240||[]).filter(a=>a.pg===pg.no && (a.src||'')===(pg.src||'')).map((a,i)=><div key={'a'+i} style={{position:'absolute',left:(a.x*100)+'%',top:(a.y*100)+'%',transform:'translate(-50%,-50%)',zIndex:3,pointerEvents:'none'}}><MaisonApp k={a.k}/></div>)}
             {ici.map(p=>maisonCadres(p).length ? <React.Fragment key={p.id}><MaisonContour cs={maisonCadres(p)} col={p.id===cible ? '#16a34a' : '#2563eb'}/>{maisonCadres(p).map((k,j)=>{ const vise = p.id===cible, col = vise ? '#16a34a' : '#2563eb';
               return <div key={j} onPointerDown={e=>{ if(mode!=='cadre' || cible) return; e.stopPropagation(); setChoix({c:k, type:p.type, nom:p.nom, pi2:p.pi2||'', id:p.id, etage:p.etage, existe:true}); }}
               style={{position:'absolute',left:(k[0]*100)+'%',top:(k[1]*100)+'%',width:((k[2]-k[0])*100)+'%',height:((k[3]-k[1])*100)+'%',boxSizing:'border-box',cursor:cible ? 'crosshair' : 'pointer',pointerEvents:cible ? 'none' : 'auto'}}>
@@ -11001,6 +11032,15 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
                 {ech && <div style={{position:'absolute',right:2,bottom:2,background:'#dc2626',color:'#fff',fontSize:11,fontWeight:700,padding:'1px 4px',borderRadius:3}}>{maisonPi2Cadre(r, pg, ech)} pi²</div>}</div>; })()}
           </div>
         </div>
+        {(()=>{ const L = MAISON_APPAREILS.filter(([k])=>cvNum((m.appareils||{})[k])>0 || (m.app240||[]).some(a=>a.k===k)); if(!L.length) return null;
+          return <div style={{position:'absolute',left:8,top:8,right:60,display:'flex',gap:4,flexWrap:'wrap',zIndex:4,alignItems:'center'}}>
+            <span style={{background:'rgba(17,24,39,.85)',color:'#fff',fontSize:11,fontWeight:700,padding:'2px 6px',borderRadius:5}}>240 V</span>
+            {L.map(([k,l])=>{ const tot = Math.round(cvNum((m.appareils||{})[k])||0), nb = (m.app240||[]).filter(a=>a.k===k).length, fini = nb>=tot;
+              return <span key={k} style={{display:'inline-flex',gap:2,alignItems:'center'}}><button onClick={()=>setPose(pose===k ? '' : k)} title={l+' — clique, puis clique sur le plan pour le déposer'}
+                style={{border:pose===k ? '2px solid var(--accent)' : '1px solid #999',borderRadius:6,padding:'2px 5px',background:'#fff',cursor:'pointer',opacity:fini && pose!==k ? .45 : 1,display:'inline-flex',gap:4,alignItems:'center',color:'#111',fontSize:11.5}}>
+                <MaisonApp k={k}/>{l.split(' (')[0]} <b>{nb}/{tot}</b></button>
+                {nb>0 && <button title="Enlever le dernier déposé" onClick={()=>majM(x=>{ const a = [...(x.app240||[])]; const j = a.map(y=>y.k).lastIndexOf(k); if(j>=0) a.splice(j,1); return {app240:a}; })} style={{border:'1px solid #999',borderRadius:5,background:'#fff',color:'#111',fontSize:11,padding:'1px 4px',cursor:'pointer'}}>↶</button>}</span>; })}
+            {pose && <span style={{background:'var(--accent)',color:'#fff',fontSize:11.5,fontWeight:700,padding:'2px 6px',borderRadius:5}}>👉 clique sur le plan pour déposer</span>}</div>; })()}
         <div style={{position:'absolute',right:8,top:8,display:'grid',gap:4}}><button className="btn btn-sm" onClick={()=>zoom(1.3)}>＋</button><button className="btn btn-sm" onClick={()=>zoom(1/1.3)}>－</button></div>
       </div>
       <div style={{width:large?320:'auto',flexShrink:0,overflow:'auto',display:'grid',gap:8,alignContent:'start',maxHeight:large?'none':'38vh'}}>
@@ -11028,7 +11068,8 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
             <details style={{marginTop:3}}><summary style={{cursor:'pointer',fontSize:12.5}}>▸ Autres sortes (tous les étages)</summary>
               <div style={{display:'flex',gap:3,flexWrap:'wrap',marginTop:4}}>{Object.entries(MAISON_TYPES).filter(([k])=>!typesEt.includes(k)).map(([k,t])=><button key={k} className="btn btn-sm" onClick={e=>garder(e.shiftKey, k)}>{t.nom}</button>)}</div></details></div>}
           {!choix.existe && <><label style={{display:'none'}}>Type<select value={choix.type} disabled={!!choix.id} onChange={e=>setChoix({...choix, type:e.target.value})}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select></label>
-            {!choix.id && <label style={{display:'grid',gap:2}}>Nom (optionnel)<input value={choix.nom} onChange={e=>setChoix({...choix, nom:e.target.value})} placeholder={nomAuto(choix.type)}/></label>}</>}
+            {!choix.id && <label style={{display:'grid',gap:2}}>Nom (Entrée = ajouter, sorte devinée du nom)<input value={choix.nom} onChange={e=>setChoix({...choix, nom:e.target.value})}
+              onKeyDown={e=>{ if(e.key==='Enter' && (choix.nom||'').trim()){ e.preventDefault(); const ty = maisonTypeDe(choix.nom); garder(e.shiftKey, ty==='autre' ? 'autre' : ty); } }} placeholder="ex. Escalier, Atelier, Rangement…"/></label>}</>}
           {choix.existe && (()=>{ const pp = m.pieces.find(x=>x.id===choix.id); return pp ? <div style={{borderTop:'1px solid var(--border)',paddingTop:6}}><b style={{fontSize:12.5}}>Sorties de la pièce</b><MaisonCompteur p={pp} majP={majP}/></div> : null; })()}
           <label style={{display:'grid',gap:2}}>Pi²{ech ? ' (calculé — modifiable)' : ''}<input value={choix.pi2} onChange={e=>setChoix({...choix, pi2:e.target.value.replace(/[^0-9.,]/g,'')})} inputMode="decimal" placeholder={ech ? '' : 'ex. 143'}/></label>
           <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
@@ -11061,6 +11102,8 @@ function MaisonPlan({d, setD, C, toast}){
   const [pages,setPages]=useState([]);   // vignettes du plan : en mémoire seulement (pas dans la soumission sauvée)
   const [cadrer,setCadrer]=useState('');   // v482 : clé de la page qu'on encadre
   const pagesV = maisonPagesVues(pages, m);
+  const triees = pagesV.filter(p=>['etage','facade','terrain'].includes(p.sorte));
+  const pagesAff = m.archive && triees.length ? triees : pagesV;   // v490 : « Archiver » = on ne garde que les pages triées (plans, façades, certificat)
   const [ajout,setAjout]=useState({etage:'Rez-de-chaussée', type:'chambre'});
   const ref = useRef(null);
   // v467 : PDF déjà dans le dossier du client (« PDF et photos du client ») → on peut le lire directement comme plan de maison
@@ -11091,12 +11134,12 @@ function MaisonPlan({d, setD, C, toast}){
   useEffect(()=>{ let vivant=true; const ids = [...new Set([...(m.plans||[]).map(x=>x.id), m.planId].filter(Boolean))]; if(!ids.length || pages.length) return;
     (async()=>{ for(const id of ids){ try{ const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
       const r = await fetch('https://www.googleapis.com/drive/v3/files/'+id+'?alt=media&supportsAllDrives=true', {headers:{Authorization:'Bearer '+tok}}); if(!r.ok) continue;
-      const res = await maisonLirePlan(new File([await r.blob()], 'plan.pdf', {type:'application/pdf'}), null, id); if(vivant) garderPages(id, res.pages); }catch(e){} } })();
+      const tg = m.pagesTag||{}, res = await maisonLirePlan(new File([await r.blob()], 'plan.pdf', {type:'application/pdf'}), null, id, m.archive ? (i=>['ignore','autre'].includes(tg[id+'|'+i])) : null); if(vivant) garderPages(id, res.pages); }catch(e){} } })();
     return ()=>{ vivant=false; }; },[]);
   const plansClient = async () => { if(!pagesV.length){ toast && toast('Le plan n\'est pas chargé — ouvre ou relis le plan'); return; }
     setEtat('Plans annotés…');
     try{ if(!peutDeposer()) await requestToken('consent');
-      const L = await maisonPlansAnnotes(pagesV, m.pieces); if(!L.length){ setEtat(''); toast && toast('Aucun emplacement placé — fais le tour pièce par pièce'); return; }
+      const L = await maisonPlansAnnotes(pagesV, m.pieces, m.app240); if(!L.length){ setEtat(''); toast && toast('Aucun emplacement placé — fais le tour pièce par pièce'); return; }
       const items = []; for(const x of L){ const id = await planGarderImage(d, setD, x.blob, x.titre); items.push({id, titre:x.titre, notes:''}); }
       setD(o=>({...o, plan:[...(o.plan||[]).filter(y=>!/^Plan annoté — /.test(y.titre||'')), ...items]}));
       setEtat(''); toast && toast(items.length+' plan'+(items.length>1?'s':'')+' annoté'+(items.length>1?'s':'')+' ajouté'+(items.length>1?'s':'')+' au plan des travaux (PDF)'); }
@@ -11145,7 +11188,7 @@ function MaisonPlan({d, setD, C, toast}){
       {!m.pieces.length && <span className="muted" style={{fontSize:12}}>ou ajoute les pièces à la main (en bas)</span>}
       {m.pieces.length>0 && <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={()=>setTour(true)}>🧭 Tour pièce par pièce{(()=>{ const n = m.pieces.filter(p=>p.ok).length; return n ? ' ('+n+'/'+m.pieces.length+')' : ''; })()}</button>}
     </div>
-    {MAISON_SORTES.map(([k,l])=>{ const pp = pagesV.filter(p=>p.sorte===k); if(!pp.length) return null;
+    {MAISON_SORTES.map(([k,l])=>{ const pp = pagesAff.filter(p=>p.sorte===k); if(!pp.length) return null;
       return <div key={k}><div className="muted" style={{fontSize:11.5,fontWeight:700,marginBottom:3}}>{l}{k==='etage' ? ' — clique pour voir les sorties prévues dans chaque pièce' : ''}</div>
         <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{pp.map(pg=>{ const ck = maisonCleP(pg), nb = m.pieces.filter(p=>p.pg===pg.no && (p.src||'')===(pg.src||'')).length;
           return <div key={ck} style={{textAlign:'center',fontSize:11,display:'grid',gap:2,justifyItems:'center'}}>
@@ -11153,11 +11196,13 @@ function MaisonPlan({d, setD, C, toast}){
           <select value={(m.pagesTag||{})[ck] ?? ''} onChange={e=>majM(o=>({pagesTag:{...(o.pagesTag||{}), [ck]:e.target.value}}))} title="C'est quoi, cette page ?" style={{width:'auto',maxWidth:150,fontSize:11,padding:'1px 3px'}}>
             {MAISON_TAGS.map(([v,t])=><option key={v} value={v}>{v==='' ? (pg.titre || 'p. '+pg.no)+(k!=='autre' ? ' (lu)' : '') : t}</option>)}</select>
           {k==='etage' && <button className="btn btn-sm" style={{fontSize:11,padding:'1px 6px'}} onClick={()=>setCadrer(ck)}>▭ Encadrer{nb ? ' ('+nb+')' : ''}</button>}</div>; })}</div></div>; })}
-    {(()=>{ const ig = pagesV.filter(p=>p.sorte==='ignore'); if(!ig.length) return null;
+    {!m.archive && (()=>{ const ig = pagesV.filter(p=>p.sorte==='ignore'); if(!ig.length) return null;
       return <div className="muted" style={{fontSize:11.5}}>✕ {ig.length} page{ig.length>1?'s':''} écartée{ig.length>1?'s':''} (pas besoin) — <a href="#" onClick={e=>{ e.preventDefault(); setGrand(ig[0]); }}>revoir</a></div>; })()}
-    {pagesV.length>0 && <div><button className="btn btn-sm" onClick={()=>setGrand(pagesV[0])}>📑 Trier les pages ({pagesV.length}) — ← → pour avancer</button></div>}
+    {pagesV.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap'}}><button className="btn btn-sm" onClick={()=>setGrand(pagesAff[0])}>{m.archive ? '📑 Voir mes plans ('+pagesAff.length+')' : '📑 Trier les pages ('+pagesV.length+') — ← → pour avancer'}</button>
+      {triees.length>0 && !m.archive && <button className="btn btn-sm" title="Ne garder que les pages triées (plans d'étage, façades, certificat) — les autres sont mises de côté" onClick={()=>majM({archive:true})}>🗄 Archiver les autres pages (garder {triees.length})</button>}
+      {m.archive && <button className="btn btn-sm" onClick={()=>majM({archive:false})}>Voir toutes les pages ({pagesV.length})</button>}</div>}
     {grand && (()=>{ const g = pagesV.find(x=>maisonCleP(x)===maisonCleP(grand)) || grand;
-      return <MaisonVue pg={g} pieces={m.pieces} m={m} majM={majM} onClose={()=>setGrand(null)} liste={pagesV} onAller={setGrand} tag={(m.pagesTag||{})[maisonCleP(g)]}
+      return <MaisonVue pg={g} pieces={m.pieces} m={m} majM={majM} onClose={()=>setGrand(null)} liste={pagesAff} onAller={setGrand} tag={(m.pagesTag||{})[maisonCleP(g)]}
         onTag={(pg, v)=>majM(o=>({pagesTag:{...(o.pagesTag||{}), [maisonCleP(pg)]:v}}))}/>; })()}
     {cadrer && pagesV.find(x=>maisonCleP(x)===cadrer) && <MaisonEncadrer pg={pagesV.find(x=>maisonCleP(x)===cadrer)} m={m} majM={majM} onClose={()=>setCadrer('')}/>}
     {tour && <MaisonTour m={m} majP={majP} majM={majM} pages={pagesV} onClose={()=>setTour(false)} onPlansClient={()=>{ setTour(false); plansClient(); }}/>}
