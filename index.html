@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v476';
+const APP_VERSION = 'v477';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10518,9 +10518,46 @@ function maisonGrille(pts, ratio){ const n = pts.length; if(n<2) return pts;
 // Décalage horizontal des marques au même endroit (interrupteurs regroupés), en nombre de marques
 function maisonDecalages(emps){ const tot = {}, vu = {}; emps.forEach(m=>{ const k = m.x+'|'+m.y; tot[k] = (tot[k]||0)+1; });
   return emps.map(m=>{ const k = m.x+'|'+m.y, n = vu[k] = (vu[k]||0)+1; return (n-1) - (tot[k]-1)/2; }); }
-function MaisonMarque({c, actif, petit, texte}){ const o = maisonOutil(c), t = petit ? 16 : 22, rect = o[6]==='rect';
-  return <div style={{minWidth:rect ? t*1.9 : t,height:rect ? t*0.62 : t,borderRadius:rect ? 2 : t/2,background:o[3],color:'#fff',fontSize:petit?8.5:10.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px',
-    border:'2px solid #fff',boxShadow:'0 1px 3px rgba(0,0,0,.5)',opacity:actif===false ? .45 : 1,boxSizing:'border-box',lineHeight:1}}>{texte || o[1]}</div>; }
+// v477 : symboles électriques façon plan (prise = cercle traversé de 2 traits, encastré = cercle en croix, interrupteur = S, thermostat = cercle T…),
+//        dans notre code de couleur ; les variantes portent un indice (20, GFI, EXT, D…). Même dessin à l'écran et sur le plan annoté du client.
+const MAISON_SYM = {
+  SO01:['prise',''], 'SO01.2':['prise','20'], 'SO01.1':['prise','GFI'], 'SO01.21':['prise','20 GFI'], SO07:['prise','EXT'], SO00:['prise','D'], X240:['prise','240'],
+  SO02:['inter',''], 'SO02.1':['inter','3'], 'SO02.2':['inter','G'],
+  SO03:['encastre',''], SO04:['plafonnier',''], MUR:['murale',''], SO08:['plafonnier','EXT'],
+  TH:['thermo',''], SO05:['fumee',''], SO06:['boite','V'], SO06H:['boite','H'], SO11:['reseau',''], PL:['plinthe','']};
+function maisonSymSvg(c, txt){
+  const o = maisonOutil(c), col = o[3], [forme, ind0] = MAISON_SYM[c] || ['rond', o[1]], ind = forme==='plinthe' ? '' : ind0;
+  let w = 40, h = 40, g = '';
+  const T = (x, y, s, t, anc) => '<text x="'+x+'" y="'+y+'" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="'+s+'" fill="'+col+'" text-anchor="'+(anc||'middle')+'" dominant-baseline="central" stroke="#fff" stroke-width="3.5" paint-order="stroke">'+t+'</text>';
+  switch(forme){
+    case 'prise': g = '<circle cx="20" cy="20" r="10"/><line x1="16" y1="4" x2="16" y2="36"/><line x1="24" y1="4" x2="24" y2="36"/>'; break;
+    case 'encastre': g = '<circle cx="20" cy="20" r="10"/><line x1="4" y1="20" x2="36" y2="20"/><line x1="20" y1="4" x2="20" y2="36"/>'; break;
+    case 'plafonnier': g = '<circle cx="20" cy="20" r="12"/><line x1="11.5" y1="11.5" x2="28.5" y2="28.5"/><line x1="28.5" y1="11.5" x2="11.5" y2="28.5"/>'; break;
+    case 'murale': g = '<path d="M7,30 A13,13 0 0 1 33,30 Z"/><line x1="12" y1="21" x2="20" y2="30"/><line x1="28" y1="21" x2="20" y2="30"/><line x1="3" y1="34" x2="37" y2="34"/>'; break;
+    case 'inter': g = '<path d="M27,9 C26,3 13,3 13,10 C13,17 27,19 27,27 C27,36 13,36 13,30"/><line x1="20" y1="1" x2="20" y2="39"/>'; break;
+    case 'thermo': g = '<line x1="20" y1="1" x2="20" y2="10"/><circle cx="20" cy="22" r="11"/>'; break;
+    case 'fumee': g = '<circle cx="20" cy="20" r="12"/><circle cx="20" cy="20" r="4" fill="'+col+'"/>'; break;
+    case 'boite': g = '<rect x="7" y="7" width="26" height="26"/>'; break;
+    case 'reseau': g = '<path d="M20,6 L35,32 L5,32 Z"/>'; break;
+    case 'plinthe': w = 84; h = 26; g = '<rect x="3" y="4" width="78" height="18" fill="#fff"/><line x1="3" y1="13" x2="10" y2="13"/><line x1="74" y1="13" x2="81" y2="13"/>'; break;
+    default: g = '<circle cx="20" cy="20" r="12"/>';
+  }
+  let t = '';
+  if(forme==='thermo') t += T(20, 22.5, 14, 'T');
+  if(forme==='boite') t += T(20, 20.5, 17, ind);
+  if(forme==='reseau') t += T(20, 24, 12, 'R');
+  if(forme==='plinthe') t += T(42, 13.5, 13, txt || 'PL');
+  const sous = forme!=='boite' && forme!=='plinthe' && ind;
+  if(sous){ const lg = ind.length; w = 40 + Math.max(10, lg*7.5); t += T(29, 35, lg>3 ? 10 : 12, ind, 'start'); }
+  const traits = (st, sw, fillBlanc) => '<g fill="'+(fillBlanc ? '#fff' : 'none')+'" stroke="'+st+'" stroke-width="'+sw+'" stroke-linecap="round" stroke-linejoin="round">'+g+'</g>';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+w+' '+h+'" width="'+w+'" height="'+h+'">'+traits('#fff', 7, true)+traits(col, 2.6, false)+t+'</svg>';
+  return {svg, w, h}; }
+const maisonSymUrl = (c, txt) => 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(maisonSymSvg(c, txt).svg);
+function MaisonMarque({c, actif, petit, texte}){ const s = maisonSymSvg(c, texte), ht = (petit ? 20 : 30) * (s.h/40) * (c==='PL' ? 1.3 : 1);
+  return <img src={maisonSymUrl(c, texte)} alt={maisonOutil(c)[2]} draggable={false} style={{height:ht, width:ht*s.w/s.h, display:'block', opacity:actif===false ? .45 : 1, filter:actif===false ? 'none' : 'drop-shadow(0 0 1px rgba(0,0,0,.35))'}}/>; }
+const MAISON_SYM_IMG = {};
+function maisonSymImage(c, txt){ const k = c+'|'+(txt||''); if(MAISON_SYM_IMG[k]) return MAISON_SYM_IMG[k];
+  return MAISON_SYM_IMG[k] = new Promise((ok,ko)=>{ const im = new Image(); im.onload = ()=>ok(im); im.onerror = ko; im.src = maisonSymUrl(c, txt); }); }
 function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}){
   const boite = useRef(null), geste = useRef(null);
   const [taille,setTaille]=useState({w:600, h:420});
@@ -10559,7 +10596,7 @@ function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}
           return <React.Fragment key={p.id}>
           {p.fx!=null && p.pg===pg.no && (p.src||'')===(pg.src||'') && <div style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none',
             fontSize:11,fontWeight:700,padding:'1px 5px',borderRadius:4,whiteSpace:'nowrap',background:piece && p.id===piece.id ? '#fde047' : 'rgba(255,255,255,.75)',color:'#111',border:piece && p.id===piece.id ? '1.5px solid #ca8a04' : '1px solid #bbb'}}>{p.nom}</div>}
-          {em.map((m,i)=><div key={i} style={{position:'absolute',left:'calc('+(m.x*100)+'% + '+(dec[i]*21)+'px)',top:(m.y*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none'}}>
+          {em.map((m,i)=><div key={i} style={{position:'absolute',left:'calc('+(m.x*100)+'% + '+(dec[i]*27)+'px)',top:(m.y*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none'}}>
             <MaisonMarque c={m.c} actif={!piece || p.id===piece.id} texte={m.c==='PL' && m.w ? String(m.w) : ''}/></div>)}
         </React.Fragment>; })}
       </div>
@@ -10722,16 +10759,15 @@ async function maisonPlansAnnotes(pages, pieces){
     const c = document.createElement('canvas'); c.width = W; c.height = H + leg; const x = c.getContext('2d');
     x.fillStyle = '#fff'; x.fillRect(0,0,c.width,c.height); x.drawImage(img, 0, 0);
     const r = Math.max(9, Math.round(W/140));
-    const marque = (cx, cy, code, rr, txt) => { const o = maisonOutil(code); x.fillStyle = o[3]; x.lineWidth = rr/4; x.strokeStyle = '#fff';
-      if(o[6]==='rect'){ x.fillRect(cx-rr*1.9, cy-rr*.65, rr*3.8, rr*1.3); x.strokeRect(cx-rr*1.9, cy-rr*.65, rr*3.8, rr*1.3); }
-      else { x.beginPath(); x.arc(cx, cy, rr, 0, 7); x.fill(); x.stroke(); }
-      x.fillStyle = '#fff'; x.font = 'bold '+Math.round(rr*(o[1].length>2 ? .78 : 1))+'px sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(txt || o[1], cx, cy+1); };
-    pieces.forEach(p=>{ const em = (p.emp||[]).filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')), dec = maisonDecalages(em); em.forEach((m,k)=>marque(m.x*W + dec[k]*r*2.1, m.y*H, m.c, r, m.c==='PL' && m.w ? m.w+' W' : '')); });
+    const marque = async (cx, cy, code, rr, txt, gauche) => { const s = maisonSymSvg(code, txt), hh = rr*2.6*(s.h/40)*(code==='PL' ? 1.3 : 1), ww = hh*s.w/s.h;
+      try{ const im = await maisonSymImage(code, txt); x.drawImage(im, gauche ? cx - rr*1.3 : cx - ww/2, cy - hh/2, ww, hh); }catch(e){} };
+    for(const p of pieces){ const em = (p.emp||[]).filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')), dec = maisonDecalages(em);
+      for(let k=0; k<em.length; k++){ const m = em[k]; await marque(m.x*W + dec[k]*r*2.4, m.y*H, m.c, r, m.c==='PL' && m.w ? m.w+' W' : ''); } }
     x.fillStyle = '#111'; x.font = 'bold '+lh+'px sans-serif'; x.textAlign = 'left'; x.textBaseline = 'middle';
     x.fillText((pg.etage||pg.titre)+' — emplacements prévus (approximatifs, à confirmer sur le chantier)', lh, H + lh);
     x.font = Math.round(lh*.85)+'px sans-serif';
-    codes.forEach((code,k)=>{ const col = k%5, row = Math.floor(k/5), cx = lh*1.5 + col*(W-2*lh)/5, cy = H + lh*2.4 + row*lh*1.6;
-      marque(cx, cy, code, lh*.6); x.fillStyle = '#111'; x.textAlign = 'left'; x.fillText(maisonOutil(code)[2]+' ('+emps.filter(m=>m.c===code).length+')', cx + lh*1.4, cy); });
+    for(let k=0; k<codes.length; k++){ const code = codes[k], col = k%5, row = Math.floor(k/5), cx = lh*1.5 + col*(W-2*lh)/5, cy = H + lh*2.4 + row*lh*1.6;
+      await marque(cx, cy, code, lh*.55, '', true); x.fillStyle = '#111'; x.textAlign = 'left'; x.fillText(maisonOutil(code)[2]+' ('+emps.filter(m=>m.c===code).length+')', cx + lh*2.6, cy); }
     out.push({titre:'Plan annoté — '+(pg.etage||pg.titre), blob:await new Promise(ok=>c.toBlob(ok, 'image/jpeg', 0.85))});
   }
   return out;
