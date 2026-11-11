@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v487';
+const APP_VERSION = 'v488';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10683,7 +10683,7 @@ function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}
       style={{position:'relative',overflow:'hidden',height:'100%',minHeight:240,background:'#e5e7eb',borderRadius:8,touchAction:'none',cursor:outil==='gomme' ? 'not-allowed' : outil ? 'crosshair' : 'grab',userSelect:'none'}}>
       <div style={{position:'absolute',left,top,width:W,height:H}}>
         <img src={pg.img} alt="" draggable={false} style={{width:'100%',height:'100%',display:'block',background:'#fff'}}/>
-        {piece && piece.pg===pg.no && maisonCadres(piece).map((k,j)=><div key={'c'+j} style={{position:'absolute',left:(k[0]*100)+'%',top:(k[1]*100)+'%',width:((k[2]-k[0])*100)+'%',height:((k[3]-k[1])*100)+'%',border:'2px dashed #ca8a04',boxSizing:'border-box',pointerEvents:'none'}}/>)}
+        {piece && piece.pg===pg.no && maisonCadres(piece).length>0 && <MaisonContour cs={maisonCadres(piece)} col="#ca8a04" tirets/>}
         {autres.map(p=>{ const em0 = (p.emp||[]).map((m,i)=>piece && p.id===piece.id && tire && tire.k===i ? {...m, x:tire.x, y:tire.y} : m), em = em0.filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')), dec = maisonDecalages(em);
           return <React.Fragment key={p.id}>
           {p.fx!=null && p.pg===pg.no && (p.src||'')===(pg.src||'') && <div style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none',
@@ -10880,12 +10880,24 @@ function maisonPagesVues(pages, m){ const tags = m.pagesTag||{};
     if(['Sous-sol','Rez-de-chaussée','Étage','Garage'].includes(t)) return {...pg, sorte:'etage', etage:t, titre:t};
     if(t==='ignore') return {...pg, sorte:'ignore', etage:'', titre:'p. '+pg.no+' (pas besoin)'};
     return {...pg, sorte:t, etage:'', titre:t==='facade' ? 'Façade p. '+pg.no : t==='terrain' ? 'Certificat / arpentage' : 'p. '+pg.no}; }); }
+// v488 : rectangles qui se chevauchent = une seule surface (aire de l'union, contour fusionné)
+function maisonUnion(cs, ratio){ const xs = [...new Set(cs.flatMap(c=>[c[0],c[2]]))].sort((a,b)=>a-b), ys = [...new Set(cs.flatMap(c=>[c[1],c[3]]))].sort((a,b)=>a-b);
+  const dans = (i,j) => i>=0 && j>=0 && i<xs.length-1 && j<ys.length-1 && cs.some(c=>c[0]<=xs[i] && c[2]>=xs[i+1] && c[1]<=ys[j] && c[3]>=ys[j+1]);
+  let aire = 0; const segs = [];
+  for(let i=0;i<xs.length-1;i++) for(let j=0;j<ys.length-1;j++){ if(!dans(i,j)) continue; aire += (xs[i+1]-xs[i])*(ys[j+1]-ys[j])*(ratio||1);
+    if(!dans(i-1,j)) segs.push([xs[i],ys[j],xs[i],ys[j+1]]); if(!dans(i+1,j)) segs.push([xs[i+1],ys[j],xs[i+1],ys[j+1]]);
+    if(!dans(i,j-1)) segs.push([xs[i],ys[j],xs[i+1],ys[j]]); if(!dans(i,j+1)) segs.push([xs[i],ys[j+1],xs[i+1],ys[j+1]]); }
+  return {aire, segs}; }
+function MaisonContour({cs, col, epais, tirets}){ const u = maisonUnion(cs, 1);
+  return <svg style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none',overflow:'visible'}} viewBox="0 0 1 1" preserveAspectRatio="none">
+    <g opacity=".12">{cs.map((c,k)=><rect key={'f'+k} x={c[0]} y={c[1]} width={c[2]-c[0]} height={c[3]-c[1]} fill={col} stroke="none"/>)}</g>
+    {u.segs.map((g,k)=><line key={k} x1={g[0]} y1={g[1]} x2={g[2]} y2={g[3]} stroke={col} strokeWidth={epais||2} strokeDasharray={tirets ? '6 4' : null} vectorEffect="non-scaling-stroke"/>)}</svg>; }
 // v485 : une pièce peut avoir plusieurs rectangles (corridor en L, etc.) — cadres[] ; cadre = boîte qui les englobe (zoom du tour)
 const maisonCadres = p => p.cadres && p.cadres.length ? p.cadres : (p.cadre ? [p.cadre] : []);
 function maisonAvecCadres(p, cs, pg, ech){ if(!cs.length) return {...p, cadres:[], cadre:null};
   const bb = [Math.min(...cs.map(c=>c[0])), Math.min(...cs.map(c=>c[1])), Math.max(...cs.map(c=>c[2])), Math.max(...cs.map(c=>c[3]))].map(v=>+v.toFixed(4));
   const gros = [...cs].sort((a,b)=>(b[2]-b[0])*(b[3]-b[1]) - (a[2]-a[0])*(a[3]-a[1]))[0];
-  const pi = ech ? cs.reduce((t,c)=>t+(maisonPi2Cadre(c, pg, ech)||0),0) : null;
+  const pi = ech ? Math.round(maisonUnion(cs, (pg.h||1)/(pg.w||1)).aire*ech*ech) : null;   // v488 : chevauchement compté une fois
   return {...p, cadres:cs, cadre:bb, fx:+((gros[0]+gros[2])/2).toFixed(4), fy:+((gros[1]+gros[3])/2).toFixed(4), ...(pi ? {pi2:String(pi)} : {})}; }
 // v487 : en encadrant, les sortes de pièces de l'étage, numérotées (touche 1-9, 0) — pas de cuisine au sous-sol, etc.
 const MAISON_TYPES_ETAGE = {
@@ -10950,9 +10962,9 @@ function MaisonEncadrer({pg, m, majM, onClose}){
           style={{position:'absolute',inset:0,overflow:'hidden',background:'#e5e7eb',borderRadius:8,touchAction:'none',cursor:mode==='main' ? 'grab' : 'crosshair',userSelect:'none'}}>
           <div style={{position:'absolute',left,top,width:W,height:H}}>
             <img src={pg.img} alt="" draggable={false} style={{width:'100%',height:'100%',display:'block',background:'#fff'}}/>
-            {ici.map(p=>maisonCadres(p).length ? <React.Fragment key={p.id}>{maisonCadres(p).map((k,j)=>{ const vise = p.id===cible, col = vise ? '#16a34a' : '#2563eb';
-              return <div key={j} onPointerDown={e=>{ if(mode!=='cadre' || cible) return; e.stopPropagation(); setChoix({c:k, type:p.type, nom:p.nom, pi2:p.pi2||'', id:p.id, existe:true}); }}
-              style={{position:'absolute',left:(k[0]*100)+'%',top:(k[1]*100)+'%',width:((k[2]-k[0])*100)+'%',height:((k[3]-k[1])*100)+'%',border:'2px solid '+col,background:vise ? 'rgba(22,163,74,.12)' : 'rgba(37,99,235,.08)',boxSizing:'border-box',cursor:cible ? 'crosshair' : 'pointer',pointerEvents:cible ? 'none' : 'auto'}}>
+            {ici.map(p=>maisonCadres(p).length ? <React.Fragment key={p.id}><MaisonContour cs={maisonCadres(p)} col={p.id===cible ? '#16a34a' : '#2563eb'}/>{maisonCadres(p).map((k,j)=>{ const vise = p.id===cible, col = vise ? '#16a34a' : '#2563eb';
+              return <div key={j} onPointerDown={e=>{ if(mode!=='cadre' || cible) return; e.stopPropagation(); setChoix({c:k, type:p.type, nom:p.nom, pi2:p.pi2||'', id:p.id, etage:p.etage, existe:true}); }}
+              style={{position:'absolute',left:(k[0]*100)+'%',top:(k[1]*100)+'%',width:((k[2]-k[0])*100)+'%',height:((k[3]-k[1])*100)+'%',boxSizing:'border-box',cursor:cible ? 'crosshair' : 'pointer',pointerEvents:cible ? 'none' : 'auto'}}>
               {j===0 && <div style={{position:'absolute',left:2,top:2,background:col,color:'#fff',fontSize:11,fontWeight:700,padding:'1px 5px',borderRadius:3,whiteSpace:'nowrap'}}>{p.nom}{cvNum(p.pi2) ? ' · '+p.pi2+' pi²' : ''}</div>}</div>; })}</React.Fragment>
               : p.fx!=null ? <div key={p.id} style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',background:'#fde047',fontSize:11,fontWeight:700,padding:'1px 5px',borderRadius:3,whiteSpace:'nowrap',pointerEvents:'none'}}>{p.nom}</div> : null)}
             {(dessin || (choix && choix.c) || (mesure && mesure.c)) && (()=>{ const c = dessin || (mesure ? mesure.c : choix.c);
@@ -10976,27 +10988,33 @@ function MaisonEncadrer({pg, m, majM, onClose}){
           <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={!maisonPieds(mesure.txt)} onClick={garderMesure}>Régler l'échelle</button><button className="btn btn-sm" onClick={()=>setMesure(null)}>Annuler</button></div></div>}
         {choix && <div style={{border:'2px solid var(--accent)',borderRadius:8,padding:'8px 10px',display:'grid',gap:6,fontSize:13}}>
           <b>{choix.existe ? 'Pièce encadrée' : 'Nouvelle pièce'}</b>
+          {choix.existe && <>
+            <label style={{display:'grid',gap:2}}>Nom<input value={choix.nom} onChange={e=>setChoix({...choix, nom:e.target.value})}/></label>
+            <label style={{display:'grid',gap:2}}>Sorte de pièce<select value={choix.type} onChange={e=>setChoix({...choix, type:e.target.value})}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select></label>
+            <label style={{display:'grid',gap:2}}>Étage<select value={choix.etage || ''} onChange={e=>setChoix({...choix, etage:e.target.value})}>{MAISON_ETAGES.map(x=><option key={x}>{x}</option>)}</select></label></>}
           {!choix.existe && ici.filter(p=>!p.cadre).length>0 && <label style={{display:'grid',gap:2}}>Pièce déjà lue :<select value={choix.id} onChange={e=>{ const p = ici.find(x=>x.id===e.target.value); setChoix({...choix, id:e.target.value, ...(p ? {type:p.type, nom:p.nom} : {})}); }}>
             <option value="">— nouvelle pièce —</option>{ici.filter(p=>!p.cadre).map(p=><option key={p.id} value={p.id}>{p.nom}</option>)}</select></label>}
           {!choix.existe && !choix.id && <div style={{display:'grid',gap:3}}>
             <span className="muted" style={{fontSize:12}}>Touche le chiffre (ou clique) — la pièce s'ajoute tout de suite · Maj + chiffre = forme en L</span>
             {typesEt.map((k,i)=><button key={k} className="btn btn-sm" style={{justifyContent:'flex-start'}} onClick={e=>garder(e.shiftKey, k)}>
               <b style={{fontFamily:'monospace',minWidth:14}}>{i===9 ? 0 : i+1}</b> {MAISON_TYPES[k].nom}</button>)}
-            <label style={{display:'grid',gap:2,marginTop:3}}>Autre sorte<select value="" onChange={e=>{ if(e.target.value) garder(false, e.target.value); }}><option value="">…</option>{Object.entries(MAISON_TYPES).filter(([k])=>!typesEt.includes(k)).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select></label></div>}
+            <details style={{marginTop:3}}><summary style={{cursor:'pointer',fontSize:12.5}}>▸ Autres sortes (tous les étages)</summary>
+              <div style={{display:'flex',gap:3,flexWrap:'wrap',marginTop:4}}>{Object.entries(MAISON_TYPES).filter(([k])=>!typesEt.includes(k)).map(([k,t])=><button key={k} className="btn btn-sm" onClick={e=>garder(e.shiftKey, k)}>{t.nom}</button>)}</div></details></div>}
           {!choix.existe && <><label style={{display:'none'}}>Type<select value={choix.type} disabled={!!choix.id} onChange={e=>setChoix({...choix, type:e.target.value})}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select></label>
             {!choix.id && <label style={{display:'grid',gap:2}}>Nom (optionnel)<input value={choix.nom} onChange={e=>setChoix({...choix, nom:e.target.value})} placeholder={nomAuto(choix.type)}/></label>}</>}
           <label style={{display:'grid',gap:2}}>Pi²{ech ? ' (calculé — modifiable)' : ''}<input value={choix.pi2} onChange={e=>setChoix({...choix, pi2:e.target.value.replace(/[^0-9.,]/g,'')})} inputMode="decimal" placeholder={ech ? '' : 'ex. 143'}/></label>
           <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-            {choix.existe ? <><button className="btn btn-sm btn-p" onClick={()=>{ majM(x=>({pieces:x.pieces.map(p=>p.id===choix.id ? {...p, pi2:String(choix.pi2||'')} : p)})); setChoix(null); }}>OK</button>
+            {choix.existe ? <><button className="btn btn-sm btn-p" onClick={()=>{ majM(x=>({pieces:x.pieces.map(p=>{ if(p.id!==choix.id) return p; const t = MAISON_TYPES[choix.type] || MAISON_TYPES.autre, nv = choix.type!==p.type;
+                  return {...p, pi2:String(choix.pi2||''), nom:(choix.nom||'').trim() || p.nom, etage:choix.etage || p.etage, type:choix.type, ...(nv ? {items:{...t.items}, chauf:t.chauf} : {})}; })})); setChoix(null); }}>✓ Enregistrer</button>
                 <button className="btn btn-sm" onClick={()=>{ setCible(choix.id); setChoix(null); }}>▭+ Ajouter un rectangle</button>
-                <button className="btn btn-sm" onClick={()=>{ majM(x=>({pieces:x.pieces.map(p=>p.id===choix.id ? maisonAvecCadres(p, maisonCadres(p).filter(k=>k.join()!==choix.c.join()), pg, ech) : p)})); setChoix(null); }}>Enlever ce rectangle</button></>
+                {choix.c && <button className="btn btn-sm" onClick={()=>{ majM(x=>({pieces:x.pieces.map(p=>p.id===choix.id ? maisonAvecCadres(p, maisonCadres(p).filter(k=>k.join()!==choix.c.join()), pg, ech) : p)})); setChoix(null); }}>Enlever ce rectangle</button>}</>
               : !choix.id ? null : <><button className="btn btn-sm btn-p" onClick={()=>garder(false)}>＋ Encadrer cette pièce</button>
                 <button className="btn btn-sm" title="Pour une pièce en L : garde ce rectangle et trace les autres parties" onClick={()=>garder(true)}>▭+ Ajouter et continuer (forme en L)</button></>}
             <button className="btn btn-sm" onClick={()=>setChoix(null)}>Annuler</button></div></div>}
         {!choix && !mesure && <div className="muted" style={{fontSize:12.5}}>{mode==='cadre' ? 'Trace un rectangle autour d\'une pièce (du coin au coin opposé). Clique sur un cadre pour le revoir.' : mode==='mesure' ? 'Trace un trait le long d\'une cote écrite sur le plan, puis entre sa longueur.' : 'Glisse pour te déplacer. La roulette (ou ＋ －) pour zoomer.'}</div>}
         <div style={{border:'1px solid var(--border)',borderRadius:8,padding:'6px 10px',fontSize:12.5,display:'grid',gap:2}}>
           <b>Pièces de cette page ({ici.length})</b>
-          {ici.map(p=><div key={p.id} style={{display:'flex',gap:6,alignItems:'center'}}><span style={{flex:1}}>{maisonCadres(p).length>1 ? '▭'+maisonCadres(p).length : p.cadre ? '▭' : '•'} {p.nom}</span><span className="muted">{cvNum(p.pi2) ? p.pi2+' pi²' : '—'}</span>
+          {ici.map(p=><div key={p.id} style={{display:'flex',gap:6,alignItems:'center'}}><span style={{flex:1}}><a href="#" style={{color:'var(--text)'}} title="Modifier le nom, la sorte, l'étage" onClick={e=>{ e.preventDefault(); setCible(''); setChoix({c:maisonCadres(p)[0]||null, type:p.type, nom:p.nom, pi2:p.pi2||'', id:p.id, etage:p.etage, existe:true}); }}>{maisonCadres(p).length>1 ? '▭'+maisonCadres(p).length : p.cadre ? '▭' : '•'} {p.nom}</a></span><span className="muted">{cvNum(p.pi2) ? p.pi2+' pi²' : '—'}</span>
             <button className="btn btn-sm" style={{padding:'0 6px'}} title="Enlever la pièce" onClick={()=>{ if(confirm('Enlever « '+p.nom+' » de la soumission ?')) majM(x=>({pieces:x.pieces.filter(y=>y.id!==p.id)})); }}>✕</button></div>)}
           {!ici.length && <span className="muted">Aucune encore.</span>}
         </div>
