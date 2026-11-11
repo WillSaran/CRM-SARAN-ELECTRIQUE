@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v478';
+const APP_VERSION = 'v479';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10939,11 +10939,11 @@ function MaisonPlan({d, setD, C, toast}){
       {[['inclus','Inclus',MAISON_INCLUS],['exclus','Exclus',MAISON_EXCLUS]].map(([k,l,liste])=><div key={k} style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap'}}><b>{l}</b>
         {liste.map(t=>{ const on = (m[k]||[]).includes(t); return <button key={t} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>majM(x=>({[k]: on ? (x[k]||[]).filter(y=>y!==t) : [...(x[k]||[]), t]}))}>{on?'✓ ':'+ '}{t}</button>; })}</div>)}
       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:4}}>
-        {(()=>{ const cs = [...new Set(m.pieces.flatMap(p=>[...Object.entries(p.items||{}).filter(([,n])=>n>0).map(([c])=>c), ...(maisonChauffage(p).so220 ? ['SO220'] : []), ...((maisonChauffage(p).prod||[]).map(([c])=>c))]))].filter(c=>!(C && C.prixDe && C.prixDe(c)));
+        {C && C.lu && (()=>{ const cs = [...new Set(m.pieces.flatMap(p=>[...Object.entries(p.items||{}).filter(([,n])=>n>0).map(([c])=>c), ...(maisonChauffage(p).so220 ? ['SO220'] : []), ...((maisonChauffage(p).prod||[]).map(([c])=>c))]))].filter(c=>!(C && C.prixDe && C.prixDe(c)));
           return cs.length ? <div style={{width:'100%',color:'var(--danger)',fontSize:12.5}}>⚠ Pas de prix dans le catalogue pour : {cs.join(', ')} — ces lignes arriveront à 0 $ (mets le prix dans Inventaire › À la sortie).</div> : null; })()}
         <b>Total des sorties : {cvMoney(m.pieces.reduce((t,p)=>t+totalPiece(p),0))}</b><span className="muted" style={{fontSize:12}}>(tes prix SO, avant entrée, appareils sans code et buffer)</span>
         <button className="btn" style={{marginLeft:'auto'}} disabled={!!etat || !m.pieces.some(p=>(p.emp||[]).length)} title="Un plan par étage avec les emplacements placés pendant le tour — va dans le plan des travaux (PDF du client)" onClick={plansClient}>📎 Plans annotés → PDF</button>
-        <button className="btn btn-p" onClick={appliquer}>↳ Remplir la soumission</button></div>
+        <button className="btn btn-p" disabled={!(C && C.lu)} title={C && C.lu ? '' : 'Les prix du catalogue chargent encore'} onClick={appliquer}>{C && C.lu ? '↳ Remplir la soumission' : '⏳ Prix en chargement…'}</button></div>
     </div>}
   </div>;
 }
@@ -11123,6 +11123,8 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
     return 'E-'+String(n).padStart(4,'0');
   };
   const enregistrer = async ()=>{
+    // v479 : pas d'enregistrement tant que le catalogue (tes prix) n'est pas chargé — sinon tout part à 0 $
+    if(!C.lu){ toast && toast('Les prix chargent encore — attends quelques secondes que les montants apparaissent, puis enregistre.'); return null; }
     setOccupe('save');
     try{
       const numero = d.numero || await prochainNumero();
