@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v475';
+const APP_VERSION = 'v476';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10346,7 +10346,7 @@ function BufferChamp({valeur, base, C, onChange}){
 // Le PDF AutoCAD cache le nom et les dimensions des pièces (annotations « AutoCAD SHX Text ») : on les lit, sinon on ajoute les pièces à la main.
 // Chauffage : 10 W/pi² arrondi à la hausse, réparti en plinthes sous les fenêtres ; chaque plinthe ET chaque thermostat = une sortie SO220.
 const MAISON_ETAGES = ['Sous-sol','Rez-de-chaussée','Étage','Garage','Extérieur'];
-const MAISON_LIB = {SO00:'prise dérivation',SO01:'prise 15 A',"SO01.1":'prise 15 A GFI',"SO01.11":'prise USB',"SO01.2":'prise 20 A',"SO01.21":'prise 20 A GFI',"SO01.22":'prise 20 A USB',
+const MAISON_LIB = {SO00:'circuit dédié',SO01:'prise 15 A',"SO01.1":'prise 15 A GFI',"SO01.11":'prise USB',"SO01.2":'prise 20 A',"SO01.21":'prise 20 A GFI',"SO01.22":'prise 20 A USB',
   SO02:'interrupteur',"SO02.1":'interrupteur 3 voies',"SO02.2":'gradateur',"SO02.3":'interrupteur domotique',"SO02.4":'détecteur de mouvement',
   SO03:'encastré (non fourni)',"SO03.1":'encastré SlimLED fourni',"SO03.2":'encastré dirigeable (NF)',"SO03.3":'encastré dirigeable fourni',SO04:'plafonnier / murale',SO05:'détecteur de fumée',SO06:'hotte / ventilateur',
   SO07:'prise extérieure',SO08:'éclairage extérieur',SO09:'carillon',SO10:'télécom',SO11:'réseau',SO12:'câble (télé)',SO13:'téléphone',SO220:'sortie chauffage',"SO220.2":'thermostat intelligent',
@@ -10486,6 +10486,7 @@ const MAISON_OUTILS = [
   ['SO03','E','encastré','#b45309','E','SO03'],['SO05','F','détecteur de fumée','#dc2626','F','SO05'],['SO06','V','ventilateur de salle de bain','#7c3aed','V','SO06'],['SO06H','H','hotte','#6d28d9','H','SO06'],
   ['SO01.1','DF','prise DDFT','#0891b2','D','SO01.1'],['SO01.2','P20','prise 20 A','#1e40af','','SO01.2'],['SO01.21','DF20','prise 20 A DDFT','#0e7490','','SO01.21'],
   ['SO02.2','G','gradateur','#166534','G','SO02.2'],['SO11','R','réseau / télé','#475569','R','SO11'],
+  ['SO00','PD','circuit dédié (extra)','#4338ca','','SO00'],
   ['SO07','PE','prise extérieure','#0369a1','','SO07'],['SO08','LE','éclairage ext.','#92400e','','SO08'],['X240','240','240 V (cuisinière, sécheuse…)','#111827','','X240']];
 const MAISON_NUMEROS = ['SO01','SO02','SO02.1','SO04','MUR','PL','TH'];   // touches 1 à 7
 const MAISON_INTER = ['SO02','SO02.1','SO02.2'];
@@ -10574,7 +10575,7 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
   const [outil,setOutil]=useState('SO01');
   const [extras,setExtras]=useState(false);
   const [plW,setPlW]=useState('');   // v475 : wattage de la prochaine plinthe ('' = suggéré)
-  const hist = useRef([]);
+  const hist = useRef([]), derTouche = useRef({k:'', t:0});
   const p = ordre[Math.min(i, ordre.length-1)];
   const pg = p ? maisonPagePour(p, pages) : null;
   const chauffe = m.pieces.some(x=>x.chauf && x.chauf!=='aucun');
@@ -10623,6 +10624,10 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
       if(e.ctrlKey || e.metaKey || e.altKey) return;
       if(k==='Backspace'){ e.preventDefault(); retour(); return; }
       if(k==='ArrowRight'){ aller(i+1); return; } if(k==='ArrowLeft'){ aller(i-1); return; }
+      // v476 : P ou L deux fois de suite (ou double-clic sur le bouton) = circuit dédié (SO00, extra)
+      const kl = k.toLowerCase(), maint = Date.now(), dbl = (kl==='p' || kl==='l') && derTouche.current.k===kl && maint - derTouche.current.t < 450;
+      derTouche.current = {k:kl, t:dbl ? 0 : maint};
+      if(dbl){ setOutil('SO00'); return; }
       if(/^[1-7]$/.test(k)){ setOutil(MAISON_NUMEROS[+k-1]); return; }
       if(k.toLowerCase()==='x'){ setOutil('gomme'); return; }
       if(k.toLowerCase()==='a'){ setOutil('PORTE'); return; }
@@ -10640,7 +10645,7 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
   const utiles = permis.filter(o=>MAISON_BASE.includes(o[0]) || ctx.includes(o[0]) || (o[0]!=='MUR' && lignes.some(([so,a,b])=>so===o[5] && (a||b) && !MAISON_OUTILS.some(x=>x[5]===so && x!==o && (MAISON_BASE.includes(x[0]) || ctx.includes(x[0]))))) || o[0]===outil);
   const reste = permis.filter(o=>!utiles.includes(o));
   const bouton = o => { const n = MAISON_NUMEROS.indexOf(o[0]);
-    return <button key={o[0]} onClick={()=>setOutil(o[0])} title={o[2]+(o[4] ? ' — touche '+o[4] : '')} style={{display:'inline-flex',gap:4,alignItems:'center',padding:'3px 7px 3px 3px',borderRadius:14,cursor:'pointer',fontSize:11.5,
+    return <button key={o[0]} onClick={()=>setOutil(o[0])} onDoubleClick={()=>{ if(o[0]==='SO01' || o[0]==='SO04') setOutil('SO00'); }} title={o[2]+(o[4] ? ' — touche '+o[4] : '')+(o[0]==='SO01' || o[0]==='SO04' ? ' (2 fois = circuit dédié)' : '')} style={{display:'inline-flex',gap:4,alignItems:'center',padding:'3px 7px 3px 3px',borderRadius:14,cursor:'pointer',fontSize:11.5,
       border:outil===o[0] ? '2px solid var(--accent)' : '1px solid var(--border2)',background:outil===o[0] ? 'rgba(88,166,255,.15)' : 'var(--bg2)',color:'var(--text)'}}>
       <MaisonMarque c={o[0]} petit/>{o[2]}<span className="muted" style={{fontSize:10,fontFamily:'monospace'}}>{[n>=0 ? n+1 : '', o[4]].filter(Boolean).join('·')}</span></button>; };
   const large = window.innerWidth >= 900;
