@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v488';
+const APP_VERSION = 'v489';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10533,7 +10533,7 @@ function maisonSymboles(p){ const t = {}, ch = maisonChauffage(p);
   return Object.entries(t).map(([k,n])=>k+(n>1?n:'')).join(' '); }
 // v483 : visionneuse de pages — ← → pour se promener ; on trie chaque page (pas besoin / plan d'étage / façade / certificat) et ça avance tout seul
 const MAISON_TRI = [['ignore','✕ Pas besoin','0'],['Sous-sol','Sous-sol','1'],['Rez-de-chaussée','Rez-de-chaussée','2'],['Étage','Étage','3'],['Garage','Garage','4'],['facade','Façade','F'],['terrain','Certificat','C'],['autre','Garder (autre)','G']];
-function MaisonVue({pg, pieces, onClose, liste, onAller, tag, onTag}){
+function MaisonVue({pg, pieces, onClose, liste, onAller, tag, onTag, m, majM}){
   const ps = pg.sorte==='etage' ? pieces.filter(p=>p.pg===pg.no && (p.src||'')===(pg.src||'') && p.fx!=null) : [];
   const [mode,setMode]=useState('symb');
   const L = liste || [pg], i = Math.max(0, L.findIndex(x=>maisonCleP(x)===maisonCleP(pg)));
@@ -10541,7 +10541,7 @@ function MaisonVue({pg, pieces, onClose, liste, onAller, tag, onTag}){
   const trier = v => { onTag && onTag(pg, v); if(i < L.length-1) aller(i+1); };
   useEffect(()=>{ const f = e => { const t = e.target; if(t && /INPUT|TEXTAREA|SELECT/.test(t.tagName)) return;
       if(e.key==='ArrowRight'){ e.preventDefault(); aller(i+1); } else if(e.key==='ArrowLeft'){ e.preventDefault(); aller(i-1); } else if(e.key==='Escape') onClose();
-      else if(onTag){ const x = MAISON_TRI.find(y=>y[2].toLowerCase()===e.key.toLowerCase()); if(x) trier(x[0]); } };
+      else if(onTag && !(pg.sorte==='etage' && m)){ const x = MAISON_TRI.find(y=>y[2].toLowerCase()===e.key.toLowerCase()); if(x) trier(x[0]); } };
     window.addEventListener('keydown', f); return ()=>window.removeEventListener('keydown', f); });
   const actuel = tag!=null ? tag : '';
   return <div style={{position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,.88)',overflow:'auto',padding:10}} onClick={onClose}>
@@ -10554,15 +10554,17 @@ function MaisonVue({pg, pieces, onClose, liste, onAller, tag, onTag}){
       {ps.length>0 && <><span style={{opacity:.7}}>· {ps.length} pièce{ps.length>1?'s':''}</span>
         <button className="btn btn-sm" onClick={()=>setMode(mode==='symb'?'texte':mode==='texte'?'rien':'symb')}>{mode==='symb'?'Symboles':mode==='texte'?'Texte':'Plan seul'} ⇄</button></>}
       <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={onClose}>✕ Fermer</button></div>
+    {pg.sorte==='etage' && m && majM ? <div onClick={e=>e.stopPropagation()} style={{marginRight:onTag && L.some(x=>['etage','facade','terrain'].includes(x.sorte)) ? 130 : 0}}><MaisonEncadrer key={maisonCleP(pg)} pg={pg} m={m} majM={majM} integre onClose={onClose}/></div> : null}
     {(()=>{ const bande = L.filter(x=>['etage','facade','terrain'].includes(x.sorte)); if(bande.length<1 || !onTag) return null;   // v484 : bande à droite — les pages déjà identifiées
       return <div onClick={e=>e.stopPropagation()} style={{position:'fixed',right:8,top:56,bottom:8,width:118,overflowY:'auto',zIndex:3,display:'grid',gap:6,alignContent:'start',background:'rgba(0,0,0,.6)',padding:6,borderRadius:8}}>
         {bande.map(x=>{ const ici = maisonCleP(x)===maisonCleP(pg); return <div key={maisonCleP(x)} onClick={()=>onAller(x)} style={{cursor:'pointer',textAlign:'center',color:'#fff',fontSize:11,fontWeight:700,border:ici ? '2px solid var(--accent)' : '1px solid #555',borderRadius:6,padding:3,background:ici ? 'rgba(88,166,255,.2)' : 'transparent'}}>
           <img src={x.img} alt="" style={{width:'100%',display:'block',background:'#fff',borderRadius:3}}/>{x.titre}<div style={{fontWeight:400,opacity:.7}}>p. {x.no}</div></div>; })}</div>; })()}
-    <div style={{textAlign:'center',marginRight:onTag && L.some(x=>['etage','facade','terrain'].includes(x.sorte)) ? 130 : 0}}><div onClick={e=>e.stopPropagation()} style={{position:'relative',display:'inline-block',verticalAlign:'top',opacity:actuel==='ignore' ? .35 : 1}}>
+    {!(pg.sorte==='etage' && m && majM) && <div style={{textAlign:'center',marginRight:onTag && L.some(x=>['etage','facade','terrain'].includes(x.sorte)) ? 130 : 0}}><div onClick={e=>e.stopPropagation()} style={{position:'relative',display:'inline-block',verticalAlign:'top',opacity:actuel==='ignore' ? .35 : 1}}>
       <img src={pg.img} alt="" style={{maxWidth:'100%',maxHeight:'calc(100vh - 70px)',display:'block',background:'#fff',borderRadius:4}}/>
       {mode!=='rien' && ps.map(p=><div key={p.id} style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',background:'rgba(255,255,255,.93)',border:'1.5px solid #c0392b',borderRadius:6,padding:'2px 5px',fontSize:11,lineHeight:1.25,color:'#111',maxWidth:mode==='texte'?190:150,textAlign:'center',boxShadow:'0 1px 4px rgba(0,0,0,.35)',pointerEvents:'none'}}>
         <b>{p.nom}</b><div>{mode==='texte' ? maisonResume(p) : maisonSymboles(p)}</div></div>)}
-    </div></div></div>;
+    </div></div>}
+  </div>;
 }
 // v470 : Tour pièce par pièce — on part du sous-sol en montant ; on place les sorties sur le plan (emplacements) ; le récap garde les quantités
 // v471 : raccourcis clavier (1-7 et lettres), outils de la pièce d'abord (le reste dans Extras), plinthe rectangulaire, encastrés en grille symétrique, interrupteurs regroupés, ↶ Retour
@@ -10906,7 +10908,31 @@ const MAISON_TYPES_ETAGE = {
   'Étage':['chambre','sdb','lavage','rangement','corridor','bureau','salon','escalier','autre'],
   'Garage':['garage','rangement','autre'], 'Extérieur':['exterieur','autre']};
 function maisonPi2Cadre(c, pg, ech){ if(!ech || !c) return null; const wU = Math.abs(c[2]-c[0]), hU = Math.abs(c[3]-c[1])*((pg.h||1)/(pg.w||1)); return Math.round(wU*ech*hU*ech); }
-function MaisonEncadrer({pg, m, majM, onClose}){
+// v489 : sorties d'une pièce, + / − directement sur la vue du plan
+const maisonOutilDe = c => MAISON_OUTILS.find(o=>o[5]===c) || null;
+function MaisonCompteur({p, majP}){ const ch = maisonChauffage(p), it = p.items||{};
+  const codes = Object.keys(it).filter(c=>it[c]>0), mettre = (c, n) => majP(p.id, {items:{...it, [c]:Math.max(0, n)}});
+  return <div style={{display:'grid',gap:3}}>
+    {codes.map(c=>{ const o = maisonOutilDe(c); return <div key={c} style={{display:'flex',gap:6,alignItems:'center'}}>{o ? <MaisonMarque c={o[0]} petit/> : <span style={{width:20}}>•</span>}
+      <span style={{flex:1}}>{MAISON_LIB[c]||c}</span><button className="btn btn-sm" style={{padding:'0 7px'}} onClick={()=>mettre(c, it[c]-1)}>−</button><b style={{minWidth:18,textAlign:'center'}}>{it[c]}</b><button className="btn btn-sm" style={{padding:'0 7px'}} onClick={()=>mettre(c, it[c]+1)}>+</button></div>; })}
+    <select value="" onChange={e=>{ if(e.target.value) mettre(e.target.value, (it[e.target.value]||0)+1); }} style={{fontSize:12.5}}>
+      <option value="">＋ Ajouter une sortie…</option>{Object.entries(MAISON_LIB).filter(([c])=>!(it[c]>0) && !/^SO220/.test(c)).map(([c,l])=><option key={c} value={c}>{l} ({c})</option>)}</select>
+    <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:3}}>🔥
+      <select value={p.chauf} onChange={x=>majP(p.id,{chauf:x.target.value})} style={{width:'auto',fontSize:12.5}}>{[['plinthe','Plinthe(s)'],['convecteur','Convecteur(s)'],['radiant','Plancher radiant'],['aero','Aérotherme (dragon)'],['aucun','Aucun chauffage']].map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
+      {['plinthe','convecteur'].includes(p.chauf) && <>fenêtres <input value={p.fenetres||''} onChange={x=>majP(p.id,{fenetres:x.target.value.replace(/\D/g,'')})} inputMode="numeric" style={{width:38,padding:'2px 4px'}}/></>}</div>
+    {ch.txt && <div style={{color:'var(--warning)',fontSize:12}}>{ch.txt}{ch.w ? ' ('+ch.w+' W)' : ''} · {ch.so220} sortie{ch.so220>1?'s':''} chauffage</div>}
+  </div>; }
+// Petit résumé en symboles d'une pièce, posé sur le plan
+function MaisonEtiquette({p, actif, onClick}){ const it = p.items||{}, ch = maisonChauffage(p);
+  const l = Object.entries(it).filter(([,n])=>n>0).map(([c,n])=>[maisonOutilDe(c), n, c]).filter(([o])=>o);
+  return <div onPointerDown={e=>{ e.stopPropagation(); onClick && onClick(); }} style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',zIndex:2,cursor:'pointer',
+    background:actif ? '#fde047' : 'rgba(255,255,255,.94)',border:actif ? '2px solid #ca8a04' : '1.5px solid #2563eb',borderRadius:6,padding:'2px 5px',color:'#111',boxShadow:'0 1px 4px rgba(0,0,0,.35)',maxWidth:190}}>
+    <div style={{fontSize:11,fontWeight:800,whiteSpace:'nowrap',textAlign:'center'}}>{p.nom}{cvNum(p.pi2) ? <span style={{fontWeight:400}}> · {p.pi2} pi²</span> : null}</div>
+    <div style={{display:'flex',gap:3,flexWrap:'wrap',justifyContent:'center',alignItems:'center',fontSize:10.5,fontWeight:700}}>
+      {l.map(([o,n,c])=><span key={c} style={{display:'inline-flex',alignItems:'center',gap:1}}><MaisonMarque c={o[0]} petit/>{n}</span>)}
+      {ch.so220>0 && <span style={{display:'inline-flex',alignItems:'center',gap:1}}><MaisonMarque c="PL" petit/>{ch.so220}</span>}</div></div>; }
+function MaisonEncadrer({pg, m, majM, onClose, integre}){
+  const majP = (id, patch) => majM(x=>({pieces:x.pieces.map(q=>q.id===id ? {...q, ...patch} : q)}));
   const boite = useRef(null), geste = useRef(null);
   const [taille,setTaille]=useState({w:800, h:500});
   const [vue,setVue]=useState({z:1, cx:.5, cy:.5});
@@ -10950,12 +10976,13 @@ function MaisonEncadrer({pg, m, majM, onClose}){
     window.addEventListener('keydown', f); return ()=>window.removeEventListener('keydown', f); });
   const large = window.innerWidth >= 900;
   const btn = (k, l) => <button className={'btn btn-sm'+(mode===k?' btn-p':'')} onClick={()=>setMode(k)}>{l}</button>;
-  return <div style={{position:'fixed',inset:0,zIndex:1000,background:'var(--bg)',padding:8,display:'flex',flexDirection:'column',gap:6,boxSizing:'border-box'}}>
+  return <div onClick={e=>e.stopPropagation()} style={integre ? {position:'relative',height:'calc(100vh - 70px)',display:'flex',flexDirection:'column',gap:6,background:'var(--bg)',borderRadius:8,padding:6,boxSizing:'border-box'}
+      : {position:'fixed',inset:0,zIndex:1000,background:'var(--bg)',padding:8,display:'flex',flexDirection:'column',gap:6,boxSizing:'border-box'}}>
     <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
       <b style={{fontSize:15}}>▭ Encadrer les pièces — {pg.etage || pg.titre}</b>
       {btn('cadre','▭ Encadrer')}{btn('mesure','📏 Échelle')}{btn('main','✋ Déplacer')}
       <span className="muted" style={{fontSize:12}}>{ech ? '✓ échelle réglée — les pi² se calculent' : 'pas d\'échelle : trace une cote connue avec 📏 (ou tape les pi²)'}</span>
-      <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={onClose}>✓ Terminé</button></div>
+      {!integre && <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={onClose}>✓ Terminé</button>}</div>
     <div style={{flex:1,minHeight:0,display:'flex',flexDirection:large?'row':'column',gap:8}}>
       <div style={{flex:1,minWidth:0,minHeight:large?0:'50vh',position:'relative'}}>
         <div ref={boite} onPointerDown={bas} onPointerMove={bouge} onPointerUp={haut} onContextMenu={e=>e.preventDefault()} onWheel={e=>zoom(e.deltaY<0 ? 1.15 : 1/1.15)}
@@ -10965,8 +10992,8 @@ function MaisonEncadrer({pg, m, majM, onClose}){
             {ici.map(p=>maisonCadres(p).length ? <React.Fragment key={p.id}><MaisonContour cs={maisonCadres(p)} col={p.id===cible ? '#16a34a' : '#2563eb'}/>{maisonCadres(p).map((k,j)=>{ const vise = p.id===cible, col = vise ? '#16a34a' : '#2563eb';
               return <div key={j} onPointerDown={e=>{ if(mode!=='cadre' || cible) return; e.stopPropagation(); setChoix({c:k, type:p.type, nom:p.nom, pi2:p.pi2||'', id:p.id, etage:p.etage, existe:true}); }}
               style={{position:'absolute',left:(k[0]*100)+'%',top:(k[1]*100)+'%',width:((k[2]-k[0])*100)+'%',height:((k[3]-k[1])*100)+'%',boxSizing:'border-box',cursor:cible ? 'crosshair' : 'pointer',pointerEvents:cible ? 'none' : 'auto'}}>
-              {j===0 && <div style={{position:'absolute',left:2,top:2,background:col,color:'#fff',fontSize:11,fontWeight:700,padding:'1px 5px',borderRadius:3,whiteSpace:'nowrap'}}>{p.nom}{cvNum(p.pi2) ? ' · '+p.pi2+' pi²' : ''}</div>}</div>; })}</React.Fragment>
-              : p.fx!=null ? <div key={p.id} style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',background:'#fde047',fontSize:11,fontWeight:700,padding:'1px 5px',borderRadius:3,whiteSpace:'nowrap',pointerEvents:'none'}}>{p.nom}</div> : null)}
+              </div>; })}</React.Fragment> : null)}
+            {ici.filter(p=>p.fx!=null).map(p=><MaisonEtiquette key={'e'+p.id} p={p} actif={choix && choix.id===p.id} onClick={()=>{ if(cible) return; setChoix({c:maisonCadres(p)[0]||null, type:p.type, nom:p.nom, pi2:p.pi2||'', id:p.id, etage:p.etage, existe:true}); }}/>)}
             {(dessin || (choix && choix.c) || (mesure && mesure.c)) && (()=>{ const c = dessin || (mesure ? mesure.c : choix.c);
               if(mode==='mesure' || mesure) return <svg style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}} viewBox="0 0 1 1" preserveAspectRatio="none"><line x1={c[0]} y1={c[1]} x2={c[2]} y2={c[3]} stroke="#dc2626" strokeWidth="3" vectorEffect="non-scaling-stroke"/></svg>;
               const r = [Math.min(c[0],c[2]), Math.min(c[1],c[3]), Math.max(c[0],c[2]), Math.max(c[1],c[3])];
@@ -11002,6 +11029,7 @@ function MaisonEncadrer({pg, m, majM, onClose}){
               <div style={{display:'flex',gap:3,flexWrap:'wrap',marginTop:4}}>{Object.entries(MAISON_TYPES).filter(([k])=>!typesEt.includes(k)).map(([k,t])=><button key={k} className="btn btn-sm" onClick={e=>garder(e.shiftKey, k)}>{t.nom}</button>)}</div></details></div>}
           {!choix.existe && <><label style={{display:'none'}}>Type<select value={choix.type} disabled={!!choix.id} onChange={e=>setChoix({...choix, type:e.target.value})}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select></label>
             {!choix.id && <label style={{display:'grid',gap:2}}>Nom (optionnel)<input value={choix.nom} onChange={e=>setChoix({...choix, nom:e.target.value})} placeholder={nomAuto(choix.type)}/></label>}</>}
+          {choix.existe && (()=>{ const pp = m.pieces.find(x=>x.id===choix.id); return pp ? <div style={{borderTop:'1px solid var(--border)',paddingTop:6}}><b style={{fontSize:12.5}}>Sorties de la pièce</b><MaisonCompteur p={pp} majP={majP}/></div> : null; })()}
           <label style={{display:'grid',gap:2}}>Pi²{ech ? ' (calculé — modifiable)' : ''}<input value={choix.pi2} onChange={e=>setChoix({...choix, pi2:e.target.value.replace(/[^0-9.,]/g,'')})} inputMode="decimal" placeholder={ech ? '' : 'ex. 143'}/></label>
           <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
             {choix.existe ? <><button className="btn btn-sm btn-p" onClick={()=>{ majM(x=>({pieces:x.pieces.map(p=>{ if(p.id!==choix.id) return p; const t = MAISON_TYPES[choix.type] || MAISON_TYPES.autre, nv = choix.type!==p.type;
@@ -11129,7 +11157,7 @@ function MaisonPlan({d, setD, C, toast}){
       return <div className="muted" style={{fontSize:11.5}}>✕ {ig.length} page{ig.length>1?'s':''} écartée{ig.length>1?'s':''} (pas besoin) — <a href="#" onClick={e=>{ e.preventDefault(); setGrand(ig[0]); }}>revoir</a></div>; })()}
     {pagesV.length>0 && <div><button className="btn btn-sm" onClick={()=>setGrand(pagesV[0])}>📑 Trier les pages ({pagesV.length}) — ← → pour avancer</button></div>}
     {grand && (()=>{ const g = pagesV.find(x=>maisonCleP(x)===maisonCleP(grand)) || grand;
-      return <MaisonVue pg={g} pieces={m.pieces} onClose={()=>setGrand(null)} liste={pagesV} onAller={setGrand} tag={(m.pagesTag||{})[maisonCleP(g)]}
+      return <MaisonVue pg={g} pieces={m.pieces} m={m} majM={majM} onClose={()=>setGrand(null)} liste={pagesV} onAller={setGrand} tag={(m.pagesTag||{})[maisonCleP(g)]}
         onTag={(pg, v)=>majM(o=>({pagesTag:{...(o.pagesTag||{}), [maisonCleP(pg)]:v}}))}/>; })()}
     {cadrer && pagesV.find(x=>maisonCleP(x)===cadrer) && <MaisonEncadrer pg={pagesV.find(x=>maisonCleP(x)===cadrer)} m={m} majM={majM} onClose={()=>setCadrer('')}/>}
     {tour && <MaisonTour m={m} majP={majP} majM={majM} pages={pagesV} onClose={()=>setTour(false)} onPlansClient={()=>{ setTour(false); plansClient(); }}/>}
