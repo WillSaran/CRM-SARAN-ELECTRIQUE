@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v474';
+const APP_VERSION = 'v475';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10379,10 +10379,11 @@ function maisonTypeDe(nom){ const n = cvNorm(nom).replace(/[^a-z0-9 ]/g,' ');
   if(/balcon|galerie|terrasse|patio|perron|exterieur/.test(n)) return 'exterieur';
   return 'autre'; }
 const PLINTHES = [500,750,1000,1250,1500,2000,2500];
-// Répartit le wattage (arrondi à la hausse) sur les fenêtres ; plus de plinthes si une seule ne suffit pas
-function maisonPlinthes(pi2, fenetres){ const W = Math.ceil((cvNum(pi2)||0)*10/250)*250; if(!W) return [];
+// v475 : 10 W/pi² réparti sur les fenêtres, chaque plinthe = la grandeur standard la PLUS PROCHE (ex. 166 pi² → 1660 W → 1500 W ; 143 pi² → 1500 W)
+function maisonPlinthes(pi2, fenetres){ const W = (cvNum(pi2)||0)*10; if(!W) return [];
   let n = Math.max(1, Math.round(cvNum(fenetres)||1)); while(W/n > 2500) n++;
-  const par = PLINTHES.find(x=>x >= W/n - 1) || 2500; return Array.from({length:n}, ()=>par); }
+  const cible = W/n, par = PLINTHES.reduce((b,x)=>Math.abs(x-cible) < Math.abs(b-cible) || (Math.abs(x-cible)===Math.abs(b-cible) && x>b) ? x : b, PLINTHES[0]);
+  return Array.from({length:n}, ()=>par); }
 // v466 : aérothermes Stelpro Dragon (codes Lumen) — choix auto selon 10 W/pi², ou 2 × 4000 W et plus pour un gros garage
 const DRAGONS = [['STEDRI0321W',3000,'3000 W'],['STEDRI0421W',4000,'4000 W'],['STEDRI0521W',5000,'5000 W'],['STEDRI0521C24W',5000,'5000 W relais intégré']];
 const DRAGON_RELAIS = 'AUBRC840T240', DRAGON_THERMO = 'AUBTH13501B', DRAGON_THERMO_INTEL = 'TH1400ZB';
@@ -10398,7 +10399,8 @@ function maisonChauffage(p){ const c = p.chauf || 'aucun', th = Math.max(1, Math
     const prod = [[g.code, g.n]]; if(g.relais) prod.push([DRAGON_RELAIS, g.relais]); prod.push([p.intel ? DRAGON_THERMO_INTEL : DRAGON_THERMO, th]);
     return {w:g.n*g.w, so220:g.n+th, plinthes:[], txt:(g.n>1 ? g.n+' × ' : '')+'aérotherme Dragon '+g.lib+(g.relais ? ' + relais RC840T' : '')+' + '+(th>1 ? th+' thermostats' : 'thermostat')+' basse tension', libres:[], prod, intel:p.intel ? th : 0}; }
   if(c==='radiant') return {so220:1+th, plinthes:[], txt:'plancher radiant + thermostat', libres:[], intel:p.intel ? th : 0};
-  const pl = maisonPlinthes(p.pi2, p.fenetres);
+  const plac = (p.emp||[]).filter(x=>x.c==='PL' && cvNum(x.w));   // v475 : plinthes placées avec leur wattage → elles font foi
+  const pl = plac.length ? plac.map(x=>+x.w) : maisonPlinthes(p.pi2, p.fenetres);
   if(!pl.length) return {so220:1+th, plinthes:[], txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+' (entre les pi² pour le wattage) + thermostat', libres:[], intel:p.intel ? th : 0};
   return {w:pl.reduce((t,x)=>t+x,0), so220:pl.length+th, plinthes:pl, txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+(pl.length>1?'s':'')+' '+pl.map(w=>w+' W').join(' + ')+' + '+(th>1 ? th+' thermostats' : 'thermostat'), libres:[], intel:p.intel ? th : 0}; }
 // Résumé client d'une pièce (« 4 prises 15 A, 1 interrupteur, … »)
@@ -10496,7 +10498,7 @@ const MAISON_CONTEXTE = {cuisine:['SO01.2','SO01.21','SO06H','SO01.1','X240'], s
 const maisonOutilPermis = (o, p) => o[0]==='SO06' ? (!p || p.type==='sdb') : o[0]==='SO06H' ? (!p || p.type==='cuisine') : true;
 // Quantité prévue (récap) pour un code compté
 function maisonPrevu(p, so){ const it = p.items||{}, ch = maisonChauffage(p);
-  if(so==='PL') return p.chauf==='aero' ? maisonDragons(p).n : ch.plinthes.length || (['radiant','plinthe','convecteur'].includes(p.chauf) ? 1 : 0);
+  if(so==='PL') return p.chauf==='aero' ? maisonDragons(p).n : ['plinthe','convecteur'].includes(p.chauf) ? Math.max(1, maisonPlinthes(p.pi2, p.fenetres).length) : p.chauf==='radiant' ? 1 : 0;
   if(so==='TH') return p.chauf && p.chauf!=='aucun' ? Math.max(1, Math.round(cvNum(p.thermos)||1)) : 0;
   if(so==='X240') return Object.entries(it).filter(([k])=>/^SO22[1-5]$/.test(k)).reduce((t,[,n])=>t+n,0);
   return it[so]||0; }
@@ -10515,9 +10517,9 @@ function maisonGrille(pts, ratio){ const n = pts.length; if(n<2) return pts;
 // Décalage horizontal des marques au même endroit (interrupteurs regroupés), en nombre de marques
 function maisonDecalages(emps){ const tot = {}, vu = {}; emps.forEach(m=>{ const k = m.x+'|'+m.y; tot[k] = (tot[k]||0)+1; });
   return emps.map(m=>{ const k = m.x+'|'+m.y, n = vu[k] = (vu[k]||0)+1; return (n-1) - (tot[k]-1)/2; }); }
-function MaisonMarque({c, actif, petit}){ const o = maisonOutil(c), t = petit ? 16 : 22, rect = o[6]==='rect';
+function MaisonMarque({c, actif, petit, texte}){ const o = maisonOutil(c), t = petit ? 16 : 22, rect = o[6]==='rect';
   return <div style={{minWidth:rect ? t*1.9 : t,height:rect ? t*0.62 : t,borderRadius:rect ? 2 : t/2,background:o[3],color:'#fff',fontSize:petit?8.5:10.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px',
-    border:'2px solid #fff',boxShadow:'0 1px 3px rgba(0,0,0,.5)',opacity:actif===false ? .45 : 1,boxSizing:'border-box',lineHeight:1}}>{o[1]}</div>; }
+    border:'2px solid #fff',boxShadow:'0 1px 3px rgba(0,0,0,.5)',opacity:actif===false ? .45 : 1,boxSizing:'border-box',lineHeight:1}}>{texte || o[1]}</div>; }
 function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}){
   const boite = useRef(null), geste = useRef(null);
   const [taille,setTaille]=useState({w:600, h:420});
@@ -10557,7 +10559,7 @@ function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}
           {p.fx!=null && p.pg===pg.no && (p.src||'')===(pg.src||'') && <div style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none',
             fontSize:11,fontWeight:700,padding:'1px 5px',borderRadius:4,whiteSpace:'nowrap',background:piece && p.id===piece.id ? '#fde047' : 'rgba(255,255,255,.75)',color:'#111',border:piece && p.id===piece.id ? '1.5px solid #ca8a04' : '1px solid #bbb'}}>{p.nom}</div>}
           {em.map((m,i)=><div key={i} style={{position:'absolute',left:'calc('+(m.x*100)+'% + '+(dec[i]*21)+'px)',top:(m.y*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none'}}>
-            <MaisonMarque c={m.c} actif={!piece || p.id===piece.id}/></div>)}
+            <MaisonMarque c={m.c} actif={!piece || p.id===piece.id} texte={m.c==='PL' && m.w ? String(m.w) : ''}/></div>)}
         </React.Fragment>; })}
       </div>
     </div>
@@ -10571,6 +10573,7 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
   const [i,setI]=useState(Math.max(0, ordre.findIndex(p=>!p.ok)));
   const [outil,setOutil]=useState('SO01');
   const [extras,setExtras]=useState(false);
+  const [plW,setPlW]=useState('');   // v475 : wattage de la prochaine plinthe ('' = suggéré)
   const hist = useRef([]);
   const p = ordre[Math.min(i, ordre.length-1)];
   const pg = p ? maisonPagePour(p, pages) : null;
@@ -10589,6 +10592,7 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
       const emp = [...(p.emp||[]), ...nv]; nv.forEach(x=>{ const so = maisonCompte(x.c); if(MAISON_LIB[so]){ const n = emp.filter(y=>maisonCompte(y.c)===so).length; if(n > (it[so]||0)) it[so] = n; } });
       majP(p.id, {emp, items:it, porte:true, ...(p.fx==null && pg ? {pg:pg.no, src:pg.src||''} : {})}); setOutil(plAFaire(p) ? 'PL' : 'SO01'); return; }
     if(e.c==='PL' && outil==='PL' && (p.emp||[]).filter(x=>x.c==='PL').length + 1 >= plAFaire(p) && plAFaire(p)) setTimeout(()=>setOutil('SO01'), 0);
+    if(e.c==='PL'){ const sug = maisonPlinthes(p.pi2, p.fenetres), k = (p.emp||[]).filter(x=>x.c==='PL').length; e = {...e, w:cvNum(plW) || sug[k] || sug[0] || 1000}; }
     memo(); let emp = [...(p.emp||[])], it = {...(p.items||{})};
     if(MAISON_INTER.includes(e.c)){   // interrupteurs placés l'un près de l'autre → même boîte (regroupés)
       const v = emp.filter(x=>MAISON_INTER.includes(x.c) && x.pg===e.pg).map(x=>({x, k:Math.hypot((x.x-e.x)*W, (x.y-e.y)*H)})).sort((a,b)=>a.k-b.k)[0];
@@ -10670,6 +10674,17 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
           {utiles.map(bouton)}
           <button onClick={()=>setOutil('gomme')} title="Touche X" style={btnO(outil==='gomme', true)}>⌫ Enlever <span className="muted" style={{fontSize:10}}>X</span></button>
         </div>
+        {(outil==='PL' || (p.emp||[]).some(x=>x.c==='PL')) && ['plinthe','convecteur'].includes(p.chauf) && (()=>{ const sug = maisonPlinthes(p.pi2, p.fenetres), pls = (p.emp||[]).map((x,k)=>[x,k]).filter(([x])=>x.c==='PL'), proch = sug[pls.length] || sug[0] || 1000;
+          return <div style={{border:'1px solid var(--border)',borderRadius:8,padding:'6px 10px',fontSize:12.5,display:'grid',gap:4}}>
+            <div><b>Plinthes</b> <span className="muted">· {cvNum(p.pi2) ? p.pi2+' pi² × 10 W = '+Math.round(cvNum(p.pi2)*10)+' W → suggéré '+sug.join(' + ')+' W' : 'entre les pi² de la pièce'}</span></div>
+            <div style={{display:'flex',gap:3,flexWrap:'wrap',alignItems:'center'}}>Prochaine :
+              {PLINTHES.map(w=><button key={w} className={'btn btn-sm'+((cvNum(plW)||proch)===w?' btn-p':'')} style={{padding:'1px 6px',fontSize:11.5}} onClick={()=>{ setPlW(String(w)); setOutil('PL'); }}>{w}</button>)}
+              <input value={plW} onChange={e=>setPlW(e.target.value.replace(/[^0-9]/g,''))} placeholder={String(proch)} inputMode="numeric" style={{width:58,padding:'1px 4px',fontSize:12}}/> W</div>
+            {pls.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>Placées : {pls.map(([x,k],j)=><span key={k} style={{display:'inline-flex',gap:3,alignItems:'center'}}>#{j+1}
+              <select value={x.w||''} onChange={e=>{ memo(); majP(p.id,{emp:(p.emp||[]).map((y,i)=>i===k ? {...y, w:+e.target.value} : y)}); }} style={{width:'auto',fontSize:12,padding:'1px 3px'}}>
+                {[...new Set([...PLINTHES, +x.w||0])].filter(Boolean).sort((a,b)=>a-b).map(w=><option key={w} value={w}>{w} W</option>)}</select></span>)}
+              <span className="muted">= {pls.reduce((t,[x])=>t+(+x.w||0),0)} W</span></div>}
+          </div>; })()}
         {reste.length>0 && <div><button className="btn btn-sm" onClick={()=>setExtras(!extras)}>{extras ? '▾' : '▸'} Catalogue de sorties ({reste.length})</button>
           {extras && <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:4}}>{reste.map(bouton)}</div>}</div>}
         <div style={{display:'grid',gap:2,border:'1px solid var(--border)',borderRadius:8,padding:'6px 10px',fontSize:13}}>
@@ -10702,11 +10717,11 @@ async function maisonPlansAnnotes(pages, pieces){
     const c = document.createElement('canvas'); c.width = W; c.height = H + leg; const x = c.getContext('2d');
     x.fillStyle = '#fff'; x.fillRect(0,0,c.width,c.height); x.drawImage(img, 0, 0);
     const r = Math.max(9, Math.round(W/140));
-    const marque = (cx, cy, code, rr) => { const o = maisonOutil(code); x.fillStyle = o[3]; x.lineWidth = rr/4; x.strokeStyle = '#fff';
+    const marque = (cx, cy, code, rr, txt) => { const o = maisonOutil(code); x.fillStyle = o[3]; x.lineWidth = rr/4; x.strokeStyle = '#fff';
       if(o[6]==='rect'){ x.fillRect(cx-rr*1.9, cy-rr*.65, rr*3.8, rr*1.3); x.strokeRect(cx-rr*1.9, cy-rr*.65, rr*3.8, rr*1.3); }
       else { x.beginPath(); x.arc(cx, cy, rr, 0, 7); x.fill(); x.stroke(); }
-      x.fillStyle = '#fff'; x.font = 'bold '+Math.round(rr*(o[1].length>2 ? .78 : 1))+'px sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(o[1], cx, cy+1); };
-    pieces.forEach(p=>{ const em = (p.emp||[]).filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')), dec = maisonDecalages(em); em.forEach((m,k)=>marque(m.x*W + dec[k]*r*2.1, m.y*H, m.c, r)); });
+      x.fillStyle = '#fff'; x.font = 'bold '+Math.round(rr*(o[1].length>2 ? .78 : 1))+'px sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(txt || o[1], cx, cy+1); };
+    pieces.forEach(p=>{ const em = (p.emp||[]).filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')), dec = maisonDecalages(em); em.forEach((m,k)=>marque(m.x*W + dec[k]*r*2.1, m.y*H, m.c, r, m.c==='PL' && m.w ? m.w+' W' : '')); });
     x.fillStyle = '#111'; x.font = 'bold '+lh+'px sans-serif'; x.textAlign = 'left'; x.textBaseline = 'middle';
     x.fillText((pg.etage||pg.titre)+' — emplacements prévus (approximatifs, à confirmer sur le chantier)', lh, H + lh);
     x.font = Math.round(lh*.85)+'px sans-serif';
