@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v471';
+const APP_VERSION = 'v472';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10352,7 +10352,7 @@ const MAISON_LIB = {SO00:'prise dérivation',SO01:'prise 15 A',"SO01.1":'prise 1
   SO07:'prise extérieure',SO08:'éclairage extérieur',SO09:'carillon',SO10:'télécom',SO11:'réseau',SO12:'câble (télé)',SO13:'téléphone',SO220:'sortie chauffage',"SO220.2":'thermostat intelligent',
   SO221:'four / cuisinière 40 A',SO222:'sécheuse 30 A',SO223:'thermopompe / AC',SO224:'chauffe-eau',SO225:'borne de recharge 40 A'};
 const MAISON_TYPES = {
-  chambre:{nom:'Chambre', items:{SO01:4, SO02:1, SO04:1}, chauf:'plinthe'},
+  chambre:{nom:'Chambre', items:{SO01:4, SO02:1, SO04:1, SO05:1}, chauf:'plinthe'},
   bureau:{nom:'Bureau', items:{SO01:4, SO02:1, SO04:1, SO11:1}, chauf:'plinthe'},
   salon:{nom:'Salon / séjour', items:{SO01:3, SO02:1, SO04:1}, chauf:'plinthe'},
   sam:{nom:'Salle à manger', items:{SO01:2, SO02:1, SO04:1}, chauf:'plinthe'},
@@ -10476,11 +10476,12 @@ function MaisonVue({pg, pieces, onClose}){
 }
 // v470 : Tour pièce par pièce — on part du sous-sol en montant ; on place les sorties sur le plan (emplacements) ; le récap garde les quantités
 // v471 : raccourcis clavier (1-7 et lettres), outils de la pièce d'abord (le reste dans Extras), plinthe rectangulaire, encastrés en grille symétrique, interrupteurs regroupés, ↶ Retour
+// v472 : à l'entrée de chaque pièce (une touche) : interrupteur + détecteur (chambres) + thermostat (si chauffage) ; plinthes sous les fenêtres ; plafonnier au centre / 4 encastrés en un clic ; on peut glisser les marques
 // [id, symbole, libellé, couleur, touche, code compté (récap), forme]
 const MAISON_OUTILS = [
   ['SO01','P','prise 15 A','#2563eb','P','SO01'],['SO02','S','interrupteur','#16a34a','S','SO02'],['SO02.1','S3','3 voies','#15803d','W','SO02.1'],
   ['SO04','L','plafonnier','#d97706','L','SO04'],['MUR','M','murale','#ea580c','M','SO04'],['PL','PL','plinthe','#e11d48','C','PL','rect'],['TH','T','thermostat','#9f1239','T','TH'],
-  ['SO03','E','encastré','#b45309','E','SO03'],['SO05','F','détecteur de fumée','#dc2626','F','SO05'],['SO06','V','ventilateur / hotte','#7c3aed','V','SO06'],
+  ['SO03','E','encastré','#b45309','E','SO03'],['SO05','F','détecteur de fumée','#dc2626','F','SO05'],['SO06','V','ventilateur / hotte','#7c3aed','V','SO06'],['SO06B','V','ventilateur de salle de bain','#7c3aed','B','SO06'],
   ['SO01.1','DF','prise DDFT','#0891b2','D','SO01.1'],['SO01.2','P20','prise 20 A','#1e40af','','SO01.2'],['SO01.21','DF20','prise 20 A DDFT','#0e7490','','SO01.21'],
   ['SO02.2','G','gradateur','#166534','G','SO02.2'],['SO11','R','réseau / télé','#475569','R','SO11'],
   ['SO07','PE','prise extérieure','#0369a1','','SO07'],['SO08','LE','éclairage ext.','#92400e','','SO08'],['X240','240','240 V (cuisinière, sécheuse…)','#111827','','X240']];
@@ -10512,18 +10513,28 @@ function maisonDecalages(emps){ const tot = {}, vu = {}; emps.forEach(m=>{ const
 function MaisonMarque({c, actif, petit}){ const o = maisonOutil(c), t = petit ? 16 : 22, rect = o[6]==='rect';
   return <div style={{minWidth:rect ? t*1.9 : t,height:rect ? t*0.62 : t,borderRadius:rect ? 2 : t/2,background:o[3],color:'#fff',fontSize:petit?8.5:10.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 3px',
     border:'2px solid #fff',boxShadow:'0 1px 3px rgba(0,0,0,.5)',opacity:actif===false ? .45 : 1,boxSizing:'border-box',lineHeight:1}}>{o[1]}</div>; }
-function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever}){
+function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}){
   const boite = useRef(null), geste = useRef(null);
   const [taille,setTaille]=useState({w:600, h:420});
+  const [tire,setTire]=useState(null);   // marque qu'on glisse {k, x, y}
   const [vue,setVue]=useState({z:2.5, cx:piece && piece.fx!=null ? piece.fx : .5, cy:piece && piece.fy!=null ? piece.fy : .5});
   useEffect(()=>{ setVue(v=>({...v, cx:piece && piece.fx!=null ? piece.fx : .5, cy:piece && piece.fy!=null ? piece.fy : .5, z:piece && piece.fx!=null ? 2.5 : 1})); },[piece && piece.id]);
   useEffect(()=>{ const m = () => boite.current && setTaille({w:boite.current.clientWidth, h:boite.current.clientHeight}); m(); window.addEventListener('resize', m); return ()=>window.removeEventListener('resize', m); },[]);
   const W = taille.w*vue.z, H = W*((pg.h||1000)/(pg.w||1400)), left = taille.w/2 - vue.cx*W, top = taille.h/2 - vue.cy*H;
   const pos = e => { const r = boite.current.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; };
-  const bas = e => { boite.current.setPointerCapture && boite.current.setPointerCapture(e.pointerId); const p = pos(e); geste.current = {x:p.x, y:p.y, cx:vue.cx, cy:vue.cy, bouge:false}; };
+  const versPage = p => ({x:vue.cx + (p.x - taille.w/2)/W, y:vue.cy + (p.y - taille.h/2)/H});
+  const bas = e => { boite.current.setPointerCapture && boite.current.setPointerCapture(e.pointerId); const p = pos(e), q = versPage(p);
+    let k = null; if(piece && outil!=='gomme'){ const em = piece.emp||[], dec = maisonDecalages(em.filter(m=>m.pg===pg.no)); let j = 0;
+      const c = em.map((m,i)=>{ if(m.pg!==pg.no) return null; const d = dec[j++]; return {i, d:Math.hypot((m.x-q.x)*W + d*21*0, (m.y-q.y)*H)}; }).filter(Boolean).sort((a,b)=>a.d-b.d)[0];
+      if(c && c.d < 14) k = c.i; }
+    geste.current = {x:p.x, y:p.y, cx:vue.cx, cy:vue.cy, bouge:false, k}; };
   const bouge = e => { const g = geste.current; if(!g) return; const p = pos(e); const dx = p.x-g.x, dy = p.y-g.y;
-    if(!g.bouge && Math.hypot(dx,dy) < 7) return; g.bouge = true; setVue(v=>({...v, cx:g.cx - dx/W, cy:g.cy - dy/H})); };
-  const haut = e => { const g = geste.current; geste.current = null; if(!g || g.bouge || !piece) return; const p = pos(e);
+    if(!g.bouge && Math.hypot(dx,dy) < 7) return; g.bouge = true;
+    if(g.k!=null){ const q = versPage(p); setTire({k:g.k, x:q.x, y:q.y}); return; }
+    setVue(v=>({...v, cx:g.cx - dx/W, cy:g.cy - dy/H})); };
+  const haut = e => { const g = geste.current; geste.current = null;
+    if(g && g.bouge && g.k!=null){ const q = versPage(pos(e)); setTire(null); onDeplacer && onDeplacer(g.k, +Math.min(1,Math.max(0,q.x)).toFixed(4), +Math.min(1,Math.max(0,q.y)).toFixed(4)); return; }
+    if(!g || g.bouge || !piece) return; const p = pos(e);
     const x = vue.cx + (p.x - taille.w/2)/W, y = vue.cy + (p.y - taille.h/2)/H; if(x<0 || x>1 || y<0 || y>1) return;
     if(outil==='gomme'){ const prs = (piece.emp||[]).map((m,i)=>({i, k:Math.hypot((m.x-x)*W, (m.y-y)*H)})).filter(m=>piece.emp[m.i].pg===pg.no).sort((a,b)=>a.k-b.k)[0]; if(prs && prs.k<28) onEnlever(prs.i); return; }
     if(outil) onPlacer({c:outil, x:+x.toFixed(4), y:+y.toFixed(4), pg:pg.no, src:pg.src||''}, W, H); };
@@ -10534,7 +10545,7 @@ function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever}){
       style={{position:'relative',overflow:'hidden',height:'min(58vh, 560px)',background:'#e5e7eb',borderRadius:8,touchAction:'none',cursor:outil==='gomme' ? 'not-allowed' : outil ? 'crosshair' : 'grab',userSelect:'none'}}>
       <div style={{position:'absolute',left,top,width:W,height:H}}>
         <img src={pg.img} alt="" draggable={false} style={{width:'100%',height:'100%',display:'block',background:'#fff'}}/>
-        {autres.map(p=>{ const em = (p.emp||[]).filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')), dec = maisonDecalages(em);
+        {autres.map(p=>{ const em0 = (p.emp||[]).map((m,i)=>piece && p.id===piece.id && tire && tire.k===i ? {...m, x:tire.x, y:tire.y} : m), em = em0.filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')), dec = maisonDecalages(em);
           return <React.Fragment key={p.id}>
           {p.fx!=null && p.pg===pg.no && (p.src||'')===(pg.src||'') && <div style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none',
             fontSize:11,fontWeight:700,padding:'1px 5px',borderRadius:4,whiteSpace:'nowrap',background:piece && p.id===piece.id ? '#fde047' : 'rgba(255,255,255,.75)',color:'#111',border:piece && p.id===piece.id ? '1.5px solid #ca8a04' : '1px solid #bbb'}}>{p.nom}</div>}
@@ -10548,7 +10559,7 @@ function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever}){
       <button className="btn btn-sm" title="Recentrer sur la pièce" onClick={()=>setVue({z:2.5, cx:piece && piece.fx!=null ? piece.fx : .5, cy:piece && piece.fy!=null ? piece.fy : .5})}>◎</button></div>
   </div>;
 }
-function MaisonTour({m, majP, pages, onClose, onPlansClient}){
+function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
   const ordre = maisonOrdre(m.pieces);
   const [i,setI]=useState(Math.max(0, ordre.findIndex(p=>!p.ok)));
   const [outil,setOutil]=useState('SO01');
@@ -10556,9 +10567,22 @@ function MaisonTour({m, majP, pages, onClose, onPlansClient}){
   const hist = useRef([]);
   const p = ordre[Math.min(i, ordre.length-1)];
   const pg = p ? maisonPagePour(p, pages) : null;
+  const chauffe = m.pieces.some(x=>x.chauf && x.chauf!=='aucun');
+  const auto = m.auto || {s:true, f:true, t:chauffe, pl:chauffe};
+  const [demande,setDemande]=useState(!m.auto);
+  const [aut,setAut]=useState(auto);
+  const plAFaire = x => auto.pl && ['plinthe','convecteur'].includes(x.chauf) ? maisonPrevu(x, 'PL') : 0;
+  const porteItems = x => [auto.s && 'SO02', auto.f && x.type==='chambre' && 'SO05', auto.t && x.chauf && x.chauf!=='aucun' && 'TH'].filter(Boolean);
+  // outil de départ de chaque pièce : la porte, puis les fenêtres, puis les prises
+  useEffect(()=>{ if(!p) return; if(!p.porte && porteItems(p).length) setOutil('PORTE'); else if((p.emp||[]).filter(x=>x.c==='PL').length < plAFaire(p)) setOutil('PL'); else setOutil('SO01'); },[p && p.id, demande]);
   const memo = () => { hist.current.push({id:p.id, emp:p.emp||[], items:p.items||{}}); if(hist.current.length>200) hist.current.shift(); };
   const retour = () => { const h = hist.current.pop(); if(!h) return; majP(h.id, {emp:h.emp, items:h.items}); const k = ordre.findIndex(x=>x.id===h.id); if(k>=0 && k!==i) setI(k); };
-  const placer = (e, W, H) => { memo(); let emp = [...(p.emp||[])], it = {...(p.items||{})};
+  const placer = (e, W, H) => {
+    if(e.c==='PORTE'){ memo(); const it = {...(p.items||{})}, nv = porteItems(p).map(c=>({...e, c}));
+      const emp = [...(p.emp||[]), ...nv]; nv.forEach(x=>{ const so = maisonCompte(x.c); if(MAISON_LIB[so]){ const n = emp.filter(y=>maisonCompte(y.c)===so).length; if(n > (it[so]||0)) it[so] = n; } });
+      majP(p.id, {emp, items:it, porte:true, ...(p.fx==null && pg ? {pg:pg.no, src:pg.src||''} : {})}); setOutil(plAFaire(p) ? 'PL' : 'SO01'); return; }
+    if(e.c==='PL' && outil==='PL' && (p.emp||[]).filter(x=>x.c==='PL').length + 1 >= plAFaire(p) && plAFaire(p)) setTimeout(()=>setOutil('SO01'), 0);
+    memo(); let emp = [...(p.emp||[])], it = {...(p.items||{})};
     if(MAISON_INTER.includes(e.c)){   // interrupteurs placés l'un près de l'autre → même boîte (regroupés)
       const v = emp.filter(x=>MAISON_INTER.includes(x.c) && x.pg===e.pg).map(x=>({x, k:Math.hypot((x.x-e.x)*W, (x.y-e.y)*H)})).sort((a,b)=>a.k-b.k)[0];
       if(v && v.k < 34) e = {...e, x:v.x.x, y:v.x.y}; }
@@ -10568,6 +10592,18 @@ function MaisonTour({m, majP, pages, onClose, onPlansClient}){
     if(MAISON_LIB[so] && !/^SO220/.test(so)){ const n = emp.filter(x=>maisonCompte(x.c)===so).length; if(n > (it[so]||0)) it[so] = n; }   // jamais sous le minimum ; plus d'emplacements → le récap monte
     majP(p.id, {emp, items:it, ...(p.fx==null && pg ? {pg:pg.no, src:pg.src||''} : {})}); };
   const enlever = k => { memo(); majP(p.id, {emp:(p.emp||[]).filter((x,j)=>j!==k)}); };
+  const deplacer = (k, x, y) => { memo(); let emp = (p.emp||[]).map((e,j)=>j===k ? {...e, x, y} : e);
+    if(emp[k] && emp[k].c==='SO03'){ const pgn = emp[k].pg, ici = emp.filter(e=>e.c==='SO03' && e.pg===pgn); emp = [...emp.filter(e=>!(e.c==='SO03' && e.pg===pgn)), ...maisonGrille(ici, (pg && pg.w && pg.h) ? pg.w/pg.h : 1.4)]; }
+    majP(p.id, {emp}); };
+  // En un clic : plafonnier au centre, ou 4 encastrés en carré autour du centre (glisse un coin pour agrandir, la grille suit)
+  const centre = () => ({x:p.fx!=null ? p.fx : .5, y:p.fy!=null ? p.fy : .5, pg:pg ? pg.no : p.pg, src:pg ? pg.src||'' : ''});
+  const rapide = sorte => { if(!pg) return; memo(); const c = centre(), r = (pg.w && pg.h) ? pg.w/pg.h : 1.4, it = {...(p.items||{})};
+    let emp = [...(p.emp||[])];
+    if(sorte==='L'){ emp.push({c:'SO04', ...c}); }
+    else { const dx = .018*Math.sqrt(Math.max(60, cvNum(p.pi2)||150)/150), dy = dx*r; emp = [...emp, ...[[-1,-1],[1,-1],[-1,1],[1,1]].map(([a,b])=>({c:'SO03', ...c, x:+(c.x+a*dx).toFixed(4), y:+(c.y+b*dy).toFixed(4)}))]; }
+    const so = sorte==='L' ? 'SO04' : 'SO03', n = emp.filter(x=>maisonCompte(x.c)===so).length; if(n > (it[so]||0)) it[so] = n;
+    if(sorte==='E') it.SO04 = Math.min(it.SO04||0, emp.filter(x=>maisonCompte(x.c)==='SO04').length);   // 4 encastrés au lieu du plafonnier
+    majP(p.id, {emp, items:it, ...(p.fx==null ? {pg:c.pg, src:c.src} : {})}); };
   const aller = k => setI(Math.max(0, Math.min(ordre.length-1, k)));
   // Raccourcis : 1-7, lettres, X = enlever, Ctrl+Z / Retour arrière = retour, ← → = pièce précédente / suivante
   useEffect(()=>{ const f = e => { const t = e.target; if(t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.tagName==='SELECT' || t.isContentEditable)) return;
@@ -10578,6 +10614,7 @@ function MaisonTour({m, majP, pages, onClose, onPlansClient}){
       if(k==='ArrowRight'){ aller(i+1); return; } if(k==='ArrowLeft'){ aller(i-1); return; }
       if(/^[1-7]$/.test(k)){ setOutil(MAISON_NUMEROS[+k-1]); return; }
       if(k.toLowerCase()==='x'){ setOutil('gomme'); return; }
+      if(k.toLowerCase()==='a'){ setOutil('PORTE'); return; }
       const o = MAISON_OUTILS.find(x=>x[4] && x[4].toLowerCase()===k.toLowerCase()); if(o){ setOutil(o[0]); if(!MAISON_NUMEROS.includes(o[0])) setExtras(true); } };
     window.addEventListener('keydown', f); return ()=>window.removeEventListener('keydown', f); });
   if(!p) return null;
@@ -10601,15 +10638,27 @@ function MaisonTour({m, majP, pages, onClose, onPlansClient}){
         <button className="btn btn-sm" onClick={onClose}>✕ Fermer</button></div>
       <div style={{display:'flex',gap:3,flexWrap:'wrap'}}>{ordre.map((x,k)=><button key={x.id} onClick={()=>aller(k)} title={x.etage+' › '+x.nom} style={{width:k===i?26:14,height:10,borderRadius:5,border:'none',cursor:'pointer',padding:0,
         background:k===i ? 'var(--accent)' : x.ok ? 'var(--success)' : (x.emp||[]).length ? 'var(--warning)' : 'var(--border2)'}}/>)}</div>
-      {pg ? <MaisonCarte pg={pg} pieces={m.pieces} piece={p} outil={outil} onPlacer={placer} onEnlever={enlever}/>
+      {demande && <div style={{border:'2px solid var(--accent)',borderRadius:8,padding:'10px 12px',display:'grid',gap:6,fontSize:13.5}}>
+        <b>Avant de partir le tour : qu'est-ce que je place automatiquement ?</b>
+        {[['s','Un interrupteur à l\'entrée de chaque pièce'],['f','Un détecteur de fumée à l\'entrée des chambres'],['t','Un thermostat à l\'entrée des pièces chauffées'+(chauffe?'':' (aucun chauffage prévu)')],['pl','Les plinthes sous les fenêtres (ou sur un mur s\'il n\'y a pas de fenêtre)'+(chauffe?'':' (aucun chauffage prévu)')]].map(([k,l])=>
+          <label key={k} style={{display:'flex',gap:6,alignItems:'center'}}><input type="checkbox" checked={!!aut[k]} onChange={e=>setAut({...aut, [k]:e.target.checked})} style={{width:'auto'}}/>{l}</label>)}
+        <div className="muted" style={{fontSize:12}}>Dans chaque pièce, tu touches l'entrée de la porte une fois : tout ce qui est coché se place là (glisse-les ensuite où tu veux). Puis tu touches sous chaque fenêtre pour les plinthes.</div>
+        <div><button className="btn btn-p" onClick={()=>{ majM({auto:aut}); setDemande(false); }}>C'est parti</button></div></div>}
+      {!demande && (outil==='PORTE' || (outil==='PL' && plAFaire(p))) && <div style={{background:'rgba(88,166,255,.12)',border:'1px solid var(--accent)',borderRadius:8,padding:'6px 10px',fontSize:13.5}}>
+        {outil==='PORTE' ? <>👉 Touche <b>l'entrée de la porte</b> : {porteItems(p).map(c=>maisonOutil(c)[2]).join(' + ')} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>{ majP(p.id,{porte:true}); setOutil(plAFaire(p) ? 'PL' : 'SO01'); }}>Passer</button></>
+          : <>👉 Touche <b>sous chaque fenêtre</b> (ou un mur) : {Math.max(0, plAFaire(p) - (p.emp||[]).filter(x=>x.c==='PL').length)} plinthe(s) à placer{ch.plinthes.length ? ' — '+ch.plinthes.map(w=>w+' W').join(', ') : ''} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>setOutil('SO01')}>Passer</button></>}</div>}
+      {pg ? <MaisonCarte pg={pg} pieces={m.pieces} piece={p} outil={outil} onPlacer={placer} onEnlever={enlever} onDeplacer={deplacer}/>
         : <div className="muted" style={{padding:20,textAlign:'center',border:'1px dashed var(--border2)',borderRadius:8}}>Le plan se charge (ou aucun plan lu) — lis le plan PDF pour placer les sorties dessus.</div>}
       <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+        <button onClick={()=>setOutil('PORTE')} title="Entrée de la porte (touche A)" style={{padding:'4px 9px',borderRadius:14,cursor:'pointer',fontSize:11.5,border:outil==='PORTE' ? '2px solid var(--accent)' : '1px solid var(--border2)',background:outil==='PORTE' ? 'rgba(88,166,255,.15)' : 'var(--bg2)',color:'var(--text)'}}>🚪 Entrée <span className="muted" style={{fontSize:10}}>A</span></button>
+        <button className="btn btn-sm" disabled={!pg} onClick={()=>rapide('L')} title="Un plafonnier au centre de la pièce">💡 Plafonnier au centre</button>
+        <button className="btn btn-sm" disabled={!pg} onClick={()=>rapide('E')} title="4 encastrés en carré au centre — glisse un coin, la grille reste symétrique">▦ 4 encastrés</button>
         {utiles.map(bouton)}
         <button onClick={()=>setOutil('gomme')} title="Touche X" style={{padding:'4px 9px',borderRadius:14,cursor:'pointer',fontSize:11.5,border:outil==='gomme' ? '2px solid var(--danger)' : '1px solid var(--border2)',background:'var(--bg2)',color:'var(--text)'}}>⌫ Enlever <span className="muted" style={{fontSize:10}}>X</span></button>
         {reste.length>0 && <button className="btn btn-sm" onClick={()=>setExtras(!extras)}>{extras ? '▾' : '▸'} Extras ({reste.length})</button>}
         {extras && reste.map(bouton)}
       </div>
-      <div className="muted" style={{fontSize:11.5}}>Touche le plan pour placer · glisse pour te déplacer · 1-7 ou les lettres pour changer d'outil · les encastrés se mettent en grille symétrique · les interrupteurs près l'un de l'autre se regroupent</div>
+      <div className="muted" style={{fontSize:11.5}}>Touche le plan pour placer · glisse pour te déplacer · 1-7 ou les lettres pour changer d'outil · glisse une marque pour la déplacer · les encastrés se mettent en grille symétrique · les interrupteurs près l'un de l'autre se regroupent</div>
       <div style={{display:'grid',gap:2,border:'1px solid var(--border)',borderRadius:8,padding:'6px 10px',fontSize:13}}>
         <div style={{display:'flex',gap:6}}><b>Placées / prévues</b>{manque>0 ? <span style={{color:'var(--warning)'}}>· il en reste {manque} à placer</span> : lignes.length ? <span style={{color:'var(--success)'}}>· tout est placé</span> : null}</div>
         {lignes.map(([so,a,b])=>{ const o = MAISON_OUTILS.find(x=>x[5]===so); return <div key={so} style={{display:'flex',gap:6,alignItems:'center'}}><MaisonMarque c={o ? o[0] : so} petit/><span style={{minWidth:170}}>{so==='SO04' ? 'plafonnier / murale' : o ? o[2] : so}</span>
@@ -10747,7 +10796,7 @@ function MaisonPlan({d, setD, C, toast}){
         <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{pp.map(pg=><div key={pg.src+'-'+pg.no} onClick={()=>setGrand(pg)} style={{cursor:'pointer',textAlign:'center',fontSize:11}}>
           <img src={pg.img} alt="" style={{height:k==='etage'?90:70,border:'1px solid var(--border2)',borderRadius:4,background:'#fff'}}/><div className="muted">{pg.titre}</div></div>)}</div></div>; })}
     {grand && <MaisonVue pg={grand} pieces={m.pieces} onClose={()=>setGrand(null)}/>}
-    {tour && <MaisonTour m={m} majP={majP} pages={pages} onClose={()=>setTour(false)} onPlansClient={()=>{ setTour(false); plansClient(); }}/>}
+    {tour && <MaisonTour m={m} majP={majP} majM={majM} pages={pages} onClose={()=>setTour(false)} onPlansClient={()=>{ setTour(false); plansClient(); }}/>}
     {etages.map(e=>{ const ps = m.pieces.filter(p=>p.etage===e), st = ps.reduce((t,p)=>t+totalPiece(p),0);
       return <div key={e} style={{border:'1px solid var(--border)',borderRadius:8}}>
         <div style={{display:'flex',padding:'6px 10px',background:'var(--bg3)',borderRadius:'8px 8px 0 0',fontWeight:700}}>{e} <span className="muted" style={{fontWeight:400,marginLeft:6}}>· {ps.length} pièce{ps.length>1?'s':''}</span><span style={{marginLeft:'auto'}}>{cvMoney(st)}</span></div>
