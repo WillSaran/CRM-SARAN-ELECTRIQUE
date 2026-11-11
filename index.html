@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v472';
+const APP_VERSION = 'v473';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10481,7 +10481,7 @@ function MaisonVue({pg, pieces, onClose}){
 const MAISON_OUTILS = [
   ['SO01','P','prise 15 A','#2563eb','P','SO01'],['SO02','S','interrupteur','#16a34a','S','SO02'],['SO02.1','S3','3 voies','#15803d','W','SO02.1'],
   ['SO04','L','plafonnier','#d97706','L','SO04'],['MUR','M','murale','#ea580c','M','SO04'],['PL','PL','plinthe','#e11d48','C','PL','rect'],['TH','T','thermostat','#9f1239','T','TH'],
-  ['SO03','E','encastré','#b45309','E','SO03'],['SO05','F','détecteur de fumée','#dc2626','F','SO05'],['SO06','V','ventilateur / hotte','#7c3aed','V','SO06'],['SO06B','V','ventilateur de salle de bain','#7c3aed','B','SO06'],
+  ['SO03','E','encastré','#b45309','E','SO03'],['SO05','F','détecteur de fumée','#dc2626','F','SO05'],['SO06','V','ventilateur de salle de bain','#7c3aed','V','SO06'],['SO06H','H','hotte','#6d28d9','H','SO06'],
   ['SO01.1','DF','prise DDFT','#0891b2','D','SO01.1'],['SO01.2','P20','prise 20 A','#1e40af','','SO01.2'],['SO01.21','DF20','prise 20 A DDFT','#0e7490','','SO01.21'],
   ['SO02.2','G','gradateur','#166534','G','SO02.2'],['SO11','R','réseau / télé','#475569','R','SO11'],
   ['SO07','PE','prise extérieure','#0369a1','','SO07'],['SO08','LE','éclairage ext.','#92400e','','SO08'],['X240','240','240 V (cuisinière, sécheuse…)','#111827','','X240']];
@@ -10489,6 +10489,8 @@ const MAISON_NUMEROS = ['SO01','SO02','SO02.1','SO04','MUR','PL','TH'];   // tou
 const MAISON_INTER = ['SO02','SO02.1','SO02.2'];
 const maisonOutil = c => MAISON_OUTILS.find(o=>o[0]===c) || [c, c, MAISON_LIB[c]||c, '#555', '', c];
 const maisonCompte = c => maisonOutil(c)[5];
+// v473 : V (ventilateur) seulement en salle de bain, H (hotte) seulement dans la cuisine
+const maisonOutilPermis = (o, p) => o[0]==='SO06' ? (!p || p.type==='sdb') : o[0]==='SO06H' ? (!p || p.type==='cuisine') : true;
 // Quantité prévue (récap) pour un code compté
 function maisonPrevu(p, so){ const it = p.items||{}, ch = maisonChauffage(p);
   if(so==='PL') return p.chauf==='aero' ? maisonDragons(p).n : ch.plinthes.length || (['radiant','plinthe','convecteur'].includes(p.chauf) ? 1 : 0);
@@ -10615,7 +10617,7 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
       if(/^[1-7]$/.test(k)){ setOutil(MAISON_NUMEROS[+k-1]); return; }
       if(k.toLowerCase()==='x'){ setOutil('gomme'); return; }
       if(k.toLowerCase()==='a'){ setOutil('PORTE'); return; }
-      const o = MAISON_OUTILS.find(x=>x[4] && x[4].toLowerCase()===k.toLowerCase()); if(o){ setOutil(o[0]); if(!MAISON_NUMEROS.includes(o[0])) setExtras(true); } };
+      const o = MAISON_OUTILS.find(x=>x[4] && x[4].toLowerCase()===k.toLowerCase() && maisonOutilPermis(x, p)); if(o){ setOutil(o[0]); if(!MAISON_NUMEROS.includes(o[0])) setExtras(true); } };
     window.addEventListener('keydown', f); return ()=>window.removeEventListener('keydown', f); });
   if(!p) return null;
   const ch = maisonChauffage(p), faits = ordre.filter(x=>x.ok).length;
@@ -10624,8 +10626,9 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
   const lignes = codesCompte.map(so=>[so, maisonPrevu(p, so), placees(so)]).filter(([,a,b])=>a||b);
   const manque = lignes.reduce((t,[,a,b])=>t+Math.max(0,a-b),0);
   // Outils de la pièce : les 7 de base + ce qui est prévu ou placé ici ; le reste dans Extras
-  const utiles = MAISON_OUTILS.filter(o=>MAISON_NUMEROS.includes(o[0]) || lignes.some(([so])=>so===o[5]) || o[0]===outil);
-  const reste = MAISON_OUTILS.filter(o=>!utiles.includes(o));
+  const permis = MAISON_OUTILS.filter(o=>maisonOutilPermis(o, p));
+  const utiles = permis.filter(o=>MAISON_NUMEROS.includes(o[0]) || lignes.some(([so])=>so===o[5]) || o[0]===outil);
+  const reste = permis.filter(o=>!utiles.includes(o));
   const bouton = o => { const n = MAISON_NUMEROS.indexOf(o[0]);
     return <button key={o[0]} onClick={()=>setOutil(o[0])} title={o[2]+(o[4] ? ' — touche '+o[4] : '')} style={{display:'inline-flex',gap:4,alignItems:'center',padding:'3px 7px 3px 3px',borderRadius:14,cursor:'pointer',fontSize:11.5,
       border:outil===o[0] ? '2px solid var(--accent)' : '1px solid var(--border2)',background:outil===o[0] ? 'rgba(88,166,255,.15)' : 'var(--bg2)',color:'var(--text)'}}>
@@ -10661,7 +10664,7 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
       <div className="muted" style={{fontSize:11.5}}>Touche le plan pour placer · glisse pour te déplacer · 1-7 ou les lettres pour changer d'outil · glisse une marque pour la déplacer · les encastrés se mettent en grille symétrique · les interrupteurs près l'un de l'autre se regroupent</div>
       <div style={{display:'grid',gap:2,border:'1px solid var(--border)',borderRadius:8,padding:'6px 10px',fontSize:13}}>
         <div style={{display:'flex',gap:6}}><b>Placées / prévues</b>{manque>0 ? <span style={{color:'var(--warning)'}}>· il en reste {manque} à placer</span> : lignes.length ? <span style={{color:'var(--success)'}}>· tout est placé</span> : null}</div>
-        {lignes.map(([so,a,b])=>{ const o = MAISON_OUTILS.find(x=>x[5]===so); return <div key={so} style={{display:'flex',gap:6,alignItems:'center'}}><MaisonMarque c={o ? o[0] : so} petit/><span style={{minWidth:170}}>{so==='SO04' ? 'plafonnier / murale' : o ? o[2] : so}</span>
+        {lignes.map(([so,a,b])=>{ const o = MAISON_OUTILS.find(x=>x[5]===so && maisonOutilPermis(x, p)) || MAISON_OUTILS.find(x=>x[5]===so); return <div key={so} style={{display:'flex',gap:6,alignItems:'center'}}><MaisonMarque c={o ? o[0] : so} petit/><span style={{minWidth:170}}>{so==='SO04' ? 'plafonnier / murale' : o ? o[2] : so}</span>
           <b style={{color:b<a ? 'var(--warning)' : 'var(--success)'}}>{b} / {a}</b>
           {MAISON_LIB[so] && <span style={{display:'inline-flex',gap:2}}><button className="btn btn-sm" style={{padding:'0 6px'}} onClick={()=>{ memo(); majP(p.id,{items:{...p.items, [so]:Math.max(0,(p.items[so]||0)-1)}}); }}>−</button>
             <button className="btn btn-sm" style={{padding:'0 6px'}} onClick={()=>{ memo(); majP(p.id,{items:{...p.items, [so]:(p.items[so]||0)+1}}); }}>+</button></span>}</div>; })}
