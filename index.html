@@ -161,7 +161,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v479';
+const APP_VERSION = 'v480';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8939,6 +8939,15 @@ function docCalcul(d, prixDe){
 // v112 : page « Plan des travaux » (photos annotées, titre et notes), 2 par rangée
 function planHtml(d, plan, esc, debut){
   if(!plan.length) return '';
+  // v480 : soumission maison avec plans annotés → une image par page (plans annotés d'abord, puis chaque photo), en grand
+  if(plan.some(p=>/^Plan annoté — /.test(p.titre||''))){
+    const tri = [...plan.filter(p=>/^Plan annoté — /.test(p.titre||'')), ...plan.filter(p=>!/^Plan annoté — /.test(p.titre||''))];
+    return tri.map((p,i)=>'<div style="page-break-before:'+(i===0 && debut ? 'auto' : 'always')+';break-inside:avoid">'+
+      '<div style="font-weight:bold;font-size:14px;margin-bottom:6px">'+esc(p.titre || 'Photo')+(d.adresse ? ' <span style="font-weight:normal">— '+esc(d.adresse)+'</span>' : '')+'</div>'+
+      '<img src="'+p.src+'" style="width:100%;max-height:9.2in;object-fit:contain;display:block"/>'+
+      (p.notes?'<div style="margin-top:6px"><u>NOTES :</u><br>'+esc(p.notes).split('\n').filter(Boolean).map((l,k)=>(k+1)+'. '+l).join('<br>')+'</div>':'')+'</div>').join('')+
+      (debut ? '<div style="page-break-after:always"></div>' : '');
+  }
   return (debut ? '' : '<div style="page-break-before:always"></div>')+'<h1 style="text-align:center;font-size:17px">PLAN DES TRAVAUX'+(d.titre?' — '+esc(d.titre).toUpperCase():'')+'</h1>'+
     '<p style="text-align:center;margin:2px 0 12px">'+esc(d.adresse)+'</p><div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px">'+
     plan.map(p=>'<div style="border:1.5px solid #111;padding:8px;break-inside:avoid;box-sizing:border-box;min-width:0"><img src="'+p.src+'" style="width:100%;height:3.1in;object-fit:contain;display:block;background:#f4f4f4"/>'+
@@ -10401,7 +10410,7 @@ function maisonChauffage(p){ const c = p.chauf || 'aucun', th = Math.max(1, Math
   if(c==='radiant') return {so220:1+th, plinthes:[], txt:'plancher radiant + thermostat', libres:[], intel:p.intel ? th : 0};
   const plac = (p.emp||[]).filter(x=>x.c==='PL' && cvNum(x.w));   // v475 : plinthes placées avec leur wattage → elles font foi
   const pl = plac.length ? plac.map(x=>+x.w) : maisonPlinthes(p.pi2, p.fenetres);
-  if(!pl.length) return {so220:1+th, plinthes:[], txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+' (entre les pi² pour le wattage) + thermostat', libres:[], intel:p.intel ? th : 0};
+  if(!pl.length) return {so220:1+th, plinthes:[], txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+' + thermostat', libres:[], intel:p.intel ? th : 0};
   return {w:pl.reduce((t,x)=>t+x,0), so220:pl.length+th, plinthes:pl, txt:(c==='convecteur' ? 'convecteur' : 'plinthe')+(pl.length>1?'s':'')+' '+pl.map(w=>w+' W').join(' + ')+' + '+(th>1 ? th+' thermostats' : 'thermostat'), libres:[], intel:p.intel ? th : 0}; }
 // Résumé client d'une pièce (« 4 prises 15 A, 1 interrupteur, … »)
 function maisonResume(p){ const it = p.items||{}, ch = maisonChauffage(p);
@@ -10843,7 +10852,7 @@ function MaisonPlan({d, setD, C, toast}){
     if(m.temporaire) lignesM.push({code:'', desc:'Entrée temporaire (chantier)', unite:'un', qte:'1', prix:String(MAISON_TEMPORAIRE), maison:true});
     const chauf = m.pieces.map(p=>[p, maisonChauffage(p)]).filter(([,c])=>c.txt);
     const txt = ['Installation électrique complète — '+(m.pieces.length)+' pièces, par étage :', '',
-      ...etages.flatMap(e=>[e.toUpperCase(), ...m.pieces.filter(p=>p.etage===e).map(p=>'• '+p.nom+(cvNum(p.pi2) ? ' ('+p.pi2+' pi²)' : '')+' : '+(maisonResume(p)||'—')), '']),
+      ...etages.flatMap(e=>[e.toUpperCase(), ...m.pieces.filter(p=>p.etage===e).map(p=>'• '+p.nom+' : '+(maisonResume(p)||'—')), '']),
       chauf.length ? 'CHAUFFAGE PRÉVU : '+chauf.map(([p,c])=>p.nom+' — '+c.txt).join(' ; ')+'.' : '',
       m.entree ? 'ENTRÉE ÉLECTRIQUE : '+m.entree+' '+(m.entreeType||'')+(m.temporaire ? ' + entrée temporaire de chantier' : '') : '',
       MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).length ? 'APPAREILS RACCORDÉS : '+MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).map(([k,l])=>maisonAppLib(m,k,l)+(cvNum(app[k])>1?' ×'+app[k]:'')).join(', ') : ''].filter((x,i,a)=>x!=='' || a[i-1]!=='').join('\n').trim();
