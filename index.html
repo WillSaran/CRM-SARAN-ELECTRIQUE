@@ -30,6 +30,13 @@
   --text:#1a1f26;--muted:#5b6472;
   --success:#1a7f37;--warning:#9a6700;--danger:#cf222e;
 }
+/* v486 : thème « Doux » — entre le sombre et le clair (ardoise douce) */
+[data-theme="doux"]{
+  --bg:#2b3038;--bg2:#333944;--bg3:#3b424e;--bg4:#444c59;
+  --border:rgba(255,255,255,0.09);--border2:rgba(255,255,255,0.17);
+  --text:#eef1f5;--muted:#a3adba;
+  --success:#56c46a;--warning:#e0b04a;--danger:#ff7b72;
+}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--font-body);height:100%}
 #root{min-height:100vh}
@@ -163,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v485';
+const APP_VERSION = 'v486';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4731,6 +4738,55 @@ function DepotBureau({cfg, data, toast, onDepose}){
     </div>}
   </div>;
 }
+// v486 : Agenda › Heures par employé — les vraies heures (punchs PunchPro, confirmés la semaine d'après), job par job, une ligne par employé.
+// Journée normale 7 h à 15 h 30 (bande pâle) ; au-delà = temps supplémentaire (OT) marqué.
+const HJ_DEBUT = 7, HJ_FIN = 15.5, HJ_MIN = 5, HJ_MAX = 19;
+const hjHeure = s => { const m = String(s||'').match(/(\d{1,2})\D+(\d{2})/); return m ? +m[1] + (+m[2])/60 : null; };
+const hjTxt = h => { const hh = Math.floor(h+1e-6), mm = Math.round((h-hh)*60); return hh+' h '+String(mm===60?0:mm).padStart(2,'0'); };
+const hjNb = h => String(Math.round(h*100)/100).replace('.', ',');
+// Place les jobs d'une journée : heures réelles si on les a, sinon bout à bout à partir de 7 h
+function hjBlocs(jobs){ let t = HJ_DEBUT; return (jobs||[]).filter(j=>j.compte).map(j=>{ let d = hjHeure(j.debut), f = hjHeure(j.fin);
+    if(d==null) d = t; if(f==null || f<=d) f = d + (j.heures||0); t = Math.max(t, f); return {...j, d, f, estime:hjHeure(j.debut)==null}; }); }
+function AgendaHeuresEmployes({cfg, refreshKey}){
+  const [sem,setSem]=useState(()=>{ const d = new Date(); d.setDate(d.getDate()-7); return getWeek(d); });   // la semaine passée (déjà confirmée)
+  const [pp,setPp]=useState(null), [err,setErr]=useState('');
+  useEffect(()=>{ let ok = true; if(!cfg.punchproSpreadsheetId){ setErr('Configure l\'ID du Sheet PunchPro dans Réglages.'); return; }
+    getPunchProDataBatched(cfg.punchproSpreadsheetId).then(r=>{ if(ok) setPp(r); }).catch(e=>{ if(ok) setErr(apiErrMsg ? apiErrMsg(e) : String(e)); });
+    return ()=>{ ok = false; }; },[cfg.punchproSpreadsheetId, refreshKey]);
+  const jours = weekDatesArr(sem), js = jours.map(localDateStr);
+  const decaler = n => { const d = new Date(jours[0]); d.setDate(d.getDate()+7*n); setSem(getWeek(d)); };
+  if(err) return <div className="card muted">{err}</div>;
+  if(!pp) return <div className="card muted">Lecture des punchs…</div>;
+  const emps = pp.emps.map(e=>e.nom).filter(n=>pp.pts.some(p=>p.nom===n && js.includes(p.date)));
+  const detail = Object.fromEntries(emps.map(n=>[n, detailEmployeSemaine(pp.pts, sem, n)]));
+  const vus = js.map((d,i)=>i<5 || emps.some(n=>(detail[n][d]||[]).some(j=>j.compte)));
+  const echelle = h => ((Math.min(HJ_MAX, Math.max(HJ_MIN, h)) - HJ_MIN) / (HJ_MAX - HJ_MIN) * 100)+'%';
+  const confirme = n => pp.pts.some(p=>p.nom===n && js.includes(p.date) && p.type==='confirm');
+  return <div>
+    <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:10}}>
+      <button className="btn btn-sm" onClick={()=>decaler(-1)}>←</button><b>Semaine du {weekRangeLabel(sem)}</b><button className="btn btn-sm" onClick={()=>decaler(1)}>→</button>
+      <span className="muted" style={{fontSize:12}}>Vraies heures des punchs (confirmées la semaine d'après) · bande pâle = 7 h à 15 h 30 · <b style={{color:'var(--danger)'}}>OT</b> = au-delà</span></div>
+    {!emps.length && <div className="card muted">Aucun punch cette semaine.</div>}
+    <div style={{overflowX:'auto'}}><table style={{borderCollapse:'collapse',width:'100%',minWidth:760,fontSize:12}}>
+      <thead><tr><th style={{textAlign:'left',padding:'4px 6px',width:120}}>Employé</th>{jours.map((d,i)=>vus[i] && <th key={i} style={{textAlign:'left',padding:'4px 6px',textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'short',day:'numeric'})}</th>)}<th style={{padding:'4px 6px'}}>Semaine</th></tr></thead>
+      <tbody>{emps.map(n=>{ let tot = 0, ot = 0;
+        const cel = js.map((d,i)=>{ if(!vus[i]) return null; const b = hjBlocs(detail[n][d]); const h = b.reduce((t,x)=>t+(x.heures||0),0);
+          const fin = b.length ? Math.max(...b.map(x=>x.f)) : 0, deb = b.length ? Math.min(...b.map(x=>x.d)) : 0;
+          const otj = Math.max(0, h - (HJ_FIN-HJ_DEBUT), fin - HJ_FIN > 0.01 ? Math.min(h, fin - Math.max(HJ_FIN, deb)) : 0); tot += h; ot += otj;
+          return <td key={d} style={{verticalAlign:'top',padding:'4px 6px',borderTop:'1px solid var(--border)'}}>
+            {b.length>0 && <div title={b.map(x=>hjTxt(x.d)+' – '+hjTxt(x.f)+' · '+x.job+' ('+hjNb(x.heures)+' h)').join('\n')} style={{position:'relative',height:16,background:'var(--bg3)',borderRadius:4,overflow:'hidden',marginBottom:3}}>
+              <div style={{position:'absolute',left:echelle(HJ_DEBUT),width:'calc('+echelle(HJ_FIN)+' - '+echelle(HJ_DEBUT)+')',top:0,bottom:0,background:'rgba(63,185,80,.15)'}}/>
+              {b.map((x,k)=><div key={k} style={{position:'absolute',left:echelle(x.d),width:'calc('+echelle(x.f)+' - '+echelle(x.d)+')',top:2,bottom:2,background:x.jobColor || 'var(--accent)',opacity:x.estime ? .55 : 1,borderRadius:2,borderRight:'1px solid var(--bg)'}}/>)}
+              {fin > HJ_FIN+0.01 && <div style={{position:'absolute',left:echelle(HJ_FIN),width:'calc('+echelle(fin)+' - '+echelle(HJ_FIN)+')',top:0,height:3,background:'var(--danger)'}}/>}</div>}
+            {b.map((x,k)=><div key={k} style={{lineHeight:1.3}}><span className="muted">{x.estime ? '≈' : ''}{hjTxt(x.d).replace(' h ','h')}–{hjTxt(x.f).replace(' h ','h')}</span> {x.job} <b>{hjNb(x.heures)} h</b></div>)}
+            {b.length>0 && <div style={{marginTop:2,fontWeight:700}}>{hjNb(h)} h{otj>0.01 && <span style={{color:'var(--danger)'}}> · OT +{hjNb(Math.round(otj*4)/4)} h</span>}</div>}
+          </td>; });
+        return <tr key={n}><td style={{verticalAlign:'top',padding:'4px 6px',borderTop:'1px solid var(--border)',fontWeight:700}}>{n.split(' ')[0]}<div className="muted" style={{fontWeight:400,fontSize:11}}>{confirme(n) ? '✓ confirmée' : 'punchs'}</div></td>{cel}
+          <td style={{verticalAlign:'top',padding:'4px 6px',borderTop:'1px solid var(--border)',whiteSpace:'nowrap'}}><b>{hjNb(tot)} h</b>{ot>0.01 && <div style={{color:'var(--danger)',fontWeight:700}}>OT +{hjNb(Math.round(ot*4)/4)} h</div>}</td></tr>; })}</tbody>
+    </table></div>
+    <div className="muted" style={{fontSize:11.5,marginTop:6}}>≈ = heure de début estimée (punch sans heure) · survole une barre pour le détail · la couleur = celle de la job dans PunchPro</div>
+  </div>;
+}
 function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // v449 : onChoisir = mode « choisir une job » (clic sur un événement)
   const [viewMode,setViewMode]=useState(()=>AGENDA_POS && AGENDA_POS.viewMode || 'semaine'); // 'jour'|'semaine'|'mois'
   const [anchor,setAnchor]=useState(()=>AGENDA_POS && AGENDA_POS.anchor ? new Date(AGENDA_POS.anchor) : new Date());
@@ -5107,12 +5163,12 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       <div>
         <h2 className="fh" style={{margin:'0 0 8px',fontSize:20}}>Agenda</h2>
         <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>
-          {[['agenda','Agenda'],['commandes','Commandes de la semaine']].map(([k,l])=><button key={k} className={'btn btn-sm'+(ongletAg===k?' btn-p':'')} onClick={()=>choisirOnglet(k)}>{l}</button>)}
+          {[['agenda','Agenda'],['heures','Heures par employé'],['commandes','Commandes de la semaine']].map(([k,l])=><button key={k} className={'btn btn-sm'+(ongletAg===k?' btn-p':'')} onClick={()=>choisirOnglet(k)}>{l}</button>)}
         </div>
       </div>
       {data && <button className="btn btn-p" onClick={()=>openNewJob(todayISO())}>+ Nouvelle job</button>}
     </div>
-    <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
+    {ongletAg!=='heures' && <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
       <button className="btn btn-sm" onClick={goPrev} onDragOver={ev=>survolFleche(ev, -1)} onDragLeave={()=>survolFleche(null)} title="Précédent (K ou ←) — glisse un événement ici pour reculer">←</button>
       <div style={{fontWeight:700,textTransform:'capitalize',minWidth:160}}>{rangeLabel()}</div>
       <button className="btn btn-sm" onClick={goNext} onDragOver={ev=>survolFleche(ev, 1)} onDragLeave={()=>survolFleche(null)} title="Suivant (J ou →) — glisse un événement ici pour avancer">→</button>
@@ -5139,7 +5195,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         {ongletAg==='agenda' && panneauFerme && <button className="btn btn-sm" onClick={basculerPanneau} title="Rouvrir le panneau des jobs En attente">⏳ En attente{attListe && attListe.length ? ' ('+attListe.length+')' : ''}</button>}
         {ongletAg==='agenda' && viewMode!=='jour' && <button className="btn btn-sm" onClick={basculerRepli} title="Replier ou afficher samedi et dimanche">{repli ? 'Sam.–dim. ▸' : '◂ Sam.–dim.'}</button>}
       </div>
-    </div>
+    </div>}
+    {ongletAg==='heures' && <AgendaHeuresEmployes cfg={cfg} refreshKey={refreshKey}/>}
     {ongletAg==='commandes' && (cd.loading ? <div className="card muted" style={{marginBottom:16,fontSize:13}}>Lecture des jobs et des commandes…</div>
       : <CvSemaine clients={cdClients} appels={cd.appels||{parNumero:{},parFacture:{},liste:[]}} ancre={anchor} commandes={commandes} onCommande={basculerCommande} manuels={manuelsAg} isDesktop={isDesktop}/>)}
     {ongletAg==='agenda' && groupesPresents.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
@@ -14527,7 +14584,7 @@ function SettingsView({cfg, setCfg, toast}){
     <h2 className="fh" style={{margin:'0 0 14px',fontSize:20}}>Réglages</h2>
     <div className="card grid" style={{gap:12}}>
       <div className="field"><label>Thème</label>
-        <select value={theme} onChange={e=>setTheme(e.target.value)}><option value="dark">Sombre</option><option value="light">Clair</option></select>
+        <select value={theme} onChange={e=>setTheme(e.target.value)}><option value="dark">Sombre</option><option value="doux">Doux (entre les deux)</option><option value="light">Clair</option></select>
       </div>
       <div className="field"><label>ID du Google Sheet CRM</label><input value={f.crmSpreadsheetId} onChange={e=>setF({...f,crmSpreadsheetId:e.target.value})} placeholder="Coller l'ID du Sheet ici"/></div>
       <div className="field"><label>ID du Google Sheet "PROJETS SARAN ÉLECTRIQUE"</label><input value={f.projetsSpreadsheetId} onChange={e=>setF({...f,projetsSpreadsheetId:e.target.value})} placeholder="Sheet séparé, sera donné à PunchPro plus tard"/></div>
