@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v494';
+const APP_VERSION = 'v495';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11165,7 +11165,8 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
     </div>
   </div>;
 }
-function MaisonPlan({d, setD, C, toast}){
+function MaisonPlan({d, setD, C, toast, partie, onRempli}){   // v495 : partie 'plans' (étape 3) | 'pieces' (étape 4) | rien = tout
+  const vP = partie!=='pieces', vR = partie!=='plans';
   const m = d.maison || maisonVide();
   const majM = patch => setD(o=>({...o, maison:{...(o.maison||maisonVide()), ...(typeof patch==='function' ? patch(o.maison||maisonVide()) : patch)}}));
   const majP = (id, patch) => majM(x=>({pieces:x.pieces.map(p=>p.id===id ? {...p, ...patch} : p)}));
@@ -11250,10 +11251,15 @@ function MaisonPlan({d, setD, C, toast}){
       return {...o, typeProjet:o.typeProjet || 'Construction neuve', titre:o.titre || 'Installation électrique — maison', travaux:txt,
         lignes:[...o.lignes.filter(l=>!l.maison), ...lignesM], remarques:[rem, incl, excl].filter(Boolean).join('\n'),
         visite:[vis, chauf.length ? '— Liste chauffage ('+chauf.reduce((t,[,c])=>t+(c.w||0),0)+' W) : '+chauf.map(([p,c])=>p.nom+' : '+c.txt).join(' ; ') : ''].filter(Boolean).join('\n')}; });
-    toast && toast('Soumission remplie par étage et par pièce — vérifie le matériel et le prix'); };
+    toast && toast('Soumission remplie par étage et par pièce — vérifie le matériel et le prix'); onRempli && onRempli(); };
   const ch = l => <input type="checkbox" checked={l} readOnly style={{width:'auto'}}/>;
   return <div style={{display:'grid',gap:8}}>
-    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+    {!vP && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+      {pagesAff.length>0 && <button className="btn btn-sm" onClick={()=>setGrand(pagesAff[0])}>📑 Voir les plans ({pagesAff.length})</button>}
+      {!m.pieces.length && <span className="muted" style={{fontSize:12.5}}>Aucune pièce encore — encadre-les sur le plan (étape 3) ou ajoute-les en bas.</span>}
+      {m.pieces.length>0 && <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={()=>setTour(true)}>🧭 Tour pièce par pièce{(()=>{ const n = m.pieces.filter(p=>p.ok).length; return n ? ' ('+n+'/'+m.pieces.length+')' : ''; })()}</button>}
+    </div>}
+    {vP && <><div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
       <input ref={ref} type="file" accept="application/pdf" style={{display:'none'}} onChange={e=>{ const f = e.target.files[0]; e.target.value=''; lire(f); }}/>
       <button className={'btn btn-sm'+(pdfs.length?'':' btn-p')} disabled={!!etat} onClick={()=>ref.current && ref.current.click()}>📄 {pdfs.length ? 'Autre plan (PDF)…' : 'Lire un plan (PDF)'}</button>
       {!etat && pdfs.map(x=><button key={x.id} className={'btn btn-sm'+(m.planId===x.id?' btn-p':'')} title="Lire ce PDF du dossier du client comme plan de maison" onClick={()=>{ if(m.planId===x.id && m.pieces.length && !confirm('Ce plan a déjà été lu ('+m.pieces.length+' pièces). Le relire ajoute les pièces une 2e fois. Continuer ?')) return; lireDrive(x); }}>
@@ -11275,12 +11281,13 @@ function MaisonPlan({d, setD, C, toast}){
     {pagesV.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap'}}><button className="btn btn-sm" onClick={()=>setGrand(pagesAff[0])}>{m.archive ? '📑 Voir mes plans ('+pagesAff.length+')' : '📑 Trier les pages ('+pagesV.length+') — ← → pour avancer'}</button>
       {triees.length>0 && !m.archive && <button className="btn btn-sm" title="Ne garder que les pages triées (plans d'étage, façades, certificat) — les autres sont mises de côté" onClick={()=>majM({archive:true})}>🗄 Archiver les autres pages (garder {triees.length})</button>}
       {m.archive && <button className="btn btn-sm" onClick={()=>majM({archive:false})}>Voir toutes les pages ({pagesV.length})</button>}</div>}
+    </>}
     {grand && (()=>{ const g = pagesV.find(x=>maisonCleP(x)===maisonCleP(grand)) || grand;
       return <MaisonVue pg={g} pieces={m.pieces} m={m} majM={majM} onClose={()=>setGrand(null)} liste={pagesAff} onAller={setGrand} tag={(m.pagesTag||{})[maisonCleP(g)]}
         onTag={(pg, v)=>majM(o=>({pagesTag:{...(o.pagesTag||{}), [maisonCleP(pg)]:v}}))}/>; })()}
     {cadrer && pagesV.find(x=>maisonCleP(x)===cadrer) && <MaisonEncadrer pg={pagesV.find(x=>maisonCleP(x)===cadrer)} m={m} majM={majM} onClose={()=>setCadrer('')}/>}
     {tour && <MaisonTour m={m} majP={majP} majM={majM} pages={pagesV} onClose={()=>setTour(false)} onPlansClient={()=>{ setTour(false); plansClient(); }}/>}
-    {etages.map(e=>{ const ps = m.pieces.filter(p=>p.etage===e), st = ps.reduce((t,p)=>t+totalPiece(p),0);
+    {vR && <>{etages.map(e=>{ const ps = m.pieces.filter(p=>p.etage===e), st = ps.reduce((t,p)=>t+totalPiece(p),0);
       return <div key={e} style={{border:'1px solid var(--border)',borderRadius:8}}>
         <div style={{display:'flex',padding:'6px 10px',background:'var(--bg3)',borderRadius:'8px 8px 0 0',fontWeight:700}}>{e} <span className="muted" style={{fontWeight:400,marginLeft:6}}>· {ps.length} pièce{ps.length>1?'s':''}</span><span style={{marginLeft:'auto'}}>{cvMoney(st)}</span></div>
         {ps.map(p=>{ const o = ouverte===p.id, chf = maisonChauffage(p);
@@ -11353,7 +11360,7 @@ function MaisonPlan({d, setD, C, toast}){
         <b>Total des sorties : {cvMoney(m.pieces.reduce((t,p)=>t+totalPiece(p),0))}</b><span className="muted" style={{fontSize:12}}>(tes prix SO, avant entrée, appareils sans code et buffer)</span>
         <button className="btn" style={{marginLeft:'auto'}} disabled={!!etat || !m.pieces.some(p=>(p.emp||[]).length)} title="Un plan par étage avec les emplacements placés pendant le tour — va dans le plan des travaux (PDF du client)" onClick={plansClient}>📎 Plans annotés → PDF</button>
         <button className="btn btn-p" disabled={!(C && C.lu)} title={C && C.lu ? '' : 'Les prix du catalogue chargent encore'} onClick={appliquer}>{C && C.lu ? '↳ Remplir la soumission' : '⏳ Prix en chargement…'}</button></div>
-    </div>}
+    </div>}</>}
   </div>;
 }
 // v457 : où vont les photos dans le PDF — à la fin, au début (en amont de la soumission), seulement pour les gars (ordre de travail), ou pas du tout
@@ -11504,6 +11511,13 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
   const [catCache,setCatCache]=useState(()=>{ try{ return localStorage.getItem('doc_cat_cache')==='1'; }catch(e){ return false; } });
   const basculerCatalogue = () => setCatCache(x=>{ try{ localStorage.setItem('doc_cat_cache', x ? '0' : '1'); }catch(e){} return !x; });
   const [apercu,setApercu]=useState(false);
+  // v495 : soumission en 5 pages — 1 client et travaux · 2 type (soumission rapide / maison) · 3 plans et photos · 4 production · 5 aperçu PDF
+  const wiz = soumMode;
+  const [etape,setEtape0]=useState(()=>d.lignes && d.lignes.some(l=>cvNum(l.qte)) ? 5 : 1);
+  const setEtape = n => { setEtape0(n); window.scrollTo(0,0); };
+  const vue = (...n) => !wiz || n.includes(etape);
+  const ETAPES = [[1,'Client'],[2,'Type'],[3,'Plans et photos'],[4,'Production'],[5,'Aperçu']];
+  const estMaison = !!(d.maison && (d.maison.on || (d.maison.pieces||[]).length || (d.maison.plans||[]).length));
   const [aCommander,setACommander]=useState(false);
   // 🖨️ : enregistre (numéro E-…) puis ouvre la version imprimable avec le plan des travaux
   const imprimer = async()=>{ const w = window.open('', '_blank'); if(!w){ toast && toast('Autorise les fenêtres pop-up pour imprimer'); return; }
@@ -11638,7 +11652,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
   };
   const modeles = [...M.liste].sort((a,b)=>((b.type && b.type===d.typeProjet)-(a.type && a.type===d.typeProjet)) || a.nom.localeCompare(b.nom));
   // Document fait avant v271 : ses lignes gardent leur comportement d'avant (aucun prix réécrit) ; seuls les produits ajoutés maintenant sont figés.
-  const ouvrir = doc => { try{ setD(docDepuisLigne(doc)); window.scrollTo(0,0); }catch(e){ toast && toast('Impossible d\'ouvrir ce document'); } };
+  const ouvrir = doc => { try{ const x = docDepuisLigne(doc); setD(x); if(wiz) setEtape0(x.lignes.some(l=>cvNum(l.qte)) ? 5 : 1); window.scrollTo(0,0); }catch(e){ toast && toast('Impossible d\'ouvrir ce document'); } };
 
   const champ = (k, ph, extra) => <input value={d[k]} onChange={e=>maj({[k]:e.target.value})} placeholder={ph} style={{width:'100%',boxSizing:'border-box',...(extra||{})}}/>;
   const choisies = d.lignes.filter(l=>cvNum(l.qte));
@@ -11662,8 +11676,14 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
     {!typeFixe && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
       {DOC_TYPES.map(([k,l])=><button key={k} className={'btn btn-sm'+(d.type===k?' btn-p':'')} onClick={()=>maj({type:k})}>{l}</button>)}
     </div>}
+    {wiz && <div className="defile-x" style={{display:'flex',gap:4,alignItems:'center',marginBottom:10,overflowX:'auto',paddingBottom:2}}>
+      {ETAPES.map(([n,l],i)=><React.Fragment key={n}>{i>0 && <span className="muted" style={{fontSize:11}}>›</span>}
+        <button className={'btn btn-sm'+(etape===n?' btn-p':'')} style={{whiteSpace:'nowrap',flexShrink:0}} onClick={()=>setEtape(n)}>{n}. {l}{n===3 && estMaison ? ' 🏠' : ''}</button></React.Fragment>)}
+      <button className="btn btn-sm" style={{marginLeft:'auto',flexShrink:0}} disabled={!!occupe} onClick={enregistrer} title="Enregistrer la soumission (sans changer de page)">{occupe==='save' ? '…' : '💾'}</button>
+    </div>}
 
-    <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
+    {vue(1) && <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
+      {wiz && <b style={{fontSize:14}}>Fiche client</b>}
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:6}}>
         <ChampClient cfg={cfg} contacts={contacts} value={d.nom} onChange={v=>maj({nom:v, deRepertoire:false})} onChoix={x=>{ setD(o=>({...o, nom:x.nom, tel:x.tel || o.tel, courriel:x.courriel || o.courriel, adresse:x.adresse || o.adresse, deRepertoire:!x.deCourriel})); toast && toast(x.deCourriel ? x.nom+' : infos prises dans tes courriels' : x.nom+' : fiche du Répertoire remplie'); }}/>
         {champ('tel','Téléphone')}{champ('courriel','Courriel')}{champ('titre','Titre du projet (ex. Borne Flo X3)')}
@@ -11681,27 +11701,35 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
         setD(o=>({...o, nom:o.nom||i.nom, tel:o.tel||i.tel, courriel:o.courriel||i.courriel, adresse:o.adresse||i.adresse, titre:o.titre||i.titre, visite: i.travaux && !String(o.visite||'').includes(i.travaux.trim()) ? [o.visite, '— Description de l\'agenda —\n'+i.travaux.trim()].filter(Boolean).join('\n\n') : o.visite, evenement:{id:ev.id, calId, titre:ev.summary||''}}));
         toast && toast('Client pris dans l\'agenda'); }}/>}
       {d.evenement && <div className="muted" style={{fontSize:12}}>📅 Lié à « {d.evenement.titre} »{d.evenement.calId===SOUM_CAL_ID ? ' (agenda Soumission) — acceptée, il ira dans En Attente.' : ' ('+((SOUM_AGENDAS.find(x=>x[0]===d.evenement.calId)||[])[1]||'agenda')+')'}</div>}
-    </div>
+    </div>}
 
-    {d.type==='Soumission' && <div className="card" style={{marginBottom:10}}>
+    {d.type==='Soumission' && !wiz && <div className="card" style={{marginBottom:10}}>
       <Repli premier key={'mai'+(d.numero||'n')} titre="🏠 Maison — plan par étage et par pièce" info={(d.maison && d.maison.pieces && d.maison.pieces.length) ? d.maison.pieces.length+' pièces' : 'lis un plan PDF ou ajoute les pièces'} ouvert0={!!(d.maison && d.maison.pieces && d.maison.pieces.length)}>
         <Parechoc nom="La soumission maison"><MaisonPlan d={d} setD={setD} C={C} toast={toast}/></Parechoc></Repli></div>}
     {/* v295 : Travaux (imprimé) avec Photos et plan, puis Notes privées (pas imprimées) */}
-    <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
-      <TravauxChamp d={d} maj={maj}/>
-      {d.type!=='Facture' && <Repli key={'ph'+(d.numero||'n')+((d.plan||[]).length?'p':'')} titre="Photos et plan" info={(d.plan||[]).length ? (d.plan||[]).length+' photo'+((d.plan||[]).length>1?'s':'')+' — page à part dans le PDF' : 'photos annotées — page à part dans le PDF'} ouvert0={(d.plan||[]).length>0 || !!d.dossier}>
+    {wiz && estMaison && vue(3,4) && <div className="card" style={{marginBottom:10}}>
+      <b style={{fontSize:14}}>🏠 Maison — {etape===3 ? 'plans : lis le PDF, trie les pages, encadre les pièces' : 'pièces : sorties, chauffage, entrée et appareils'}</b>
+      <div style={{marginTop:8}}><Parechoc nom="La soumission maison"><MaisonPlan d={d} setD={setD} C={C} toast={toast} partie={etape===3 ? 'plans' : 'pieces'} onRempli={()=>{ setEtape(5); voirApercu(); }}/></Parechoc></div></div>}
+    {vue(1,3) && <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
+      {vue(1) && <TravauxChamp d={d} maj={maj}/>}
+      {vue(3) && d.type!=='Facture' && <Repli key={'ph'+(d.numero||'n')+((d.plan||[]).length?'p':'')} titre="Photos et plan" info={(d.plan||[]).length ? (d.plan||[]).length+' photo'+((d.plan||[]).length>1?'s':'')+' — page à part dans le PDF' : 'photos annotées — page à part dans le PDF'} ouvert0={(d.plan||[]).length>0 || !!d.dossier}>
         {d.dossier && <div style={{marginBottom:6}}><span className="muted" style={{fontSize:12}}>PDF et photos du client :</span><SoumPhotos dossier={d.dossier}/></div>}
         <Parechoc nom="Le plan des travaux"><PlanTravaux d={d} setD={setD} toast={toast} dansCarte/></Parechoc>
       </Repli>}
-    </div>
-    {d.type!=='Facture' && <div className="card" style={{marginBottom:10}}>
+    </div>}
+    {vue(1) && d.type!=='Facture' && <div className="card" style={{marginBottom:10}}>
       <Repli premier key={'np'+(d.numero||'n')+(String(d.visite||'').trim()?'v':'')} titre="Notes privées" info="mesures et notes sur place — pas imprimées" ouvert0={!!String(d.visite||'').trim()}>
         <div style={{display:'flex',justifyContent:'flex-end',marginBottom:4}}><ImporterCourrielVisite d={d} setD={setD} toast={toast}/></div>
         <textarea value={d.visite||''} onChange={e=>maj({visite:e.target.value})} rows={d.visite && d.visite.length>120 ? 6 : 3} placeholder={'ex. Panneau 100 A au sous-sol, 12 pi jusqu\'au garage, 2 circuits libres…'} style={{width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
       </Repli>
     </div>}
 
-    {d.type==='Soumission' && <div className="card" style={{marginBottom:10}}>
+    {d.type==='Soumission' && vue(2) && <div className="card" style={{marginBottom:10}}>
+      {wiz && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10,paddingBottom:10,borderBottom:'1px solid var(--border2)'}}>
+        <button className={'btn'+(estMaison?' btn-p':'')} onClick={()=>{ setD(o=>({...o, typeProjet:o.typeProjet || 'Construction neuve', maison:{...(o.maison||maisonVide()), on:true}})); setEtape(3); }}>🏠 Maison — plan par étage et par pièce</button>
+        <button className="btn" onClick={()=>setEtape(3)}>✏️ Sans calcul (je remplis moi-même)</button>
+        <span className="muted" style={{fontSize:12}}>ou un modèle / un calcul ci-dessous</span>
+      </div>}
       <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginBottom:6}}>
         <b style={{fontSize:13.5}}>⚡ Soumission rapide</b>
         <select value={d.typeProjet} onChange={e=>maj({typeProjet:e.target.value})} style={{marginLeft:'auto'}}><option value="">Type de projet…</option>{TYPES_PROJET.map(t=><option key={t}>{t}</option>)}</select>
@@ -11712,7 +11740,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
           <button className="btn btn-sm" title="Enlever ce modèle" style={{padding:'0 6px',opacity:.5}} onClick={async()=>{ if(!confirm('Enlever le modèle « '+m.nom+' » ?')) return; try{ await M.enlever(m); }catch(e){ toast&&toast('Erreur : '+apiErrMsg(e)); } }}>×</button>
         </span>)}
       </div> : <div className="muted" style={{fontSize:12}}>Pas encore de modèle. Prépare une soumission type (ex. une borne : heures, déplacement, fil, disjoncteur…), puis « Garder comme modèle ». La prochaine fois, un clic remplit tout.</div>}
-      <CalculRapide C={C} d={d} setD={setD} toast={toast} onRempli={voirApercu}/>
+      <CalculRapide C={C} d={d} setD={setD} toast={toast} onRempli={()=>{ if(wiz) setEtape(5); voirApercu(); }}/>
       <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:8}}>
         {nomModele===null ? <button className="btn btn-sm" disabled={!d.lignes.some(l=>cvNum(l.qte)) && !d.forfait && !d.jours.some(j=>cvNum(j.sa01))} onClick={()=>setNomModele(d.typeProjet ? d.typeProjet+(d.titre?' — '+d.titre:'') : d.titre||'')}>💾 Garder comme modèle</button>
         : <><input autoFocus value={nomModele} onChange={e=>setNomModele(e.target.value)} placeholder="Nom du modèle (ex. Borne 48 A — 15 m)" style={{flex:'1 1 220px'}}/>
@@ -11721,7 +11749,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       </div>
     </div>}
 
-    <div className="card" style={{marginBottom:10}}>
+    {vue(4) && <div className="card" style={{marginBottom:10}}>
       <div style={{fontWeight:700,marginBottom:6}}>Heures</div>
       {d.jours.map((j,i)=><div key={i} style={{display:'flex',gap:6,alignItems:'center',marginBottom:4,flexWrap:'wrap'}}>
         <input type="date" value={j.date} onChange={e=>maj({jours:d.jours.map((x,k)=>k===i?{...x,date:e.target.value}:x)})} style={{width:150}}/>
@@ -11741,10 +11769,10 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
           <input key={k+(C.prixDe(k)||'')} defaultValue={C.prixDe(k)!=null?C.prixDe(k):''} inputMode="decimal" style={{width:70}} onBlur={async e=>{ const v=e.target.value.trim().replace(',','.'); if(v===String(C.prixDe(k)!=null?C.prixDe(k):'')) return; try{ await C.majPrix(k, v); toast&&toast('Taux enregistré'); }catch(er){ toast&&toast('Erreur : '+apiErrMsg(er)); } }}/></label>)}
         <span className="muted" style={{fontSize:11.5,width:'100%'}}>Gardés dans « La mémoire — Jobs › Prix » (toi seulement). Vide = prix de ta dernière facture.</span>
       </div>}
-    </div>
+    </div>}
 
 
-    <div className="card" style={{marginBottom:10}}>
+    {vue(4) && <div className="card" style={{marginBottom:10}}>
       <div style={{fontWeight:700,marginBottom:6,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><span>Matériel {choisies.length>0 && <span className="muted" style={{fontWeight:400}}>· {choisies.length} article{choisies.length>1?'s':''}</span>}</span>
         {choisies.length>0 && <button className={'btn btn-sm'+(aCommander?' btn-p':'')} style={{marginLeft:'auto'}} onClick={()=>setACommander(!aCommander)} title="La liste à commander chez le fournisseur : quantités seulement, sans prix">Matériel à commander</button>}</div>
       {aCommander && choisies.length>0 && <MaterielACommander d={d} lignes={choisies} toast={toast} onNavigate={onNavigate}/>}
@@ -11779,9 +11807,9 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
         {!C.lu && <div className="muted" style={{padding:10}}>Chargement…</div>}
       </div>
       </>}
-    </div>
+    </div>}
 
-    {prix && d.type==='Soumission' && (()=>{   // v394 : prix « heures + matériel » en direct, sous le matériel (ajoute des articles → le buffer et le prix suivent)
+    {prix && d.type==='Soumission' && vue(4,5) && (()=>{   // v394 : prix « heures + matériel » en direct, sous le matériel (ajoute des articles → le buffer et le prix suivent)
       // v464 : buffer vide = politique par paliers ; n'importe quel chiffre tapé (même 0) est gardé tel quel
       const base = calc.mat+calc.mo+calc.depl+calc.quin, B = docBorne(d, calc), manuelB = d.buffer!=null && String(d.buffer).trim()!=='';
       const bufPct = manuelB ? (cvNum(d.buffer)||0) : bufferAuto(base-B.prix, C.bufferPol), buf = (base-B.prix)*(bufPct/100), sug = arr5(base+buf);
@@ -11809,7 +11837,12 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
         </div>
       </div>; })()}
 
-    <div className="card" style={{marginBottom:10}}>
+    {wiz && etape<5 && <div style={{display:'flex',gap:8,justifyContent:'space-between',marginBottom:12}}>
+      <button className="btn" disabled={etape===1} onClick={()=>setEtape(etape-1)}>‹ Précédent</button>
+      <button className="btn btn-p" onClick={()=>{ const n = etape===2 && !estMaison && !d.lignes.some(l=>cvNum(l.qte)) ? 3 : etape+1; setEtape(n); if(n===5) voirApercu(); }}>{etape===4 ? 'Inscrire et voir l\'aperçu ›' : 'Suivant ›'}</button>
+    </div>}
+    {vue(5) && <div className="card" style={{marginBottom:10}}>
+      {wiz && <button className="btn btn-sm" style={{marginBottom:8}} onClick={()=>setEtape(4)}>‹ Retour à la production</button>}
       <textarea value={d.remarques} onChange={e=>maj({remarques:e.target.value})} rows={2} placeholder="Remarques…" style={{width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
       <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:5}}>{CLAUSES_RAPIDES.map(([k,l,t])=>{ const on = String(d.remarques||'').includes(t);
         return <button key={k} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} title={t} onClick={()=>maj({remarques: on ? String(d.remarques||'').replace(t,'').replace(/\n{2,}/g,'\n').trim() : [String(d.remarques||'').trim(), t].filter(Boolean).join('\n')})}>{on ? '✓ ' : '+ '}{l}</button>; })}</div>
@@ -11851,11 +11884,11 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       {d.type==='Facture' && !soumMode && <div style={{display:'flex',justifyContent:'flex-end',marginTop:8}}>
         <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={envoyerAFaire} title="Courriel de info@ à info@ : « Facture à faire », avec le brouillon en PDF">{occupe==='envoi' ? 'Envoi…' : '📧 Envoyer la facture à faire'}</button></div>}
       {d.type==='Facture' && <div className="muted" style={{fontSize:11.5,marginTop:6,textAlign:'right'}}>Facture = brouillon : « Envoyer la facture à faire » l'envoie à info@ avec le PDF, pour la faire dans le logiciel comptable (numéro officiel).</div>}
-    </div>
+    </div>}
 
-    {apercu && <ApercuPdf d={d} setD={setD} prixDe={C.prixDe} onImprimer={imprimer} onFermer={()=>setApercu(false)}/>}
+    {(apercu || (wiz && etape===5)) && vue(5) && <ApercuPdf d={d} setD={setD} prixDe={C.prixDe} onImprimer={imprimer} onFermer={()=>{ setApercu(false); if(wiz) setEtape(4); }}/>}
 
-    {D.docs.some(x=>!typeFixe || x.type===typeFixe) && <div className="card">
+    {vue(1) && D.docs.some(x=>!typeFixe || x.type===typeFixe) && <div className="card">
       <div style={{fontWeight:700,marginBottom:6}}>{soumMode ? 'Dernières soumissions faites ici' : typeFixe==='Ordre de travail' ? 'Derniers ordres de travail' : typeFixe==='Facture' ? 'Dernières factures (brouillons)' : 'Derniers documents'}</div>
       {D.docs.filter(x=>!typeFixe || x.type===typeFixe).slice(0,15).map(x=><div key={x.numero} onClick={()=>ouvrir(x)} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13,cursor:'pointer'}}>
         <span><b>{x.numero}</b> · {x.type} · {x.client||'—'}{x.titre && <span className="muted"> · {x.titre}</span>}</span>
