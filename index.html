@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v503';
+const APP_VERSION = 'v504';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11075,6 +11075,9 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
     const e = +(pi/u).toFixed(3); majM(x=>({echelles:{...(x.echelles||{}), [cle]:e}, pieces:x.pieces.map(p=>p.pg===pg.no && (p.src||'')===(pg.src||'') && p.cadre && !cvNum(p.pi2) ? {...p, pi2:String(maisonPi2Cadre(p.cadre, pg, e))} : p)}));
     setMesure(null); setMode('cadre'); };
   const typesEt = MAISON_TYPES_ETAGE[pg.etage] || Object.keys(MAISON_TYPES);
+  const refNom = useRef(null);   // v504 : après chaque rectangle, le curseur est dans « Nom »
+  const nbCs = choix && !choix.existe ? (choix.cs||[]).length : 0;
+  useEffect(()=>{ if(nbCs && refNom.current) setTimeout(()=>refNom.current && refNom.current.focus(), 0); },[nbCs]);
   const enleverDernier = () => setChoix(ch=>{ if(!ch || ch.existe) return ch; const cs = (ch.cs || [ch.c]).slice(0,-1); if(!cs.length) return null;
     return {...ch, cs, c:cs[cs.length-1], pi2:ech ? String(cs.reduce((t,k)=>t+(maisonPi2Cadre(k, pg, ech)||0),0)) : ch.pi2}; });
   useEffect(()=>{ if(!choix || choix.existe) return;   // v501 : ⌫ / Suppr = enlève le dernier rectangle de la pièce en cours
@@ -11151,10 +11154,12 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
             <details style={{marginTop:3}}><summary style={{cursor:'pointer',fontSize:12.5}}>▸ Autres sortes (tous les étages)</summary>
               <div style={{display:'flex',gap:3,flexWrap:'wrap',marginTop:4}}>{Object.entries(MAISON_TYPES).filter(([k])=>!typesEt.includes(k)).map(([k,t])=><button key={k} className="btn btn-sm" onClick={e=>garder(e.shiftKey, k)}>{t.nom}</button>)}</div></details></div>}
           {!choix.existe && <><label style={{display:'none'}}>Type<select value={choix.type} disabled={!!choix.id} onChange={e=>setChoix({...choix, type:e.target.value})}>{Object.entries(MAISON_TYPES).map(([k,t])=><option key={k} value={k}>{t.nom}</option>)}</select></label>
-            {!choix.id && <label style={{display:'grid',gap:2}}>Nom (Entrée = ajouter, sorte devinée du nom)<input value={choix.nom} onChange={e=>setChoix({...choix, nom:e.target.value})}
-              onKeyDown={e=>{ if(e.key==='Enter' && (choix.nom||'').trim()){ e.preventDefault(); const ty = maisonTypeDe(choix.nom); garder(e.shiftKey, ty==='autre' ? 'autre' : ty); } }} placeholder="ex. Escalier, Atelier, Rangement…"/></label>}</>}
+            {!choix.id && <label style={{display:'grid',gap:2}}>Nom (Entrée = ajouter, sorte devinée du nom)<input ref={refNom} value={choix.nom} onChange={e=>setChoix({...choix, nom:e.target.value})}
+              onKeyDown={e=>{ const vide = !(choix.nom||'');
+                if(vide && /^\d$/.test(e.key)){ const ty = typesEt[e.key==='0' ? 9 : +e.key-1]; if(ty){ e.preventDefault(); garder(e.shiftKey, ty); } return; }   // v504 : champ vide → le chiffre choisit la sorte
+                if(vide && (e.key==='Backspace' || e.key==='Delete')){ e.preventDefault(); enleverDernier(); return; }
+                if(e.key==='Enter' && (choix.nom||'').trim()){ e.preventDefault(); const ty = maisonTypeDe(choix.nom); garder(e.shiftKey, ty==='autre' ? 'autre' : ty); } }} placeholder="chiffre = sorte · ou écris le nom + Entrée"/></label>}</>}
           {choix.existe && (()=>{ const pp = m.pieces.find(x=>x.id===choix.id); return pp ? <div style={{borderTop:'1px solid var(--border)',paddingTop:6}}><b style={{fontSize:12.5}}>Sorties de la pièce</b><MaisonCompteur p={pp} majP={majP}/></div> : null; })()}
-          <label style={{display:'grid',gap:2}}>Pi²{ech ? ' (calculé — modifiable)' : ''}<input value={choix.pi2} onChange={e=>setChoix({...choix, pi2:e.target.value.replace(/[^0-9.,]/g,'')})} inputMode="decimal" placeholder={ech ? '' : 'ex. 143'}/></label>
           <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
             {choix.existe ? <><button className="btn btn-sm btn-p" onClick={()=>{ majM(x=>({pieces:x.pieces.map(p=>{ if(p.id!==choix.id) return p; const t = MAISON_TYPES[choix.type] || MAISON_TYPES.autre, nv = choix.type!==p.type;
                   return {...p, pi2:String(choix.pi2||''), nom:(choix.nom||'').trim() || p.nom, etage:choix.etage || p.etage, type:choix.type, ...(nv ? {items:{...t.items}, chauf:t.chauf} : {})}; })})); setChoix(null); }}>✓ Enregistrer</button>
