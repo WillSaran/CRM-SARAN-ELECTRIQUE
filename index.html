@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v501';
+const APP_VERSION = 'v502';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11215,11 +11215,18 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli}){   // v495 : partie '
           majM(o=>({plans:[...(o.plans||[]), {id:up.id, name:f.name}], pagesTag:ren(o.pagesTag), echelles:ren(o.echelles), pieces:o.pieces.map(p=>p.src===f.name ? {...p, src:up.id} : p)})); setPages(x=>x.map(p=>p.src===f.name ? {...p, src:up.id} : p)); } }catch(e){} } }
     catch(e){ setEtat(''); toast && toast('Plan illisible : '+(e && e.message || e)); } };
   // Les images des plans ne sont pas sauvées dans la soumission : on les relit du Drive à l'ouverture
+  const [relit,setRelit]=useState('');   // v502 : plan déjà trié qu'on recharge du Drive — « attends, c'est déjà fait »
   useEffect(()=>{ let vivant=true; const ids = [...new Set([...(m.plans||[]).map(x=>x.id), m.planId].filter(Boolean))]; if(!ids.length || pages.length) return;
+    setRelit('Ouverture du plan…');
     (async()=>{ for(const id of ids){ try{ const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
       const r = await fetch('https://www.googleapis.com/drive/v3/files/'+id+'?alt=media&supportsAllDrives=true', {headers:{Authorization:'Bearer '+tok}}); if(!r.ok) continue;
-      const tg = m.pagesTag||{}, res = await maisonLirePlan(new File([await r.blob()], 'plan.pdf', {type:'application/pdf'}), null, id, m.archive ? (i=>['ignore','autre'].includes(tg[id+'|'+i])) : null); if(vivant) garderPages(id, res.pages); }catch(e){} } })();
+      const tg = m.pagesTag||{}, res = await maisonLirePlan(new File([await r.blob()], 'plan.pdf', {type:'application/pdf'}), t=>{ if(vivant) setRelit(t); }, id, m.archive ? (i=>['ignore','autre'].includes(tg[id+'|'+i])) : null); if(vivant) garderPages(id, res.pages); }catch(e){} }
+      if(vivant) setRelit(''); })();
     return ()=>{ vivant=false; }; },[]);
+  const nbGardees = Object.values(m.pagesTag||{}).filter(v=>['etage','facade','terrain'].includes(v)).length;
+  const bandeRelit = relit && <div style={{display:'flex',gap:10,alignItems:'center',padding:'10px 12px',border:'2px solid var(--accent)',borderRadius:8,background:'var(--bg3)',fontSize:13.5}}>
+    <div className="spin"></div><div><b>Ton plan est déjà fait — je recharge tes pages (quelques secondes)…</b>
+      <div className="muted" style={{fontSize:12.5}}>Ne refais rien : {nbGardees ? nbGardees+' page'+(nbGardees>1?'s':'')+' triée'+(nbGardees>1?'s':'')+', ' : ''}{m.pieces.length} pièce{m.pieces.length>1?'s':''} et ton ménage sont sauvés. {relit}</div></div></div>;
   const plansClient = async () => { if(!pagesV.length){ toast && toast('Le plan n\'est pas chargé — ouvre ou relis le plan'); return; }
     setEtat('Plans annotés…');
     try{ if(!peutDeposer()) await requestToken('consent');
@@ -11263,6 +11270,7 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli}){   // v495 : partie '
     toast && toast('Soumission remplie par étage et par pièce — vérifie le matériel et le prix'); onRempli && onRempli(); };
   const ch = l => <input type="checkbox" checked={l} readOnly style={{width:'auto'}}/>;
   return <div style={{display:'grid',gap:8}}>
+    {bandeRelit}
     {!vP && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
       {pagesAff.length>0 && <button className="btn btn-sm" onClick={()=>setGrand(pagesAff[0])}>📑 Voir les plans ({pagesAff.length})</button>}
       {!m.pieces.length && <span className="muted" style={{fontSize:12.5}}>Aucune pièce encore — encadre-les sur le plan (étape 3) ou ajoute-les en bas.</span>}
