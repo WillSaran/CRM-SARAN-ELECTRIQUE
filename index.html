@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v499';
+const APP_VERSION = 'v500';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11514,7 +11514,8 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
   // v495 : soumission en 5 pages — 1 client et travaux · 2 type (soumission rapide / maison) · 3 plans et photos · 4 production · 5 aperçu PDF
   const wiz = soumMode;
   const [etape,setEtape0]=useState(()=>d.lignes && d.lignes.some(l=>cvNum(l.qte)) ? 5 : 1);
-  const setEtape = n => { setEtape0(n); window.scrollTo(0,0); };
+  useEffect(()=>{ if(wiz && etape===5) setApercu(true); },[]);   // v500 : l'aperçu s'ouvre en arrivant à la page 5, et « Cacher » le cache vraiment
+  const setEtape = n => { setEtape0(n); if(n===5) setApercu(true); window.scrollTo(0,0); };
   const vue = (...n) => !wiz || n.includes(etape);
   const ETAPES = [[1,'Client'],[2,'Type'],[3,'Plans et photos'],[4,'Matériel et sorties'],[5,'Aperçu et prix']];   // v498 : renommées
   const [voirMat,setVoirMat]=useState(false);
@@ -11654,7 +11655,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
   };
   const modeles = [...M.liste].sort((a,b)=>((b.type && b.type===d.typeProjet)-(a.type && a.type===d.typeProjet)) || a.nom.localeCompare(b.nom));
   // Document fait avant v271 : ses lignes gardent leur comportement d'avant (aucun prix réécrit) ; seuls les produits ajoutés maintenant sont figés.
-  const ouvrir = doc => { try{ const x = docDepuisLigne(doc); setD(x); if(wiz) setEtape0(x.lignes.some(l=>cvNum(l.qte)) ? 5 : 1); window.scrollTo(0,0); }catch(e){ toast && toast('Impossible d\'ouvrir ce document'); } };
+  const ouvrir = doc => { try{ const x = docDepuisLigne(doc); setD(x); if(wiz){ const n = x.lignes.some(l=>cvNum(l.qte)) ? 5 : 1; setEtape0(n); setApercu(n===5); } window.scrollTo(0,0); }catch(e){ toast && toast('Impossible d\'ouvrir ce document'); } };
 
   const champ = (k, ph, extra) => <input value={d[k]} onChange={e=>maj({[k]:e.target.value})} placeholder={ph} style={{width:'100%',boxSizing:'border-box',...(extra||{})}}/>;
   const choisies = d.lignes.filter(l=>cvNum(l.qte));
@@ -11899,7 +11900,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       {d.type==='Facture' && <div className="muted" style={{fontSize:11.5,marginTop:6,textAlign:'right'}}>Facture = brouillon : « Envoyer la facture à faire » l'envoie à info@ avec le PDF, pour la faire dans le logiciel comptable (numéro officiel).</div>}
     </div>}
 
-    {(apercu || (wiz && etape===5)) && vue(5) && <ApercuPdf d={d} setD={setD} prixDe={C.prixDe} onImprimer={imprimer} onFermer={()=>{ setApercu(false); if(wiz) setEtape(4); }}/>}
+    {apercu && vue(5) && <ApercuPdf d={d} setD={setD} prixDe={C.prixDe} onImprimer={imprimer} onFermer={()=>setApercu(false)}/>}
 
     {!wiz && D.docs.some(x=>!typeFixe || x.type===typeFixe) && <div className="card">   {/* v496 : plus de « Dernières soumissions » dans la soumission (William les voit dans Soumissions) */}
       <div style={{fontWeight:700,marginBottom:6}}>{soumMode ? 'Dernières soumissions faites ici' : typeFixe==='Ordre de travail' ? 'Derniers ordres de travail' : typeFixe==='Facture' ? 'Dernières factures (brouillons)' : 'Derniers documents'}</div>
