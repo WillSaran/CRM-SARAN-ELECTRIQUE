@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v497';
+const APP_VERSION = 'v498';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11516,7 +11516,8 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
   const [etape,setEtape0]=useState(()=>d.lignes && d.lignes.some(l=>cvNum(l.qte)) ? 5 : 1);
   const setEtape = n => { setEtape0(n); window.scrollTo(0,0); };
   const vue = (...n) => !wiz || n.includes(etape);
-  const ETAPES = [[1,'Client'],[2,'Type'],[3,'Plans et photos'],[4,'Production'],[5,'Aperçu']];
+  const ETAPES = [[1,'Client'],[2,'Type'],[3,'Plans et photos'],[4,'Matériel et sorties'],[5,'Aperçu et prix']];   // v498 : renommées
+  const [voirMat,setVoirMat]=useState(false);
   const [srcClient,setSrcClient]=useState('rep');   // v497 : page 1 — le client vient d'abord du Répertoire, sinon de l'agenda
   const estMaison = !!(d.maison && (d.maison.on || (d.maison.pieces||[]).length || (d.maison.plans||[]).length));
   const [aCommander,setACommander]=useState(false);
@@ -11711,7 +11712,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
         <Parechoc nom="La soumission maison"><MaisonPlan d={d} setD={setD} C={C} toast={toast}/></Parechoc></Repli></div>}
     {/* v295 : Travaux (imprimé) avec Photos et plan, puis Notes privées (pas imprimées) */}
     {wiz && estMaison && vue(3,4) && <div className="card" style={{marginBottom:10}}>
-      <b style={{fontSize:14}}>🏠 Maison — {etape===3 ? 'plans : lis le PDF, trie les pages, encadre les pièces' : 'pièces : sorties, chauffage, entrée et appareils'}</b>
+      <b style={{fontSize:14}}>🏠 Maison — {etape===3 ? 'plans : lis le PDF, trie les pages, encadre les pièces' : 'sorties estimées par pièce : chauffage, entrée et appareils'}</b>
       <div style={{marginTop:8}}><Parechoc nom="La soumission maison"><MaisonPlan d={d} setD={setD} C={C} toast={toast} partie={etape===3 ? 'plans' : 'pieces'} onRempli={()=>{ setEtape(5); voirApercu(); }}/></Parechoc></div></div>}
     {vue(1,3) && <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
       {vue(1) && <TravauxChamp d={d} maj={maj}/>}
@@ -11812,7 +11813,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       </>}
     </div>}
 
-    {prix && d.type==='Soumission' && vue(4,5) && (()=>{   // v394 : prix « heures + matériel » en direct, sous le matériel (ajoute des articles → le buffer et le prix suivent)
+    {prix && d.type==='Soumission' && vue(5) && (()=>{   // v394 : prix « heures + matériel » en direct, sous le matériel (ajoute des articles → le buffer et le prix suivent)
       // v464 : buffer vide = politique par paliers ; n'importe quel chiffre tapé (même 0) est gardé tel quel
       const base = calc.mat+calc.mo+calc.depl+calc.quin, B = docBorne(d, calc), manuelB = d.buffer!=null && String(d.buffer).trim()!=='';
       const bufPct = manuelB ? (cvNum(d.buffer)||0) : bufferAuto(base-B.prix, C.bufferPol), buf = (base-B.prix)*(bufPct/100), sug = arr5(base+buf);
@@ -11821,7 +11822,12 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       return <div className="card" style={{marginBottom:10}}>
         <div style={{fontWeight:700,marginBottom:6}}>Prix — heures + matériel <span className="muted" style={{fontWeight:400,fontSize:12}}>· se recalcule quand tu changes le matériel ou les heures (pas imprimé)</span></div>
         <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:'2px 16px',maxWidth:440,fontSize:13.5}}>
-          <span>Matériel ({choisies.length} article{choisies.length>1?'s':''})</span><b style={{textAlign:'right'}}>{cvMoney(calc.mat)}</b>
+          <span style={{cursor:'pointer'}} onClick={()=>setVoirMat(!voirMat)} title="Voir les articles">{voirMat ? '▾' : '▸'} Matériel ({choisies.length} article{choisies.length>1?'s':''})</span><b style={{textAlign:'right'}}>{cvMoney(calc.mat)}</b>
+          {voirMat && <div style={{gridColumn:'1 / -1',margin:'2px 0 4px 14px',fontSize:12.5,borderLeft:'2px solid var(--border2)',paddingLeft:8}}>
+            {choisies.map((l,i)=>{ const pu = calc.px(l.code,l), n = cvNum(l.qte)||0; return <div key={i} style={{display:'flex',gap:6}}>
+              <span style={{width:34,textAlign:'right',fontWeight:700}}>{n}</span><span className="muted" style={{minWidth:80}}>{l.code}</span><span style={{flex:1}}>{l.desc}</span>
+              <span className="muted" style={{whiteSpace:'nowrap'}}>{cvMoney(pu)}</span><b style={{width:80,textAlign:'right',whiteSpace:'nowrap'}}>{cvMoney(pu*n)}</b></div>; })}
+            {!choisies.length && <span className="muted">Aucun article.</span>}</div>}
           <span>Main-d'œuvre <span className="muted">({calc.h1} h SA01{calc.h2 ? ' + '+calc.h2+' h SA02' : ''})</span></span><b style={{textAlign:'right'}}>{cvMoney(calc.mo)}</b>
           <span>Déplacement et quincaillerie</span><b style={{textAlign:'right'}}>{cvMoney(calc.depl+calc.quin)}</b>
           <span style={{borderTop:'1px solid var(--border2)',paddingTop:2}}>Sous-total</span><b style={{textAlign:'right',borderTop:'1px solid var(--border2)',paddingTop:2}}>{cvMoney(base)}</b>
@@ -11842,10 +11848,10 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
 
     {wiz && etape<5 && <div style={{display:'flex',gap:8,justifyContent:'space-between',marginBottom:12}}>
       <button className="btn" disabled={etape===1} onClick={()=>setEtape(etape-1)}>‹ Précédent</button>
-      <button className="btn btn-p" onClick={()=>{ const n = etape===2 && !estMaison && !d.lignes.some(l=>cvNum(l.qte)) ? 3 : etape+1; setEtape(n); if(n===5) voirApercu(); }}>{etape===4 ? 'Inscrire et voir l\'aperçu ›' : 'Suivant ›'}</button>
+      <button className="btn btn-p" onClick={()=>{ const n = etape===2 && !estMaison && !d.lignes.some(l=>cvNum(l.qte)) ? 3 : etape+1; setEtape(n); if(n===5) voirApercu(); }}>{etape===4 ? 'Voir l\'aperçu et le prix ›' : 'Suivant ›'}</button>
     </div>}
     {vue(5) && <div className="card" style={{marginBottom:10}}>
-      {wiz && <button className="btn btn-sm" style={{marginBottom:8}} onClick={()=>setEtape(4)}>‹ Retour à la production</button>}
+      {wiz && <button className="btn btn-sm" style={{marginBottom:8}} onClick={()=>setEtape(4)}>‹ Retour au matériel et sorties</button>}
       <textarea value={d.remarques} onChange={e=>maj({remarques:e.target.value})} rows={2} placeholder="Remarques…" style={{width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
       <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:5}}>{CLAUSES_RAPIDES.map(([k,l,t])=>{ const on = String(d.remarques||'').includes(t);
         return <button key={k} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} title={t} onClick={()=>maj({remarques: on ? String(d.remarques||'').replace(t,'').replace(/\n{2,}/g,'\n').trim() : [String(d.remarques||'').trim(), t].filter(Boolean).join('\n')})}>{on ? '✓ ' : '+ '}{l}</button>; })}</div>
