@@ -184,7 +184,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v507';
+const APP_VERSION = 'v508';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -15369,7 +15369,7 @@ const CPT_ONGLETS = [['bord','Tableau de bord'],['grand','Grand livre']];   // v
 //   // v506 : Comptes clients et Bons de vente sortis dans « Suivi des factures »
 const SUIVI_ONGLETS = [['clients','Comptes clients'],['factures','Bons de vente']];   // v506 : menu « Suivi des factures »
 const cptGroupe = nav => ['clients','factures','verif'].includes(CPT_NAV[nav]) ? 'suivi' : 'compta';   // v416 : Grand livre = Paiements, TPS/TVQ, Archive des factures
-const GL_ONGLETS = [['fourn','Comptes fournisseurs'],['recevoir','Comptes à recevoir'],['paiements','Paiements'],['taxes','TPS/TVQ'],['archive','Archive des factures'],['etats','États de compte']];   // v417   // v420 : États de compte   // v374 : TPS/TVQ   // v272   // v240
+const GL_ONGLETS = [['fourn','Comptes fournisseurs'],['recevoir','Comptes à recevoir'],['payer','Comptes à payer'],['paiements','Paiements'],['taxes','TPS/TVQ'],['archive','Archive des factures'],['etats','États de compte']];   // v417   // v420 : États de compte   // v374 : TPS/TVQ   // v272   // v240
 // v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
 // v380 : fiche du Répertoire › Factures (factures envoyées de ce client : en attente de paiement, puis payées)
 function FacturesClient({cfg, cfgRep, refreshKey, contacts}){
@@ -15885,6 +15885,191 @@ function useNomClient(cfg){
 }
 // ══ v418 : Grand livre › Comptes à recevoir — les factures « En attente de paiement » de l'onglet Paiements (même calcul : paiements
 // confirmés, payées en partie, escomptes, notes de crédit, auxiliaire d'avant le 1er juillet), par client : courant, 30 j, 60 j, 90 j et plus
+// v508 : Comptes à payer (Grand livre) — factures fournisseurs (La mémoire — Achats) moins les paiements inscrits dans l'onglet « Paiements fournisseurs ».
+// William paie surtout à l'état de compte mensuel ; on inscrit aussi les paiements envoyés (virements, chèques) et on les retrouve dans les relevés Desjardins / CIBC.
+const CAP_ONGLET = 'Paiements fournisseurs';
+const CAP_ENTETE = ['Id','Date','Fournisseur','Montant','Mode','Factures','Source','Note','Créé le'];
+const CAP_MODES = ['Chèque','Virement','Prélèvement','Carte','Solde d\'ouverture'];
+const capCle = f => cvNorm(f);
+const capMot = f => (String(f||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=4 && !/^(electrique|inc|ltee|limitee|distribution|canada)$/.test(w))[0]) || '';
+async function capOngletExiste(id){
+  const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:id});
+  if((meta.result.sheets||[]).some(s=>s.properties.title===CAP_ONGLET)) return;
+  await window.gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId:id, resource:{requests:[{addSheet:{properties:{title:CAP_ONGLET}}}]}});
+  await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:qSheet(CAP_ONGLET)+'!A1', valueInputOption:'RAW', resource:{values:[CAP_ENTETE]}});
+}
+async function capAjouter(cfg, lignes){
+  const id = cfg.memoireAchatsSpreadsheetId; await capOngletExiste(id);
+  if(typeof suivreEcritures==='function') suivreEcritures();
+  const auj = new Date().toLocaleDateString('fr-CA');
+  return window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:id, range:qSheet(CAP_ONGLET)+'!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS',
+    resource:{values:lignes.map((x,i)=>[x.id || ('CP'+Date.now()+'-'+i), x.date, x.fournisseur, String(txR(txNum(x.montant))), x.mode||'', (x.factures||[]).join(', '), x.source||'CRM', x.note||'', auj])}});
+}
+function useComptesPayer(cfg, cle){
+  const T = useTaxes(cfg, cle);
+  const [P,setP]=useState({lu:false, liste:[]});
+  const lire = useCallback(async force=>{ if(!cfg.memoireAchatsSpreadsheetId) return setP({lu:true, liste:[]});
+    const v = await lireCache(cfg.memoireAchatsSpreadsheetId, qSheet(CAP_ONGLET)+'!A1:I', force).then(r=>r.result.values||[], ()=>[]);
+    setP({lu:true, liste:v.slice(1).filter(r=>r[0]).map(r=>({id:r[0], date:txDate(r[1]), fournisseur:r[2]||'', montant:txNum(r[3]), mode:r[4]||'', factures:String(r[5]||'').split(/\s*,\s*/).filter(Boolean), source:r[6]||'', note:r[7]||''}))}); },[cfg.memoireAchatsSpreadsheetId]);
+  useEffect(()=>{ lire(false); },[lire, cle]);
+  return {T, P, relire:()=>{ T.relire(); lire(true); }};
+}
+// Factures ouvertes par fournisseur (depuis le 1er juillet 2026, comme le reste du CRM)
+function capConstruire(achats, paiements){
+  const payees = new Set(); const credit = {};
+  paiements.forEach(p=>{ const k = capCle(p.fournisseur); p.factures.forEach(n=>payees.add(k+'|'+n)); });
+  const G = {};
+  (achats||[]).filter(a=>a.date>=PAI_DEBUT && a.qui).forEach(a=>{ const k = capCle(a.qui);
+    const g = G[k] = G[k] || {k, nom:a.qui, fs:[], payees:0, paye:0, credit:0};
+    if(payees.has(k+'|'+a.num)){ g.payees++; return; }
+    g.fs.push(a); });
+  // Paiement plus gros que les factures qu'il couvre = crédit (acompte) chez le fournisseur
+  paiements.forEach(p=>{ const k = capCle(p.fournisseur); const g = G[k]; if(!g) return; g.paye += p.montant;
+    const couvert = (achats||[]).filter(a=>capCle(a.qui)===k && p.factures.includes(String(a.num))).reduce((t,a)=>t+a.ttc,0);
+    if(p.montant - couvert > 0.02) g.credit += txR(p.montant - couvert); });
+  return Object.values(G).map(g=>({...g, fs:g.fs.sort((a,b)=>a.date.localeCompare(b.date)), du:txR(g.fs.reduce((t,a)=>t+a.ttc,0) - g.credit)})).sort((a,b)=>b.du-a.du);
+}
+const capMois = d => { const M = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre']; return M[+d.slice(5,7)-1]+' '+d.slice(0,4); };
+// Un retrait du relevé → fournisseur et factures proposés (nom dans la description, puis montant exact : état d'un mois, une facture, ou les plus vieilles factures)
+function capProposer(t, G){
+  const d = cvNorm(t.desc), parNom = G.filter(g=>{ const m = capMot(g.nom); return m && d.includes(cvNorm(m)); });
+  const essayer = g => { const parMois = {}; g.fs.forEach(a=>{ (parMois[a.date.slice(0,7)] = parMois[a.date.slice(0,7)] || []).push(a); });
+    for(const m of Object.keys(parMois).sort()){ const s = parMois[m].reduce((x,a)=>x+a.ttc,0); if(Math.abs(s - t.montant) <= 0.02) return {g, fs:parMois[m], quoi:'état de '+capMois(m+'-01')}; }
+    const une = g.fs.find(a=>Math.abs(a.ttc - t.montant) <= 0.02); if(une) return {g, fs:[une], quoi:'facture #'+une.num};
+    let s = 0; const fs = []; for(const a of g.fs){ if(s + a.ttc > t.montant + 0.02) break; s += a.ttc; fs.push(a); }
+    if(Math.abs(s - t.montant) <= 0.02 && fs.length) return {g, fs, quoi:fs.length+' factures (les plus vieilles)'};
+    return null; };
+  for(const g of parNom){ const r = essayer(g); if(r) return {...r, sur:true}; }
+  if(parNom.length) return {g:parNom[0], fs:[], quoi:'montant différent des factures ouvertes', sur:false};
+  for(const g of G){ const r = essayer(g); if(r && r.quoi.startsWith('état')) return {...r, sur:false}; }   // montant seul : seulement un état mensuel exact
+  return null;
+}
+// Lire un relevé de compte (Desjardins : lecteur de colonnes ; sinon lecture générale, ex. CIBC) → retraits
+async function capLireReleve(fichier){
+  const pages = await relevePdfPages(fichier);
+  const T = releveLire(pages);
+  if(T.length) return {banque:'Desjardins', retraits:T.filter(t=>t.depot===false).map(t=>({date:t.date, desc:t.desc.replace(/\*+\d*/g,'').trim(), montant:t.montant}))};
+  const L = txLireReleve(pages.flatMap(p=>releveLignes(p).map(l=>l.txt)).join('\n'));
+  return {banque:'Autre (CIBC ?) — à vérifier', retraits:L.filter(x=>x.montant>0).map(x=>({date:x.date, desc:x.desc, montant:x.montant}))};
+}
+function ComptesPayerView({cfg}){
+  const [cle,setCle]=useState(0);
+  const {T, P, relire} = useComptesPayer(cfg, cle);
+  const [ouv,setOuv]=useState({});
+  const [pay,setPay]=useState(null);   // {g, fs, montant, date, mode, note, quoi}
+  const [sel,setSel]=useState({});     // factures cochées : k|num
+  const [rel,setRel]=useState(null);   // relevé : {nom, banque, lignes:[{t, prop, garder, choix}]}
+  const [etat,setEtat]=useState('');
+  const [ouverture,setOuverture]=useState(null);   // {g, date}
+  if(!cfg.memoireAchatsSpreadsheetId) return <div className="card muted">Configure d'abord « La mémoire — Achats » dans Réglages.</div>;
+  if(!T.lu || !P.lu) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des factures fournisseurs…</span></div>;
+  if(T.err) return <div className="card" style={{color:'var(--danger)'}}>Impossible de lire les achats : {T.err}</div>;
+  const G = capConstruire(T.achats, P.liste);
+  const auj = localDateStr(new Date());
+  const age = d => Math.floor((Date.parse(auj) - Date.parse(d)) / 864e5);
+  const COL = [['c','0-30 j'],['j30','31-60 j'],['j60','61-90 j'],['j90','90 j et plus']];
+  const tranche = j => j<=30 ? 'c' : j<=60 ? 'j30' : j<=90 ? 'j60' : 'j90';
+  const L = G.filter(g=>g.fs.length || g.credit).map(g=>{ const c = {c:0, j30:0, j60:0, j90:0}; g.fs.forEach(a=>{ c[tranche(age(a.date))] += a.ttc; }); return {...g, ...c}; });
+  const tot = L.reduce((t,g)=>{ COL.forEach(([k])=>t[k]+=g[k]); t.du+=g.du; return t; },{c:0, j30:0, j60:0, j90:0, du:0});
+  const fini = msg => { setEtat(''); setPay(null); setRel(null); setSel({}); setOuverture(null); setCle(k=>k+1); relire(); if(msg) alert(msg); };
+  const payer = async () => { const x = pay; if(!(txNum(x.montant)>0)) return; setEtat('Enregistrement…');
+    try{ await capAjouter(cfg, [{date:x.date, fournisseur:x.g.nom, montant:x.montant, mode:x.mode, factures:x.fs.map(a=>a.num), source:'CRM', note:x.note}]); fini(); }
+    catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
+  const ouvrirPaiement = (g, fs, quoi) => setPay({g, fs, quoi, montant:String(txR(fs.reduce((t,a)=>t+a.ttc,0))), date:auj, mode:'Chèque', note:''});
+  const faireOuverture = async () => { const {g, date} = ouverture, fs = g.fs.filter(a=>a.date<=date); if(!fs.length) return setOuverture(null); setEtat('Enregistrement…');
+    try{ await capAjouter(cfg, [{date, fournisseur:g.nom, montant:fs.reduce((t,a)=>t+a.ttc,0), mode:'Solde d\'ouverture', factures:fs.map(a=>a.num), source:'CRM', note:'Déjà payées avant le suivi dans le CRM'}]); fini(); }
+    catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
+  const lireReleve = async fichier => { if(!fichier) return; setEtat('Lecture du relevé…');
+    try{ const r = await capLireReleve(fichier); const ids = new Set(P.liste.map(p=>p.id)), vus = {};
+      const lignes = r.retraits.map(t=>{ const k = t.date+'-'+t.montant.toFixed(2); vus[k] = (vus[k]||0)+1; const id = 'releve-'+k+'-'+vus[k];
+        const prop = capProposer(t, G); return {t, id, deja:ids.has(id), prop, garder:!ids.has(id) && !!(prop && prop.sur && prop.fs.length), choix:prop ? prop.g.k : ''}; });
+      setRel({nom:fichier.name, banque:r.banque, lignes}); setEtat(''); }
+    catch(e){ setEtat(''); alert('Relevé illisible : '+(e.message||e)); } };
+  const inscrireReleve = async () => { const L2 = rel.lignes.filter(l=>l.garder && l.choix && !l.deja); if(!L2.length) return; setEtat('Enregistrement…');
+    try{ await capAjouter(cfg, L2.map(l=>{ const g = G.find(x=>x.k===l.choix); const fs = l.prop && l.prop.g.k===l.choix ? l.prop.fs : [];
+        return {id:l.id, date:l.t.date, fournisseur:g.nom, montant:l.t.montant, mode:/interac|virement/i.test(l.t.desc) ? 'Virement' : /ch[eè]que/i.test(l.t.desc) ? 'Chèque' : 'Prélèvement', factures:fs.map(a=>a.num), source:'Relevé '+rel.banque, note:l.t.desc.slice(0,80)}; }));
+      fini(L2.length+' paiement'+(L2.length>1?'s':'')+' inscrit'+(L2.length>1?'s':'')+'.'); }
+    catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
+  const majL = (i, o) => setRel(r=>({...r, lignes:r.lignes.map((x,k)=>k===i ? {...x, ...o} : x)}));
+  const cel = (v, k) => <td style={{textAlign:'right',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap',color: Math.abs(v)<0.005 ? 'var(--muted)' : k==='j90' ? 'var(--danger)' : k==='j60' ? 'var(--warning)' : undefined}}>{Math.abs(v)<0.005 ? '—' : cvMoney(v)}</td>;
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Comptes à payer</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Factures fournisseurs (La mémoire — Achats) depuis le 1er juillet 2026, moins les paiements inscrits. Par fournisseur, selon l'âge depuis la date de la facture. Ouvre un fournisseur pour payer l'état d'un mois ou des factures cochées.</div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+      <label className="btn btn-sm btn-p" style={{cursor:'pointer'}}>{etat || '📄 Déposer un relevé (Desjardins ou CIBC)'}<input type="file" accept="application/pdf" style={{display:'none'}} disabled={!!etat} onChange={e=>{ const f = e.target.files[0]; e.target.value=''; lireReleve(f); }}/></label>
+      <button className="btn btn-sm" onClick={()=>{ setCle(k=>k+1); relire(); }}>↻ Relire</button></div>
+
+    {rel && <div className="card" style={{border:'1px solid var(--accent)',marginBottom:12}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}><b>Relevé : {rel.nom} <span className="muted" style={{fontWeight:400,fontSize:12}}>({rel.banque})</span></b><button className="btn btn-sm" onClick={()=>setRel(null)}>Fermer</button></div>
+      <div className="muted" style={{fontSize:12,marginBottom:6}}>{rel.lignes.length} retraits lus. Coché = paiement à un fournisseur, avec les factures qu'il paie. Vérifie, change le fournisseur au besoin, puis inscris.</div>
+      <div style={{maxHeight:420,overflowY:'auto'}}>
+        {rel.lignes.map((l,i)=><div key={l.id} style={{display:'flex',gap:8,alignItems:'center',padding:'4px 0',borderTop:'1px solid var(--border)',fontSize:12.5,opacity:l.deja ? .5 : 1}}>
+          <input type="checkbox" checked={l.garder} disabled={l.deja} onChange={e=>majL(i,{garder:e.target.checked})}/>
+          <span style={{width:70}} className="muted">{cvFmtDay(l.t.date)}</span>
+          <span style={{flex:'1 1 200px',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={l.t.desc}>{l.t.desc}</span>
+          <b style={{width:90,textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{cvMoney(l.t.montant)}</b>
+          {l.deja ? <span className="muted" style={{width:230}}>déjà inscrit</span> : <span style={{width:230,display:'grid',gap:2}}>
+            <select value={l.choix} onChange={e=>majL(i,{choix:e.target.value, garder:!!e.target.value})} style={{padding:'3px 6px',fontSize:12}}>
+              <option value="">— pas un fournisseur —</option>{G.map(g=><option key={g.k} value={g.k}>{g.nom}</option>)}</select>
+            {l.prop && l.prop.g.k===l.choix && <span className="muted" style={{fontSize:11}}>{l.prop.fs.length ? '→ '+l.prop.quoi : l.prop.quoi}</span>}</span>}
+        </div>)}</div>
+      <div style={{marginTop:8}}><button className="btn btn-sm btn-p" disabled={!!etat || !rel.lignes.some(l=>l.garder && l.choix && !l.deja)} onClick={inscrireReleve}>{etat || 'Inscrire les paiements cochés'}</button></div>
+    </div>}
+
+    {pay && <div className="card" style={{border:'1px solid var(--accent)',marginBottom:12}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}><b>Paiement à {pay.g.nom} — {pay.quoi}</b><button className="btn btn-sm" onClick={()=>setPay(null)}>Fermer</button></div>
+      <div className="muted" style={{fontSize:12,marginBottom:6}}>{pay.fs.length} facture{pay.fs.length>1?'s':''} : {pay.fs.map(a=>'#'+a.num).join(', ')}</div>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'end'}}>
+        <label style={{display:'grid',gap:2,fontSize:12}}><span className="muted">Date</span><input type="date" value={pay.date} onChange={e=>setPay({...pay, date:e.target.value})}/></label>
+        <label style={{display:'grid',gap:2,fontSize:12}}><span className="muted">Montant</span><input value={pay.montant} onChange={e=>setPay({...pay, montant:e.target.value})} style={{width:110}}/></label>
+        <label style={{display:'grid',gap:2,fontSize:12}}><span className="muted">Mode</span><select value={pay.mode} onChange={e=>setPay({...pay, mode:e.target.value})}>{CAP_MODES.filter(m=>m!=='Solde d\'ouverture').map(m=><option key={m}>{m}</option>)}</select></label>
+        <label style={{display:'grid',gap:2,fontSize:12,flex:'1 1 160px'}}><span className="muted">Note (no de chèque…)</span><input value={pay.note} onChange={e=>setPay({...pay, note:e.target.value})}/></label>
+        <button className="btn btn-sm btn-p" disabled={!!etat || !(txNum(pay.montant)>0)} onClick={payer}>{etat || 'Enregistrer le paiement'}</button></div>
+    </div>}
+
+    {ouverture && <div className="card" style={{border:'1px solid var(--accent)',marginBottom:12}}>
+      <b>Déjà payé — {ouverture.g.nom}</b>
+      <div className="muted" style={{fontSize:12,margin:'4px 0 6px'}}>Marque payées toutes les factures de ce fournisseur jusqu'à cette date (ce qui était réglé avant le suivi dans le CRM).</div>
+      <div style={{display:'flex',gap:8,alignItems:'end'}}><input type="date" value={ouverture.date} onChange={e=>setOuverture({...ouverture, date:e.target.value})}/>
+        <span style={{fontSize:12.5}}>{ouverture.g.fs.filter(a=>a.date<=ouverture.date).length} factures · {cvMoney(ouverture.g.fs.filter(a=>a.date<=ouverture.date).reduce((t,a)=>t+a.ttc,0))}</span>
+        <button className="btn btn-sm btn-p" disabled={!!etat} onClick={faireOuverture}>{etat || 'Marquer payées'}</button><button className="btn btn-sm" onClick={()=>setOuverture(null)}>Annuler</button></div>
+    </div>}
+
+    {!L.length ? <div className="card muted">Rien à payer.</div> : <div className="card" style={{padding:'6px 10px',overflowX:'auto'}}>
+      <table style={{width:'100%',fontSize:13,borderCollapse:'collapse',minWidth:560}}>
+        <thead><tr className="muted" style={{textAlign:'right',fontSize:12}}><th style={{textAlign:'left',padding:'4px 0'}}>Fournisseur</th>{COL.map(([k,l])=><th key={k}>{l}</th>)}<th>Dû</th></tr></thead>
+        <tbody>
+          {L.map(g=>{ const mois = {}; g.fs.forEach(a=>{ (mois[a.date.slice(0,7)] = mois[a.date.slice(0,7)] || []).push(a); });
+            const coches = g.fs.filter(a=>sel[g.k+'|'+a.num]);
+            return <React.Fragment key={g.k}>
+            <tr style={{borderTop:'1px solid var(--border)',cursor:'pointer'}} onClick={()=>setOuv(o=>({...o, [g.k]:!o[g.k]}))}>
+              <td style={{padding:'6px 0'}}>{ouv[g.k] ? '▾' : '▸'} {g.nom} <span className="muted" style={{fontSize:11.5}}>({g.fs.length})</span></td>
+              {COL.map(([k])=><React.Fragment key={k}>{cel(g[k], k)}</React.Fragment>)}<td style={{textAlign:'right',fontWeight:700,fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}}>{cvMoney(g.du)}</td></tr>
+            {ouv[g.k] && <tr><td colSpan={6} style={{padding:'4px 0 10px 18px'}}>
+              {g.credit>0 && <div style={{fontSize:12.5,color:'var(--success, green)',marginBottom:4}}>Crédit (payé en trop / acompte) : {cvMoney(g.credit)}</div>}
+              {Object.keys(mois).sort().map(m=>{ const s = mois[m].reduce((t,a)=>t+a.ttc,0); return <div key={m} style={{marginBottom:6}}>
+                <div style={{display:'flex',gap:8,alignItems:'center',fontSize:12.5}}><b>État de {capMois(m+'-01')}</b><span className="muted">{mois[m].length} fact. · {cvMoney(s)}</span>
+                  <button className="btn btn-sm" onClick={()=>ouvrirPaiement(g, mois[m], 'état de '+capMois(m+'-01'))}>Payer l'état</button></div>
+                {mois[m].map(a=><label key={a.num} style={{display:'flex',gap:8,alignItems:'center',fontSize:12.5,padding:'1px 0 1px 8px'}}>
+                  <input type="checkbox" checked={!!sel[g.k+'|'+a.num]} onChange={e=>setSel(x=>({...x, [g.k+'|'+a.num]:e.target.checked}))}/>
+                  {a.pdf ? <a href={'https://drive.google.com/file/d/'+a.pdf+'/view'} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>#{a.num}</a> : '#'+a.num}
+                  <span className="muted">{cvFmtDay(a.date)} · {age(a.date)} j{a.ref ? ' · '+a.ref : ''}</span><span style={{marginLeft:'auto',fontVariantNumeric:'tabular-nums'}}>{cvMoney(a.ttc)}</span></label>)}
+              </div>; })}
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:4}}>
+                {coches.length>0 && <button className="btn btn-sm btn-p" onClick={()=>ouvrirPaiement(g, coches, coches.length+' facture'+(coches.length>1?'s':'')+' cochée'+(coches.length>1?'s':''))}>Payer la sélection ({cvMoney(coches.reduce((t,a)=>t+a.ttc,0))})</button>}
+                <button className="btn btn-sm" onClick={()=>setOuverture({g, date:auj})}>Déjà payé jusqu'au…</button></div>
+            </td></tr>}
+          </React.Fragment>; })}
+          <tr style={{borderTop:'2px solid var(--border)',fontWeight:700}}><td style={{padding:'6px 0'}}>Total</td>{COL.map(([k])=><React.Fragment key={k}>{cel(tot[k], k)}</React.Fragment>)}<td style={{textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{cvMoney(tot.du)}</td></tr>
+        </tbody></table></div>}
+    {P.liste.length>0 && <div className="card" style={{marginTop:12,padding:'8px 12px'}}>
+      <b style={{fontSize:13}}>Derniers paiements aux fournisseurs</b>
+      {P.liste.slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,15).map(p=><div key={p.id} style={{display:'flex',gap:8,fontSize:12.5,padding:'3px 0',borderTop:'1px solid var(--border)'}}>
+        <span className="muted" style={{width:70}}>{cvFmtDay(p.date)}</span><span style={{flex:1}}>{p.fournisseur} <span className="muted">· {p.mode}{p.factures.length ? ' · '+p.factures.length+' fact.' : ''}{p.note ? ' · '+p.note : ''}</span></span>
+        <b style={{fontVariantNumeric:'tabular-nums'}}>{cvMoney(p.montant)}</b></div>)}
+    </div>}
+  </div>;
+}
 function ComptesRecevoirView({cfg, cfgRep, refreshKey, contacts}){
   const [q,setQ]=useState('');
   return <div>
@@ -16134,6 +16319,7 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
     {onglet==='grand' && sous==='paiements' && <PaiementsOnglet key={'p'+(cles.paiements||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='grand' && sous==='taxes' && <TaxesView key={'t'+(cles.taxes||0)} cfg={cfgRep}/>}
     {onglet==='grand' && sous==='recevoir' && <ComptesRecevoirView key={'r'+(cles.recevoir||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
+    {onglet==='grand' && sous==='payer' && <ComptesPayerView key={'cp'+(cles.payer||0)} cfg={cfgRep}/>}   {/* v508 */}
     {onglet==='grand' && sous==='etats' && <EtatsCompteView key={'e'+(cles.etats||0)} cfg={cfgRep} refreshKey={refreshKey}/>}
     {onglet==='grand' && sous==='archive' && <ArchiveFacturesView key={'a'+(cles.archive||0)} cfg={cfgRep}/>}
     {onglet==='factures' && <FacturesView key={'x'+(cles.factures||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
