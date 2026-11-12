@@ -184,7 +184,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v506';
+const APP_VERSION = 'v507';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -15364,11 +15364,12 @@ function repIgnores(){ try{ return new Set(JSON.parse(localStorage.getItem('crm_
 function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.setItem('crm_rep_ignores', JSON.stringify([...s])); }catch(e){} }
 
 // v202 : Comptabilité — comptes fournisseurs, factures clients (et paiements reçus), appels de service, à vérifier. Les pages gardent toutes leurs fonctions.
-const CPT_NAV = {compta:'fourn', suivi:'clients', drive:'archive', factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
-const CPT_ONGLETS = [['fourn','Comptes fournisseurs'],['grand','Grand livre']];   // v506 : Comptes clients et Bons de vente sortis dans « Suivi des factures »
+const CPT_NAV = {compta:'bord', suivi:'clients', drive:'archive', factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
+const CPT_ONGLETS = [['bord','Tableau de bord'],['grand','Grand livre']];   // v507 : Comptabilité ouvre sur un tableau de bord ; Comptes fournisseurs passent dans le Grand livre
+//   // v506 : Comptes clients et Bons de vente sortis dans « Suivi des factures »
 const SUIVI_ONGLETS = [['clients','Comptes clients'],['factures','Bons de vente']];   // v506 : menu « Suivi des factures »
 const cptGroupe = nav => ['clients','factures','verif'].includes(CPT_NAV[nav]) ? 'suivi' : 'compta';   // v416 : Grand livre = Paiements, TPS/TVQ, Archive des factures
-const GL_ONGLETS = [['recevoir','Comptes à recevoir'],['paiements','Paiements'],['taxes','TPS/TVQ'],['archive','Archive des factures'],['etats','États de compte']];   // v417   // v420 : États de compte   // v374 : TPS/TVQ   // v272   // v240
+const GL_ONGLETS = [['fourn','Comptes fournisseurs'],['recevoir','Comptes à recevoir'],['paiements','Paiements'],['taxes','TPS/TVQ'],['archive','Archive des factures'],['etats','États de compte']];   // v417   // v420 : États de compte   // v374 : TPS/TVQ   // v272   // v240
 // v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
 // v380 : fiche du Répertoire › Factures (factures envoyées de ce client : en attente de paiement, puis payées)
 function FacturesClient({cfg, cfgRep, refreshKey, contacts}){
@@ -16070,6 +16071,46 @@ function EtatsCompteView({cfg, refreshKey}){
         </div>; })}</div>}
   </div>;
 }
+// v507 : Comptabilité › Tableau de bord — factures fournisseurs à associer, TPS/TVQ du trimestre, achats et ventes
+function ComptaTableauBord({cfgRep, refreshKey, onAller}){
+  const T = useTaxes(cfgRep, 0);
+  const d = useClientsData(cfgRep, refreshKey+'|bord');
+  const auj = localDateStr(new Date()), per = txPeriode('trim', auj), [a,b] = txBornes('trim', per), perAv = txDecaler('trim', per, -1), [a0,b0] = txBornes('trim', perAv);
+  const som = (L, k) => txR(L.reduce((t,x)=>t+(+x[k]||0),0));
+  const bilan = (x0, x1) => { const dans = x => x.date>=x0 && x.date<=x1, V = T.ventes.filter(dans), A = [...T.achats.filter(dans), ...T.depenses.filter(dans)];
+    return {V, A, tps:txR(som(V,'tps')-som(A,'tps')), tvq:txR(som(V,'tvq')-som(A,'tvq')), tpsP:som(V,'tps'), tvqP:som(V,'tvq'), tpsA:som(A,'tps'), tvqA:som(A,'tvq'), ventes:som(V,'ht'), achats:som(A,'ht')}; };
+  const B = T.lu ? bilan(a, b) : null, B0 = T.lu ? bilan(a0, b0) : null;
+  const ach = d.achats || [], dt = x => x.date || x.recue || '';
+  const clients = useMemo(()=>cvBuildClients(d.events||[], d.registry||[], d.factures||{}),[d.events, d.registry, d.factures]);
+  const aAssocier = ach.filter(x=>!x.job && !achatSur(x, clients)), mois = auj.slice(0,7), achMois = ach.filter(x=>dt(x).startsWith(mois));
+  const net = v => <span style={{color:v>0 ? 'var(--danger)' : 'var(--success)'}}>{cvMoney(Math.abs(v))} {v>0 ? 'à remettre' : 'à recevoir'}</span>;
+  const Tuile = ({titre, gros, sous, aller, c}) => <div className="card" onClick={aller ? ()=>onAller(aller) : undefined} style={{margin:0,padding:'12px 14px',cursor:aller?'pointer':'default'}}>
+    <div className="muted" style={{fontSize:12}}>{titre}</div><div style={{fontSize:21,fontWeight:800,color:c||'var(--text)',fontVariantNumeric:'tabular-nums'}}>{gros}</div>
+    {sous && <div className="muted" style={{fontSize:12,marginTop:2}}>{sous}</div>}{aller && <div style={{fontSize:12,color:'var(--accent)',marginTop:4}}>Ouvrir ›</div>}</div>;
+  const grille = {display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:10,marginBottom:14};
+  return <div>
+    <div className="muted" style={{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Comptes fournisseurs</div>
+    <div style={grille}>
+      <Tuile titre="Factures fournisseurs à lire / associer" gros={d.loading && !ach.length ? '…' : aAssocier.length} c={aAssocier.length ? 'var(--warning)' : 'var(--success)'}
+        sous={aAssocier.length ? cvMoney(aAssocier.reduce((t,x)=>t+(x.st||0),0))+' avant taxes — à mettre sur une job, un camion ou l\'inventaire' : 'Tout est associé'} aller="fourn"/>
+      <Tuile titre={'Achats fournisseurs — '+new Date().toLocaleDateString('fr-CA',{month:'long'})} gros={d.loading && !ach.length ? '…' : cvMoney(achMois.reduce((t,x)=>t+(x.st||0),0))} sous={achMois.length+' facture'+(achMois.length>1?'s':'')+' avant taxes'} aller="fourn"/>
+    </div>
+    <div className="muted" style={{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>TPS / TVQ — {txLibelle('trim', per)} (trimestre en cours)</div>
+    {!T.lu ? <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des factures…</span></div> : <>
+    <div style={grille}>
+      <Tuile titre="TPS nette" gros={net(B.tps)} sous={'perçue '+cvMoney(B.tpsP)+' − payée '+cvMoney(B.tpsA)} aller="taxes"/>
+      <Tuile titre="TVQ nette" gros={net(B.tvq)} sous={'perçue '+cvMoney(B.tvqP)+' − payée '+cvMoney(B.tvqA)} aller="taxes"/>
+      <Tuile titre="Total TPS + TVQ" gros={net(txR(B.tps+B.tvq))} sous={'trimestre passé ('+txLibelle('trim', perAv)+') : '+cvMoney(Math.abs(txR(B0.tps+B0.tvq)))+(B0.tps+B0.tvq>0 ? ' à remettre' : ' à recevoir')} aller="taxes"/>
+    </div>
+    <div className="muted" style={{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Ce trimestre</div>
+    <div style={grille}>
+      <Tuile titre="Ventes facturées (avant taxes)" gros={cvMoney(B.ventes)} sous={B.V.length+' facture'+(B.V.length>1?'s':'')+' · trimestre passé '+cvMoney(B0.ventes)} aller="archive"/>
+      <Tuile titre="Achats et dépenses (avant taxes)" gros={cvMoney(B.achats)} sous={B.A.length+' facture'+(B.A.length>1?'s':'')+' · trimestre passé '+cvMoney(B0.achats)} aller="taxes"/>
+      <Tuile titre="Comptes à recevoir" gros="Voir ›" sous="factures en attente de paiement, par âge" aller="recevoir"/>
+    </div></>}
+    {T.err && <div className="card" style={{color:'var(--danger)'}}>Erreur : {T.err}</div>}
+  </div>;
+}
 function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, onglet0}){
   const estGL = k => GL_ONGLETS.some(x=>x[0]===k);
   const [onglet,setOnglet]=useState(onglet0==='verif' ? 'clients' : estGL(onglet0) ? 'grand' : (onglet0 || 'clients'));
@@ -16083,7 +16124,8 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,borderBottom:'1px solid var(--border)',paddingBottom:10}}>
       {(estSuivi ? SUIVI_ONGLETS : CPT_ONGLETS).map(([k,l])=><button key={k} className={'btn btn-sm'+(onglet===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
     </div>
-    {onglet==='fourn' && <FournisseursView key={'f'+(cles.fourn||0)} cfg={cfgRep} refreshKey={refreshKey} isDesktop={isDesktop}/>}
+    {onglet==='bord' && <ComptaTableauBord cfgRep={cfgRep} refreshKey={refreshKey} onAller={k=>{ setOnglet('grand'); setSous(k); window.scrollTo(0,0); }}/>}
+    {onglet==='grand' && sous==='fourn' && <FournisseursView key={'f'+(cles.fourn||0)} cfg={cfgRep} refreshKey={refreshKey} isDesktop={isDesktop}/>}
     {onglet==='clients' && <>
       <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Comptes clients</h2>
       <div className="muted" style={{fontSize:13,marginBottom:10}}>Tous tes clients : contracteurs et particuliers. Clique un client pour voir ses jobs (en cours, terminées), puis une job pour ses factures, achats, PO et dossier.</div>
