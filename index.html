@@ -170,7 +170,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v493';
+const APP_VERSION = 'v494';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3884,6 +3884,22 @@ function AttitrerEquipe({ev, toast, onFait}){
   </div>;
 }
 
+// v494 : quand La mémoire a roulé pour la dernière fois (onglet « Mises à jour » du registre des jobs, écrit par noterMaj_ dans le script).
+const MEMOIRE_TACHES = {courrielsJobs:'Courriels des jobs', registreFactures:'Factures', paiementsInteracLire:'Paiements Interac', soumissionsCourriels:'Soumissions', achatsFournisseurs:'Achats fournisseurs', rangerCRS:'Rangement CRS', agendaCRS:'Agenda CRS', rattrapageCRS:'Rattrapage CRS', adressesManquantes:'Adresses'};
+const memoireIlya = d => { const m = Math.round((Date.now() - d.getTime())/60000); return m < 1 ? "à l'instant" : m < 60 ? 'il y a '+m+' min' : m < 1440 ? 'il y a '+Math.floor(m/60)+' h'+(m%60>=5 ? ' '+String(m%60).padStart(2,'0') : '') : 'il y a '+Math.floor(m/1440)+' j'; };
+function MemoireDerniereMaj({cfg, refreshKey}){
+  const [l,setL]=useState(null);
+  useEffect(()=>{ let ok = true; if(!cfg.memoireJobsSpreadsheetId) return;
+    lireCache(cfg.memoireJobsSpreadsheetId, qSheet('Mises à jour')+'!A1:B', true).then(r=>{ if(!ok) return;
+      setL((r.result.values||[]).slice(1).map(x=>({nom:x[0], d:new Date(String(x[1]||'').replace(' ','T'))})).filter(x=>x.nom && !isNaN(x.d))); }).catch(()=>{ if(ok) setL([]); });
+    return ()=>{ ok = false; }; },[cfg.memoireJobsSpreadsheetId, refreshKey]);
+  if(!l) return null;
+  if(!l.length) return <span className="muted" style={{fontSize:12}}>La mémoire : heure de mise à jour pas encore notée</span>;
+  const tri = [...l].sort((a,b)=>b.d-a.d), der = tri[0], hm = d => d.toLocaleString('fr-CA',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+  const soumi = l.find(x=>x.nom==='soumissionsCourriels');
+  return <span className="muted" style={{fontSize:12,cursor:'help'}} title={tri.map(x=>(MEMOIRE_TACHES[x.nom]||x.nom)+' : '+hm(x.d)).join('\n')}>
+    🧠 La mémoire mise à jour <b style={{color:'var(--text)'}}>{memoireIlya(der.d)}</b> ({hm(der.d)}){soumi && <> · soumissions {memoireIlya(soumi.d)}</>}</span>;
+}
 function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   const [, setTicAttitre] = useState(0);
   const {loading, err, events, registry, factures, appels, courriels, achats, archives, lent} = useClientsData(cfg, refreshKey+'|d');
@@ -3971,7 +3987,8 @@ function TableauDeBordView({cfg, data, toast, refreshKey, onNavigate}){
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:4}}>
       <h2 className="fh" style={{margin:0,fontSize:24}}>Bonjour, Saran Électrique !</h2>
-      {cfg.memoireMajUrl && <button className="btn btn-sm" title="Va chercher les nouveaux PO, factures, courriels et achats (prêt dans environ 15 min)" onClick={()=>window.open(cfg.memoireMajUrl,'_blank')}>⟳ Mettre à jour La mémoire</button>}
+      <span style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}><MemoireDerniereMaj cfg={cfg} refreshKey={refreshKey}/>
+      {cfg.memoireMajUrl && <button className="btn btn-sm" title="Va chercher les nouveaux PO, factures, courriels et achats (prêt dans environ 15 min)" onClick={()=>window.open(cfg.memoireMajUrl,'_blank')}>⟳ Mettre à jour La mémoire</button>}</span>
     </div>
     <div className="muted" style={{fontSize:13,marginBottom:14}}><span style={{textTransform:'capitalize'}}>{new Date().toLocaleDateString('fr-CA',{weekday:'long'})}</span> {new Date().toLocaleDateString('fr-CA',{day:'numeric',month:'long'})} — ce qui demande ton attention. Clique un bloc pour aller à sa section.</div>
     {lent && lent.length>0 && <div className="card" style={{marginBottom:12,fontSize:13,borderColor:'var(--warning)'}}>⚠️ Trop long à lire : {lent.join(', ')}. Certains chiffres sont incomplets — essaie « Refresh ».</div>}
