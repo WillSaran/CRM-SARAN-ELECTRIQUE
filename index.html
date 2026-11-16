@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v534';
+const APP_VERSION = 'v535';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -589,7 +589,7 @@ function agendaGroupe(e){ if(e.calendarId===EN_ATTENTE_CAL) return 'attente'; if
 function agendaGroupeNom(k){ return k==='attente' ? 'En attente' : k==='suivi' ? 'Mon agenda (Suivi)' : equipeNom(k); }
 function agendaGroupeCouleur(k){ return k==='attente' ? 'var(--muted)' : k==='suivi' ? '#039be5' : equipeCouleur(k); }
 const AGENDA_GROUPES_ORDRE = [...EQUIPES_ORDRE_AG(), 'autre', 'attente', 'suivi'];
-function EQUIPES_ORDRE_AG(){ return ['4','9','3','5']; }
+function EQUIPES_ORDRE_AG(){ return ['4','9','3','5','2']; }   // v535 : + Benjamin
 // Style d'un bloc : couleur pleine pour une équipe ; hachuré pour En attente ; gris pointillé pour une job pas attitrée.
 function agendaStyle(e){
   const g = agendaGroupe(e), c = eventColor(e);
@@ -5473,26 +5473,26 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
               <span style={{flex:1,minWidth:0}}><b>{e.title}</b>{e.location ? <span className="muted" style={{fontSize:11.5}}> · {e.location.split(',')[0]}</span> : null}{agendaGroupe(e)==='attente' ? <span className="muted" style={{fontSize:11.5}}> · en attente</span> : null}</span></div>; })}
         </div>}
       </div>}
-      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>   {/* v532 : Jour/Semaine/Mois sur la même ligne que les raccourcis de la vue choisie */}
-      <div style={{display:'inline-flex',border:'1px solid var(--border2)',borderRadius:10,overflow:'hidden',background:'var(--bg3)'}}>
+      <div style={{display:'inline-flex',flexDirection:'column',gap:4,width:300,maxWidth:'100%'}}>   {/* v535 : raccourcis de la vue choisie EN DESSOUS de Jour/Semaine/Mois, même largeur */}
+      <div style={{display:'flex',border:'1px solid var(--border2)',borderRadius:10,overflow:'hidden',background:'var(--bg3)'}}>
         {[['jour','Jour'],['semaine','Semaine'],['mois','Mois']].map(([id,label],i)=>
-          <button key={id} onClick={()=>changerVue(id)} style={{border:'none',borderLeft:i?'1px solid var(--border2)':'none',padding:'7px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',
+          <button key={id} onClick={()=>changerVue(id)} style={{flex:'1 1 0',border:'none',borderLeft:i?'1px solid var(--border2)':'none',padding:'7px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',
             background:viewMode===id?'var(--accent)':'transparent',color:viewMode===id?'#fff':'var(--text)'}}>{label}</button>)}
       </div>
       {(()=>{ const pastille = (cle, actif, marque, onClick, titre, l1, l2) => <button key={cle} onClick={onClick} title={titre}
-          style={{display:'inline-flex',alignItems:'baseline',gap:4,whiteSpace:'nowrap',border:'1px solid '+(marque?'var(--accent)':'var(--border2)'),borderRadius:7,padding:'5px 9px',fontSize:12,fontWeight:700,cursor:'pointer',lineHeight:1.15,fontVariantNumeric:'tabular-nums',
+          style={{flex:'1 1 0',minWidth:0,display:'inline-flex',justifyContent:'center',alignItems:'baseline',gap:4,whiteSpace:'nowrap',border:'1px solid '+(marque?'var(--accent)':'var(--border2)'),borderRadius:7,padding:'3px 4px',fontSize:11.5,fontWeight:700,cursor:'pointer',lineHeight:1.15,fontVariantNumeric:'tabular-nums',
             background:actif?'var(--accent)':'var(--bg3)',color:actif?'#fff':'var(--text)'}}><span>{l1}</span>{l2 && <span style={{opacity:.75,fontWeight:500}}>{l2}</span>}</button>;
         const lundiDe = x => { const d = new Date(x); d.setHours(12,0,0,0); d.setDate(d.getDate()-((d.getDay()+6)%7)); return d; };
         const auj = new Date(), aujS = localDateStr(auj);
         if(viewMode==='jour'){ const lun = lundiDe(anchor), sel = localDateStr(anchor);
-          return <div style={{display:'flex',gap:3}}>{['Lun','Mar','Mer','Jeu','Ven'].map((j,i)=>{ const d = new Date(lun); d.setDate(lun.getDate()+i); const ds = localDateStr(d);
+          return <div style={{display:'flex',gap:3,width:'100%'}}>{['Lun','Mar','Mer','Jeu','Ven'].map((j,i)=>{ const d = new Date(lun); d.setDate(lun.getDate()+i); const ds = localDateStr(d);
             return pastille(j, sel===ds, ds===aujS, ()=>setAnchor(new Date(d)), d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'}), j, d.getDate()); })}</div>; }
         if(viewMode==='semaine'){ const m0 = new Date(anchor.getFullYear(), anchor.getMonth(), 1, 12); const fin = new Date(anchor.getFullYear(), anchor.getMonth()+1, 0, 12);
           const lst = []; for(let d = lundiDe(m0); d <= fin; d = new Date(d.getFullYear(), d.getMonth(), d.getDate()+7, 12)) lst.push(d);
           const selS = localDateStr(lundiDe(anchor)), aujL = localDateStr(lundiDe(auj));
-          return <div style={{display:'flex',gap:3}}>{lst.map((d,i)=>{ const ds = localDateStr(d);
-            return pastille(ds, selS===ds, ds===aujL, ()=>setAnchor(new Date(d)), 'Semaine du '+d.toLocaleDateString('fr-CA',{day:'numeric',month:'long'}), 'Sem. '+(i+1), d.getDate()+' '+d.toLocaleDateString('fr-CA',{month:'short'}).replace('.','')); })}</div>; }
-        return <div style={{display:'flex',gap:3}}>{[-1,0,1].map(k=>{ const d = new Date(anchor.getFullYear(), anchor.getMonth()+k, 1, 12);
+          return <div style={{display:'flex',gap:3,width:'100%'}}>{lst.map((d,i)=>{ const ds = localDateStr(d);
+            return pastille(ds, selS===ds, ds===aujL, ()=>setAnchor(new Date(d)), 'Semaine du '+d.toLocaleDateString('fr-CA',{day:'numeric',month:'long'}), 'S'+(i+1), d.getDate()+(d.getMonth()!==anchor.getMonth() ? '/'+(d.getMonth()+1) : '')); })}</div>; }
+        return <div style={{display:'flex',gap:3,width:'100%'}}>{[-1,0,1].map(k=>{ const d = new Date(anchor.getFullYear(), anchor.getMonth()+k, 1, 12);
           return pastille('m'+k, k===0, d.getFullYear()===auj.getFullYear() && d.getMonth()===auj.getMonth(), ()=>setAnchor(d), '', d.toLocaleDateString('fr-CA',{month:'long'}).replace(/^./,c=>c.toUpperCase()), d.getFullYear()!==auj.getFullYear() ? d.getFullYear() : ''); })}</div>; })()}
       </div>
       <div style={{display:'flex',gap:4,marginLeft:'auto',flexWrap:'wrap'}}>
