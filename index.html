@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v529';
+const APP_VERSION = 'v530';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5196,14 +5196,17 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   const evVisibles = events.filter(e=>!cachees.includes(agendaGroupe(e)));
   // Vue par équipe : chaque jour divisé en couloirs (Dan | Brandon | Phil …), « Autres » au bout s'il y en a
   const couloirDe = e => { const g = agendaGroupe(e); return EQUIPES_ORDRE.includes(g) ? g : 'autres'; };
-  const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>couloirDe(e)===k) || (viewMode==='jour' && couloirsPlus.includes(k))); if(t.some(e=>couloirDe(e)==='autres')) l.push('autres'); return l; })();   // v529 : en vue Jour, colonnes ajoutées pour les gars sans job
+  // v530 : en vue Jour, un gars dont les initiales sont dans le titre d'une job (ex. « … BP BL ») a aussi cette job dans sa colonne (« avec »)
+  const iniEquipe = k => Object.keys(CREW_INITIALS).filter(x=>CREW_INITIALS[x]===CREW_COLORS[k]);
+  const estAvec = (e, k) => viewMode==='jour' && k!=='autres' && couloirDe(e)!==k && iniEquipe(k).some(x=>new RegExp('(^|\\s)'+x+'(\\s|$)').test(e.title||''));
+  const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>couloirDe(e)===k || estAvec(e, k)) || (viewMode==='jour' && couloirsPlus.includes(k))); if(t.some(e=>couloirDe(e)==='autres')) l.push('autres'); return l; })();   // v529 : en vue Jour, colonnes ajoutées pour les gars sans job
   const enCouloirs = parEquipe && viewMode!=='mois' && couloirs.length>1;
   function placer(dayEvents){
     if(viewMode==='jour'){   // v515 : chaque équipe (ou la journée) divisée en parts égales de 7 h à 15 h 30, dans l'ordre des heures
-      const etaler = (L, left, w) => { const t = [...L].sort((a,b)=>String(a.start).localeCompare(String(b.start))), part = 8.5/(t.length||1);
-        return t.map((e,i)=>({event:e, leftPct:left, widthPct:w, vS:7+i*part, vE:7+(i+1)*part})); };
+      const etaler = (L, left, w, k) => { const t = [...L].sort((a,b)=>String(a.start).localeCompare(String(b.start))), part = 8.5/(t.length||1);
+        return t.map((e,i)=>({event:e, leftPct:left, widthPct:w, vS:7+i*part, vE:7+(i+1)*part, aide:k ? estAvec(e, k) : false, lane:k||''})); };
       if(!enCouloirs) return etaler(dayEvents, 0, 100);
-      const w = 100/couloirs.length; return couloirs.flatMap((k,li)=>etaler(dayEvents.filter(e=>couloirDe(e)===k), li*w, w)); }
+      const w = 100/couloirs.length; return couloirs.flatMap((k,li)=>etaler(dayEvents.filter(e=>couloirDe(e)===k || estAvec(e, k)), li*w, w, k)); }
     if(!enCouloirs) return layoutDayEvents(dayEvents).map(p=>({event:p.event, widthPct:100/p.totalCols, leftPct:p.col*100/p.totalCols}));
     const w = 100/couloirs.length;
     return couloirs.flatMap((k,li)=>layoutDayEvents(dayEvents.filter(e=>couloirDe(e)===k)).map(p=>({event:p.event, widthPct:w/p.totalCols, leftPct:li*w + p.col*w/p.totalCols})));
@@ -5519,18 +5522,18 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
             {hours.map(h=><div key={h} onClick={()=>{ if(data) openNewJob(dStr, viewMode==='jour' ? '07:00' : String(h).padStart(2,'0')+':00'); }}
               style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box',cursor:data?'copy':'default'}}
               title={data?'Cliquer pour créer une job à '+h+'h':''}></div>)}
-            {placed.map(({event:e,leftPct,widthPct,vS,vE})=>{
+            {placed.map(({event:e,leftPct,widthPct,vS,vE,aide,lane})=>{
               const start=new Date(e.start), end=e.end?new Date(e.end):new Date(start.getTime()+3600000);
               const startH=vS!=null ? vS : Math.max(HOUR_START, start.getHours()+start.getMinutes()/60);
               const endHraw=end.getHours()+end.getMinutes()/60;
               const endH=vE!=null ? vE-0.04 : Math.min(HOUR_END+1, endHraw>startH?endHraw:startH+1);
               const top=(startH-HOUR_START)*PX_H;
               const height=Math.max(18,(endH-startH)*PX_H-2);
-              return <div key={e.id} title={'Glisser pour déplacer, cliquer pour modifier — '+e.title}
-                onPointerDown={ev=>handleEventPointerDown(ev,e)}
+              return <div key={e.id+(aide ? '-avec-'+lane : '')} title={(aide ? 'Avec '+equipeNom(lane)+' sur cette job — ' : 'Glisser pour déplacer, cliquer pour modifier — ')+e.title}
+                onPointerDown={ev=>{ if(aide){ ev.stopPropagation(); return; } handleEventPointerDown(ev,e); }} onClick={aide ? ()=>setEditEvent(e) : undefined}
                 onPointerMove={handleEventPointerMove}
                 onPointerUp={handleEventPointerUp}
-                style={{position:'absolute',top,height,left:'calc('+leftPct+'% + 2px)',width:'calc('+widthPct+'% - 4px)',...agendaStyle(e),fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'visible',boxShadow:'0 1px 3px rgba(0,0,0,.25)',cursor:'grab',touchAction:'none',userSelect:'none'}}>
+                style={{position:'absolute',top,height,left:'calc('+leftPct+'% + 2px)',width:'calc('+widthPct+'% - 4px)',...agendaStyle(e),...(aide ? {opacity:.62, outline:'2px dashed '+(GCAL_COLOR_MAP[lane]||'var(--muted)'), outlineOffset:-2} : {}),fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'visible',boxShadow:'0 1px 3px rgba(0,0,0,.25)',cursor:'grab',touchAction:'none',userSelect:'none'}}>
                 {viewMode==='jour' && (()=>{   // v525 : coin en haut à droite — OT (ordre de travail relié) et 📎 pièces jointes, cliquables
                   const L = e.attachments||[], otNo = (String(e.description||'').match(/Ordre de travail\s*:?\s*#?(\d+)/i)||[])[1], otI = L.findIndex(a=>/^OT_|ordre de travail/i.test(a.title||''));
                   if(!L.length && !otNo && otI<0) return null; const stop = ev=>ev.stopPropagation();
