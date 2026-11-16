@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v539';
+const APP_VERSION = 'v540';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5283,9 +5283,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   async function repartirJour(liste, d){
     const n = liste.length; if(!n) return 0; const part = 8.5/n; let nb = 0;
     for(let i=0;i<n;i++){ const e = liste[i], deb = aDate(d, quartH(7+i*part)), fin = aDate(d, i===n-1 ? 15.5 : quartH(7+(i+1)*part));
-      if(new Date(e.start).getTime()===deb.getTime() && new Date(e.end).getTime()===fin.getTime()) continue;
+      if(!e.allDay && new Date(e.start).getTime()===deb.getTime() && new Date(e.end).getTime()===fin.getTime()) continue;
       setEvents(l=>l.map(x=>x.id===e.id && x.calendarId===e.calendarId ? {...x, start:deb.toISOString(), end:fin.toISOString(), allDay:false} : x));
-      await window.gapi.client.calendar.events.patch({calendarId:e.calendarId, eventId:e.id, resource:{start:{dateTime:deb.toISOString(), timeZone:'America/Toronto'}, end:{dateTime:fin.toISOString(), timeZone:'America/Toronto'}}});
+      await window.gapi.client.calendar.events.patch({calendarId:e.calendarId, eventId:e.id, resource:{start:{dateTime:deb.toISOString(), timeZone:'America/Toronto', date:null}, end:{dateTime:fin.toISOString(), timeZone:'America/Toronto', date:null}}});   // v540 : date:null — une job « toute la journée » devient 7 h – 15 h 30
       nb++; }
     return nb;
   }
@@ -5319,6 +5319,12 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     const debut = new Date(d); debut.setMinutes(Math.round(h*60));
     if(viewMode==='jour' && enCouloirs && src.calendarId!==EN_ATTENTE_CAL){ deposerJour(src, d, h, (ev.clientX-rect.left)/rect.width); return; }   // v533
     if(viewMode==='jour'){ const d7 = new Date(d); d7.setHours(7,0,0,0); const f = new Date(d); f.setHours(15,30,0,0);   // v514 : en vue Jour, une job placée prend la journée 7 h – 15 h 30
+      appliquerOuCeduler({ev:src, allDay:false, debut:d7, fin:f}); return; }
+    if(src.allDay && src.calendarId!==EN_ATTENTE_CAL){   // v540 : vue Semaine — une job « toute la journée » déposée dans la grille va de 7 h à 15 h 30, chez le gars de la colonne visée
+      const d7 = new Date(d); d7.setHours(7,0,0,0); const f = new Date(d); f.setHours(15,30,0,0);
+      if(enCouloirs){ const k = couloirs[Math.max(0, Math.min(couloirs.length-1, Math.floor((ev.clientX-rect.left)/rect.width*couloirs.length)))];
+        if(k && k!=='autres' && CREW_COLORS[k] && k!==couloirDe(src)){ setEvents(l=>l.map(x=>x.id===src.id && x.calendarId===src.calendarId ? {...x, colorId:k, couleurId:k, labelId:''} : x));
+          attitrerCouleur(src.calendarId, src.id, k, src.labelId).catch(err=>toast('Couleur : '+apiErrMsg(err),'err')); } }
       appliquerOuCeduler({ev:src, allDay:false, debut:d7, fin:f}); return; }
     appliquerOuCeduler({ev:src, allDay:false, debut, fin:new Date(debut.getTime()+dureeDe(src, debut))});
   }
