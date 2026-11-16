@@ -104,6 +104,13 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .modal-leger .field>label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700}
 .modal-leger input:not([type=checkbox]):not([type=file]),.modal-leger select,.modal-leger textarea{background:transparent!important;border:none!important;border-bottom:1px solid var(--border2)!important;border-radius:0!important;padding-left:2px!important;box-shadow:none!important}
 .modal-leger input:focus,.modal-leger select:focus,.modal-leger textarea:focus{outline:none!important;border-bottom-color:var(--accent)!important}
+/* v519 : événement à l'horizontale sur ordi (infos à gauche, notes à droite), à la verticale sur cellulaire */
+.ev-grille{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:24px;align-items:stretch}
+.ev-grille>.ev-droite{display:flex;flex-direction:column;min-height:0}
+@media (max-width:899px){.ev-grille{grid-template-columns:1fr;gap:0}}
+.modal-leger textarea.ev-notes{flex:1;min-height:180px;height:auto;resize:none;background:rgba(127,127,127,.08)!important;border:none!important;border-radius:10px!important;padding:10px 12px!important;line-height:1.45;font-family:var(--font-body)}
+.modal-leger textarea.ev-notes:focus{box-shadow:0 0 0 1px var(--accent)!important}
+@media (min-width:900px){.modal-leger textarea.ev-notes{min-height:52vh}}
 .field{margin-bottom:11px}
 .field label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.02em}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -189,7 +196,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v518';
+const APP_VERSION = 'v519';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1179,7 +1186,7 @@ function useToast(){
 let DERNIER_CLIC = null;
 if(typeof document!=='undefined') document.addEventListener('pointerdown', e=>{ DERNIER_CLIC = {x:e.clientX, y:e.clientY, t:Date.now()}; }, true);
 let MODAL_FERMER = null;   // v518 : fermer la fenêtre ouverte avec la même animation (bouton « Fermer » d'une fenêtre)
-function Modal({title,onClose,children,wide,teinte,deClic}){
+function Modal({title,onClose,children,wide,teinte,deClic,tresLarge}){
   const ref = useRef(null), fond = useRef(null), orig = useRef(null), ferme = useRef(false);
   const fermer = () => { const el = ref.current, c = orig.current; if(ferme.current) return; ferme.current = true;
     let reduit = false; try{ reduit = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){}
@@ -1194,7 +1201,7 @@ function Modal({title,onClose,children,wide,teinte,deClic}){
     const r = el.getBoundingClientRect(), dx = c.x-(r.left+r.width/2), dy = c.y-(r.top+r.height/2);
     el.animate([{transform:'translate('+dx+'px,'+dy+'px) scale(.12)', opacity:.2},{transform:'none', opacity:1}], {duration:260, easing:'cubic-bezier(.2,.8,.2,1)'});
     if(fond.current) fond.current.animate([{backgroundColor:'rgba(0,0,0,0)'},{backgroundColor:'rgba(0,0,0,.28)'}], {duration:260}); },[]);
-  const sty = {...(wide?{maxWidth:'720px'}:{}), ...(teinte ? {borderTop:'6px solid '+teinte, background:'linear-gradient(180deg, '+teinte+'26 0, var(--bg2) 140px)'} : {})};
+  const sty = {...(wide?{maxWidth:'720px'}:{}), ...(tresLarge?{maxWidth:'1150px',maxHeight:'92vh'}:{}), ...(teinte ? {borderTop:'6px solid '+teinte, background:'linear-gradient(180deg, '+teinte+'26 0, var(--bg2) 140px)'} : {})};
   return <div ref={fond} className="modal-bg" style={deClic ? {background:'rgba(0,0,0,.28)', backdropFilter:'blur(2px)'} : null} onMouseDown={e=>{ if(e.target===e.currentTarget) fermer(); }}>
     <div ref={ref} className={'modal'+(deClic ? ' modal-leger' : '')} style={sty}>
       <button className="close-x" onClick={fermer}>×</button>
@@ -4719,7 +4726,7 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
   }
 
   const dossierJob = job && job.j.reg && job.j.reg.dossier;
-  return <Modal title="Modifier l'événement" onClose={onClose} wide deClic teinte={eventColor(event)}>
+  return <Modal title="Modifier l'événement" onClose={onClose} wide tresLarge deClic teinte={eventColor(event)}>
     {job && <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:14,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
       <span style={{fontSize:12.5,flex:'1 1 160px'}}><b>{(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}</b>{job.j.po ? <span className="muted"> · {job.j.po}</span> : null}</span>
       {dossierJob ? <a className="btn btn-p btn-sm" href={'https://drive.google.com/drive/folders/'+dossierJob} target="_blank" rel="noopener" style={{textDecoration:'none'}}>Ouvrir le dossier ↗</a>
@@ -4727,14 +4734,13 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
       <button type="button" className="btn btn-sm" title="Ouvre le bon de commande pour ce passage (référence, qui va chercher, date)" onClick={()=>{ onClose(); BC_PREFILL = {id:event.id, day:String(event.start||'').slice(0,10), title:event.title}; CRM_ALLER && CRM_ALLER('commandes', {}); }}>Commander le matériel</button>
       <button type="button" className="btn btn-sm" onClick={()=>{ onClose(); CRM_ALLER && CRM_ALLER('projets', {jobIds:[job.j.id], ouvrir:job.c.code+job.j.id, nom:(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}); }}>Voir la job dans Projets</button>
     </div>}
+    <div className="ev-grille"><div className="ev-gauche">
     <div className="field"><label>Titre</label><input value={titre} onChange={e=>setTitre(e.target.value)}/></div>
-    <div className="field"><label>Équipe (couleur dans l'agenda)</label>
-      <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
-        {EQUIPES_ORDRE.filter(k=>CREW_COLORS[k]).map(k=><button key={k} type="button" className="btn btn-sm" onClick={()=>setCouleur(k)}
-          style={{background:GCAL_COLOR_MAP[k],color:texteSur(GCAL_COLOR_MAP[k]),border:'none',outline:couleur===k?'3px solid var(--text)':'none',outlineOffset:1,fontWeight:couleur===k?800:600}}>{couleur===k?'✓ ':''}{equipeNom(k)}</button>)}
-        <span className="muted" style={{fontSize:11.5,marginLeft:6}}>Autres :</span>
-        {Object.keys(GCAL_COLOR_MAP).filter(k=>!CREW_COLORS[k]).map(k=><span key={k} onClick={()=>setCouleur(k)} title={'Couleur '+k}
-          style={{width:18,height:18,borderRadius:'50%',background:GCAL_COLOR_MAP[k],cursor:'pointer',display:'inline-block',outline:couleur===k?'3px solid var(--text)':'none',outlineOffset:1}}></span>)}
+    <div className="field"><label>Équipe</label>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+        {EQUIPES_ORDRE.filter(k=>CREW_COLORS[k]).map(k=>{ const nom = CREW_COLORS[k], ini = Object.keys(CREW_INITIALS).filter(x=>CREW_INITIALS[x]===nom), dansTitre = ini.some(x=>new RegExp('\\b'+x+'\\b').test(titre||'')), c = GCAL_COLOR_MAP[k];
+          return <button key={k} type="button" className="btn btn-sm" onClick={()=>setCouleur(k)} title={nom+(dansTitre ? ' — ses initiales sont dans le titre' : '')}   // v519 : initiales ; encadré = initiales déjà dans le titre
+            style={{background:couleur===k ? c : 'transparent',color:couleur===k ? texteSur(c) : 'var(--text)',border:'2px solid '+c,outline:dansTitre?'2px solid var(--text)':'none',outlineOffset:2,fontWeight:800,minWidth:44}}>{couleur===k?'✓ ':''}{ini[0] || equipeNom(k)}</button>; })}
       </div>
       {!couleur && <div style={{fontSize:12,color:'var(--warning)',marginTop:4}}>Pas de couleur : la job est « À attitrer ».</div>}
     </div>
@@ -4752,7 +4758,6 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
       <div className="field"><label>Début</label><input type="time" value={heureDebut} onChange={e=>setHeureDebut(e.target.value)}/></div>
       <div className="field"><label>Fin</label><input type="time" value={heureFin} onChange={e=>setHeureFin(e.target.value)}/></div>
     </div> : <div className="muted" style={{fontSize:12,marginBottom:10}}>Événement "toute la journée" — seule la date peut être changée ici (déplace l'événement, sans changer sa durée).</div>}
-    <div className="field"><label>Notes / description</label><TexteDeplie value={desc} onChange={setDesc}/></div>
 
     <div className="field">
       <label>Pièces jointes (Google Drive)</label>
@@ -4778,6 +4783,9 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
       <button className="btn btn-sm" style={{marginTop:6}} onClick={addAttachment}>+ Ajouter le fichier</button></>}
     </div>
 
+    </div>
+    <div className="ev-droite field"><label>Notes / description</label><textarea className="ev-notes" value={desc||''} onChange={e=>setDesc(e.target.value)}/></div>
+    </div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:6}}>
       {!confirmDel ? <button className="btn btn-sm btn-danger" onClick={()=>setConfirmDel(true)}>Supprimer l'événement</button>
         : <div style={{display:'flex',gap:6,alignItems:'center'}}>
