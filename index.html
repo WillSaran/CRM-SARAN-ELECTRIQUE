@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v541';
+const APP_VERSION = 'v542';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4189,7 +4189,8 @@ const BQ_ENTETE = ['Employé','Taux ($/h supp)','Heures déjà payées','Note','
 // v510 : fiche d'un employé — sa banque d'heures, ce qu'il a acheté (factures fournisseurs « Employé — … ») et son dossier (ententes, factures, avances, notes, fichiers)
 const EMP_DOSSIER = 'Dossier employés', EMP_DOSSIER_ENTETE = ['Id','Employé','Date','Type','Titre','Montant','Déduire de la banque','Fichiers (id)','Note','Créé le'];
 const EMP_TYPES = ['Entente','Facture / achat','Avance','Stock pris','Note','Document'];
-function EmployeFiche({cfg, l, docsAbsent, onClose, relire}){
+const AJUST_H = 'Ajustement heures', REGLE = 'Règlement';   // v542 : « Règlement » = comptes réglés à cette date (les achats d'avant ne sont plus déduits)   // v542 : ligne du dossier employé — Montant = heures (+ ou −) ajoutées à la banque
+function EmployeFiche({cfg, l, docsAbsent, onClose, relire, onRegl}){
   const id = cfg.memoireJobsSpreadsheetId, e = l.e;
   const vide = {type:'Facture / achat', date:localDateStr(new Date()), titre:'', montant:'', deduire:true, note:''};
   const [f,setF]=useState(null), [fichiers,setFichiers]=useState([]), [busy,setBusy]=useState(''), [voir,setVoir]=useState('');   // v511 : voir = id du fichier affiché dans la fiche
@@ -4216,10 +4217,15 @@ function EmployeFiche({cfg, l, docsAbsent, onClose, relire}){
         <div key={k} style={{background:'var(--bg3)',borderRadius:8,padding:'8px 10px'}}><div className="muted" style={{fontSize:11.5}}>{k}</div>
           <div style={{fontWeight:800,fontSize:16,color:i===3 && l.solde!=null ? (l.solde<0 ? 'var(--danger)' : 'var(--success)') : 'var(--text)'}}>{v}</div></div>)}
     </div>
+    {/* v542 : récapitulatif depuis le dernier règlement */}
+    <div style={{marginTop:10,padding:'8px 12px',border:'1px solid var(--border2)',borderRadius:8,display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+      <div style={{flex:1,minWidth:200}}><b>Depuis {l.dernier ? 'le dernier règlement ('+l.dernier.date+')' : 'le début (jamais réglé)'}</b>
+        <div className="muted" style={{fontSize:12.5}}>{(l.achD||[]).length} achat{(l.achD||[]).length>1?'s':''} fournisseur + {(l.dosD||[]).length} autre{(l.dosD||[]).length>1?'s':''} à déduire = <b style={{color:'var(--danger)'}}>− {cvMoney(l.deduit)}</b> · banque {fmtH(l.reste)} restantes{l.solde!=null ? ' · solde '+cvMoney(l.solde) : ''}</div></div>
+      {onRegl && <button className="btn btn-sm btn-p" onClick={onRegl}>📄 Feuille de règlement</button>}</div>
     {titre('Achats chez les fournisseurs ('+l.ach.length+') — '+cvMoney(totAch))}
     {!l.ach.length ? <div className="muted" style={{fontSize:12.5}}>Aucune facture fournisseur associée à « Employé — {e.nom.split(' ')[0]} ». (Comptabilité › Comptes fournisseurs › 👷 Employé)</div>
       : <div style={{display:'grid',gap:2,fontSize:13}}>{l.ach.sort((a,b)=>String(b.date).localeCompare(String(a.date))).map((a,k)=><div key={k} style={{display:'flex',gap:8,borderTop:k?'1px solid var(--border)':'none',padding:'3px 0'}}>
-        <span className="muted" style={{width:84}}>{a.date}</span><span style={{flex:1}}>{a.pdf ? <a href={lien(a.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>{a.f} #{a.num}</a> : a.f+' #'+a.num}{a.ref && <span className="muted"> · {a.ref}</span>}</span><b>{cvMoney(a.total||a.st)}</b></div>)}</div>}
+        <span className="muted" style={{width:84}}>{a.date}</span><span style={{flex:1,opacity:l.depuis && String(a.date)<=l.depuis ? .5 : 1}}>{l.depuis && String(a.date)<=l.depuis && <span className="badge" style={{marginRight:4}}>réglé</span>}{a.pdf ? <a href={lien(a.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>{a.f} #{a.num}</a> : a.f+' #'+a.num}{a.ref && <span className="muted"> · {a.ref}</span>}</span><b>{cvMoney(a.total||a.st)}</b></div>)}</div>}
     {titre('Son dossier ('+l.dos.length+')'+(totDos ? ' — '+cvMoney(totDos)+' à déduire' : ''))}
     {l.dos.length===0 && !f && <div className="muted" style={{fontSize:12.5}}>Rien encore. Ajoute une entente, une facture, une avance, du stock pris…</div>}
     <div style={{display:'grid',gap:4}}>{[...l.dos].sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(d=><div key={d.id||d.row} style={{border:'1px solid var(--border)',borderRadius:8,padding:'6px 10px',fontSize:13}}>
@@ -4285,15 +4291,30 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
       if(ex.row) await sheetsUpdateRow(id, qSheet('Banque employés'), ex.row, ligne); else await sheetsAppendRow(id, qSheet('Banque employés'), ligne);
       await lire(true); }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
   const lignes = emps.map(e=>{ const r = reg.rows[cvNorm(e.nom)] || {}; const taux = r.taux!=null ? r.taux : global.taux;
-    const h = Math.round((banqueConf ? (banqueConf[cvNorm(e.nom)]||0) : (supp[e.nom]||0))*100)/100, payees = r.payees||0, reste = Math.max(0, h - payees);
+    const dosE = docs.l.filter(d=>prenom(d.emp)===prenom(e.nom)), ajust = dosE.filter(d=>d.type===AJUST_H), adjH = ajust.reduce((t,d)=>t+(d.montant||0),0);   // v542 : ajustements d'heures (feuille de règlement)
+    const base = Math.round((banqueConf ? (banqueConf[cvNorm(e.nom)]||0) : (supp[e.nom]||0))*100)/100, h = Math.round((base+adjH)*100)/100, payees = r.payees||0, reste = Math.max(0, h - payees);
     const ach = achats.filter(a=>prenom(a.emp)===prenom(e.nom)), dos = docs.l.filter(d=>prenom(d.emp)===prenom(e.nom));
-    const deduit = ach.reduce((t,a)=>t+(a.total||a.st),0) + dos.filter(d=>d.deduire).reduce((t,d)=>t+d.montant,0);
+    const regs = dos.filter(d=>d.type===REGLE).sort((a,b)=>String(a.date).localeCompare(String(b.date))), dernier = regs.length ? regs[regs.length-1] : null, depuis = dernier ? String(dernier.date) : '';
+    const achD = ach.filter(a=>!depuis || String(a.date)>depuis), dosD = dos.filter(d=>d.deduire && (!depuis || String(d.date)>depuis));   // v542 : seulement depuis le dernier règlement
+    const deduit = achD.reduce((t,a)=>t+(a.total||a.st),0) + dosD.reduce((t,d)=>t+d.montant,0);
     const valeur = taux!=null ? reste*taux : null;
-    return {e, h, payees, reste, taux, perso:r.taux!=null, ach, dos, deduit, valeur, solde: valeur!=null ? valeur-deduit : null}; });
+    return {e, h, base, ajust, adjH, dernier, depuis, achD, dosD, payees, reste, taux, perso:r.taux!=null, ach, dos, deduit, valeur, solde: valeur!=null ? valeur-deduit : null}; });
+  const [pdfVoir,setPdfVoir]=useState(null), [regl,setRegl]=useState(null);   // v542 : PDF d'un achat dans le CRM ; feuille de règlement d'un employé
+  const ajouterAjust = async (nom, date, heures, raison)=>{ if(docs.absent) await ensureSheetsExist(id, [{name:EMP_DOSSIER, headers:EMP_DOSSIER_ENTETE}]);
+    await sheetsAppendRow(id, qSheet(EMP_DOSSIER), ['E-'+Date.now(), nom, date, AJUST_H, raison, heures.toFixed(2), 'Non', '', '', new Date().toLocaleString('fr-CA')]); await lire(true); };
+  const regler = async l=>{ if(docs.absent) await ensureSheetsExist(id, [{name:EMP_DOSSIER, headers:EMP_DOSSIER_ENTETE}]);
+    await sheetsAppendRow(id, qSheet(EMP_DOSSIER), ['E-'+Date.now(), l.e.nom, localDateStr(new Date()), REGLE, 'Comptes réglés — solde '+(l.solde!=null ? cvMoney(l.solde) : '?'), l.solde!=null ? l.solde.toFixed(2) : '', 'Non', '', 'Heures en banque réglées : '+fmtH(l.h)+' · achats déduits : '+cvMoney(l.deduit), new Date().toLocaleString('fr-CA')]);
+    await ecrire(l.e.nom, {payees:String(l.h)}); await lire(true); };
+  const enleverAjust = async d=>{ await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:qSheet(EMP_DOSSIER)+'!D'+d.row, valueInputOption:'RAW', resource:{values:[['(supprimé) '+d.type]]}}); await lire(true); };
   const lf = fiche && lignes.find(l=>prenom(l.e.nom)===prenom(fiche));
   const champ = (val, onSave, w, ph) => <input key={String(val)} defaultValue={val==null?'':val} placeholder={ph} inputMode="decimal" onBlur={e=>{ const v=e.target.value.trim().replace(',','.'); if(v!==String(val==null?'':val)) onSave(v); }} style={{width:w||64,textAlign:'right',padding:'3px 6px'}}/>;
   return <div className="card" style={{marginTop:16,padding:0,overflowX:'auto'}}>
-    {lf && <EmployeFiche cfg={cfg} l={lf} docsAbsent={docs.absent} onClose={()=>setFiche(null)} relire={()=>lire(true)}/>}
+    {lf && !regl && <EmployeFiche cfg={cfg} l={lf} docsAbsent={docs.absent} onClose={()=>setFiche(null)} relire={()=>lire(true)} onRegl={()=>setRegl(lf.e.nom)}/>}
+    {pdfVoir && <Modal title={'📄 '+pdfVoir.titre} onClose={()=>setPdfVoir(null)} wide>
+      <iframe src={'https://drive.google.com/file/d/'+pdfVoir.id+'/preview'} style={{width:'100%',height:'70vh',border:'1px solid var(--border)',borderRadius:8,background:'#fff'}}/>
+      <a className="btn btn-sm" style={{marginTop:8}} href={'https://drive.google.com/file/d/'+pdfVoir.id+'/view'} target="_blank" rel="noopener">↗ Ouvrir dans Drive</a></Modal>}
+    {regl && (()=>{ const l = lignes.find(x=>x.e.nom===regl); return l ? <FeuilleReglement l={l} sem={(banqueDetail && banqueDetail[cvNorm(l.e.nom)]) || []} onClose={()=>setRegl(null)}
+      ajouter={(d,h,r)=>ajouterAjust(l.e.nom, d, h, r)} enlever={enleverAjust} regler={()=>regler(l)} voirPdf={setPdfVoir} ecrirePayees={v=>ecrire(l.e.nom, {payees:v})}/> : null; })()}
     <div style={{padding:'12px 14px',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',alignItems:'center'}}>
       <div><div className="fh" style={{fontSize:16}}>Banque d'heures supp</div>
         <div className="muted" style={{fontSize:11.5}}>Semaines confirmées seulement : heures au-delà de 40 h, moins les heures que l'employé a pris dans sa banque pour compléter ses 40 h. Valeur = heures × taux. Les achats associés à l'employé (Fournisseurs › 👷 Employé) sont déduits.</div></div>
@@ -4304,12 +4325,13 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
       <tbody>{lignes.map(l=>{ const ouvH = voir && voir.nom===l.e.nom && voir.quoi==='h', ouvA = voir && voir.nom===l.e.nom && voir.quoi==='ach', sem = (banqueDetail && banqueDetail[cvNorm(l.e.nom)]) || [];
         const lien = {cursor:'pointer',textDecoration:'underline',textDecorationStyle:'dotted'};
         return <React.Fragment key={l.e.nom}><tr>
-        <td style={{cursor:'pointer'}} title="Ouvrir sa fiche" onClick={()=>setFiche && setFiche(l.e.nom)}><span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:l.e.couleur,marginRight:6}}></span><span style={{color:'var(--accent)',fontWeight:700}}>{l.e.nom}</span>{l.dos.length>0 && <span className="muted" style={{fontSize:11}}> · 📎 {l.dos.length}</span>}</td>
+        <td style={{cursor:'pointer'}} title="Ouvrir sa fiche" onClick={()=>setFiche && setFiche(l.e.nom)}><span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:l.e.couleur,marginRight:6}}></span><span style={{color:'var(--accent)',fontWeight:700}}>{l.e.nom}</span>{l.dos.length>0 && <span className="muted" style={{fontSize:11}}> · 📎 {l.dos.length}</span>}
+          <button className="btn btn-sm" style={{marginLeft:8,padding:'1px 7px',fontSize:11}} onClick={ev=>{ ev.stopPropagation(); setRegl(l.e.nom); }} title="Feuille pour régler les comptes : heures, ajustements, achats, solde">📄 Règlement</button></td>
         <td style={{textAlign:'right',fontWeight:700,...lien}} title="Voir le calcul semaine par semaine" onClick={()=>basculer(l.e.nom,'h')}>{ouvH?'▾ ':'▸ '}{fmtH(l.h)}</td>
         <td style={{textAlign:'right'}}>{champ(l.payees||'', v=>ecrire(l.e.nom, {payees:v}), 60, 'h')}</td>
         <td style={{textAlign:'right'}}>{champ(l.perso ? l.taux : '', v=>ecrire(l.e.nom, {taux:v}), 60, l.taux!=null ? String(l.taux) : '$/h')}</td>
         <td style={{textAlign:'right'}}>{l.valeur!=null ? cvMoney(l.valeur) : <span className="muted">fixe le taux</span>}</td>
-        <td style={{textAlign:'right',...(l.deduit?lien:{})}} title={l.deduit ? 'Voir les achats déduits' : ''} onClick={()=>l.deduit && basculer(l.e.nom,'ach')}>{l.deduit ? (ouvA?'▾ ':'▸ ')+'− '+cvMoney(l.deduit) : '—'}{(l.ach.length+l.dos.filter(d=>d.deduire).length) ? <span className="muted" style={{fontSize:11}}> ({l.ach.length+l.dos.filter(d=>d.deduire).length})</span> : null}</td>
+        <td style={{textAlign:'right',...(l.deduit?lien:{})}} title={l.deduit ? 'Voir les achats déduits' : ''} onClick={()=>l.deduit && basculer(l.e.nom,'ach')}>{l.deduit ? (ouvA?'▾ ':'▸ ')+'− '+cvMoney(l.deduit) : '—'}{(l.achD.length+l.dosD.length) ? <span className="muted" style={{fontSize:11}}> ({l.achD.length+l.dosD.length})</span> : null}</td>
         <td style={{textAlign:'right',fontWeight:800,color:l.solde==null?'var(--muted)':l.solde<0?'var(--danger)':'var(--success)'}}>{l.solde!=null ? cvMoney(l.solde) : '—'}{l.solde!=null && l.taux ? <div className="muted" style={{fontSize:10.5,fontWeight:400}}>{fmtH(Math.max(0,l.solde)/l.taux)} restantes</div> : null}</td>
       </tr>
       {ouvH && <tr><td colSpan="7" style={{background:'var(--bg3)',padding:'8px 14px'}}>
@@ -4326,17 +4348,74 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
           </tbody></table>}
       </td></tr>}
       {ouvA && <tr><td colSpan="7" style={{background:'var(--bg3)',padding:'8px 14px'}}>
-        <div style={{fontWeight:700,marginBottom:4}}>Achats déduits — {l.e.nom}</div>
+        <div style={{fontWeight:700,marginBottom:4}}>Achats déduits — {l.e.nom}{l.depuis ? <span className="muted" style={{fontWeight:400}}> (depuis le règlement du {l.depuis})</span> : null}</div>
         <table style={{fontSize:12.5,width:'auto'}}><thead><tr><th>Date</th><th>Quoi</th><th>Détail</th><th style={{textAlign:'right'}}>Montant</th></tr></thead>
-          <tbody>{[...l.ach.map(a=>({date:a.date, quoi:'Facture fournisseur', det:a.f+(a.num?' #'+a.num:'')+(a.ref?' · '+a.ref:''), m:a.total||a.st, pdf:a.pdf})),
-              ...l.dos.filter(d=>d.deduire).map(d=>({date:d.date, quoi:d.type, det:d.titre+(d.note?' — '+d.note:''), m:d.montant, pdf:''}))]
+          <tbody>{[...l.achD.map(a=>({date:a.date, quoi:'Facture fournisseur', det:a.f+(a.num?' #'+a.num:'')+(a.ref?' · '+a.ref:''), m:a.total||a.st, pdf:a.pdf})),
+              ...l.dosD.map(d=>({date:d.date, quoi:d.type, det:d.titre+(d.note?' — '+d.note:''), m:d.montant, pdf:(d.fichiers||[])[0]||''}))]
             .sort((a,b)=>String(b.date).localeCompare(String(a.date))).map((x,i)=><tr key={i}><td style={{whiteSpace:'nowrap'}}>{x.date}</td><td>{x.quoi}</td>
-              <td>{x.det}{x.pdf && <> · <a href={x.pdf} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>📄 PDF</a></>}</td><td style={{textAlign:'right',fontWeight:700}}>{cvMoney(x.m)}</td></tr>)}
+              <td>{x.det}{x.pdf && <> · <span role="button" onClick={()=>setPdfVoir({id:x.pdf, titre:x.det})} style={{color:'var(--accent)',cursor:'pointer'}}>📄 PDF</span></>}</td><td style={{textAlign:'right',fontWeight:700}}>{cvMoney(x.m)}</td></tr>)}
             <tr><td colSpan="3" style={{textAlign:'right'}}>Total déduit</td><td style={{textAlign:'right',fontWeight:800}}>{cvMoney(l.deduit)}</td></tr></tbody></table>
       </td></tr>}
       </React.Fragment>; })}</tbody>
     </table>
   </div>;
+}
+// v542 : feuille de règlement d'un employé — tout le calcul sur une page (heures confirmées, ajustements, payées, taux, achats déduits, solde), imprimable
+function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePayees, regler}){
+  const [aj,setAj]=useState({date:localDateStr(new Date()), h:'', raison:''}), [busy,setBusy]=useState(false);
+  const zone = useRef(null);
+  const deds = [...l.achD.map(a=>({date:a.date, quoi:'Facture '+a.f+(a.num?' #'+a.num:''), det:a.ref||'', m:a.total||a.st, pdf:a.pdf})),
+    ...l.dosD.map(d=>({date:d.date, quoi:d.type, det:d.titre+(d.note?' — '+d.note:''), m:d.montant, pdf:(d.fichiers||[])[0]||''}))].sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const sg = x => (x>0?'+':x<0?'−':'')+fmtH(Math.abs(x));
+  const go = async ()=>{ const h = cvNum(String(aj.h).replace(',','.')); if(!h){ alert('Écris le nombre d\'heures (ex. 2 ou -1,5).'); return; } if(!aj.raison.trim()){ alert('Écris la raison de l\'ajustement.'); return; }
+    setBusy(true); try{ await ajouter(aj.date, h, aj.raison.trim()); setAj({...aj, h:'', raison:''}); }catch(e){ alert('Pas enregistré : '+apiErrMsg(e)); } setBusy(false); };
+  const imprimer = ()=>{ const w = window.open('', '_blank'); if(!w) return;
+    w.document.write('<html><head><meta charset="utf-8"><title>Règlement — '+l.e.nom+'</title><style>body{font-family:system-ui,sans-serif;font-size:12px;color:#111;margin:24px}table{border-collapse:collapse;width:100%;margin:6px 0 14px}th,td{border-bottom:1px solid #ccc;padding:4px 6px;text-align:left}td.n,th.n{text-align:right}.noprint{display:none}h2,h3{margin:8px 0}</style></head><body>'+zone.current.innerHTML+'</body></html>');
+    w.document.close(); w.focus(); setTimeout(()=>w.print(), 300); };
+  const th = {textAlign:'left',padding:'4px 6px',borderBottom:'1px solid var(--border)',fontSize:12}, td = {padding:'4px 6px',borderBottom:'1px solid var(--border)',fontSize:12.5}, n = {textAlign:'right'};
+  return <Modal title={'📄 Règlement — '+l.e.nom} onClose={onClose} wide>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end',alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>
+      {l.dernier && <span className="muted" style={{fontSize:12,marginRight:'auto'}}>Dernier règlement : {l.dernier.date}</span>}
+      <button className="btn btn-sm" onClick={imprimer}>🖨 Imprimer / PDF</button>
+      <button className="btn btn-sm btn-p" disabled={busy} onClick={async()=>{ if(!confirm('Marquer les comptes de '+l.e.nom+' comme réglés aujourd\'hui ?\n\n• Les '+fmtH(l.h)+' en banque comptent comme payées\n• Les achats d\'avant aujourd\'hui ne seront plus déduits')) return;
+        setBusy(true); try{ await regler(); }catch(e){ alert('Pas enregistré : '+apiErrMsg(e)); } setBusy(false); }}>✓ Marquer réglé aujourd'hui</button></div>
+    <div ref={zone}>
+      <h2 style={{margin:'0 0 2px',fontSize:18}}>Règlement de la banque d'heures — {l.e.nom}</h2>
+      <div className="muted" style={{fontSize:12,marginBottom:10}}>Saran Électrique inc. · en date du {new Date().toLocaleDateString('fr-CA',{day:'numeric',month:'long',year:'numeric'})}</div>
+      <h3 style={{fontSize:14}}>1. Heures en banque (semaines confirmées)</h3>
+      <table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr><th style={th}>Semaine</th><th style={{...th,...n}} className="n">+ au-dessus de 40 h</th><th style={{...th,...n}} className="n">− pris dans la banque</th><th style={{...th,...n}} className="n">Cumul</th></tr></thead>
+        <tbody>{sem.filter(w=>w.supp||w.pris).map(w=><tr key={w.semaine}><td style={td}>{weekRangeLabel(w.semaine)}</td><td style={{...td,...n}} className="n">{w.supp ? '+'+fmtH(w.supp) : ''}</td><td style={{...td,...n}} className="n">{w.pris ? '−'+fmtH(w.pris) : ''}</td><td style={{...td,...n}} className="n">{fmtH(w.apres)}</td></tr>)}
+          {!sem.some(w=>w.supp||w.pris) && <tr><td style={td} colSpan="4">Aucune heure supp sur les semaines confirmées.</td></tr>}
+          <tr><td style={{...td,fontWeight:700}} colSpan="3">Sous-total des semaines</td><td style={{...td,...n,fontWeight:700}} className="n">{fmtH(l.base)}</td></tr></tbody></table>
+      <h3 style={{fontSize:14}}>2. Ajustements</h3>
+      <table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr><th style={th}>Date</th><th style={th}>Raison</th><th style={{...th,...n}} className="n">Heures</th><th style={th} className="noprint"></th></tr></thead>
+        <tbody>{l.ajust.map(d=><tr key={d.row}><td style={td}>{d.date}</td><td style={td}>{d.titre}</td><td style={{...td,...n}} className="n">{sg(d.montant)}</td>
+          <td style={td} className="noprint"><span role="button" style={{cursor:'pointer',color:'var(--muted)'}} title="Enlever" onClick={async()=>{ if(confirm('Enlever cet ajustement ?')){ setBusy(true); try{ await enlever(d); }catch(e){ alert(apiErrMsg(e)); } setBusy(false); } }}>✕</span></td></tr>)}
+          <tr className="noprint"><td style={td}><input type="date" value={aj.date} onChange={e=>setAj({...aj, date:e.target.value})} style={{padding:'2px 4px'}}/></td>
+            <td style={td}><input value={aj.raison} onChange={e=>setAj({...aj, raison:e.target.value})} placeholder="Raison (ex. journée du 3 nov. pas punchée)" style={{width:'100%',padding:'2px 6px'}}/></td>
+            <td style={{...td,...n}}><input value={aj.h} onChange={e=>setAj({...aj, h:e.target.value})} placeholder="+2 ou -1,5" inputMode="decimal" style={{width:80,textAlign:'right',padding:'2px 6px'}}/></td>
+            <td style={td}><button className="btn btn-sm btn-p" disabled={busy} onClick={go}>Ajouter</button></td></tr>
+          <tr><td style={{...td,fontWeight:700}} colSpan="2">Total des ajustements</td><td style={{...td,...n,fontWeight:700}} className="n">{sg(l.adjH)}</td><td style={td} className="noprint"></td></tr></tbody></table>
+      <h3 style={{fontSize:14}}>3. Calcul</h3>
+      <table style={{width:'100%',borderCollapse:'collapse'}}><tbody>
+        <tr><td style={td}>Heures en banque (1 + 2)</td><td style={{...td,...n}} className="n">{fmtH(l.h)}</td></tr>
+        <tr><td style={td}>− Heures déjà payées <span className="noprint"><input key={l.payees} defaultValue={l.payees||''} placeholder="h" inputMode="decimal" onBlur={e=>{ const v=e.target.value.trim().replace(',','.'); if(v!==String(l.payees||'')) ecrirePayees(v); }} style={{width:60,textAlign:'right',padding:'1px 4px',marginLeft:6}}/></span></td><td style={{...td,...n}} className="n">−{fmtH(l.payees||0)}</td></tr>
+        <tr><td style={{...td,fontWeight:700}}>Heures restantes</td><td style={{...td,...n,fontWeight:700}} className="n">{fmtH(l.reste)}</td></tr>
+        <tr><td style={td}>× Taux</td><td style={{...td,...n}} className="n">{l.taux!=null ? cvMoney(l.taux)+' / h' : 'à fixer (colonne Taux)'}</td></tr>
+        <tr><td style={{...td,fontWeight:700}}>Valeur des heures</td><td style={{...td,...n,fontWeight:700}} className="n">{l.valeur!=null ? cvMoney(l.valeur) : '—'}</td></tr>
+      </tbody></table>
+      <h3 style={{fontSize:14}}>4. Achats et avances déduits{l.depuis ? ' (depuis le règlement du '+l.depuis+')' : ''}</h3>
+      <table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr><th style={th}>Date</th><th style={th}>Quoi</th><th style={th}>Détail</th><th style={{...th,...n}} className="n">Montant</th></tr></thead>
+        <tbody>{deds.map((x,i)=><tr key={i}><td style={td}>{x.date}</td><td style={td}>{x.quoi}</td><td style={td}>{x.det}{x.pdf && <span className="noprint"> · <span role="button" onClick={()=>voirPdf({id:x.pdf, titre:x.quoi})} style={{color:'var(--accent)',cursor:'pointer'}}>📄 PDF</span></span>}</td><td style={{...td,...n}} className="n">{cvMoney(x.m)}</td></tr>)}
+          {!deds.length && <tr><td style={td} colSpan="4">Aucun.</td></tr>}
+          <tr><td style={{...td,fontWeight:700}} colSpan="3">Total déduit</td><td style={{...td,...n,fontWeight:700}} className="n">−{cvMoney(l.deduit)}</td></tr></tbody></table>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 12px',border:'2px solid var(--border2)',borderRadius:8,marginTop:6}}>
+        <b style={{fontSize:15}}>Solde à régler</b>
+        <b style={{fontSize:18,color:l.solde==null?'var(--muted)':l.solde<0?'var(--danger)':'var(--success)'}}>{l.solde!=null ? cvMoney(l.solde) : 'fixe le taux'}</b></div>
+      {l.solde!=null && <div className="muted" style={{fontSize:11.5,marginTop:4}}>{l.solde>=0 ? 'Montant dû à '+l.e.nom.split(' ')[0]+' (ou '+fmtH(l.taux ? l.solde/l.taux : 0)+' à reprendre en congé).' : l.e.nom.split(' ')[0]+' doit '+cvMoney(-l.solde)+' à Saran Électrique.'}</div>}
+      <div style={{display:'flex',gap:40,marginTop:30,fontSize:12}}><div style={{flex:1,borderTop:'1px solid #888',paddingTop:4}}>Signature de l'employé</div><div style={{flex:1,borderTop:'1px solid #888',paddingTop:4}}>Saran Électrique inc.</div></div>
+    </div>
+  </Modal>;
 }
 function HeuresView({cfg, refreshKey}){
   const [loading,setLoading]=useState(true);
