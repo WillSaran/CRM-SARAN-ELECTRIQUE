@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v523';
+const APP_VERSION = 'v524';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4658,6 +4658,9 @@ function DossierApercu({id}){
   </div>;
 }
 function EditEventModal({cfg, event, job, onClose, onSaved, toast}){
+  const iniDe = k => Object.keys(CREW_INITIALS).find(x=>CREW_INITIALS[x]===CREW_COLORS[k]) || '';
+  const aIni = x => !!x && new RegExp('(^|\\s)'+x+'(\\s|$)').test(titre||'');
+  const basculerIni = x => setTitre(t=>{ t = t||''; return aIni(x) ? t.replace(new RegExp('(^|\\s)'+x+'(?=\\s|$)','g'),'').replace(/\s{2,}/g,' ').trim() : t.trim()+' '+x; });
   const [panneau,setPanneau]=useState(null);   // v521 : 'dossier' | 'commande' | 'projet' — ouverts DANS la fenêtre, sans changer de page
   const Bk = useBlocages(cfg || {});
   const blocOuverts = useMemo(()=>{ if(!job) return []; const ids = new Set((job.j.events||[]).flatMap(e=>[e.id, String(e.id||'').split('_')[0]]));
@@ -4780,11 +4783,17 @@ function EditEventModal({cfg, event, job, onClose, onSaved, toast}){
     <div style={{display:panneau ? 'none' : 'block'}}>
     <div className="ev-grille"><div className="ev-gauche">
     <div className="field"><label>Titre</label><input value={titre} onChange={e=>setTitre(e.target.value)}/></div>
-    <div className="field"><label>Équipe</label>
+    <div className="field"><label>Équipe — principal (sa couleur)</label>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-        {EQUIPES_ORDRE.filter(k=>CREW_COLORS[k]).map(k=>{ const nom = CREW_COLORS[k], ini = Object.keys(CREW_INITIALS).filter(x=>CREW_INITIALS[x]===nom), dansTitre = ini.some(x=>new RegExp('\\b'+x+'\\b').test(titre||'')), c = GCAL_COLOR_MAP[k];
-          return <button key={k} type="button" className="btn btn-sm" onClick={()=>setCouleur(k)} title={nom+(dansTitre ? ' — ses initiales sont dans le titre' : '')}   // v519 : initiales ; encadré = initiales déjà dans le titre
-            style={{background:couleur===k ? c : 'transparent',color:couleur===k ? texteSur(c) : 'var(--text)',border:'2px solid '+c,outline:dansTitre?'2px solid var(--text)':'none',outlineOffset:2,fontWeight:800,minWidth:44}}>{couleur===k?'✓ ':''}{ini[0] || equipeNom(k)}</button>; })}
+        {EQUIPES_ORDRE.filter(k=>CREW_COLORS[k]).map(k=>{ const ini = iniDe(k), c = GCAL_COLOR_MAP[k];   // v524 : principal = couleur de l'événement (+ ses initiales dans le titre)
+          return <button key={k} type="button" className="btn btn-sm" onClick={()=>{ setCouleur(k); if(ini && !aIni(ini)) setTitre(t=>(t||'').trim()+' '+ini); }} title={CREW_COLORS[k]+' — en charge'}
+            style={{background:couleur===k ? c : 'transparent',color:couleur===k ? texteSur(c) : 'var(--text)',border:'2px solid '+c,fontWeight:800,minWidth:44}}>{couleur===k?'✓ ':''}{ini || equipeNom(k)}</button>; })}
+      </div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginTop:8}}>
+        <span className="muted" style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:.5,marginRight:2}}>Avec</span>
+        {EQUIPES_ORDRE.filter(k=>CREW_COLORS[k] && k!==couleur).map(k=>{ const ini = iniDe(k), c = GCAL_COLOR_MAP[k], on = aIni(ini);   // v524 : les autres gars sur la job = leurs initiales ajoutées au titre
+          return <button key={k} type="button" className="btn btn-sm" onClick={()=>basculerIni(ini)} title={(on ? 'Enlever ' : 'Ajouter ')+CREW_COLORS[k]+' sur cette job'}
+            style={{background:on ? c+'40' : 'transparent',color:'var(--text)',border:'1px '+(on?'solid ':'dashed ')+c,fontWeight:on?800:600,minWidth:40,padding:'2px 8px'}}>{on ? '✓ ' : '+ '}{ini}</button>; })}
       </div>
       {!couleur && <div style={{fontSize:12,color:'var(--warning)',marginTop:4}}>Pas de couleur : la job est « À attitrer ».</div>}
     </div>
