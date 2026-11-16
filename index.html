@@ -184,7 +184,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v516';
+const APP_VERSION = 'v517';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1170,9 +1170,19 @@ function useToast(){
 }
 
 // ── UI: Modal wrapper ─────────────────────────────────────────────────────
-function Modal({title,onClose,children,wide}){
-  return <div className="modal-bg" onMouseDown={e=>{ if(e.target===e.currentTarget) onClose(); }}>
-    <div className="modal" style={wide?{maxWidth:'720px'}:null}>
+// v517 : dernier clic (pour qu'une fenêtre « sorte » de l'événement cliqué, au lieu d'apparaître d'un coup)
+let DERNIER_CLIC = null;
+if(typeof document!=='undefined') document.addEventListener('pointerdown', e=>{ DERNIER_CLIC = {x:e.clientX, y:e.clientY, t:Date.now()}; }, true);
+function Modal({title,onClose,children,wide,teinte,deClic}){
+  const ref = useRef(null), fond = useRef(null);
+  useLayoutEffect(()=>{ const el = ref.current, c = DERNIER_CLIC; if(!deClic || !el || !c || Date.now()-c.t > 1500 || !el.animate) return;
+    try{ if(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return; }catch(e){}
+    const r = el.getBoundingClientRect(), dx = c.x-(r.left+r.width/2), dy = c.y-(r.top+r.height/2);
+    el.animate([{transform:'translate('+dx+'px,'+dy+'px) scale(.12)', opacity:.2},{transform:'none', opacity:1}], {duration:260, easing:'cubic-bezier(.2,.8,.2,1)'});
+    if(fond.current) fond.current.animate([{backgroundColor:'rgba(0,0,0,0)'},{backgroundColor:'rgba(0,0,0,.28)'}], {duration:260}); },[]);
+  const sty = {...(wide?{maxWidth:'720px'}:{}), ...(teinte ? {borderTop:'6px solid '+teinte, background:'linear-gradient(180deg, '+teinte+'26 0, var(--bg2) 140px)'} : {})};
+  return <div ref={fond} className="modal-bg" style={deClic ? {background:'rgba(0,0,0,.28)', backdropFilter:'blur(2px)'} : null} onMouseDown={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+    <div ref={ref} className="modal" style={sty}>
       <button className="close-x" onClick={onClose}>×</button>
       <div className="modal-title">{title}</div>
       {children}
@@ -4694,7 +4704,7 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
   }
 
   const dossierJob = job && job.j.reg && job.j.reg.dossier;
-  return <Modal title="Modifier l'événement" onClose={onClose} wide>
+  return <Modal title="Modifier l'événement" onClose={onClose} wide deClic teinte={eventColor(event)}>
     {job && <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:12,padding:'8px 10px',border:'1px solid var(--border)',borderRadius:8}}>
       <span style={{fontSize:12.5,flex:'1 1 160px'}}><b>{(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}</b>{job.j.po ? <span className="muted"> · {job.j.po}</span> : null}</span>
       {dossierJob ? <a className="btn btn-p btn-sm" href={'https://drive.google.com/drive/folders/'+dossierJob} target="_blank" rel="noopener" style={{textDecoration:'none'}}>Ouvrir le dossier ↗</a>
