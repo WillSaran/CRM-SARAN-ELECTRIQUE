@@ -184,7 +184,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v513';
+const APP_VERSION = 'v514';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4870,6 +4870,7 @@ function AgendaHeuresEmployes({cfg, refreshKey}){
   const vus = js.map((d,i)=>i<5 || emps.some(n=>(detail[n][d]||[]).some(j=>j.compte)));
   const echelle = h => ((Math.min(HJ_MAX, Math.max(HJ_MIN, h)) - HJ_MIN) / (HJ_MAX - HJ_MIN) * 100)+'%';
   const confirme = n => pp.pts.some(p=>p.nom===n && js.includes(p.date) && p.type==='confirm');
+  const coul = Object.fromEntries(pp.emps.map(e=>[e.nom, e.couleur]));
   return <div>
     <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:10}}>
       <button className="btn btn-sm" onClick={()=>decaler(-1)}>←</button><b>Semaine du {weekRangeLabel(sem)}</b><button className="btn btn-sm" onClick={()=>decaler(1)}>→</button>
@@ -4886,10 +4887,13 @@ function AgendaHeuresEmployes({cfg, refreshKey}){
               <div style={{position:'absolute',left:echelle(HJ_DEBUT),width:'calc('+echelle(HJ_FIN)+' - '+echelle(HJ_DEBUT)+')',top:0,bottom:0,background:'rgba(63,185,80,.15)'}}/>
               {b.map((x,k)=><div key={k} style={{position:'absolute',left:echelle(x.d),width:'calc('+echelle(x.f)+' - '+echelle(x.d)+')',top:2,bottom:2,background:x.jobColor || 'var(--accent)',opacity:x.estime ? .55 : 1,borderRadius:2,borderRight:'1px solid var(--bg)'}}/>)}
               {fin > HJ_FIN+0.01 && <div style={{position:'absolute',left:echelle(HJ_FIN),width:'calc('+echelle(fin)+' - '+echelle(HJ_FIN)+')',top:0,height:3,background:'var(--danger)'}}/>}</div>}
-            {b.map((x,k)=><div key={k} style={{lineHeight:1.3}}><span className="muted">{x.estime ? '≈' : ''}{hjTxt(x.d).replace(' h ','h')}–{hjTxt(x.f).replace(' h ','h')}</span> {x.job} <b>{hjNb(x.heures)} h</b></div>)}
+            {b.length>0 && <div style={{display:'grid',gap:3,maxHeight:190,overflowY:'auto',paddingRight:2}}>{b.map((x,k)=>{ const fond = x.jobColor || coul[n] || 'var(--accent)';   // v514 : cartes de couleur comme l'agenda, la case défile s'il y a beaucoup de jobs
+              return <div key={k} title={x.job+(x.note ? '\n📝 '+x.note : '')} style={{background:fond,color:texteSur(fond),borderLeft:'4px solid '+(coul[n]||fond),borderRadius:5,padding:'3px 6px',lineHeight:1.25,opacity:x.estime ? .8 : 1,boxShadow:'0 1px 2px rgba(0,0,0,.25)'}}>
+                <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{x.job}</div>
+                <div style={{fontSize:11,opacity:.9}}>{x.estime ? '≈' : ''}{hjTxt(x.d).replace(' h ','h')}–{hjTxt(x.f).replace(' h ','h')} · <b>{hjNb(x.heures)} h</b></div></div>; })}</div>}
             {b.length>0 && <div style={{marginTop:2,fontWeight:700}}>{hjNb(h)} h{otj>0.01 && <span style={{color:'var(--danger)'}}> · OT +{hjNb(Math.round(otj*4)/4)} h</span>}</div>}
           </td>; });
-        return <tr key={n}><td style={{verticalAlign:'top',padding:'4px 6px',borderTop:'1px solid var(--border)',fontWeight:700}}>{n.split(' ')[0]}<div className="muted" style={{fontWeight:400,fontSize:11}}>{confirme(n) ? '✓ confirmée' : 'punchs'}</div></td>{cel}
+        return <tr key={n}><td style={{verticalAlign:'top',padding:'4px 6px',borderTop:'1px solid var(--border)',fontWeight:700}}><span style={{display:'inline-block',width:10,height:10,borderRadius:'50%',background:coul[n]||'var(--muted)',marginRight:6}}/>{n.split(' ')[0]}<div className="muted" style={{fontWeight:400,fontSize:11}}>{confirme(n) ? '✓ confirmée' : 'punchs'}</div></td>{cel}
           <td style={{verticalAlign:'top',padding:'4px 6px',borderTop:'1px solid var(--border)',whiteSpace:'nowrap'}}><b>{hjNb(tot)} h</b>{ot>0.01 && <div style={{color:'var(--danger)',fontWeight:700}}>OT +{hjNb(Math.round(ot*4)/4)} h</div>}</td></tr>; })}</tbody>
     </table></div>
     <div className="muted" style={{fontSize:11.5,marginTop:6}}>≈ = heure de début estimée (punch sans heure) · survole une barre pour le détail · la couleur = celle de la job dans PunchPro</div>
@@ -5077,7 +5081,11 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     return weekRangeLabel(getWeek(anchor));
   }
 
-  const HOUR_START=6, HOUR_END=20, PX_H=isDesktop?64:46;
+  // v514 : vue Jour = 7 h à 15 h 30 au complet sans défiler (s'élargit seulement si une job déborde)
+  const jourEvs = viewMode==='jour' ? (events||[]).filter(e=>!e.allDay && String(e.start).slice(0,10)===localDateStr(anchor)) : [];
+  const HOUR_START = viewMode==='jour' ? Math.min(7, ...jourEvs.map(e=>new Date(e.start).getHours())) : 6;
+  const HOUR_END = viewMode==='jour' ? Math.max(15, ...jourEvs.map(e=>{ const f = new Date(e.end||e.start); return f.getHours() - (f.getMinutes() ? 0 : 1); })) : 20;
+  const PX_H = viewMode==='jour' ? Math.max(isDesktop?44:38, Math.floor(((typeof window!=='undefined' ? window.innerHeight : 800) - (isDesktop?300:330)) / (HOUR_END-HOUR_START+1))) : (isDesktop?64:46);
   const hours = Array.from({length:HOUR_END-HOUR_START+1},(_,i)=>HOUR_START+i);
   const todayStr = localDateStr(new Date());
   // Colonnes responsives (minmax(0,1fr)) sur desktop pour remplir toute la largeur
@@ -5135,6 +5143,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     const rect = dayColRefs.current[dayIdx].getBoundingClientRect();
     let h = HOUR_START + (ev.clientY-rect.top)/PX_H; h = Math.max(0, Math.min(23.75, Math.round(h*4)/4));
     const debut = new Date(d); debut.setMinutes(Math.round(h*60));
+    if(viewMode==='jour'){ const d7 = new Date(d); d7.setHours(7,0,0,0); const f = new Date(d); f.setHours(15,30,0,0);   // v514 : en vue Jour, une job placée prend la journée 7 h – 15 h 30
+      appliquerOuCeduler({ev:src, allDay:false, debut:d7, fin:f}); return; }
     appliquerOuCeduler({ev:src, allDay:false, debut, fin:new Date(debut.getTime()+dureeDe(src, debut))});
   }
   function dropMois(ev, d){
@@ -5387,7 +5397,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
               {nbFerme>0 && <span style={{fontSize:11,fontWeight:700,background:'var(--bg4)',borderRadius:8,padding:'1px 6px',height:'fit-content'}}>{nbFerme}</span>}</div>}
             {enCouloirs && !ferme(d) && couloirs.slice(1).map((k,li)=><div key={'s'+k} style={{position:'absolute',top:0,bottom:0,left:((li+1)*100/couloirs.length)+'%',borderLeft:'1px dashed var(--border2)',pointerEvents:'none',zIndex:1}}></div>)}
             {dStr===todayStr && hNow>=HOUR_START && hNow<=HOUR_END+1 && <div style={{position:'absolute',left:0,right:0,top:(hNow-HOUR_START)*PX_H,height:2,background:'var(--danger)',zIndex:6,pointerEvents:'none'}}><div style={{position:'absolute',left:-4,top:-4,width:10,height:10,borderRadius:'50%',background:'var(--danger)'}}></div></div>}
-            {hours.map(h=><div key={h} onClick={()=>{ if(data) openNewJob(dStr, String(h).padStart(2,'0')+':00'); }}
+            {hours.map(h=><div key={h} onClick={()=>{ if(data) openNewJob(dStr, viewMode==='jour' ? '07:00' : String(h).padStart(2,'0')+':00'); }}
               style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box',cursor:data?'copy':'default'}}
               title={data?'Cliquer pour créer une job à '+h+'h':''}></div>)}
             {placed.map(({event:e,leftPct,widthPct})=>{
@@ -5405,6 +5415,16 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
                 <div style={{overflow:'hidden',height:'100%'}}>
                   <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{pastilles(e)}{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>
                   <div style={{opacity:.85}}>{start.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}–{end.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}</div>
+                  {viewMode==='jour' && (()=>{   // v514 : vue Jour — la note de la job, les pièces jointes et « Commander » directement sur le bloc
+                    const note = String(e.description||'').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\n{2,}/g,'\n').trim();
+                    const pj = (e.attachments||[]).length, stop = ev=>ev.stopPropagation();
+                    return <>
+                      {note && height>60 && <div style={{fontSize:10.5,opacity:.92,whiteSpace:'pre-wrap',overflow:'hidden',display:'-webkit-box',WebkitBoxOrient:'vertical',WebkitLineClamp:Math.max(1, Math.floor((height-62)/13)),marginTop:2}}>📝 {note}</div>}
+                      <div style={{display:'flex',gap:4,alignItems:'center',marginTop:3,flexWrap:'wrap'}}>
+                        {pj>0 && <span style={{fontSize:10.5,background:'rgba(255,255,255,.35)',borderRadius:4,padding:'0 4px'}} title={(e.attachments||[]).map(a=>a.title).join('\n')}>📎 {pj}</span>}
+                        <button className="btn btn-sm" style={{padding:'1px 7px',fontSize:11,background:'var(--bg2)',color:'var(--text)'}} onPointerDown={stop} onPointerUp={stop}
+                          onClick={ev=>{ ev.stopPropagation(); BC_PREFILL = {id:e.id, day:String(e.start||'').slice(0,10), title:e.title}; CRM_ALLER && CRM_ALLER('commandes', {}); }} title="Ouvre le bon de commande pour cette job">🛒 Commander</button>
+                      </div></>; })()}
                 </div>
                 <div onPointerDown={ev2=>handleResizePointerDown(ev2,e)} onPointerMove={handleResizePointerMove} onPointerUp={handleResizePointerUp}
                   title="Glisser pour changer la durée"
