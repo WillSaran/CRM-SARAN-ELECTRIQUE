@@ -184,7 +184,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v515';
+const APP_VERSION = 'v516';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4901,6 +4901,7 @@ function AgendaHeuresEmployes({cfg, refreshKey}){
 }
 function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // v449 : onChoisir = mode « choisir une job » (clic sur un événement)
   const [viewMode,setViewMode]=useState(()=>AGENDA_POS && AGENDA_POS.viewMode || 'semaine'); // 'jour'|'semaine'|'mois'
+  const [pjVoir,setPjVoir]=useState(null);   // v516 : pièces jointes d'une job affichées dans l'agenda {ev, i}
   const [anchor,setAnchor]=useState(()=>AGENDA_POS && AGENDA_POS.anchor ? new Date(AGENDA_POS.anchor) : new Date());
   useEffect(()=>{ AGENDA_POS = {...(AGENDA_POS||{}), viewMode, anchor:anchor.getTime()}; try{ sessionStorage.setItem('agenda_pos', JSON.stringify(AGENDA_POS)); }catch(e){} },[viewMode, anchor]);
   useEffect(()=>{ if(onChoisir) return; const y = AGENDA_POS && AGENDA_POS.scrollY; if(y) setTimeout(()=>window.scrollTo(0, y), 60);
@@ -5329,6 +5330,12 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       {cachees.length>0 && <span style={{color:'var(--accent)',fontSize:12,cursor:'pointer'}} onClick={()=>{ setCachees([]); try{ localStorage.setItem('agenda_groupes_caches','[]'); }catch(e){} }}>Tout montrer</span>}
     </div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
+    {pjVoir && (()=>{ const L = pjVoir.ev.attachments||[], a = L[pjVoir.i] || L[0], fid = a && (a.fileId || (String(a.fileUrl||'').match(/\/d\/([\w-]+)/)||[])[1]);
+      return <Modal title={'📎 '+pjVoir.ev.title} onClose={()=>setPjVoir(null)} wide>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>{L.map((x,i)=><button key={i} className={'btn btn-sm'+(i===pjVoir.i?' btn-p':'')} onClick={()=>setPjVoir({...pjVoir, i})}>{x.title || 'Pièce jointe '+(i+1)}</button>)}</div>
+        {fid ? <iframe src={'https://drive.google.com/file/d/'+fid+'/preview'} style={{width:'100%',height:'65vh',border:'1px solid var(--border)',borderRadius:8,background:'#fff'}}/> : <div className="muted">Aperçu impossible.</div>}
+        {a && <a className="btn btn-sm" style={{marginTop:8}} href={a.fileUrl} target="_blank" rel="noopener">↗ Ouvrir dans un nouvel onglet</a>}
+      </Modal>; })()}
     {ongletAg==='agenda' && <div style={{display:'grid',gridTemplateColumns:isDesktop && !panneauFerme?'minmax(0,1fr) '+(grandPanneau?'420px':'280px'):'minmax(0,1fr)',gap:12,alignItems:'start'}}><div style={{minWidth:0}}>
     {majAg && !loading && <div className="muted" style={{position:'fixed',right:16,bottom:16,zIndex:60,fontSize:12,background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:8,padding:'4px 10px'}}>Mise à jour…</div>}
     {loading ? <div className="muted">Chargement...</div> :
@@ -5425,7 +5432,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
                     return <>
                       {note && height>60 && <div style={{fontSize:10.5,opacity:.92,whiteSpace:'pre-wrap',overflow:'hidden',display:'-webkit-box',WebkitBoxOrient:'vertical',WebkitLineClamp:Math.max(1, Math.floor((height-62)/13)),marginTop:2}}>📝 {note}</div>}
                       <div style={{display:'flex',gap:4,alignItems:'center',marginTop:3,flexWrap:'wrap'}}>
-                        {pj>0 && <span style={{fontSize:10.5,background:'rgba(255,255,255,.35)',borderRadius:4,padding:'0 4px'}} title={(e.attachments||[]).map(a=>a.title).join('\n')}>📎 {pj}</span>}
+                        {pj>0 && <button className="btn btn-sm" style={{padding:'1px 7px',fontSize:11,background:'var(--bg2)',color:'var(--text)'}} onPointerDown={stop} onPointerUp={stop}
+                          onClick={ev=>{ ev.stopPropagation(); setPjVoir({ev:e, i:0}); }} title={(e.attachments||[]).map(a=>a.title).join('\n')}>📎 {pj} — voir</button>}
                         {aOT && <button className="btn btn-sm" style={{padding:'1px 7px',fontSize:11,background:'var(--bg2)',color:'var(--text)'}} onPointerDown={stop} onPointerUp={stop}
                           onClick={ev=>{ ev.stopPropagation(); BC_PREFILL = {id:e.id, day:String(e.start||'').slice(0,10), title:e.title}; CRM_ALLER && CRM_ALLER('commandes', {}); }} title="Ouvre le bon de commande pour cette job (ordre de travail relié)">🛒 Commander</button>}
                       </div></>; })()}
