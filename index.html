@@ -99,6 +99,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;z-index:100;padding:14px}
 .modal{background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:20px;width:100%;max-width:560px;max-height:88vh;overflow-y:auto}
 .modal-title{font-family:var(--font-head);font-weight:800;font-size:18px;margin:0 0 14px}
+/* v518 : fenêtre légère (événement de l'agenda) — champs sans boîtes, juste une ligne */
+.modal-leger .field{margin-bottom:12px}
+.modal-leger .field>label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700}
+.modal-leger input:not([type=checkbox]):not([type=file]),.modal-leger select,.modal-leger textarea{background:transparent!important;border:none!important;border-bottom:1px solid var(--border2)!important;border-radius:0!important;padding-left:2px!important;box-shadow:none!important}
+.modal-leger input:focus,.modal-leger select:focus,.modal-leger textarea:focus{outline:none!important;border-bottom-color:var(--accent)!important}
 .field{margin-bottom:11px}
 .field label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.02em}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -184,7 +189,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v517';
+const APP_VERSION = 'v518';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -1173,17 +1178,26 @@ function useToast(){
 // v517 : dernier clic (pour qu'une fenêtre « sorte » de l'événement cliqué, au lieu d'apparaître d'un coup)
 let DERNIER_CLIC = null;
 if(typeof document!=='undefined') document.addEventListener('pointerdown', e=>{ DERNIER_CLIC = {x:e.clientX, y:e.clientY, t:Date.now()}; }, true);
+let MODAL_FERMER = null;   // v518 : fermer la fenêtre ouverte avec la même animation (bouton « Fermer » d'une fenêtre)
 function Modal({title,onClose,children,wide,teinte,deClic}){
-  const ref = useRef(null), fond = useRef(null);
-  useLayoutEffect(()=>{ const el = ref.current, c = DERNIER_CLIC; if(!deClic || !el || !c || Date.now()-c.t > 1500 || !el.animate) return;
+  const ref = useRef(null), fond = useRef(null), orig = useRef(null), ferme = useRef(false);
+  const fermer = () => { const el = ref.current, c = orig.current; if(ferme.current) return; ferme.current = true;
+    let reduit = false; try{ reduit = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){}
+    if(!deClic || !el || !c || !el.animate || reduit){ onClose(); return; }
+    const r = el.getBoundingClientRect(), dx = c.x-(r.left+r.width/2), dy = c.y-(r.top+r.height/2);
+    const a = el.animate([{transform:'none', opacity:1},{transform:'translate('+dx+'px,'+dy+'px) scale(.12)', opacity:0}], {duration:220, easing:'cubic-bezier(.4,0,.8,.4)', fill:'forwards'});
+    if(fond.current) fond.current.animate([{backgroundColor:'rgba(0,0,0,.28)'},{backgroundColor:'rgba(0,0,0,0)'}], {duration:220, fill:'forwards'});
+    a.onfinish = () => onClose(); };
+  useEffect(()=>{ if(!deClic) return; MODAL_FERMER = fermer; return ()=>{ if(MODAL_FERMER===fermer) MODAL_FERMER = null; }; });
+  useLayoutEffect(()=>{ const el = ref.current, c = DERNIER_CLIC; if(c && Date.now()-c.t <= 1500) orig.current = c; if(!deClic || !el || !c || Date.now()-c.t > 1500 || !el.animate) return;
     try{ if(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return; }catch(e){}
     const r = el.getBoundingClientRect(), dx = c.x-(r.left+r.width/2), dy = c.y-(r.top+r.height/2);
     el.animate([{transform:'translate('+dx+'px,'+dy+'px) scale(.12)', opacity:.2},{transform:'none', opacity:1}], {duration:260, easing:'cubic-bezier(.2,.8,.2,1)'});
     if(fond.current) fond.current.animate([{backgroundColor:'rgba(0,0,0,0)'},{backgroundColor:'rgba(0,0,0,.28)'}], {duration:260}); },[]);
   const sty = {...(wide?{maxWidth:'720px'}:{}), ...(teinte ? {borderTop:'6px solid '+teinte, background:'linear-gradient(180deg, '+teinte+'26 0, var(--bg2) 140px)'} : {})};
-  return <div ref={fond} className="modal-bg" style={deClic ? {background:'rgba(0,0,0,.28)', backdropFilter:'blur(2px)'} : null} onMouseDown={e=>{ if(e.target===e.currentTarget) onClose(); }}>
-    <div ref={ref} className="modal" style={sty}>
-      <button className="close-x" onClick={onClose}>×</button>
+  return <div ref={fond} className="modal-bg" style={deClic ? {background:'rgba(0,0,0,.28)', backdropFilter:'blur(2px)'} : null} onMouseDown={e=>{ if(e.target===e.currentTarget) fermer(); }}>
+    <div ref={ref} className={'modal'+(deClic ? ' modal-leger' : '')} style={sty}>
+      <button className="close-x" onClick={fermer}>×</button>
       <div className="modal-title">{title}</div>
       {children}
     </div>
@@ -4635,6 +4649,7 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
   const pj = a => ({fileUrl:a.fileUrl, title:a.title, ...(a.fileId?{fileId:a.fileId}:{}), ...(a.mimeType?{mimeType:a.mimeType}:{})});
   const [newFileUrl,setNewFileUrl]=useState('');
   const [newFileTitre,setNewFileTitre]=useState('');
+  const [lienOuvert,setLienOuvert]=useState(false);
   const [busy,setBusy]=useState(false);
   const [confirmDel,setConfirmDel]=useState(false);
 
@@ -4705,7 +4720,7 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
 
   const dossierJob = job && job.j.reg && job.j.reg.dossier;
   return <Modal title="Modifier l'événement" onClose={onClose} wide deClic teinte={eventColor(event)}>
-    {job && <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:12,padding:'8px 10px',border:'1px solid var(--border)',borderRadius:8}}>
+    {job && <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:14,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
       <span style={{fontSize:12.5,flex:'1 1 160px'}}><b>{(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}</b>{job.j.po ? <span className="muted"> · {job.j.po}</span> : null}</span>
       {dossierJob ? <a className="btn btn-p btn-sm" href={'https://drive.google.com/drive/folders/'+dossierJob} target="_blank" rel="noopener" style={{textDecoration:'none'}}>Ouvrir le dossier ↗</a>
         : <span className="muted" style={{fontSize:12}}>{job.j.po ? 'Pas de dossier rattaché à '+job.j.po : 'Pas de dossier (aucun PO)'}</span>}
@@ -4749,17 +4764,18 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
       </div>
       {attachments.length>0 && <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:8}}>
         {attachments.map((a,i)=>
-          <div key={i} style={{display:'flex',alignItems:'center',gap:8,background:'var(--bg3)',borderRadius:8,padding:'6px 10px'}}>
+          <div key={i} style={{display:'flex',alignItems:'center',gap:8,borderBottom:'1px solid var(--border)',padding:'4px 2px'}}>
             <a href={a.fileUrl} target="_blank" rel="noreferrer" style={{flex:1,fontSize:12.5,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.title||a.fileUrl}</a>
             <button className="btn btn-sm btn-danger" onClick={()=>removeAttachment(i)}>×</button>
           </div>
         )}
       </div>}
+      {!lienOuvert ? <span style={{fontSize:12,color:'var(--accent)',cursor:'pointer'}} onClick={()=>setLienOuvert(true)}>+ coller un lien Drive</span> : <>
       <div className="row2" style={{gridTemplateColumns:'2fr 1fr'}}>
         <input placeholder="… ou coller un lien Google Drive" value={newFileUrl} onChange={e=>setNewFileUrl(e.target.value)}/>
         <input placeholder="Nom du fichier (optionnel)" value={newFileTitre} onChange={e=>setNewFileTitre(e.target.value)}/>
       </div>
-      <button className="btn btn-sm" style={{marginTop:6}} onClick={addAttachment}>+ Ajouter le fichier</button>
+      <button className="btn btn-sm" style={{marginTop:6}} onClick={addAttachment}>+ Ajouter le fichier</button></>}
     </div>
 
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:6}}>
@@ -4770,7 +4786,7 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
             <button className="btn btn-sm" onClick={()=>setConfirmDel(false)}>Annuler</button>
           </div>}
       <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-        <button className="btn btn-s" onClick={onClose}>Fermer</button>
+        <button className="btn btn-s" onClick={()=>MODAL_FERMER ? MODAL_FERMER() : onClose()}>Fermer</button>
         <button className="btn btn-s" onClick={handleDuplicate} disabled={busy} title="Crée une copie de cet événement avec les mêmes infos">{busy?'...':'Dupliquer'}</button>
         <button className="btn btn-p" onClick={handleSave} disabled={busy}>{busy?'Sauvegarde...':'Enregistrer'}</button>
       </div>
