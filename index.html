@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v542';
+const APP_VERSION = 'v543';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5338,13 +5338,13 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
 
   // v532 : en vue Jour, une job cachée (ex. « À attitrer ») reste visible dans la colonne d'un gars affiché dont les initiales sont dans le titre
   const nommeVisible = e => Object.keys(CREW_COLORS).some(k=>!cachees.includes(k) && Object.keys(CREW_INITIALS).some(x=>CREW_INITIALS[x]===CREW_COLORS[k] && new RegExp('(^|\\s)'+x+'(\\s|$)').test(e.title||'')));
-  const evVisibles = events.filter(e=>!cachees.includes(agendaGroupe(e)) || (viewMode==='jour' && !e.allDay && nommeVisible(e)));
+  const evVisibles = events.filter(e=>!cachees.includes(agendaGroupe(e)) || (viewMode!=='mois' && !e.allDay && nommeVisible(e)));
   // Vue par équipe : chaque jour divisé en couloirs (Dan | Brandon | Phil …), « Autres » au bout s'il y en a
   const couloirDe = e => { const g = agendaGroupe(e); return EQUIPES_ORDRE.includes(g) ? g : 'autres'; };
   // v530 : en vue Jour, un gars dont les initiales sont dans le titre d'une job (ex. « … BP BL ») a aussi cette job dans sa colonne (« avec »)
   const iniEquipe = k => Object.keys(CREW_INITIALS).filter(x=>CREW_INITIALS[x]===CREW_COLORS[k]);
   const propre = (e, k) => couloirDe(e)===k && !cachees.includes(agendaGroupe(e));   // v532 : sa propre job (pas une job cachée)
-  const estAvec = (e, k) => viewMode==='jour' && k!=='autres' && !cachees.includes(k) && couloirDe(e)!==k && iniEquipe(k).some(x=>new RegExp('(^|\\s)'+x+'(\\s|$)').test(e.title||''));
+  const estAvec = (e, k) => viewMode!=='mois' && k!=='autres' && !cachees.includes(k) && couloirDe(e)!==k && iniEquipe(k).some(x=>new RegExp('(^|\\s)'+x+'(\\s|$)').test(e.title||''));
   const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>propre(e, k) || estAvec(e, k)) || (viewMode==='jour' && CREW_COLORS[k] && !cachees.includes(k))); if(t.some(e=>propre(e, 'autres'))) l.push('autres'); return l; })();   // v529 : en vue Jour, colonnes ajoutées pour les gars sans job
   const enCouloirs = parEquipe && viewMode!=='mois' && couloirs.length>1;
   function placer(dayEvents){
@@ -5355,7 +5355,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       const w = 100/couloirs.length; return couloirs.flatMap((k,li)=>etaler(dayEvents.filter(e=>propre(e, k) || estAvec(e, k)), li*w, w, k)); }
     if(!enCouloirs) return layoutDayEvents(dayEvents).map(p=>({event:p.event, widthPct:100/p.totalCols, leftPct:p.col*100/p.totalCols}));
     const w = 100/couloirs.length;
-    return couloirs.flatMap((k,li)=>layoutDayEvents(dayEvents.filter(e=>couloirDe(e)===k)).map(p=>({event:p.event, widthPct:w/p.totalCols, leftPct:li*w + p.col*w/p.totalCols})));
+    return couloirs.flatMap((k,li)=>layoutDayEvents(dayEvents.filter(e=>propre(e, k) || estAvec(e, k))).map(p=>({event:p.event, widthPct:w/p.totalCols, leftPct:li*w + p.col*w/p.totalCols, aide:estAvec(p.event, k), lane:k})));   // v543 : en Semaine aussi, la job apparaît en pointillé chez les gars dont les initiales sont dans le titre
   }
   const nommeDans = (e, k) => Object.keys(CREW_INITIALS).some(x=>CREW_INITIALS[x]===CREW_COLORS[k] && new RegExp('(^|\\s)'+x+'(\\s|$)').test(e.title||''));
   const groupesPresents = AGENDA_GROUPES_ORDRE.filter(k=>CREW_COLORS[k] || events.some(e=>agendaGroupe(e)===k));   // v534 : les 5 gars toujours là, on/off
