@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v536';
+const APP_VERSION = 'v537';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -503,7 +503,7 @@ async function listCalendarEventsRange(calendarIds, timeMinISO, timeMaxISO, q){ 
       if(id===CREW_CAL || id===EN_ATTENTE_CAL){
         const libs = await libellesAgenda(id);
         if(libs.length){ const parEv = await libellesEvenements(id, timeMinISO, timeMaxISO).catch(()=>({}));
-          all.forEach(e=>{ if(e.calendarId!==id || !parEv[e.id]) return; const l = libs.find(x=>x.id===parEv[e.id]); e.labelId = parEv[e.id]; if(l && l.colorId) e.colorId = l.colorId; }); }
+          all.forEach(e=>{ if(e.calendarId!==id || !parEv[e.id]) return; const l = libs.find(x=>x.id===parEv[e.id]); e.labelId = parEv[e.id]; if(l && l.colorId && (l.crew || !CREW_COLORS[e.colorId])) e.colorId = l.colorId; }); }   // v537 : un libellé qui n'est pas celui d'un gars (ex. resté d'En attente) n'écrase plus la couleur d'un gars
       }
     }catch(err){ /* calendrier inaccessible, on ignore et continue */ }
   }));
@@ -5334,7 +5334,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       } else res = {start:{dateTime:c.debut.toISOString(), timeZone:'America/Toronto', date:null}, end:{dateTime:c.fin.toISOString(), timeZone:'America/Toronto', date:null}};
       let cal = c.ev.calendarId, etape = 'transfert dans The Crew';   // v536 : on déplace d'abord dans The Crew, puis on change la date/l'heure
       try{
-        if(versCrew && cal!==CREW_CAL){ await window.gapi.client.calendar.events.move({calendarId:cal, eventId:c.ev.id, destination:CREW_CAL}); cal = CREW_CAL; }
+        if(versCrew && cal!==CREW_CAL){ await window.gapi.client.calendar.events.move({calendarId:cal, eventId:c.ev.id, destination:CREW_CAL}); cal = CREW_CAL;
+          await window.gapi.client.request({path:'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(CREW_CAL)+'/events/'+encodeURIComponent(c.ev.id), method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:null}}).catch(()=>null); }   // v537 : on enlève le libellé d'En attente
         etape = 'changement de date';
         await window.gapi.client.calendar.events.patch({calendarId:cal, eventId:c.ev.id, resource:res});
       }catch(err){ console.error('Céduler — '+etape, err); throw {result:{error:{message:'('+etape+') '+(err && err.status ? err.status+' — ' : '')+apiErrMsg(err)}}}; }
