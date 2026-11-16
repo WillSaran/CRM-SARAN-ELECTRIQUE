@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v545';
+const APP_VERSION = 'v546';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4399,6 +4399,14 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
     <div ref={zone}>
       <h2 style={{margin:'0 0 2px',fontSize:18}}>Règlement de la banque d'heures — {l.e.nom}</h2>
       <div className="muted" style={{fontSize:12,marginBottom:10}}>Saran Électrique inc. · en date du {new Date().toLocaleDateString('fr-CA',{day:'numeric',month:'long',year:'numeric'})}</div>
+      {/* v546 : résumé en haut, comme la feuille PDF de Philippe */}
+      <table style={{width:'100%',borderCollapse:'collapse',border:'2px solid var(--accent)',marginBottom:6}}><tbody>
+        <tr><td style={td}>Heures supp en banque</td><td style={{...td,...n}} className="n">{fmtH(l.reste)}</td></tr>
+        <tr><td style={td}>× Taux horaire{l.tauxPaie!=null ? ' (talon de paie du '+TAUX_PAIE.periode+')' : ''}</td><td style={{...td,...n}} className="n">{l.taux!=null ? cvMoney(l.taux)+' / h' : 'à fixer'}</td></tr>
+        <tr><td style={td}>= Valeur des heures</td><td style={{...td,...n}} className="n">{l.valeur!=null ? cvMoney(l.valeur) : '—'}</td></tr>
+        <tr><td style={td}>− Achats à déduire ({deds.length} facture{deds.length>1?'s':''}, taxes incluses)</td><td style={{...td,...n}} className="n">− {cvMoney(l.deduit)}</td></tr>
+        <tr style={{background:'rgba(var(--accent-rgb),.08)'}}><td style={{...td,fontWeight:800,fontSize:15}}>{l.solde==null ? 'Solde' : l.solde>=0 ? 'Solde dû à '+l.e.nom.split(' ')[0] : 'Solde dû par '+l.e.nom.split(' ')[0]}</td><td style={{...td,...n,fontWeight:800,fontSize:16,color:l.solde==null?'var(--muted)':l.solde<0?'var(--danger)':'var(--success)'}} className="n">{l.solde!=null ? cvMoney(Math.abs(l.solde)) : 'fixe le taux'}</td></tr>
+      </tbody></table>
       <h3 style={{fontSize:14}}>1. Heures en banque (semaines confirmées)</h3>
       <table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr><th style={th}>Semaine</th><th style={{...th,...n}} className="n">+ au-dessus de 40 h</th><th style={{...th,...n}} className="n">− pris dans la banque</th><th style={{...th,...n}} className="n">Cumul</th></tr></thead>
         <tbody>{sem.filter(w=>w.supp||w.pris).map(w=><tr key={w.semaine}><td style={td}>{weekRangeLabel(w.semaine)}</td><td style={{...td,...n}} className="n">{w.supp ? '+'+fmtH(w.supp) : ''}</td><td style={{...td,...n}} className="n">{w.pris ? '−'+fmtH(w.pris) : ''}</td><td style={{...td,...n}} className="n">{fmtH(w.apres)}</td></tr>)}
