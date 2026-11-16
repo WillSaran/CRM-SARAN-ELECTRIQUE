@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v543';
+const APP_VERSION = 'v544';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4189,6 +4189,8 @@ const BQ_ENTETE = ['Employé','Taux ($/h supp)','Heures déjà payées','Note','
 // v510 : fiche d'un employé — sa banque d'heures, ce qu'il a acheté (factures fournisseurs « Employé — … ») et son dossier (ententes, factures, avances, notes, fichiers)
 const EMP_DOSSIER = 'Dossier employés', EMP_DOSSIER_ENTETE = ['Id','Employé','Date','Type','Titre','Montant','Déduire de la banque','Fichiers (id)','Note','Créé le'];
 const EMP_TYPES = ['Entente','Facture / achat','Avance','Stock pris','Note','Document'];
+// v544 : taux horaire lu dans les talons de paie de l'ACQ (période finissant le 7 nov. 2026, payée le 11 nov.) — par prénom
+const TAUX_PAIE = {periode:'2026-11-07', taux:{philippe:35.55, brandon:50.79, maude:30.47, daniel:50.79}};
 const AJUST_H = 'Ajustement heures', REGLE = 'Règlement';   // v542 : « Règlement » = comptes réglés à cette date (les achats d'avant ne sont plus déduits)   // v542 : ligne du dossier employé — Montant = heures (+ ou −) ajoutées à la banque
 function EmployeFiche({cfg, l, docsAbsent, onClose, relire, onRegl}){
   const id = cfg.memoireJobsSpreadsheetId, e = l.e;
@@ -4290,7 +4292,7 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
     try{ if(reg.absent) await ensureSheetsExist(id, [{name:'Banque employés', headers:BQ_ENTETE}]);
       if(ex.row) await sheetsUpdateRow(id, qSheet('Banque employés'), ex.row, ligne); else await sheetsAppendRow(id, qSheet('Banque employés'), ligne);
       await lire(true); }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
-  const lignes = emps.map(e=>{ const r = reg.rows[cvNorm(e.nom)] || {}; const taux = r.taux!=null ? r.taux : global.taux;
+  const lignes = emps.map(e=>{ const r = reg.rows[cvNorm(e.nom)] || {}; const tauxPaie = TAUX_PAIE.taux[prenom(e.nom)]; const taux = r.taux!=null ? r.taux : (tauxPaie!=null ? tauxPaie : global.taux);   // v544 : par défaut, le taux de sa paie
     const dosE = docs.l.filter(d=>prenom(d.emp)===prenom(e.nom)), ajust = dosE.filter(d=>d.type===AJUST_H), adjH = ajust.reduce((t,d)=>t+(d.montant||0),0);   // v542 : ajustements d'heures (feuille de règlement)
     const base = Math.round((banqueConf ? (banqueConf[cvNorm(e.nom)]||0) : (supp[e.nom]||0))*100)/100, h = Math.round((base+adjH)*100)/100, payees = r.payees||0, reste = Math.max(0, h - payees);
     const ach = achats.filter(a=>prenom(a.emp)===prenom(e.nom)), dos = docs.l.filter(d=>prenom(d.emp)===prenom(e.nom));
@@ -4298,7 +4300,7 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
     const achD = ach.filter(a=>!depuis || String(a.date)>depuis), dosD = dos.filter(d=>d.deduire && (!depuis || String(d.date)>depuis));   // v542 : seulement depuis le dernier règlement
     const deduit = achD.reduce((t,a)=>t+(a.total||a.st),0) + dosD.reduce((t,d)=>t+d.montant,0);
     const valeur = taux!=null ? reste*taux : null;
-    return {e, h, base, ajust, adjH, dernier, depuis, achD, dosD, payees, reste, taux, perso:r.taux!=null, ach, dos, deduit, valeur, solde: valeur!=null ? valeur-deduit : null}; });
+    return {e, tauxPaie, h, base, ajust, adjH, dernier, depuis, achD, dosD, payees, reste, taux, perso:r.taux!=null, ach, dos, deduit, valeur, solde: valeur!=null ? valeur-deduit : null}; });
   const [pdfVoir,setPdfVoir]=useState(null), [regl,setRegl]=useState(null);   // v542 : PDF d'un achat dans le CRM ; feuille de règlement d'un employé
   const ajouterAjust = async (nom, date, heures, raison)=>{ if(docs.absent) await ensureSheetsExist(id, [{name:EMP_DOSSIER, headers:EMP_DOSSIER_ENTETE}]);
     await sheetsAppendRow(id, qSheet(EMP_DOSSIER), ['E-'+Date.now(), nom, date, AJUST_H, raison, heures.toFixed(2), 'Non', '', '', new Date().toLocaleString('fr-CA')]); await lire(true); };
@@ -4329,7 +4331,8 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
           <button className="btn btn-sm" style={{marginLeft:8,padding:'1px 7px',fontSize:11}} onClick={ev=>{ ev.stopPropagation(); setRegl(l.e.nom); }} title="Feuille pour régler les comptes : heures, ajustements, achats, solde">📄 Règlement</button></td>
         <td style={{textAlign:'right',fontWeight:700,...lien}} title="Voir le calcul semaine par semaine" onClick={()=>basculer(l.e.nom,'h')}>{ouvH?'▾ ':'▸ '}{fmtH(l.h)}</td>
         <td style={{textAlign:'right'}}>{champ(l.payees||'', v=>ecrire(l.e.nom, {payees:v}), 60, 'h')}</td>
-        <td style={{textAlign:'right'}}>{champ(l.perso ? l.taux : '', v=>ecrire(l.e.nom, {taux:v}), 60, l.taux!=null ? String(l.taux) : '$/h')}</td>
+        <td style={{textAlign:'right'}}>{champ(l.perso ? l.taux : '', v=>ecrire(l.e.nom, {taux:v}), 60, l.taux!=null ? String(l.taux) : '$/h')}
+          <div className="muted" style={{fontSize:10.5}} title={'Talon de paie ACQ, période finissant le '+TAUX_PAIE.periode}>{l.tauxPaie!=null ? 'paie : '+cvMoney(l.tauxPaie)+'/h' : 'pas de talon'}</div></td>
         <td style={{textAlign:'right'}}>{l.valeur!=null ? cvMoney(l.valeur) : <span className="muted">fixe le taux</span>}</td>
         <td style={{textAlign:'right',...(l.deduit?lien:{})}} title={l.deduit ? 'Voir les achats déduits' : ''} onClick={()=>l.deduit && basculer(l.e.nom,'ach')}>{l.deduit ? (ouvA?'▾ ':'▸ ')+'− '+cvMoney(l.deduit) : '—'}{(l.achD.length+l.dosD.length) ? <span className="muted" style={{fontSize:11}}> ({l.achD.length+l.dosD.length})</span> : null}</td>
         <td style={{textAlign:'right',fontWeight:800,color:l.solde==null?'var(--muted)':l.solde<0?'var(--danger)':'var(--success)'}}>{l.solde!=null ? cvMoney(l.solde) : '—'}{l.solde!=null && l.taux ? <div className="muted" style={{fontSize:10.5,fontWeight:400}}>{fmtH(Math.max(0,l.solde)/l.taux)} restantes</div> : null}</td>
@@ -4401,7 +4404,7 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
         <tr><td style={td}>Heures en banque (1 + 2)</td><td style={{...td,...n}} className="n">{fmtH(l.h)}</td></tr>
         <tr><td style={td}>− Heures déjà payées <span className="noprint"><input key={l.payees} defaultValue={l.payees||''} placeholder="h" inputMode="decimal" onBlur={e=>{ const v=e.target.value.trim().replace(',','.'); if(v!==String(l.payees||'')) ecrirePayees(v); }} style={{width:60,textAlign:'right',padding:'1px 4px',marginLeft:6}}/></span></td><td style={{...td,...n}} className="n">−{fmtH(l.payees||0)}</td></tr>
         <tr><td style={{...td,fontWeight:700}}>Heures restantes</td><td style={{...td,...n,fontWeight:700}} className="n">{fmtH(l.reste)}</td></tr>
-        <tr><td style={td}>× Taux</td><td style={{...td,...n}} className="n">{l.taux!=null ? cvMoney(l.taux)+' / h' : 'à fixer (colonne Taux)'}</td></tr>
+        <tr><td style={td}>× Taux{l.tauxPaie!=null && <span className="muted"> (taux de sa paie : {cvMoney(l.tauxPaie)}/h, période du {TAUX_PAIE.periode})</span>}</td><td style={{...td,...n}} className="n">{l.taux!=null ? cvMoney(l.taux)+' / h' : 'à fixer (colonne Taux)'}</td></tr>
         <tr><td style={{...td,fontWeight:700}}>Valeur des heures</td><td style={{...td,...n,fontWeight:700}} className="n">{l.valeur!=null ? cvMoney(l.valeur) : '—'}</td></tr>
       </tbody></table>
       <h3 style={{fontSize:14}}>4. Achats et avances déduits{l.depuis ? ' (depuis le règlement du '+l.depuis+')' : ''}</h3>
