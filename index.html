@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v548';
+const APP_VERSION = 'v549';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4305,13 +4305,19 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
     const achD = ach.filter(a=>!depuis || String(a.date)>depuis), dosD = dos.filter(d=>d.deduire && (!depuis || String(d.date)>depuis));   // v542 : seulement depuis le dernier règlement
     const deduit = achD.reduce((t,a)=>t+(a.total||a.st),0) + dosD.reduce((t,d)=>t+d.montant,0);
     const valeur = taux!=null ? reste*taux : null;
-    return {e, tauxPaie, h, base, ajust, adjH, dernier, depuis, achD, dosD, payees, reste, taux, perso:r.taux!=null, ach, dos, deduit, valeur, solde: valeur!=null ? valeur-deduit : null}; });
+    const hRest = taux ? Math.max(0, Math.round(((valeur!=null ? valeur : 0) - deduit)/taux*100)/100) : null;   // v549 : heures qui restent en banque une fois le matériel payé avec ses heures
+    return {e, tauxPaie, hRest, h, base, ajust, adjH, dernier, depuis, achD, dosD, payees, reste, taux, perso:r.taux!=null, ach, dos, deduit, valeur, solde: valeur!=null ? valeur-deduit : null}; });
   const [pdfVoir,setPdfVoir]=useState(null), [regl,setRegl]=useState(null);   // v542 : PDF d'un achat dans le CRM ; feuille de règlement d'un employé
   const ajouterAjust = async (nom, date, heures, raison)=>{ if(docs.absent) await ensureSheetsExist(id, [{name:EMP_DOSSIER, headers:EMP_DOSSIER_ENTETE}]);
     await sheetsAppendRow(id, qSheet(EMP_DOSSIER), ['E-'+Date.now(), nom, date, AJUST_H, raison, heures.toFixed(2), 'Non', '', '', new Date().toLocaleString('fr-CA')]); await lire(true); };
   const regler = async l=>{ if(docs.absent) await ensureSheetsExist(id, [{name:EMP_DOSSIER, headers:EMP_DOSSIER_ENTETE}]);
-    await sheetsAppendRow(id, qSheet(EMP_DOSSIER), ['E-'+Date.now(), l.e.nom, localDateStr(new Date()), REGLE, 'Comptes réglés — solde '+(l.solde!=null ? cvMoney(l.solde) : '?'), l.solde!=null ? l.solde.toFixed(2) : '', 'Non', '', 'Heures en banque réglées : '+fmtH(l.h)+' · achats déduits : '+cvMoney(l.deduit), new Date().toLocaleString('fr-CA')]);
-    await ecrire(l.e.nom, {payees:String(l.h)}); await lire(true); };
+    const reste = l.hRest!=null ? l.hRest : 0, utilisees = Math.round(Math.max(0, l.reste - reste)*100)/100;   // v549 : les heures qui paient le matériel sont « payées », le reste demeure en banque
+    await sheetsAppendRow(id, qSheet(EMP_DOSSIER), ['E-'+Date.now(), l.e.nom, localDateStr(new Date()), REGLE, 'Comptes réglés — '+fmtH(utilisees)+' utilisées pour le matériel, '+fmtH(reste)+' restent en banque', l.deduit.toFixed(2), 'Non', '', 'Banque avant : '+fmtH(l.reste)+' · matériel : '+cvMoney(l.deduit)+' · taux : '+(l.taux!=null ? cvMoney(l.taux) : '?')+' · reste : '+fmtH(reste), new Date().toLocaleString('fr-CA')]);
+    await ecrire(l.e.nom, {payees:String(Math.round((l.payees + utilisees)*100)/100)});
+    try{ const ppId = cfg.punchproSpreadsheetId || PP_SHEET_ID, r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:ppId, range:'Employés!A2:A'});   // PunchPro : sa banque affichée dans l'app
+      const i = (r.result.values||[]).findIndex(x=>cvNorm(x[0]||'')===cvNorm(l.e.nom));
+      if(i>=0) await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:ppId, range:'Employés!D'+(i+2), valueInputOption:'RAW', resource:{values:[[reste]]}}); }catch(x){}
+    await lire(true); };
   // v547 : PDF de la feuille gardé dans son dossier Drive + une ligne « Document » dans sa fiche
   const archiver = async (l, b64, nom, note)=>{ const bin = atob(b64), u8 = new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
     const racine = await driveDossier('Saran CRM — Employés'), dos = await driveDossier(l.e.nom, racine), f = await driveDeposer(new File([u8], nom, {type:'application/pdf'}), dos);
@@ -4398,7 +4404,7 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
     setEnvoi({to:l.e.email||'', sujet:'Ta banque d\'heures — règlement au '+dateTxt, etat:'',
       texte:'Salut '+p+',\n\nVoici le relevé de ta banque d\'heures au '+dateTxt+' (PDF joint) :\n\n'+
         '• Heures supp en banque : '+fmtH(l.reste)+'\n'+(l.taux!=null ? '• Taux : '+cvMoney(l.taux)+' / h → '+cvMoney(l.valeur)+'\n' : '')+
-        '• Achats déduits : '+cvMoney(l.deduit)+'\n'+(l.solde!=null ? '• Solde : '+cvMoney(Math.abs(l.solde))+(l.solde>=0 ? ' en ta faveur' : ' à rembourser')+'\n' : '')+
+        '• Achats déduits : '+cvMoney(l.deduit)+'\n'+(l.solde!=null ? '• Solde : '+cvMoney(Math.abs(l.solde))+(l.solde>=0 ? ' en ta faveur' : ' à rembourser')+'\n' : '')+(l.hRest!=null ? '• Heures qui te restent en banque : '+fmtH(l.hRest)+'\n' : '')+
         '\nLe détail de chaque semaine et de chaque commande est dans le PDF. Dis-moi si quelque chose ne marche pas.\n\nWilliam\nSaran Électrique inc.'}); };
   const envoyer = async ()=>{ if(!/@/.test(envoi.to)){ alert('Écris son adresse courriel.'); return; }
     try{ setEnvoi(e=>({...e, etat:'PDF…'})); const b64 = await docPdfBase64(pageHtml());
@@ -4415,7 +4421,7 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
       {l.dernier && <span className="muted" style={{fontSize:12,marginRight:'auto'}}>Dernier règlement : {l.dernier.date}</span>}
       <button className="btn btn-sm" onClick={imprimer}>🖨 Imprimer / PDF</button>
       <button className="btn btn-sm" onClick={ouvrirEnvoi} title={'Envoie la feuille en PDF à '+(l.e.email||'son courriel')}>✉️ Envoyer à {l.e.nom.split(' ')[0]}</button>
-      <button className="btn btn-sm btn-p" disabled={busy} onClick={async()=>{ if(!confirm('Marquer les comptes de '+l.e.nom+' comme réglés aujourd\'hui ?\n\n• Les '+fmtH(l.h)+' en banque comptent comme payées\n• Les achats d\'avant aujourd\'hui ne seront plus déduits')) return;
+      <button className="btn btn-sm btn-p" disabled={busy} onClick={async()=>{ if(!confirm('Régler les comptes de '+l.e.nom+' aujourd\'hui ?\n\n• Le matériel ('+cvMoney(l.deduit)+') est payé avec '+fmtH(Math.max(0, l.reste-(l.hRest||0)))+' de sa banque\n• Il lui reste '+fmtH(l.hRest||0)+' en banque (CRM et PunchPro mis à jour)\n• Les achats d\'avant aujourd\'hui ne seront plus déduits')) return;
         setBusy(true); try{ await regler(); }catch(e){ alert('Pas enregistré : '+apiErrMsg(e)); } setBusy(false); }}>✓ Marquer réglé aujourd'hui</button></div>
     {envoi && <div style={{border:'1px solid var(--border2)',borderRadius:8,padding:10,marginBottom:10,display:'grid',gap:6}}>
       <div style={{display:'grid',gridTemplateColumns:'60px 1fr',gap:6,alignItems:'center',fontSize:12.5}}>
@@ -4478,6 +4484,7 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
         <tr><td style={td}>− Total des matériels</td><td style={{...td,...n}} className="n">− {cvMoney(l.deduit)}</td></tr>
         <tr style={{background:'rgba(var(--accent-rgb),.08)'}}><td style={{...td,fontWeight:800,fontSize:15}}>= {l.solde==null ? 'Solde' : l.solde>=0 ? 'Solde dû à '+l.e.nom.split(' ')[0] : 'Solde dû par '+l.e.nom.split(' ')[0]}</td>
           <td style={{...td,...n,fontWeight:800,fontSize:16,color:l.solde==null?'var(--muted)':l.solde<0?'var(--danger)':'var(--success)'}} className="n">{l.solde!=null ? cvMoney(Math.abs(l.solde)) : 'fixe le taux'}</td></tr>
+        {l.hRest!=null && <tr><td style={{...td,fontWeight:700}}>Heures en banque restantes ({cvMoney(Math.max(0,l.solde||0))} ÷ {cvMoney(l.taux)})</td><td style={{...td,...n,fontWeight:800,fontSize:15}} className="n">{fmtH(l.hRest)}</td></tr>}
       </tbody></table>
       {l.solde!=null && <div className="muted" style={{fontSize:11.5,marginTop:4}}>{l.solde>=0 ? 'Montant dû à '+l.e.nom.split(' ')[0]+' (ou '+fmtH(l.taux ? l.solde/l.taux : 0)+' à reprendre en congé).' : l.e.nom.split(' ')[0]+' doit '+cvMoney(-l.solde)+' à Saran Électrique.'}</div>}
       <div style={{display:'flex',gap:40,marginTop:30,fontSize:12}}><div style={{flex:1,borderTop:'1px solid #888',paddingTop:4}}>Signature de l'employé</div><div style={{flex:1,borderTop:'1px solid #888',paddingTop:4}}>Saran Électrique inc.</div></div>
