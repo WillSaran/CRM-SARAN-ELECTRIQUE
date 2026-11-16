@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v544';
+const APP_VERSION = 'v545';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4271,11 +4271,16 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
   const id = cfg.memoireJobsSpreadsheetId;
   const [reg,setReg]=useState({lu:false, rows:{}, absent:false});
   const [achats,setAchats]=useState([]);
+  const [lignesAch,setLignesAch]=useState({});   // v545 : articles des factures {fournisseur|facture: [{code, desc, qte, montant}]}
+  const [arrondi,setArrondi]=useState(()=>{ try{ return localStorage.getItem('banque_arrondi')==='1'; }catch(e){ return false; } });   // v545 : taux arrondi au dollar (vers le bas)
+  const basculerArrondi = ()=>setArrondi(v=>{ try{ localStorage.setItem('banque_arrondi', v ? '0' : '1'); }catch(e){} return !v; });
   const lire = useCallback(async (force)=>{
     try{ const r = await lireCache(id, qSheet('Banque employés')+'!A1:E', force); const rows = {};
       (r.result.values||[]).slice(1).forEach((x,i)=>{ if(x[0]) rows[cvNorm(x[0])] = {nom:x[0], taux:cvNum(x[1]), payees:cvNum(x[2])||0, note:x[3]||'', row:i+2}; });
       setReg({lu:true, rows, absent:false}); }catch(e){ setReg({lu:true, rows:{}, absent:true}); }
     try{ const a = await lireCache(cfg.memoireAchatsSpreadsheetId, 'A1:L', force);
+      try{ const lg = await lireCache(cfg.memoireAchatsSpreadsheetId, 'Lignes!A1:F', force); const m = {};
+        (lg.result.values||[]).slice(1).forEach(r=>{ const k = (r[0]||'')+'|'+(r[1]||''); (m[k] = m[k] || []).push({code:r[2]||'', desc:r[3]||'', qte:r[4]||'', montant:cvNum(r[5])||0}); }); setLignesAch(m); }catch(e){}
       setAchats((a.result.values||[]).slice(1).filter(r=>/^Employé — /.test(r[8]||'')).map(r=>({emp:String(r[8]).replace(/^Employé — /,''), st:cvNum(r[4])||0, total:cvNum(r[5])||0, date:r[2]||'', f:r[0]||'', num:r[1]||'', ref:r[3]||'', pdf:r[6]||''}))); }catch(e){}
     try{ const d = await lireCache(id, qSheet(EMP_DOSSIER)+'!A1:J', force); setDocs({lu:true, absent:false, l:(d.result.values||[]).slice(1).map((x,k)=>({row:k+2, id:x[0]||'', emp:x[1]||'', date:x[2]||'', type:x[3]||'', titre:x[4]||'', montant:cvNum(x[5])||0, deduire:/^oui/i.test(x[6]||''), fichiers:String(x[7]||'').split(/[,\s]+/).filter(Boolean), note:x[8]||''})).filter(x=>x.emp && !/supprim/i.test(x.type))}); }catch(e){ setDocs({lu:true, l:[], absent:true}); }
   },[id, cfg.memoireAchatsSpreadsheetId]);
@@ -4292,7 +4297,7 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
     try{ if(reg.absent) await ensureSheetsExist(id, [{name:'Banque employés', headers:BQ_ENTETE}]);
       if(ex.row) await sheetsUpdateRow(id, qSheet('Banque employés'), ex.row, ligne); else await sheetsAppendRow(id, qSheet('Banque employés'), ligne);
       await lire(true); }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
-  const lignes = emps.map(e=>{ const r = reg.rows[cvNorm(e.nom)] || {}; const tauxPaie = TAUX_PAIE.taux[prenom(e.nom)]; const taux = r.taux!=null ? r.taux : (tauxPaie!=null ? tauxPaie : global.taux);   // v544 : par défaut, le taux de sa paie
+  const lignes = emps.map(e=>{ const r = reg.rows[cvNorm(e.nom)] || {}; const tauxPaie = TAUX_PAIE.taux[prenom(e.nom)]; const taux0 = r.taux!=null ? r.taux : (tauxPaie!=null ? tauxPaie : global.taux), taux = taux0!=null && arrondi ? Math.floor(taux0) : taux0;   // v544 : par défaut, le taux de sa paie
     const dosE = docs.l.filter(d=>prenom(d.emp)===prenom(e.nom)), ajust = dosE.filter(d=>d.type===AJUST_H), adjH = ajust.reduce((t,d)=>t+(d.montant||0),0);   // v542 : ajustements d'heures (feuille de règlement)
     const base = Math.round((banqueConf ? (banqueConf[cvNorm(e.nom)]||0) : (supp[e.nom]||0))*100)/100, h = Math.round((base+adjH)*100)/100, payees = r.payees||0, reste = Math.max(0, h - payees);
     const ach = achats.filter(a=>prenom(a.emp)===prenom(e.nom)), dos = docs.l.filter(d=>prenom(d.emp)===prenom(e.nom));
@@ -4316,11 +4321,11 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
       <iframe src={'https://drive.google.com/file/d/'+pdfVoir.id+'/preview'} style={{width:'100%',height:'70vh',border:'1px solid var(--border)',borderRadius:8,background:'#fff'}}/>
       <a className="btn btn-sm" style={{marginTop:8}} href={'https://drive.google.com/file/d/'+pdfVoir.id+'/view'} target="_blank" rel="noopener">↗ Ouvrir dans Drive</a></Modal>}
     {regl && (()=>{ const l = lignes.find(x=>x.e.nom===regl); return l ? <FeuilleReglement l={l} sem={(banqueDetail && banqueDetail[cvNorm(l.e.nom)]) || []} onClose={()=>setRegl(null)}
-      ajouter={(d,h,r)=>ajouterAjust(l.e.nom, d, h, r)} enlever={enleverAjust} regler={()=>regler(l)} voirPdf={setPdfVoir} ecrirePayees={v=>ecrire(l.e.nom, {payees:v})}/> : null; })()}
+      lignesAch={lignesAch} ajouter={(d,h,r)=>ajouterAjust(l.e.nom, d, h, r)} enlever={enleverAjust} regler={()=>regler(l)} voirPdf={setPdfVoir} ecrirePayees={v=>ecrire(l.e.nom, {payees:v})}/> : null; })()}
     <div style={{padding:'12px 14px',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',alignItems:'center'}}>
       <div><div className="fh" style={{fontSize:16}}>Banque d'heures supp</div>
         <div className="muted" style={{fontSize:11.5}}>Semaines confirmées seulement : heures au-delà de 40 h, moins les heures que l'employé a pris dans sa banque pour compléter ses 40 h. Valeur = heures × taux. Les achats associés à l'employé (Fournisseurs › 👷 Employé) sont déduits.</div></div>
-      <div style={{display:'flex',gap:6,alignItems:'center'}}><span className="muted" style={{fontSize:12}}>Valeur d'une heure supp :</span>{champ(global.taux, v=>ecrire('TOUS', {taux:v}), 70, '$/h')}<span className="muted">$/h</span></div>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><label style={{display:'inline-flex',gap:5,alignItems:'center',fontSize:12.5,cursor:'pointer',marginRight:10}}><input type="checkbox" checked={arrondi} onChange={basculerArrondi}/> Arrondir les taux au dollar (50,79 → 50)</label><span className="muted" style={{fontSize:12}}>Valeur d'une heure supp :</span>{champ(global.taux, v=>ecrire('TOUS', {taux:v}), 70, '$/h')}<span className="muted">$/h</span></div>
     </div>
     <table>
       <thead><tr><th>Employé</th><th style={{textAlign:'right'}}>Banque (h)</th><th style={{textAlign:'right'}}>Déjà payées</th><th style={{textAlign:'right'}}>Taux</th><th style={{textAlign:'right'}}>Valeur</th><th style={{textAlign:'right'}}>Achats déduits</th><th style={{textAlign:'right'}}>Solde</th></tr></thead>
@@ -4364,7 +4369,16 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
   </div>;
 }
 // v542 : feuille de règlement d'un employé — tout le calcul sur une page (heures confirmées, ajustements, payées, taux, achats déduits, solde), imprimable
-function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePayees, regler}){
+function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePayees, regler, lignesAch}){
+  const [tous,setTous]=useState(false);   // v545 : matériaux depuis le dernier règlement, ou tous
+  const factMat = (tous ? l.ach : l.achD).slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).map(a=>({...a, lignes:(lignesAch||{})[a.f+'|'+a.num]||[]}));
+  const exporterCsv = ()=>{ const q = v => '"'+String(v==null?'':v).replace(/"/g,'""')+'"', nb = x => (Math.round((x||0)*100)/100).toFixed(2).replace('.',',');
+    const rows = [['Date','Fournisseur','Facture','PO / référence','Code','Description','Qté','Montant (avant taxes)','Total facture (taxes incl.)']];
+    factMat.forEach(a=>{ if(a.lignes.length) a.lignes.forEach((x,i)=>rows.push([a.date, a.f, a.num, a.ref, x.code, x.desc, x.qte, nb(x.montant), i===0 ? nb(a.total||a.st) : '']));
+      else rows.push([a.date, a.f, a.num, a.ref, '', '(articles non lus)', '', nb(a.st), nb(a.total||a.st)]); });
+    rows.push([]); rows.push(['','','','','','Total des factures (taxes incl.)','','',nb(factMat.reduce((t,a)=>t+(a.total||a.st),0))]);
+    const blob = new Blob(['\ufeff'+rows.map(r=>r.map(q).join(';')).join('\r\n')], {type:'text/csv;charset=utf-8'});
+    const u = URL.createObjectURL(blob), lnk = document.createElement('a'); lnk.href = u; lnk.download = 'Achats '+l.e.nom+' '+localDateStr(new Date())+'.csv'; document.body.appendChild(lnk); lnk.click(); lnk.remove(); setTimeout(()=>URL.revokeObjectURL(u), 2000); };
   const [aj,setAj]=useState({date:localDateStr(new Date()), h:'', raison:''}), [busy,setBusy]=useState(false);
   const zone = useRef(null);
   const deds = [...l.achD.map(a=>({date:a.date, quoi:'Facture '+a.f+(a.num?' #'+a.num:''), det:a.ref||'', m:a.total||a.st, pdf:a.pdf})),
@@ -4412,6 +4426,13 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
         <tbody>{deds.map((x,i)=><tr key={i}><td style={td}>{x.date}</td><td style={td}>{x.quoi}</td><td style={td}>{x.det}{x.pdf && <span className="noprint"> · <span role="button" onClick={()=>voirPdf({id:x.pdf, titre:x.quoi})} style={{color:'var(--accent)',cursor:'pointer'}}>📄 PDF</span></span>}</td><td style={{...td,...n}} className="n">{cvMoney(x.m)}</td></tr>)}
           {!deds.length && <tr><td style={td} colSpan="4">Aucun.</td></tr>}
           <tr><td style={{...td,fontWeight:700}} colSpan="3">Total déduit</td><td style={{...td,...n,fontWeight:700}} className="n">−{cvMoney(l.deduit)}</td></tr></tbody></table>
+      <h3 style={{fontSize:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>5. Détail du matériel acheté{tous ? ' (tous les achats)' : l.depuis ? ' (depuis le règlement du '+l.depuis+')' : ''}
+        <span className="noprint" style={{display:'inline-flex',gap:6,alignItems:'center',fontWeight:400,fontSize:12}}><label style={{cursor:'pointer'}}><input type="checkbox" checked={tous} onChange={e=>setTous(e.target.checked)}/> tous les achats</label>
+          <button className="btn btn-sm" onClick={exporterCsv} title="Fichier Excel (CSV) à envoyer : chaque article, la facture, le PO et la date">⬇ Excel (CSV)</button></span></h3>
+      {!factMat.length ? <div className="muted" style={{fontSize:12.5,marginBottom:10}}>Aucune facture.</div> : factMat.map((a,i)=><div key={i} style={{marginBottom:8}}>
+        <div style={{fontSize:12.5,fontWeight:700}}>{a.date} · {a.f} #{a.num}{a.ref ? ' · PO / réf. « '+a.ref+' »' : ''} — {cvMoney(a.total||a.st)} <span className="muted" style={{fontWeight:400}}>taxes incl.</span></div>
+        {a.lignes.length ? <table style={{width:'100%',borderCollapse:'collapse'}}><tbody>{a.lignes.map((x,k)=><tr key={k}><td style={{...td,width:150,color:'var(--muted)'}}>{x.code}</td><td style={td}>{x.desc}</td><td style={{...td,...n,width:50}} className="n">{x.qte}</td><td style={{...td,...n,width:90}} className="n">{cvMoney(x.montant)}</td></tr>)}</tbody></table>
+          : <div className="muted" style={{fontSize:12}}>Articles pas encore lus pour cette facture{a.pdf ? ' — voir le PDF' : ''}.</div>}</div>)}
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 12px',border:'2px solid var(--border2)',borderRadius:8,marginTop:6}}>
         <b style={{fontSize:15}}>Solde à régler</b>
         <b style={{fontSize:18,color:l.solde==null?'var(--muted)':l.solde<0?'var(--danger)':'var(--success)'}}>{l.solde!=null ? cvMoney(l.solde) : 'fixe le taux'}</b></div>
@@ -5613,7 +5634,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       </div>
       {(()=>{ const pastille = (cle, actif, marque, onClick, titre, l1, l2) => <button key={cle} onClick={onClick} title={titre}
           style={{flex:'1 1 0',minWidth:0,display:'inline-flex',justifyContent:'center',alignItems:'baseline',gap:4,whiteSpace:'nowrap',border:'1px solid '+(marque?'var(--accent)':'var(--border2)'),borderRadius:7,padding:'3px 4px',fontSize:11.5,fontWeight:700,cursor:'pointer',lineHeight:1.15,fontVariantNumeric:'tabular-nums',
-            background:actif?'var(--accent)':'var(--bg3)',color:actif?'#fff':'var(--text)'}}><span>{l1}</span>{l2 && <span style={{opacity:.75,fontWeight:500}}>{l2}</span>}</button>;
+            background:actif?'rgba(var(--accent-rgb),.18)':'var(--bg3)',color:'var(--text)',boxShadow:actif?'inset 0 -2px 0 var(--accent)':'none'}}><span>{l1}</span>{l2 && <span style={{opacity:.75,fontWeight:500}}>{l2}</span>}</button>;
         const lundiDe = x => { const d = new Date(x); d.setHours(12,0,0,0); d.setDate(d.getDate()-((d.getDay()+6)%7)); return d; };
         const auj = new Date(), aujS = localDateStr(auj);
         if(viewMode==='jour'){ const lun = lundiDe(anchor), sel = localDateStr(anchor);
