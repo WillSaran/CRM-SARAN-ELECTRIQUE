@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v522';
+const APP_VERSION = 'v523';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5502,7 +5502,11 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
                 onPointerUp={handleEventPointerUp}
                 style={{position:'absolute',top,height,left:'calc('+leftPct+'% + 2px)',width:'calc('+widthPct+'% - 4px)',...agendaStyle(e),fontSize:10.5,padding:'2px 5px',borderRadius:5,overflow:'visible',boxShadow:'0 1px 3px rgba(0,0,0,.25)',cursor:'grab',touchAction:'none',userSelect:'none'}}>
                 <div style={{overflow:'hidden',height:'100%'}}>
-                  <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{pastilles(e)}{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>
+                  <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                    {viewMode==='jour' && (e.attachments||[]).length>0 && <span role="button" onPointerDown={ev=>ev.stopPropagation()} onPointerUp={ev=>ev.stopPropagation()}
+                      onClick={ev=>{ ev.stopPropagation(); setPjVoir({ev:e, i:0}); }} title={'Voir : '+(e.attachments||[]).map(a=>a.title).join(' · ')}
+                      style={{display:'inline-block',cursor:'pointer',background:'var(--bg2)',color:'var(--text)',borderRadius:4,padding:'0 4px',marginRight:4,fontSize:10.5,lineHeight:'15px'}}>📎{(e.attachments||[]).length>1 ? (e.attachments||[]).length : ''}</span>}
+                    {pastilles(e)}{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>
                   {viewMode==='jour' && e.location && <div style={{opacity:.9,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}} title={e.location}>📍 {e.location}</div>}
                   <div style={{opacity:.85}}>{start.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}–{end.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'})}</div>
                   {viewMode==='jour' && (()=>{   // v514 : vue Jour — la note de la job, les pièces jointes et « Commander » directement sur le bloc
@@ -5512,8 +5516,6 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
                     return <>
                       {note && height>60 && <div style={{fontSize:10.5,opacity:.92,whiteSpace:'pre-wrap',overflow:'hidden',display:'-webkit-box',WebkitBoxOrient:'vertical',WebkitLineClamp:Math.max(1, Math.floor((height-62)/13)),marginTop:2}}>📝 {note}</div>}
                       <div style={{display:'flex',gap:4,alignItems:'center',marginTop:3,flexWrap:'wrap'}}>
-                        {pj>0 && <button className="btn btn-sm" style={{padding:'1px 7px',fontSize:11,background:'var(--bg2)',color:'var(--text)'}} onPointerDown={stop} onPointerUp={stop}
-                          onClick={ev=>{ ev.stopPropagation(); setPjVoir({ev:e, i:0}); }} title={(e.attachments||[]).map(a=>a.title).join('\n')}>📎 {pj} — voir</button>}
                         {aOT && <button className="btn btn-sm" style={{padding:'1px 7px',fontSize:11,background:'var(--bg2)',color:'var(--text)'}} onPointerDown={stop} onPointerUp={stop}
                           onClick={ev=>{ ev.stopPropagation(); BC_PREFILL = {id:e.id, day:String(e.start||'').slice(0,10), title:e.title}; CRM_ALLER && CRM_ALLER('commandes', {}); }} title="Ouvre le bon de commande pour cette job (ordre de travail relié)">🛒 Commander</button>}
                       </div></>; })()}
