@@ -184,7 +184,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v514';
+const APP_VERSION = 'v515';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5081,11 +5081,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     return weekRangeLabel(getWeek(anchor));
   }
 
-  // v514 : vue Jour = 7 h à 15 h 30 au complet sans défiler (s'élargit seulement si une job déborde)
-  const jourEvs = viewMode==='jour' ? (events||[]).filter(e=>!e.allDay && String(e.start).slice(0,10)===localDateStr(anchor)) : [];
-  const HOUR_START = viewMode==='jour' ? Math.min(7, ...jourEvs.map(e=>new Date(e.start).getHours())) : 6;
-  const HOUR_END = viewMode==='jour' ? Math.max(15, ...jourEvs.map(e=>{ const f = new Date(e.end||e.start); return f.getHours() - (f.getMinutes() ? 0 : 1); })) : 20;
-  const PX_H = viewMode==='jour' ? Math.max(isDesktop?44:38, Math.floor(((typeof window!=='undefined' ? window.innerHeight : 800) - (isDesktop?300:330)) / (HOUR_END-HOUR_START+1))) : (isDesktop?64:46);
+  // v515 : vue Jour = 7 h à 15 h 30 ; les jobs de chaque équipe se partagent la journée (affichage), l'heure réelle est écrite dans le bloc
+  const HOUR_START = viewMode==='jour' ? 7 : 6, HOUR_END = viewMode==='jour' ? 15 : 20;
+  const PX_H = viewMode==='jour' ? Math.max(isDesktop?52:44, Math.floor(((typeof window!=='undefined' ? window.innerHeight : 800) - (isDesktop?290:320)) / 8.5)) : (isDesktop?64:46);
   const hours = Array.from({length:HOUR_END-HOUR_START+1},(_,i)=>HOUR_START+i);
   const todayStr = localDateStr(new Date());
   // Colonnes responsives (minmax(0,1fr)) sur desktop pour remplir toute la largeur
@@ -5108,6 +5106,11 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>couloirDe(e)===k)); if(t.some(e=>couloirDe(e)==='autres')) l.push('autres'); return l; })();
   const enCouloirs = parEquipe && viewMode!=='mois' && couloirs.length>1;
   function placer(dayEvents){
+    if(viewMode==='jour'){   // v515 : chaque équipe (ou la journée) divisée en parts égales de 7 h à 15 h 30, dans l'ordre des heures
+      const etaler = (L, left, w) => { const t = [...L].sort((a,b)=>String(a.start).localeCompare(String(b.start))), part = 8.5/(t.length||1);
+        return t.map((e,i)=>({event:e, leftPct:left, widthPct:w, vS:7+i*part, vE:7+(i+1)*part})); };
+      if(!enCouloirs) return etaler(dayEvents, 0, 100);
+      const w = 100/couloirs.length; return couloirs.flatMap((k,li)=>etaler(dayEvents.filter(e=>couloirDe(e)===k), li*w, w)); }
     if(!enCouloirs) return layoutDayEvents(dayEvents).map(p=>({event:p.event, widthPct:100/p.totalCols, leftPct:p.col*100/p.totalCols}));
     const w = 100/couloirs.length;
     return couloirs.flatMap((k,li)=>layoutDayEvents(dayEvents.filter(e=>couloirDe(e)===k)).map(p=>({event:p.event, widthPct:w/p.totalCols, leftPct:li*w + p.col*w/p.totalCols})));
@@ -5213,7 +5216,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         if(rect && e.clientX>=rect.left && e.clientX<=rect.right){ targetDayIdx=i; break; }
       }
       let newStartMs = info.origStartMs;
-      if(targetDayIdx!==null){
+      if(targetDayIdx!==null && viewMode!=='jour'){   // v515 : en vue Jour (parts égales), glisser change l'équipe, pas l'heure
         const rect = dayColRefs.current[targetDayIdx].getBoundingClientRect();
         const blockTopY = e.clientY - info.grabOffsetY;
         let hourFloat = HOUR_START + (blockTopY-rect.top)/PX_H;
@@ -5400,11 +5403,11 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
             {hours.map(h=><div key={h} onClick={()=>{ if(data) openNewJob(dStr, viewMode==='jour' ? '07:00' : String(h).padStart(2,'0')+':00'); }}
               style={{height:PX_H,borderTop:'1px solid var(--border)',boxSizing:'border-box',cursor:data?'copy':'default'}}
               title={data?'Cliquer pour créer une job à '+h+'h':''}></div>)}
-            {placed.map(({event:e,leftPct,widthPct})=>{
+            {placed.map(({event:e,leftPct,widthPct,vS,vE})=>{
               const start=new Date(e.start), end=e.end?new Date(e.end):new Date(start.getTime()+3600000);
-              const startH=Math.max(HOUR_START, start.getHours()+start.getMinutes()/60);
+              const startH=vS!=null ? vS : Math.max(HOUR_START, start.getHours()+start.getMinutes()/60);
               const endHraw=end.getHours()+end.getMinutes()/60;
-              const endH=Math.min(HOUR_END+1, endHraw>startH?endHraw:startH+1);
+              const endH=vE!=null ? vE-0.04 : Math.min(HOUR_END+1, endHraw>startH?endHraw:startH+1);
               const top=(startH-HOUR_START)*PX_H;
               const height=Math.max(18,(endH-startH)*PX_H-2);
               return <div key={e.id} title={'Glisser pour déplacer, cliquer pour modifier — '+e.title}
@@ -5418,19 +5421,20 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
                   {viewMode==='jour' && (()=>{   // v514 : vue Jour — la note de la job, les pièces jointes et « Commander » directement sur le bloc
                     const note = String(e.description||'').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\n{2,}/g,'\n').trim();
                     const pj = (e.attachments||[]).length, stop = ev=>ev.stopPropagation();
+                    const aOT = /Ordre de travail\s*:?\s*#?\d+/i.test(String(e.description||'')) || (e.attachments||[]).some(a=>/^OT_|ordre de travail/i.test(a.title||''));   // v515 : « Commander » seulement s'il y a un ordre de travail (liste de stock) relié
                     return <>
                       {note && height>60 && <div style={{fontSize:10.5,opacity:.92,whiteSpace:'pre-wrap',overflow:'hidden',display:'-webkit-box',WebkitBoxOrient:'vertical',WebkitLineClamp:Math.max(1, Math.floor((height-62)/13)),marginTop:2}}>📝 {note}</div>}
                       <div style={{display:'flex',gap:4,alignItems:'center',marginTop:3,flexWrap:'wrap'}}>
                         {pj>0 && <span style={{fontSize:10.5,background:'rgba(255,255,255,.35)',borderRadius:4,padding:'0 4px'}} title={(e.attachments||[]).map(a=>a.title).join('\n')}>📎 {pj}</span>}
-                        <button className="btn btn-sm" style={{padding:'1px 7px',fontSize:11,background:'var(--bg2)',color:'var(--text)'}} onPointerDown={stop} onPointerUp={stop}
-                          onClick={ev=>{ ev.stopPropagation(); BC_PREFILL = {id:e.id, day:String(e.start||'').slice(0,10), title:e.title}; CRM_ALLER && CRM_ALLER('commandes', {}); }} title="Ouvre le bon de commande pour cette job">🛒 Commander</button>
+                        {aOT && <button className="btn btn-sm" style={{padding:'1px 7px',fontSize:11,background:'var(--bg2)',color:'var(--text)'}} onPointerDown={stop} onPointerUp={stop}
+                          onClick={ev=>{ ev.stopPropagation(); BC_PREFILL = {id:e.id, day:String(e.start||'').slice(0,10), title:e.title}; CRM_ALLER && CRM_ALLER('commandes', {}); }} title="Ouvre le bon de commande pour cette job (ordre de travail relié)">🛒 Commander</button>}
                       </div></>; })()}
                 </div>
-                <div onPointerDown={ev2=>handleResizePointerDown(ev2,e)} onPointerMove={handleResizePointerMove} onPointerUp={handleResizePointerUp}
+                {viewMode!=='jour' && <div onPointerDown={ev2=>handleResizePointerDown(ev2,e)} onPointerMove={handleResizePointerMove} onPointerUp={handleResizePointerUp}
                   title="Glisser pour changer la durée"
                   style={{position:'absolute',left:0,right:0,bottom:-4,height:9,cursor:'ns-resize',touchAction:'none',display:'flex',alignItems:'center',justifyContent:'center'}}>
                   <div style={{width:22,height:3,borderRadius:2,background:'rgba(29,29,29,.55)'}}></div>
-                </div>
+                </div>}
               </div>;
             })}
           </div>;
