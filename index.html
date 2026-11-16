@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v520';
+const APP_VERSION = 'v521';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4637,7 +4637,31 @@ function NouvelleJobAgenda({cfg, addProjet, toast, onClose, onDone, initialDate,
 // jointes Drive (par lien de partage) et suppression.
 // v345 : point de départ des itinéraires (la shop)
 const SHOP_ADRESSE = '560 boulevard du Séminaire Nord, Saint-Jean-sur-Richelieu, QC';
-function EditEventModal({event, job, onClose, onSaved, toast}){
+// v521 : contenu du dossier Drive d'une job, avec aperçu, dans la fenêtre de l'événement
+function DossierApercu({id}){
+  const [l,setL]=useState(null), [voir,setVoir]=useState(null), [err,setErr]=useState('');
+  useEffect(()=>{ let ok = true;
+    driveFetch('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent("'"+id+"' in parents and trashed=false")+'&orderBy=modifiedTime%20desc&pageSize=100&fields=files(id,name,mimeType,modifiedTime)&supportsAllDrives=true&includeItemsFromAllDrives=true')
+      .then(r=>{ if(!ok) return; const f = (r.files||[]).filter(x=>x.mimeType!=='application/vnd.google-apps.folder'); setL(f); setVoir(f[0] || null); }).catch(e=>ok && setErr(apiErrMsg(e)));
+    return ()=>{ ok = false; }; },[id]);
+  if(err) return <div className="muted">Dossier illisible : {err}</div>;
+  if(!l) return <div style={{display:'flex',gap:8,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture du dossier…</span></div>;
+  return <div style={{display:'grid',gridTemplateColumns:'minmax(200px,280px) minmax(0,1fr)',gap:14,minHeight:'60vh'}}>
+    <div style={{overflowY:'auto',maxHeight:'66vh',display:'grid',alignContent:'start',gap:2}}>
+      {!l.length && <div className="muted" style={{fontSize:12.5}}>Dossier vide.</div>}
+      {l.map(f=><div key={f.id} onClick={()=>setVoir(f)} style={{cursor:'pointer',padding:'6px 8px',borderRadius:6,fontSize:12.5,background:voir && voir.id===f.id ? 'rgba(127,127,127,.18)' : 'transparent'}}>
+        {/pdf/.test(f.mimeType) ? '📄' : /^image/.test(f.mimeType) ? '🖼️' : /audio|video|webm/.test(f.mimeType+f.name) ? '🎤' : '📎'} {f.name}
+        <div className="muted" style={{fontSize:11}}>{String(f.modifiedTime||'').slice(0,10)}</div></div>)}
+      <a className="btn btn-sm" style={{marginTop:6}} href={'https://drive.google.com/drive/folders/'+id} target="_blank" rel="noopener">↗ Ouvrir dans Drive</a>
+    </div>
+    {voir ? <iframe key={voir.id} src={'https://drive.google.com/file/d/'+voir.id+'/preview'} style={{width:'100%',height:'66vh',border:'1px solid var(--border)',borderRadius:8,background:'#fff'}}/> : <div/>}
+  </div>;
+}
+function EditEventModal({cfg, event, job, onClose, onSaved, toast}){
+  const [panneau,setPanneau]=useState(null);   // v521 : 'dossier' | 'commande' | 'projet' — ouverts DANS la fenêtre, sans changer de page
+  const Bk = useBlocages(cfg || {});
+  const blocOuverts = useMemo(()=>{ if(!job) return []; const ids = new Set((job.j.events||[]).flatMap(e=>[e.id, String(e.id||'').split('_')[0]]));
+    return (Bk.liste||[]).filter(b=>b.statut!=='Réglé' && (b.source==='punchpro' ? (ids.has(b.eventId) || ids.has(String(b.eventId||'').split('_')[0])) : b.job===job.j.id)); },[Bk.liste, job]);
   const startDt = new Date(event.start);
   const endDt = event.end ? new Date(event.end) : new Date(startDt.getTime()+3600000);
   const [titre,setTitre]=useState(event.title||'');
@@ -4743,12 +4767,17 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
   const dossierJob = job && job.j.reg && job.j.reg.dossier;
   return <Modal title="Modifier l'événement" onClose={onClose} wide tresLarge deClic teinte={eventColor(event)}>
     {job && <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:14,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
-      <span style={{fontSize:12.5,flex:'1 1 160px'}}><b>{(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}</b>{job.j.po ? <span className="muted"> · {job.j.po}</span> : null}</span>
-      {dossierJob ? <a className="btn btn-p btn-sm" href={'https://drive.google.com/drive/folders/'+dossierJob} target="_blank" rel="noopener" style={{textDecoration:'none'}}>Ouvrir le dossier ↗</a>
-        : <span className="muted" style={{fontSize:12}}>{job.j.po ? 'Pas de dossier rattaché à '+job.j.po : 'Pas de dossier (aucun PO)'}</span>}
-      <button type="button" className="btn btn-sm" title="Ouvre le bon de commande pour ce passage (référence, qui va chercher, date)" onClick={()=>{ onClose(); BC_PREFILL = {id:event.id, day:String(event.start||'').slice(0,10), title:event.title}; CRM_ALLER && CRM_ALLER('commandes', {}); }}>Commander le matériel</button>
-      <button type="button" className="btn btn-sm" onClick={()=>{ onClose(); CRM_ALLER && CRM_ALLER('projets', {jobIds:[job.j.id], ouvrir:job.c.code+job.j.id, nom:(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}); }}>Voir la job dans Projets</button>
+      <span style={{fontSize:12.5,flex:'1 1 160px'}}><b>{(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}</b>{job.j.po ? <span className="muted"> · {job.j.po}</span> : null}
+        {blocOuverts.length>0 && <span onClick={()=>setPanneau('projet')} title={blocOuverts.map(b=>(b.type||'Blocage')+(b.description ? ' — '+b.description : '')).join('\n')}
+          style={{marginLeft:8,cursor:'pointer',background:'var(--warning)',color:'#1d1d1d',borderRadius:10,padding:'1px 8px',fontWeight:800,fontSize:11.5}}>⚠️ {blocOuverts.length} blocage{blocOuverts.length>1?'s':''}</span>}</span>
+      {panneau && <button type="button" className="btn btn-sm" onClick={()=>setPanneau(null)}>← Retour à l'événement</button>}
+      {[['dossier','📁 Dossier', !!dossierJob],['commande','🛒 Commander le matériel', true],['projet','📊 La job dans Projets', true]].map(([k,l,ok])=>ok && <button key={k} type="button" className={'btn btn-sm'+(panneau===k?' btn-p':'')} onClick={()=>setPanneau(panneau===k ? null : k)}>{l}</button>)}
+      {!dossierJob && <span className="muted" style={{fontSize:12}}>{job.j.po ? 'Pas de dossier rattaché à '+job.j.po : 'Pas de dossier (aucun PO)'}</span>}
     </div>}
+    {panneau==='dossier' && dossierJob && <DossierApercu id={dossierJob}/>}
+    {panneau==='commande' && <div style={{maxHeight:'70vh',overflowY:'auto'}}>{(()=>{ BC_PREFILL = BC_PREFILL || {id:event.id, day:String(event.start||'').slice(0,10), title:event.title}; return null; })()}<CommandesView cfg={cfg} toast={toast} refreshKey={0}/></div>}
+    {panneau==='projet' && job && <div style={{maxHeight:'70vh',overflowY:'auto'}}>{(()=>{ NAV_FOCUS = {cible:'projets', t:Date.now(), jobIds:[job.j.id], ouvrir:job.c.code+job.j.id, nom:(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}; return null; })()}<ProjetsSuivi cfg={cfg} refreshKey={0}/></div>}
+    <div style={{display:panneau ? 'none' : 'block'}}>
     <div className="ev-grille"><div className="ev-gauche">
     <div className="field"><label>Titre</label><input value={titre} onChange={e=>setTitre(e.target.value)}/></div>
     <div className="field"><label>Équipe</label>
@@ -4800,6 +4829,7 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
 
     </div>
     <div className="ev-droite field"><label>Notes / description</label><NotesRiches className="ev-notes" value={desc||''} onChange={setDesc}/></div>
+    </div>
     </div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:6}}>
       {!confirmDel ? <button className="btn btn-sm btn-danger" onClick={()=>setConfirmDel(true)}>Supprimer l'événement</button>
@@ -5546,7 +5576,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     {showJobModal && data && <NouvelleJobAgenda cfg={cfg} addProjet={data.addProjet} toast={toast} initialDate={jobDate} initialHeure={jobHeure}
       clients={cdClients} fiches={cd.fiches} onClose={()=>setShowJobModal(false)} onDone={()=>setReloadKey(k=>k+1)}/>}
     {editEvent && onChoisir && <ChoisirEvenement e={editEvent} onChoisir={onChoisir} onClear={()=>setEditEvent(null)}/>}
-    {editEvent && !onChoisir && <EditEventModal event={editEvent} job={jobDeEvenement(editEvent)} toast={toast} onClose={()=>setEditEvent(null)} onSaved={()=>setReloadKey(k=>k+1)}/>}
+    {editEvent && !onChoisir && <EditEventModal cfg={cfg} event={editEvent} job={jobDeEvenement(editEvent)} toast={toast} onClose={()=>setEditEvent(null)} onSaved={()=>setReloadKey(k=>k+1)}/>}
   </div>;
 }
 
