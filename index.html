@@ -110,6 +110,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 @media (max-width:899px){.ev-grille{grid-template-columns:1fr;gap:0}}
 .modal-leger textarea.ev-notes{flex:1;min-height:180px;height:auto;resize:none;background:rgba(127,127,127,.08)!important;border:none!important;border-radius:10px!important;padding:10px 12px!important;line-height:1.45;font-family:var(--font-body)}
 .modal-leger textarea.ev-notes:focus{box-shadow:0 0 0 1px var(--accent)!important}
+.notes-riches{flex:1;min-height:180px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;background:rgba(127,127,127,.08);border-radius:10px;padding:10px 12px;line-height:1.45;font-size:13.5px;outline:none;cursor:text}
+.notes-riches:focus{box-shadow:0 0 0 1px var(--accent)}
+.notes-riches a{color:var(--accent)}
+.notes-riches ul,.notes-riches ol{margin:4px 0;padding-left:20px;white-space:normal}
+@media (min-width:900px){.notes-riches{min-height:52vh;max-height:62vh}}
 @media (min-width:900px){.modal-leger textarea.ev-notes{min-height:52vh}}
 .field{margin-bottom:11px}
 .field label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.02em}
@@ -196,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v519';
+const APP_VERSION = 'v520';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4481,6 +4486,16 @@ function QuickJobModal({cfg, addProjet, toast, onClose, onDone, initialDate, ini
 // v321 : nouvelle job depuis l'agenda — choisir le client (contracteur → ses jobs ; particulier → le Répertoire), le type de job,
 // l'équipe et l'agenda (The Crew / En attente). Le titre reprend le nom de la job existante pour que les gars punchent sur la même job.
 // v324 : zone de notes compacte (4 lignes) qui s'agrandit pour tout montrer quand on clique dedans
+// v520 : notes d'un événement affichées proprement (gras, liens, listes de Google Agenda) et modifiables sur place
+function notesNettoyer(h){ return String(h||'').replace(/<\s*(script|style|iframe|object)[\s\S]*?<\/\s*\1\s*>/gi,'').replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi,'').replace(/(href|src)\s*=\s*(["'])\s*javascript:[^"']*\2/gi,'$1="#"'); }
+function NotesRiches({value, onChange, className}){
+  const ref = useRef(null), dernier = useRef(null);
+  useEffect(()=>{ const el = ref.current; if(!el || value===dernier.current) return; el.innerHTML = notesNettoyer(value); dernier.current = value; },[value]);
+  const changer = () => { const h = ref.current.innerHTML; dernier.current = h; onChange(h); };
+  return <div ref={ref} className={(className||'')+' notes-riches'} contentEditable suppressContentEditableWarning onInput={changer}
+    onClick={e=>{ const a = e.target.closest && e.target.closest('a'); if(a && (e.metaKey || e.ctrlKey)) window.open(a.href, '_blank'); }}
+    title="Clique pour modifier · Cmd + clic pour ouvrir un lien"/>;
+}
 function TexteDeplie({value, onChange, placeholder, lignes}){
   const ref = useRef(null); const [ouvert,setOuvert]=useState(false);
   const ajuster = () => { const t = ref.current; if(!t) return;
@@ -4784,7 +4799,7 @@ function EditEventModal({event, job, onClose, onSaved, toast}){
     </div>
 
     </div>
-    <div className="ev-droite field"><label>Notes / description</label><textarea className="ev-notes" value={desc||''} onChange={e=>setDesc(e.target.value)}/></div>
+    <div className="ev-droite field"><label>Notes / description</label><NotesRiches className="ev-notes" value={desc||''} onChange={setDesc}/></div>
     </div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:6}}>
       {!confirmDel ? <button className="btn btn-sm btn-danger" onClick={()=>setConfirmDel(true)}>Supprimer l'événement</button>
