@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v533';
+const APP_VERSION = 'v534';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5239,7 +5239,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   const iniEquipe = k => Object.keys(CREW_INITIALS).filter(x=>CREW_INITIALS[x]===CREW_COLORS[k]);
   const propre = (e, k) => couloirDe(e)===k && !cachees.includes(agendaGroupe(e));   // v532 : sa propre job (pas une job cachée)
   const estAvec = (e, k) => viewMode==='jour' && k!=='autres' && !cachees.includes(k) && couloirDe(e)!==k && iniEquipe(k).some(x=>new RegExp('(^|\\s)'+x+'(\\s|$)').test(e.title||''));
-  const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>propre(e, k) || estAvec(e, k)) || (viewMode==='jour' && couloirsPlus.includes(k))); if(t.some(e=>propre(e, 'autres'))) l.push('autres'); return l; })();   // v529 : en vue Jour, colonnes ajoutées pour les gars sans job
+  const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>propre(e, k) || estAvec(e, k)) || (viewMode==='jour' && CREW_COLORS[k] && !cachees.includes(k))); if(t.some(e=>propre(e, 'autres'))) l.push('autres'); return l; })();   // v529 : en vue Jour, colonnes ajoutées pour les gars sans job
   const enCouloirs = parEquipe && viewMode!=='mois' && couloirs.length>1;
   function placer(dayEvents){
     if(viewMode==='jour'){   // v515 : chaque équipe (ou la journée) divisée en parts égales de 7 h à 15 h 30, dans l'ordre des heures
@@ -5251,7 +5251,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     const w = 100/couloirs.length;
     return couloirs.flatMap((k,li)=>layoutDayEvents(dayEvents.filter(e=>couloirDe(e)===k)).map(p=>({event:p.event, widthPct:w/p.totalCols, leftPct:li*w + p.col*w/p.totalCols})));
   }
-  const groupesPresents = AGENDA_GROUPES_ORDRE.filter(k=>events.some(e=>agendaGroupe(e)===k));
+  const nommeDans = (e, k) => Object.keys(CREW_INITIALS).some(x=>CREW_INITIALS[x]===CREW_COLORS[k] && new RegExp('(^|\\s)'+x+'(\\s|$)').test(e.title||''));
+  const groupesPresents = AGENDA_GROUPES_ORDRE.filter(k=>CREW_COLORS[k] || events.some(e=>agendaGroupe(e)===k));   // v534 : les 5 gars toujours là, on/off
   // Un événement « toute la journée » sur plusieurs jours apparaît chaque jour (la date de fin est exclusive).
   function couvre(e, dStr){ const d0 = String(e.start).slice(0,10); if(!e.allDay || !e.end) return d0===dStr; return d0<=dStr && dStr<String(e.end).slice(0,10); }
   function eventsForDay(dStr){ return evVisibles.filter(e=>String(e.start).slice(0,10)===dStr && !e.allDay); }
@@ -5503,7 +5504,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     {ongletAg==='commandes' && (cd.loading ? <div className="card muted" style={{marginBottom:16,fontSize:13}}>Lecture des jobs et des commandes…</div>
       : <CvSemaine clients={cdClients} appels={cd.appels||{parNumero:{},parFacture:{},liste:[]}} ancre={anchor} commandes={commandes} onCommande={basculerCommande} manuels={manuelsAg} isDesktop={isDesktop}/>)}
     {ongletAg==='agenda' && groupesPresents.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
-      {groupesPresents.map(k=>{ const on = !cachees.includes(k), n = events.filter(e=>agendaGroupe(e)===k).length;
+      {groupesPresents.map(k=>{ const on = !cachees.includes(k), n = events.filter(e=>agendaGroupe(e)===k || (CREW_COLORS[k] && nommeDans(e, k))).length;
         return <button key={k} className="btn btn-sm" onClick={()=>basculerGroupe(k)} title={on?'Cacher':'Montrer'}
           style={{display:'inline-flex',alignItems:'center',gap:5,opacity:on?1:.45,borderColor:on?agendaGroupeCouleur(k):undefined}}>
           <span style={{width:10,height:10,borderRadius:'50%',background:on && k!=='autre' && k!=='attente'?agendaGroupeCouleur(k):'transparent',border:'2px '+(k==='autre'||k==='attente'?'dashed ':'solid ')+agendaGroupeCouleur(k),display:'inline-block',boxSizing:'border-box'}}></span>
@@ -5511,7 +5512,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       {cachees.length>0 && <span style={{color:'var(--accent)',fontSize:12,cursor:'pointer'}} onClick={()=>{ setCachees([]); try{ localStorage.setItem('agenda_groupes_caches','[]'); }catch(e){} }}>Tout montrer</span>}
     </div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
-    {ongletAg==='agenda' && viewMode==='jour' && (()=>{   // v529 : les gars qui n'ont pas de job ce jour-là — un clic leur ouvre une colonne
+    {false && (()=>{   // v534 : remplacé par les 5 noms on/off (une colonne par gars affiché en vue Jour)
       const sans = EQUIPES_ORDRE.filter(k=>CREW_COLORS[k] && !couloirs.includes(k)), ajoutes = couloirsPlus.filter(k=>couloirs.includes(k) && !evVisibles.some(e=>!e.allDay && (propre(e, k) || estAvec(e, k))));
       if(!sans.length && !ajoutes.length) return null;
       return <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
