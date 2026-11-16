@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v538';
+const APP_VERSION = 'v539';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -457,14 +457,14 @@ async function attitrerCouleur(calId, eventId, k, labelActuel){
   const eventUrl = 'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(calId)+'/events/'+encodeURIComponent(eventId);
   const libs = await libellesAgenda(calId), lib = libs.find(l=>l.crew===k) || (CREW_COLORS[k] ? null : libs.find(l=>l.colorId===k));
   let parCouleur = !lib;
-  if(lib){ await window.gapi.client.request({path:eventUrl, method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:lib.id}}).catch(()=>null);
+  if(lib){ await window.gapi.client.request({path:eventUrl, method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:lib.id}}).then(undefined, ()=>null);
     const v = await window.gapi.client.request({path:eventUrl, params:{eventLabelVersion:1, fields:'eventLabelId'}}).then(r=>r.result.eventLabelId||'', ()=>'');
     if(v!==lib.id) parCouleur = true;   // v440 : le libellé n'a pas pris (ex. événement venu d'un autre agenda) → on passe par la couleur
-    else if(CREW_COLORS[k]) await window.gapi.client.calendar.events.patch({calendarId:calId, eventId, resource:{colorId:k}}).catch(()=>null); }   // v441 : la couleur suit le libellé (sinon une vieille couleur, ex. sauge, le rangeait dans « Autres »)
+    else if(CREW_COLORS[k]) await window.gapi.client.calendar.events.patch({calendarId:calId, eventId, resource:{colorId:k}}).then(undefined, ()=>null); }   // v441 : la couleur suit le libellé (sinon une vieille couleur, ex. sauge, le rangeait dans « Autres »)
   if(parCouleur){
     // v438 : retirer l'ancien libellé (celui de l'équipe d'avant l'emporte sur la couleur → l'événement « revenait » à l'autre gars)
     const lu = await window.gapi.client.request({path:eventUrl, params:{eventLabelVersion:1, fields:'eventLabelId'}}).then(r=>r.result.eventLabelId||'', ()=>labelActuel||'');
-    if(lu) await window.gapi.client.request({path:eventUrl, method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:null}}).catch(()=>null);   // v442 : un libellé venu d'un autre agenda (En attente) peut refuser d'être retiré — pas grave, la couleur suffit
+    if(lu) await window.gapi.client.request({path:eventUrl, method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:null}}).then(undefined, ()=>null);   // v442 : un libellé venu d'un autre agenda (En attente) peut refuser d'être retiré — pas grave, la couleur suffit
     await window.gapi.client.calendar.events.patch({calendarId:calId, eventId, resource:{colorId:k}});
   }
   // Vérification : si un libellé d'une autre équipe est resté, on le dit au lieu de laisser l'agenda revenir en arrière
@@ -5293,7 +5293,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     try{
       if(src.calendarId===EN_ATTENTE_CAL){   // v538 : job En attente (hachurée) déposée dans la grille → elle passe dans The Crew
         await window.gapi.client.calendar.events.move({calendarId:EN_ATTENTE_CAL, eventId:src.id, destination:CREW_CAL});
-        await window.gapi.client.request({path:'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(CREW_CAL)+'/events/'+encodeURIComponent(src.id), method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:null}}).catch(()=>null);
+        await window.gapi.client.request({path:'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(CREW_CAL)+'/events/'+encodeURIComponent(src.id), method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:null}}).then(undefined, ()=>null);
         const ancienId = src.calendarId; src = {...src, calendarId:CREW_CAL, labelId:''};
         setEvents(l=>l.map(x=>x.id===src.id && x.calendarId===ancienId ? src : x)); }
       const li = Math.max(0, Math.min(couloirs.length-1, Math.floor(fx*couloirs.length))), k = couloirs[li], ancien = couloirDe(src), jour = localDateStr(d);
@@ -5340,7 +5340,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       let cal = c.ev.calendarId, etape = 'transfert dans The Crew';   // v536 : on déplace d'abord dans The Crew, puis on change la date/l'heure
       try{
         if(versCrew && cal!==CREW_CAL){ await window.gapi.client.calendar.events.move({calendarId:cal, eventId:c.ev.id, destination:CREW_CAL}); cal = CREW_CAL;
-          await window.gapi.client.request({path:'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(CREW_CAL)+'/events/'+encodeURIComponent(c.ev.id), method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:null}}).catch(()=>null); }   // v537 : on enlève le libellé d'En attente
+          await window.gapi.client.request({path:'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(CREW_CAL)+'/events/'+encodeURIComponent(c.ev.id), method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:null}}).then(undefined, ()=>null); }   // v537 : on enlève le libellé d'En attente
         etape = 'changement de date';
         await window.gapi.client.calendar.events.patch({calendarId:cal, eventId:c.ev.id, resource:res});
       }catch(err){ console.error('Céduler — '+etape, err); throw {result:{error:{message:'('+etape+') '+(err && err.status ? err.status+' — ' : '')+apiErrMsg(err)}}}; }
