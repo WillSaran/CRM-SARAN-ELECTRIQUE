@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v546';
+const APP_VERSION = 'v547';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4312,6 +4312,11 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
   const regler = async l=>{ if(docs.absent) await ensureSheetsExist(id, [{name:EMP_DOSSIER, headers:EMP_DOSSIER_ENTETE}]);
     await sheetsAppendRow(id, qSheet(EMP_DOSSIER), ['E-'+Date.now(), l.e.nom, localDateStr(new Date()), REGLE, 'Comptes réglés — solde '+(l.solde!=null ? cvMoney(l.solde) : '?'), l.solde!=null ? l.solde.toFixed(2) : '', 'Non', '', 'Heures en banque réglées : '+fmtH(l.h)+' · achats déduits : '+cvMoney(l.deduit), new Date().toLocaleString('fr-CA')]);
     await ecrire(l.e.nom, {payees:String(l.h)}); await lire(true); };
+  // v547 : PDF de la feuille gardé dans son dossier Drive + une ligne « Document » dans sa fiche
+  const archiver = async (l, b64, nom, note)=>{ const bin = atob(b64), u8 = new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
+    const racine = await driveDossier('Saran CRM — Employés'), dos = await driveDossier(l.e.nom, racine), f = await driveDeposer(new File([u8], nom, {type:'application/pdf'}), dos);
+    if(docs.absent) await ensureSheetsExist(id, [{name:EMP_DOSSIER, headers:EMP_DOSSIER_ENTETE}]);
+    await sheetsAppendRow(id, qSheet(EMP_DOSSIER), ['E-'+Date.now(), l.e.nom, localDateStr(new Date()), 'Document', nom.replace(/\.pdf$/,''), '', '', f.id, note, new Date().toLocaleString('fr-CA')]); await lire(true); return f.id; };
   const enleverAjust = async d=>{ await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:qSheet(EMP_DOSSIER)+'!D'+d.row, valueInputOption:'RAW', resource:{values:[['(supprimé) '+d.type]]}}); await lire(true); };
   const lf = fiche && lignes.find(l=>prenom(l.e.nom)===prenom(fiche));
   const champ = (val, onSave, w, ph) => <input key={String(val)} defaultValue={val==null?'':val} placeholder={ph} inputMode="decimal" onBlur={e=>{ const v=e.target.value.trim().replace(',','.'); if(v!==String(val==null?'':val)) onSave(v); }} style={{width:w||64,textAlign:'right',padding:'3px 6px'}}/>;
@@ -4321,7 +4326,7 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
       <iframe src={'https://drive.google.com/file/d/'+pdfVoir.id+'/preview'} style={{width:'100%',height:'70vh',border:'1px solid var(--border)',borderRadius:8,background:'#fff'}}/>
       <a className="btn btn-sm" style={{marginTop:8}} href={'https://drive.google.com/file/d/'+pdfVoir.id+'/view'} target="_blank" rel="noopener">↗ Ouvrir dans Drive</a></Modal>}
     {regl && (()=>{ const l = lignes.find(x=>x.e.nom===regl); return l ? <FeuilleReglement l={l} sem={(banqueDetail && banqueDetail[cvNorm(l.e.nom)]) || []} onClose={()=>setRegl(null)}
-      lignesAch={lignesAch} ajouter={(d,h,r)=>ajouterAjust(l.e.nom, d, h, r)} enlever={enleverAjust} regler={()=>regler(l)} voirPdf={setPdfVoir} ecrirePayees={v=>ecrire(l.e.nom, {payees:v})}/> : null; })()}
+      lignesAch={lignesAch} archiver={(b,nm,nt)=>archiver(l,b,nm,nt)} ajouter={(d,h,r)=>ajouterAjust(l.e.nom, d, h, r)} enlever={enleverAjust} regler={()=>regler(l)} voirPdf={setPdfVoir} ecrirePayees={v=>ecrire(l.e.nom, {payees:v})}/> : null; })()}
     <div style={{padding:'12px 14px',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',alignItems:'center'}}>
       <div><div className="fh" style={{fontSize:16}}>Banque d'heures supp</div>
         <div className="muted" style={{fontSize:11.5}}>Semaines confirmées seulement : heures au-delà de 40 h, moins les heures que l'employé a pris dans sa banque pour compléter ses 40 h. Valeur = heures × taux. Les achats associés à l'employé (Fournisseurs › 👷 Employé) sont déduits.</div></div>
@@ -4369,7 +4374,8 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
   </div>;
 }
 // v542 : feuille de règlement d'un employé — tout le calcul sur une page (heures confirmées, ajustements, payées, taux, achats déduits, solde), imprimable
-function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePayees, regler, lignesAch}){
+function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePayees, regler, lignesAch, archiver}){
+  const [envoi,setEnvoi]=useState(null);   // v547 : {to, sujet, texte, etat}
   const [tous,setTous]=useState(false);   // v545 : matériaux depuis le dernier règlement, ou tous
   const factMat = (tous ? l.ach : l.achD).slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).map(a=>({...a, lignes:(lignesAch||{})[a.f+'|'+a.num]||[]}));
   const exporterCsv = ()=>{ const q = v => '"'+String(v==null?'':v).replace(/"/g,'""')+'"', nb = x => (Math.round((x||0)*100)/100).toFixed(2).replace('.',',');
@@ -4386,16 +4392,40 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
   const sg = x => (x>0?'+':x<0?'−':'')+fmtH(Math.abs(x));
   const go = async ()=>{ const h = cvNum(String(aj.h).replace(',','.')); if(!h){ alert('Écris le nombre d\'heures (ex. 2 ou -1,5).'); return; } if(!aj.raison.trim()){ alert('Écris la raison de l\'ajustement.'); return; }
     setBusy(true); try{ await ajouter(aj.date, h, aj.raison.trim()); setAj({...aj, h:'', raison:''}); }catch(e){ alert('Pas enregistré : '+apiErrMsg(e)); } setBusy(false); };
+  const pageHtml = ()=>'<html><head><meta charset="utf-8"><title>Règlement — '+l.e.nom+'</title><style>:root{--border:#ddd;--border2:#bbb;--accent:#d9661a;--accent-rgb:217,102,26;--success:#1a7f37;--danger:#c62828;--warning:#b26a00;--muted:#666;--text:#111;--bg3:#f4f4f4}body{font-family:Helvetica,Arial,sans-serif;font-size:12px;color:#111;margin:28px;background:#fff}table{border-collapse:collapse;width:100%;margin:6px 0 14px}th,td{border-bottom:1px solid #ccc;padding:4px 6px;text-align:left;color:#111!important}td.n,th.n{text-align:right}.noprint{display:none}h2{margin:4px 0}h3{margin:12px 0 4px;color:#d9661a}.muted{color:#666}</style></head><body><div style="color:#d9661a;font-weight:700;font-size:11px;margin-bottom:8px">SARAN ÉLECTRIQUE INC. · 582 boul. du Séminaire Nord, Saint-Jean-sur-Richelieu</div>'+zone.current.innerHTML+'</body></html>';
+  const nomPdf = 'Règlement '+l.e.nom+' '+localDateStr(new Date())+'.pdf';
+  const ouvrirEnvoi = ()=>{ const p = l.e.nom.split(' ')[0], dateTxt = new Date().toLocaleDateString('fr-CA',{day:'numeric',month:'long',year:'numeric'});
+    setEnvoi({to:l.e.email||'', sujet:'Ta banque d\'heures — règlement au '+dateTxt, etat:'',
+      texte:'Salut '+p+',\n\nVoici le relevé de ta banque d\'heures au '+dateTxt+' (PDF joint) :\n\n'+
+        '• Heures supp en banque : '+fmtH(l.reste)+'\n'+(l.taux!=null ? '• Taux : '+cvMoney(l.taux)+' / h → '+cvMoney(l.valeur)+'\n' : '')+
+        '• Achats déduits : '+cvMoney(l.deduit)+'\n'+(l.solde!=null ? '• Solde : '+cvMoney(Math.abs(l.solde))+(l.solde>=0 ? ' en ta faveur' : ' à rembourser')+'\n' : '')+
+        '\nLe détail de chaque semaine et de chaque commande est dans le PDF. Dis-moi si quelque chose ne marche pas.\n\nWilliam\nSaran Électrique inc.'}); };
+  const envoyer = async ()=>{ if(!/@/.test(envoi.to)){ alert('Écris son adresse courriel.'); return; }
+    try{ setEnvoi(e=>({...e, etat:'PDF…'})); const b64 = await docPdfBase64(pageHtml());
+      setEnvoi(e=>({...e, etat:'Envoi…'})); await gmailEnvoyer({to:envoi.to, sujet:envoi.sujet, texte:envoi.texte, pj:{nom:nomPdf, type:'application/pdf', base64:b64}});
+      setEnvoi(e=>({...e, etat:'Rangement dans sa fiche…'})); try{ await archiver(b64, nomPdf, 'Envoyé par courriel à '+envoi.to+' le '+new Date().toLocaleString('fr-CA')); }catch(x){}
+      setEnvoi(e=>({...e, etat:'✓ Envoyé à '+envoi.to+' — le PDF est dans sa fiche'})); }
+    catch(x){ setEnvoi(e=>({...e, etat:''})); alert('Pas envoyé : '+apiErrMsg(x)); } };
   const imprimer = ()=>{ const w = window.open('', '_blank'); if(!w) return;
-    w.document.write('<html><head><meta charset="utf-8"><title>Règlement — '+l.e.nom+'</title><style>body{font-family:system-ui,sans-serif;font-size:12px;color:#111;margin:24px}table{border-collapse:collapse;width:100%;margin:6px 0 14px}th,td{border-bottom:1px solid #ccc;padding:4px 6px;text-align:left}td.n,th.n{text-align:right}.noprint{display:none}h2,h3{margin:8px 0}</style></head><body>'+zone.current.innerHTML+'</body></html>');
+    w.document.write(pageHtml());
     w.document.close(); w.focus(); setTimeout(()=>w.print(), 300); };
   const th = {textAlign:'left',padding:'4px 6px',borderBottom:'1px solid var(--border)',fontSize:12}, td = {padding:'4px 6px',borderBottom:'1px solid var(--border)',fontSize:12.5}, n = {textAlign:'right'};
   return <Modal title={'📄 Règlement — '+l.e.nom} onClose={onClose} wide>
     <div style={{display:'flex',gap:8,justifyContent:'flex-end',alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>
       {l.dernier && <span className="muted" style={{fontSize:12,marginRight:'auto'}}>Dernier règlement : {l.dernier.date}</span>}
       <button className="btn btn-sm" onClick={imprimer}>🖨 Imprimer / PDF</button>
+      <button className="btn btn-sm" onClick={ouvrirEnvoi} title={'Envoie la feuille en PDF à '+(l.e.email||'son courriel')}>✉️ Envoyer à {l.e.nom.split(' ')[0]}</button>
       <button className="btn btn-sm btn-p" disabled={busy} onClick={async()=>{ if(!confirm('Marquer les comptes de '+l.e.nom+' comme réglés aujourd\'hui ?\n\n• Les '+fmtH(l.h)+' en banque comptent comme payées\n• Les achats d\'avant aujourd\'hui ne seront plus déduits')) return;
         setBusy(true); try{ await regler(); }catch(e){ alert('Pas enregistré : '+apiErrMsg(e)); } setBusy(false); }}>✓ Marquer réglé aujourd'hui</button></div>
+    {envoi && <div style={{border:'1px solid var(--border2)',borderRadius:8,padding:10,marginBottom:10,display:'grid',gap:6}}>
+      <div style={{display:'grid',gridTemplateColumns:'60px 1fr',gap:6,alignItems:'center',fontSize:12.5}}>
+        <span className="muted">À</span><input value={envoi.to} onChange={e=>setEnvoi({...envoi, to:e.target.value})} placeholder="courriel de l'employé"/>
+        <span className="muted">Objet</span><input value={envoi.sujet} onChange={e=>setEnvoi({...envoi, sujet:e.target.value})}/></div>
+      <textarea value={envoi.texte} onChange={e=>setEnvoi({...envoi, texte:e.target.value})} rows={9} style={{width:'100%',boxSizing:'border-box',fontSize:12.5}}/>
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><span className="muted" style={{fontSize:12}}>📎 {nomPdf}</span>
+        <span style={{marginLeft:'auto',fontSize:12.5,fontWeight:700,color:/^✓/.test(envoi.etat)?'var(--success)':'var(--muted)'}}>{envoi.etat}</span>
+        <button className="btn btn-sm" onClick={()=>setEnvoi(null)}>Fermer</button>
+        <button className="btn btn-sm btn-p" disabled={!!envoi.etat && !/^✓/.test(envoi.etat)} onClick={envoyer}>✉️ Envoyer</button></div></div>}
     <div ref={zone}>
       <h2 style={{margin:'0 0 2px',fontSize:18}}>Règlement de la banque d'heures — {l.e.nom}</h2>
       <div className="muted" style={{fontSize:12,marginBottom:10}}>Saran Électrique inc. · en date du {new Date().toLocaleDateString('fr-CA',{day:'numeric',month:'long',year:'numeric'})}</div>
