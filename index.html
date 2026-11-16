@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v537';
+const APP_VERSION = 'v538';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5291,13 +5291,18 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   }
   async function deposerJour(src, d, h, fx){
     try{
+      if(src.calendarId===EN_ATTENTE_CAL){   // v538 : job En attente (hachurée) déposée dans la grille → elle passe dans The Crew
+        await window.gapi.client.calendar.events.move({calendarId:EN_ATTENTE_CAL, eventId:src.id, destination:CREW_CAL});
+        await window.gapi.client.request({path:'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(CREW_CAL)+'/events/'+encodeURIComponent(src.id), method:'PATCH', params:{eventLabelVersion:1}, body:{eventLabelId:null}}).catch(()=>null);
+        const ancienId = src.calendarId; src = {...src, calendarId:CREW_CAL, labelId:''};
+        setEvents(l=>l.map(x=>x.id===src.id && x.calendarId===ancienId ? src : x)); }
       const li = Math.max(0, Math.min(couloirs.length-1, Math.floor(fx*couloirs.length))), k = couloirs[li], ancien = couloirDe(src), jour = localDateStr(d);
       const dansJour = e => !e.allDay && localDateStr(new Date(e.start))===jour && !(e.id===src.id && e.calendarId===src.calendarId);
       const parHeure = (a,b)=>String(a.start).localeCompare(String(b.start));
-      const lane = kk => evVisibles.filter(e=>dansJour(e) && propre(e, kk)).sort(parHeure);
+      const lane = kk => evVisibles.filter(e=>dansJour(e) && propre(e, kk) && e.calendarId===CREW_CAL).sort(parHeure);   // seulement les jobs de The Crew
       const cible = lane(k), pos = Math.max(0, Math.min(cible.length, Math.floor((h-7)/(8.5/(cible.length+1)))));
       cible.splice(pos, 0, src);
-      if(k!==ancien && k!=='autres' && CREW_COLORS[k]){ setEvents(l=>l.map(x=>x.id===src.id && x.calendarId===src.calendarId ? {...x, colorId:k, couleurId:k, labelId:''} : x));
+      if(k!==couloirDe(src) && k!=='autres' && CREW_COLORS[k]){ setEvents(l=>l.map(x=>x.id===src.id && x.calendarId===src.calendarId ? {...x, colorId:k, couleurId:k, labelId:''} : x));
         await attitrerCouleur(src.calendarId, src.id, k, src.labelId); }
       await repartirJour(cible, d);
       if(k!==ancien || localDateStr(new Date(src.start))!==jour) await repartirJour(lane(ancien), d);
@@ -5390,7 +5395,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         const rect = dayColRefs.current[i] && dayColRefs.current[i].getBoundingClientRect();
         if(rect && e.clientX>=rect.left && e.clientX<=rect.right){ targetDayIdx=i; break; }
       }
-      if(targetDayIdx!==null && viewMode==='jour' && enCouloirs && info.ev.calendarId===CREW_CAL){   // v536 : vue Jour — on la dépose à la place d'une autre job (elles changent de place), dans la colonne visée
+      if(targetDayIdx!==null && viewMode==='jour' && enCouloirs && (info.ev.calendarId===CREW_CAL || info.ev.calendarId===EN_ATTENTE_CAL)){   // v536 : vue Jour — on la dépose à la place d'une autre job (elles changent de place), dans la colonne visée
         const rect = dayColRefs.current[targetDayIdx].getBoundingClientRect();
         deposerJour(info.ev, new Date(days[targetDayIdx]), HOUR_START + (e.clientY-rect.top)/PX_H, (e.clientX-rect.left)/rect.width);
         dragInfoRef.current=null; draggedElRef.current=null; return; }
@@ -5412,7 +5417,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         if(k && k!=='autres' && k!==couloirDe(info.ev) && CREW_COLORS[k]){ const ev0 = info.ev;
           setEvents(l=>l.map(x=>x.id===ev0.id && x.calendarId===ev0.calendarId ? {...x, colorId:k, couleurId:k, labelId:''} : x));
           // v440 : une job de l'agenda Suivi déposée dans le couloir d'une équipe passe dans The Crew, puis prend la couleur de l'équipe
-          const versCrew = ev0.calendarId===SUIVI_CAL_ID;
+          const versCrew = ev0.calendarId===SUIVI_CAL_ID || ev0.calendarId===EN_ATTENTE_CAL;   // v538 : une job En attente déposée chez un gars passe dans The Crew
           pCouleur = (versCrew ? window.gapi.client.calendar.events.move({calendarId:ev0.calendarId, eventId:ev0.id, destination:CREW_CAL}) : Promise.resolve())
             .then(()=>attitrerCouleur(versCrew ? CREW_CAL : ev0.calendarId, ev0.id, k, versCrew ? '' : ev0.labelId))
             .then(()=>toast('Attitrée à '+equipeNom(k)+(versCrew ? ' (déplacée dans The Crew)' : '')+'.','ok')).catch(err=>toast('Couleur : '+apiErrMsg(err),'err'));
