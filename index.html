@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v530';
+const APP_VERSION = 'v531';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4319,6 +4319,8 @@ function HeuresView({cfg, refreshKey}){
   const [week,setWeek]=useState(()=>semaineHeures(new Date()));
   const conf = useSemainesConfirmees(cfg, refreshKey);
   const [fiche,setFiche]=useState(null);   // v510 : clic sur un employé = sa fiche
+  const [ouverts,setOuverts]=useState([]);   // v531 : employés dont les jobs sont déroulées
+  const basc = n => setOuverts(l=>l.includes(n) ? l.filter(x=>x!==n) : [...l, n]);
 
   useEffect(()=>{
     if(!cfg.punchproSpreadsheetId) { setLoading(false); return; }
@@ -4380,21 +4382,31 @@ function HeuresView({cfg, refreshKey}){
           <thead><tr>
             <th>Employé</th>
             {joursLabel.map((j,i)=><th key={i}>{j} {dates[i].getDate()}</th>)}
-            <th>Total</th>
+            <th>Semaine <span role="button" className="muted" style={{cursor:'pointer',fontSize:11,fontWeight:500}} onClick={()=>setOuverts(ouverts.length ? [] : empsSorted.map(e=>e.nom))}>{ouverts.length ? '▾ tout replier' : '▸ tout déplier'}</span></th>
             <th>Confirmée</th>
           </tr></thead>
           <tbody>
-            {empsSorted.map(e=>{
+            {empsSorted.map(e=>{   // v531 : comme « Heures par employé » — total du jour + écart, ▸ pour dérouler les jobs, écart de la semaine vs 40 h
               const row = table[e.nom]||{};
               const total = dateStrs.reduce((s,d)=>s+(row[d]||0),0);
-              const ouvert = detail && detail.nom===e.nom;
-              return <React.Fragment key={e.nom}><tr>
-                <td style={{cursor:'pointer'}} title="Ouvrir sa fiche (achats, ententes, banque)" onClick={()=>setFiche(e.nom)}><span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:e.couleur,marginRight:6}}></span><span style={{textDecoration:'underline',textDecorationStyle:'dotted'}}>{e.nom}</span> <span className="muted" style={{fontSize:11}}>{ouvert && !detail.jour ? '▲' : '▼'}</span></td>
-                {dateStrs.map((d,i)=><td key={i} style={{cursor:row[d]?'pointer':'default',fontWeight:ouvert && detail.jour===d ? 800 : undefined,color:ouvert && detail.jour===d ? 'var(--accent)' : undefined}} title={row[d] ? 'Voir les jobs de cette journée' : undefined} onClick={()=>row[d] && basculer(e.nom, d)}>{row[d]?fmtH(row[d]):'—'}</td>)}
-                <td style={{fontWeight:700,color:'var(--accent)',cursor:'pointer'}} title="Voir sa semaine jour par jour" onClick={()=>basculer(e.nom, '')}>{fmtH(total)} <span className="muted" style={{fontSize:10}}>{ouvert && !detail.jour ? '▾' : '▸'}</span></td>
-                <td>{conf.pret ? <ConfirmerMain conf={conf} week={week} nom={e.nom} total={total}/> : ''}</td>
-              </tr>
-              {ouvert && <tr><td colSpan="10" style={{padding:0}}><Detail nom={e.nom} jour={detail.jour}/></td></tr>}</React.Fragment>;
+              const ouv = ouverts.includes(e.nom), D = ouv ? detailEmployeSemaine(pts, week, e.nom) : null;
+              const ecart = (h, base) => { const x = Math.round((h-base)*4)/4; if(Math.abs(x)<0.01) return null;
+                return <span style={{fontSize:11,fontWeight:800,color:x>0?'var(--danger)':'var(--muted)'}}>{x>0?'+':'−'}{fmtH(Math.abs(x))}</span>; };
+              return <tr key={e.nom}>
+                <td style={{verticalAlign:'top',whiteSpace:'nowrap'}}><span role="button" onClick={()=>basc(e.nom)} title={ouv?'Replier les jobs':'Voir ses jobs'} style={{cursor:'pointer',marginRight:4,color:'var(--muted)'}}>{ouv?'▾':'▸'}</span>
+                  <span style={{cursor:'pointer'}} title="Ouvrir sa fiche (achats, ententes, banque)" onClick={()=>setFiche(e.nom)}><span style={{display:'inline-block',width:9,height:9,borderRadius:'50%',background:e.couleur,marginRight:6}}></span><span style={{fontWeight:700,textDecoration:'underline',textDecorationStyle:'dotted'}}>{e.nom}</span></span></td>
+                {dateStrs.map((d,i)=><td key={i} style={{verticalAlign:'top',cursor:row[d]?'pointer':'default'}} onClick={()=>row[d] && basc(e.nom)} title={row[d] ? (ouv?'Replier':'Voir les jobs') : undefined}>
+                  {row[d] ? <div><span style={{fontSize:14,fontWeight:800}}>{fmtH(row[d])}</span> {i<5 ? ecart(row[d], 8.5) : <span style={{fontSize:11,fontWeight:800,color:'var(--danger)'}}>+{fmtH(row[d])}</span>}</div> : <span className="muted">—</span>}
+                  {ouv && D && (D[d]||[]).filter(x=>x.compte).map((x,k)=>{ const fond = x.jobColor || e.couleur || 'var(--accent)';
+                    return <div key={k} title={x.job+(x.note?'\n📝 '+x.note:'')} style={{background:fond,color:texteSur(fond),borderRadius:5,padding:'2px 6px',marginTop:3,lineHeight:1.25,maxWidth:170}}>
+                      <div style={{fontWeight:700,fontSize:11,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{x.job}</div>
+                      <div style={{fontSize:10.5,opacity:.9}}>{[x.debut,x.fin].filter(Boolean).join('–')}{x.debut||x.fin?' · ':''}<b>{fmtH(x.heures)}</b></div></div>; })}
+                </td>)}
+                <td style={{verticalAlign:'top',whiteSpace:'nowrap'}}><span style={{fontSize:15,fontWeight:800,color:'var(--accent)'}}>{fmtH(total)}</span>
+                  <div>{(()=>{ const x = Math.round((total-40)*4)/4; return Math.abs(x)<0.01 ? <span className="muted" style={{fontSize:11}}>pile 40 h</span>
+                    : <span style={{fontSize:11.5,fontWeight:800,color:x>0?'var(--danger)':'var(--muted)'}}>{x>0 ? '+'+fmtH(x)+' supp' : '−'+fmtH(-x)+' sous 40 h'}</span>; })()}</div></td>
+                <td style={{verticalAlign:'top'}}>{conf.pret ? <ConfirmerMain conf={conf} week={week} nom={e.nom} total={total}/> : ''}</td>
+              </tr>;
             })}
             {empsSorted.length===0 && <tr><td colSpan="10" className="muted" style={{padding:16}}>Aucun employé trouvé dans le Sheet PunchPro.</td></tr>}
           </tbody>
@@ -5032,7 +5044,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   const [editEvent,setEditEvent]=useState(null);
   const [reloadKey,setReloadKey]=useState(0);
   // v267 : onglets Agenda | Commandes de la semaine ; équipes cachées ; panneau En attente ; cédule par glisser
-  const [ongletAg,setOngletAg]=useState(()=>{ try{ return localStorage.getItem('agenda_onglet')||'agenda'; }catch(e){ return 'agenda'; } });
+  const [ongletAg,setOngletAg]=useState(()=>{ try{ const o = localStorage.getItem('agenda_onglet'); return o && o!=='heures' ? o : 'agenda'; }catch(e){ return 'agenda'; } });   // v531 : Heures par employé → onglet Employés
   const choisirOnglet = k => { setOngletAg(k); try{ localStorage.setItem('agenda_onglet', k); }catch(e){} };
   const [cachees,setCachees]=useState(()=>{ try{ return JSON.parse(localStorage.getItem('agenda_groupes_caches')||'[]'); }catch(e){ return []; } });
   const basculerGroupe = k => setCachees(l=>{ const n = l.includes(k) ? l.filter(x=>x!==k) : [...l, k]; try{ localStorage.setItem('agenda_groupes_caches', JSON.stringify(n)); }catch(e){} return n; });
@@ -5380,7 +5392,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       <div>
         <h2 className="fh" style={{margin:'0 0 8px',fontSize:20}}>Agenda</h2>
         <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>
-          {[['agenda','Agenda'],['heures','Heures par employé'],['commandes','Commandes de la semaine']].map(([k,l])=><button key={k} className={'btn btn-sm'+(ongletAg===k?' btn-p':'')} onClick={()=>choisirOnglet(k)}>{l}</button>)}
+          {[['agenda','Agenda'],['commandes','Commandes de la semaine']].map(([k,l])=><button key={k} className={'btn btn-sm'+(ongletAg===k?' btn-p':'')} onClick={()=>choisirOnglet(k)}>{l}</button>)}
         </div>
       </div>
       {data && <button className="btn btn-p" onClick={()=>openNewJob(todayISO())}>+ Nouvelle job</button>}
@@ -5421,7 +5433,6 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         {ongletAg==='agenda' && viewMode!=='jour' && <button className="btn btn-sm" onClick={basculerRepli} title="Replier ou afficher samedi et dimanche">{repli ? 'Sam.–dim. ▸' : '◂ Sam.–dim.'}</button>}
       </div>
     </div>}
-    {ongletAg==='heures' && <AgendaHeuresEmployes cfg={cfg} refreshKey={refreshKey}/>}
     {ongletAg==='commandes' && (cd.loading ? <div className="card muted" style={{marginBottom:16,fontSize:13}}>Lecture des jobs et des commandes…</div>
       : <CvSemaine clients={cdClients} appels={cd.appels||{parNumero:{},parFacture:{},liste:[]}} ancre={anchor} commandes={commandes} onCommande={basculerCommande} manuels={manuelsAg} isDesktop={isDesktop}/>)}
     {ongletAg==='agenda' && groupesPresents.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
