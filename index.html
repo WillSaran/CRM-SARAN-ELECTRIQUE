@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v525';
+const APP_VERSION = 'v526';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5395,10 +5395,18 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
               <span style={{flex:1,minWidth:0}}><b>{e.title}</b>{e.location ? <span className="muted" style={{fontSize:11.5}}> · {e.location.split(',')[0]}</span> : null}{agendaGroupe(e)==='attente' ? <span className="muted" style={{fontSize:11.5}}> · en attente</span> : null}</span></div>; })}
         </div>}
       </div>}
+      <div style={{display:'inline-flex',flexDirection:'column',gap:4}}>
       <div style={{display:'inline-flex',border:'1px solid var(--border2)',borderRadius:10,overflow:'hidden',background:'var(--bg3)'}}>
         {[['jour','Jour'],['semaine','Semaine'],['mois','Mois']].map(([id,label],i)=>
           <button key={id} onClick={()=>changerVue(id)} style={{border:'none',borderLeft:i?'1px solid var(--border2)':'none',padding:'7px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',
             background:viewMode===id?'var(--accent)':'transparent',color:viewMode===id?'#fff':'var(--text)'}}>{label}</button>)}
+      </div>
+      {(()=>{ const lun = new Date(anchor); lun.setHours(12,0,0,0); lun.setDate(lun.getDate()-((lun.getDay()+6)%7));   // v526 : lun–ven de la semaine affichée, un clic = la journée
+        const sel = viewMode==='jour' ? localDateStr(anchor) : '', auj = localDateStr(new Date());
+        return <div style={{display:'flex',gap:3}}>{['Lun','Mar','Mer','Jeu','Ven'].map((j,i)=>{ const d = new Date(lun); d.setDate(lun.getDate()+i); const ds = localDateStr(d);
+          return <button key={j} onClick={()=>{ setAnchor(new Date(d)); setViewMode('jour'); }} title={d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})}
+            style={{flex:1,border:'1px solid '+(ds===auj?'var(--accent)':'var(--border2)'),borderRadius:7,padding:'2px 6px',fontSize:11.5,fontWeight:700,cursor:'pointer',lineHeight:1.15,
+              background:sel===ds?'var(--accent)':'var(--bg3)',color:sel===ds?'#fff':'var(--text)'}}>{j}<span style={{opacity:.7,fontWeight:500}}> {d.getDate()}</span></button>; })}</div>; })()}
       </div>
       <div style={{display:'flex',gap:4,marginLeft:'auto',flexWrap:'wrap'}}>
         {ongletAg==='agenda' && viewMode!=='mois' && <button className={'btn btn-sm'+(parEquipe?' btn-p':'')} onClick={basculerParEquipe} title="Diviser chaque jour en colonnes par équipe">Par équipe</button>}
