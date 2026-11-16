@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v535';
+const APP_VERSION = 'v536';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5332,8 +5332,15 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         const fin = new Date(c.date+'T00:00:00'); fin.setDate(fin.getDate()+span);
         res = {start:{date:c.date, dateTime:null, timeZone:null}, end:{date:localDateStr(fin), dateTime:null, timeZone:null}};
       } else res = {start:{dateTime:c.debut.toISOString(), timeZone:'America/Toronto', date:null}, end:{dateTime:c.fin.toISOString(), timeZone:'America/Toronto', date:null}};
-      await window.gapi.client.calendar.events.patch({calendarId:c.ev.calendarId, eventId:c.ev.id, resource:res});
-      if(versCrew && c.ev.calendarId!==CREW_CAL) await window.gapi.client.calendar.events.move({calendarId:c.ev.calendarId, eventId:c.ev.id, destination:CREW_CAL});
+      let cal = c.ev.calendarId, etape = 'transfert dans The Crew';   // v536 : on déplace d'abord dans The Crew, puis on change la date/l'heure
+      try{
+        if(versCrew && cal!==CREW_CAL){ await window.gapi.client.calendar.events.move({calendarId:cal, eventId:c.ev.id, destination:CREW_CAL}); cal = CREW_CAL; }
+        etape = 'changement de date';
+        await window.gapi.client.calendar.events.patch({calendarId:cal, eventId:c.ev.id, resource:res});
+      }catch(err){ console.error('Céduler — '+etape, err); throw {result:{error:{message:'('+etape+') '+(err && err.status ? err.status+' — ' : '')+apiErrMsg(err)}}}; }
+      if(versCrew && viewMode==='jour' && enCouloirs && !c.allDay){ const d = new Date(c.debut); d.setHours(0,0,0,0); const jour = localDateStr(d);   // v536 : en vue Jour, ses jobs se répartissent de 7 h à 15 h 30
+        const L = events.filter(e=>!e.allDay && e.calendarId===CREW_CAL && localDateStr(new Date(e.start))===jour && couloirDe(e)==='autres').sort((a,b)=>String(a.start).localeCompare(String(b.start)));
+        try{ await repartirJour([...L, {...c.ev, calendarId:CREW_CAL, start:c.debut.toISOString(), end:c.fin.toISOString()}], d); }catch(x){} }
       toast(versCrew ? 'Cédulée dans The Crew.' : 'Nouvelle date — reste En attente.', 'ok'); setReloadKey(k=>k+1);
     }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
   }
@@ -5382,6 +5389,10 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         const rect = dayColRefs.current[i] && dayColRefs.current[i].getBoundingClientRect();
         if(rect && e.clientX>=rect.left && e.clientX<=rect.right){ targetDayIdx=i; break; }
       }
+      if(targetDayIdx!==null && viewMode==='jour' && enCouloirs && info.ev.calendarId===CREW_CAL){   // v536 : vue Jour — on la dépose à la place d'une autre job (elles changent de place), dans la colonne visée
+        const rect = dayColRefs.current[targetDayIdx].getBoundingClientRect();
+        deposerJour(info.ev, new Date(days[targetDayIdx]), HOUR_START + (e.clientY-rect.top)/PX_H, (e.clientX-rect.left)/rect.width);
+        dragInfoRef.current=null; draggedElRef.current=null; return; }
       let newStartMs = info.origStartMs;
       if(targetDayIdx!==null && viewMode!=='jour'){   // v515 : en vue Jour (parts égales), glisser change l'équipe, pas l'heure
         const rect = dayColRefs.current[targetDayIdx].getBoundingClientRect();
