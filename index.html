@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v547';
+const APP_VERSION = 'v548';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4379,10 +4379,10 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
   const [tous,setTous]=useState(false);   // v545 : matériaux depuis le dernier règlement, ou tous
   const factMat = (tous ? l.ach : l.achD).slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).map(a=>({...a, lignes:(lignesAch||{})[a.f+'|'+a.num]||[]}));
   const exporterCsv = ()=>{ const q = v => '"'+String(v==null?'':v).replace(/"/g,'""')+'"', nb = x => (Math.round((x||0)*100)/100).toFixed(2).replace('.',',');
-    const rows = [['Date','Fournisseur','Facture','PO / référence','Code','Description','Qté','Montant (avant taxes)','Total facture (taxes incl.)']];
-    factMat.forEach(a=>{ if(a.lignes.length) a.lignes.forEach((x,i)=>rows.push([a.date, a.f, a.num, a.ref, x.code, x.desc, x.qte, nb(x.montant), i===0 ? nb(a.total||a.st) : '']));
-      else rows.push([a.date, a.f, a.num, a.ref, '', '(articles non lus)', '', nb(a.st), nb(a.total||a.st)]); });
-    rows.push([]); rows.push(['','','','','','Total des factures (taxes incl.)','','',nb(factMat.reduce((t,a)=>t+(a.total||a.st),0))]);
+    const rows = [['Date','Fournisseur','Facture','PO / référence','Code','Description','Qté','Montant','Total facture']];
+    factMat.forEach(a=>{ if(a.lignes.length) a.lignes.forEach((x,i)=>rows.push([a.date, a.f, a.num, a.ref, x.code, x.desc, x.qte, nb(x.montant*1.14975), i===0 ? nb(a.total||a.st) : '']));
+      else rows.push([a.date, a.f, a.num, a.ref, '', '(articles non lus)', '', nb(a.total||a.st), nb(a.total||a.st)]); });
+    rows.push([]); rows.push(['','','','','','Total des matériels','','',nb(factMat.reduce((t,a)=>t+(a.total||a.st),0))]);
     const blob = new Blob(['\ufeff'+rows.map(r=>r.map(q).join(';')).join('\r\n')], {type:'text/csv;charset=utf-8'});
     const u = URL.createObjectURL(blob), lnk = document.createElement('a'); lnk.href = u; lnk.download = 'Achats '+l.e.nom+' '+localDateStr(new Date())+'.csv'; document.body.appendChild(lnk); lnk.click(); lnk.remove(); setTimeout(()=>URL.revokeObjectURL(u), 2000); };
   const [aj,setAj]=useState({date:localDateStr(new Date()), h:'', raison:''}), [busy,setBusy]=useState(false);
@@ -4434,15 +4434,15 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
         <tr><td style={td}>Heures supp en banque</td><td style={{...td,...n}} className="n">{fmtH(l.reste)}</td></tr>
         <tr><td style={td}>× Taux horaire{l.tauxPaie!=null ? ' (talon de paie du '+TAUX_PAIE.periode+')' : ''}</td><td style={{...td,...n}} className="n">{l.taux!=null ? cvMoney(l.taux)+' / h' : 'à fixer'}</td></tr>
         <tr><td style={td}>= Valeur des heures</td><td style={{...td,...n}} className="n">{l.valeur!=null ? cvMoney(l.valeur) : '—'}</td></tr>
-        <tr><td style={td}>− Achats à déduire ({deds.length} facture{deds.length>1?'s':''}, taxes incluses)</td><td style={{...td,...n}} className="n">− {cvMoney(l.deduit)}</td></tr>
+        <tr><td style={td}>− Achats à déduire ({deds.length} facture{deds.length>1?'s':''})</td><td style={{...td,...n}} className="n">− {cvMoney(l.deduit)}</td></tr>
         <tr style={{background:'rgba(var(--accent-rgb),.08)'}}><td style={{...td,fontWeight:800,fontSize:15}}>{l.solde==null ? 'Solde' : l.solde>=0 ? 'Solde dû à '+l.e.nom.split(' ')[0] : 'Solde dû par '+l.e.nom.split(' ')[0]}</td><td style={{...td,...n,fontWeight:800,fontSize:16,color:l.solde==null?'var(--muted)':l.solde<0?'var(--danger)':'var(--success)'}} className="n">{l.solde!=null ? cvMoney(Math.abs(l.solde)) : 'fixe le taux'}</td></tr>
       </tbody></table>
-      <h3 style={{fontSize:14}}>1. Heures en banque (semaines confirmées)</h3>
+      <h3 style={{fontSize:14}}>Heures en banque (semaines confirmées)</h3>
       <table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr><th style={th}>Semaine</th><th style={{...th,...n}} className="n">+ au-dessus de 40 h</th><th style={{...th,...n}} className="n">− pris dans la banque</th><th style={{...th,...n}} className="n">Cumul</th></tr></thead>
         <tbody>{sem.filter(w=>w.supp||w.pris).map(w=><tr key={w.semaine}><td style={td}>{weekRangeLabel(w.semaine)}</td><td style={{...td,...n}} className="n">{w.supp ? '+'+fmtH(w.supp) : ''}</td><td style={{...td,...n}} className="n">{w.pris ? '−'+fmtH(w.pris) : ''}</td><td style={{...td,...n}} className="n">{fmtH(w.apres)}</td></tr>)}
           {!sem.some(w=>w.supp||w.pris) && <tr><td style={td} colSpan="4">Aucune heure supp sur les semaines confirmées.</td></tr>}
           <tr><td style={{...td,fontWeight:700}} colSpan="3">Sous-total des semaines</td><td style={{...td,...n,fontWeight:700}} className="n">{fmtH(l.base)}</td></tr></tbody></table>
-      <h3 style={{fontSize:14}}>2. Ajustements</h3>
+      <div className={l.ajust.length ? '' : 'noprint'}><h3 style={{fontSize:14}}>Ajustements{!l.ajust.length && <span className="muted" style={{fontWeight:400,fontSize:12}}> — aucun (n'apparaît pas sur la feuille)</span>}</h3>
       <table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr><th style={th}>Date</th><th style={th}>Raison</th><th style={{...th,...n}} className="n">Heures</th><th style={th} className="noprint"></th></tr></thead>
         <tbody>{l.ajust.map(d=><tr key={d.row}><td style={td}>{d.date}</td><td style={td}>{d.titre}</td><td style={{...td,...n}} className="n">{sg(d.montant)}</td>
           <td style={td} className="noprint"><span role="button" style={{cursor:'pointer',color:'var(--muted)'}} title="Enlever" onClick={async()=>{ if(confirm('Enlever cet ajustement ?')){ setBusy(true); try{ await enlever(d); }catch(e){ alert(apiErrMsg(e)); } setBusy(false); } }}>✕</span></td></tr>)}
@@ -4450,30 +4450,35 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
             <td style={td}><input value={aj.raison} onChange={e=>setAj({...aj, raison:e.target.value})} placeholder="Raison (ex. journée du 3 nov. pas punchée)" style={{width:'100%',padding:'2px 6px'}}/></td>
             <td style={{...td,...n}}><input value={aj.h} onChange={e=>setAj({...aj, h:e.target.value})} placeholder="+2 ou -1,5" inputMode="decimal" style={{width:80,textAlign:'right',padding:'2px 6px'}}/></td>
             <td style={td}><button className="btn btn-sm btn-p" disabled={busy} onClick={go}>Ajouter</button></td></tr>
-          <tr><td style={{...td,fontWeight:700}} colSpan="2">Total des ajustements</td><td style={{...td,...n,fontWeight:700}} className="n">{sg(l.adjH)}</td><td style={td} className="noprint"></td></tr></tbody></table>
-      <h3 style={{fontSize:14}}>3. Calcul</h3>
+          <tr><td style={{...td,fontWeight:700}} colSpan="2">Total des ajustements</td><td style={{...td,...n,fontWeight:700}} className="n">{sg(l.adjH)}</td><td style={td} className="noprint"></td></tr></tbody></table></div>
+      <h3 style={{fontSize:14}}>Valeur de sa banque</h3>
       <table style={{width:'100%',borderCollapse:'collapse'}}><tbody>
-        <tr><td style={td}>Heures en banque (1 + 2)</td><td style={{...td,...n}} className="n">{fmtH(l.h)}</td></tr>
-        <tr><td style={td}>− Heures déjà payées <span className="noprint"><input key={l.payees} defaultValue={l.payees||''} placeholder="h" inputMode="decimal" onBlur={e=>{ const v=e.target.value.trim().replace(',','.'); if(v!==String(l.payees||'')) ecrirePayees(v); }} style={{width:60,textAlign:'right',padding:'1px 4px',marginLeft:6}}/></span></td><td style={{...td,...n}} className="n">−{fmtH(l.payees||0)}</td></tr>
-        <tr><td style={{...td,fontWeight:700}}>Heures restantes</td><td style={{...td,...n,fontWeight:700}} className="n">{fmtH(l.reste)}</td></tr>
+        <tr><td style={td}>Heures en banque</td><td style={{...td,...n}} className="n">{fmtH(l.h)}</td></tr>
+        <tr className={l.payees ? '' : 'noprint'}><td style={td}>− Heures déjà payées <span className="noprint"><input key={l.payees} defaultValue={l.payees||''} placeholder="h" inputMode="decimal" onBlur={e=>{ const v=e.target.value.trim().replace(',','.'); if(v!==String(l.payees||'')) ecrirePayees(v); }} style={{width:60,textAlign:'right',padding:'1px 4px',marginLeft:6}}/></span></td><td style={{...td,...n}} className="n">−{fmtH(l.payees||0)}</td></tr>
+        <tr className={l.payees ? '' : 'noprint'}><td style={{...td,fontWeight:700}}>Heures restantes</td><td style={{...td,...n,fontWeight:700}} className="n">{fmtH(l.reste)}</td></tr>
         <tr><td style={td}>× Taux{l.tauxPaie!=null && <span className="muted"> (taux de sa paie : {cvMoney(l.tauxPaie)}/h, période du {TAUX_PAIE.periode})</span>}</td><td style={{...td,...n}} className="n">{l.taux!=null ? cvMoney(l.taux)+' / h' : 'à fixer (colonne Taux)'}</td></tr>
-        <tr><td style={{...td,fontWeight:700}}>Valeur des heures</td><td style={{...td,...n,fontWeight:700}} className="n">{l.valeur!=null ? cvMoney(l.valeur) : '—'}</td></tr>
+        <tr><td style={{...td,fontWeight:700}}>Valeur de sa banque</td><td style={{...td,...n,fontWeight:700}} className="n">{l.valeur!=null ? cvMoney(l.valeur) : '—'}</td></tr>
       </tbody></table>
-      <h3 style={{fontSize:14}}>4. Achats et avances déduits{l.depuis ? ' (depuis le règlement du '+l.depuis+')' : ''}</h3>
+      <h3 style={{fontSize:14}}>Matériel et avances à déduire{l.depuis ? ' (depuis le règlement du '+l.depuis+')' : ''}</h3>
       <table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr><th style={th}>Date</th><th style={th}>Quoi</th><th style={th}>Détail</th><th style={{...th,...n}} className="n">Montant</th></tr></thead>
         <tbody>{deds.map((x,i)=><tr key={i}><td style={td}>{x.date}</td><td style={td}>{x.quoi}</td><td style={td}>{x.det}{x.pdf && <span className="noprint"> · <span role="button" onClick={()=>voirPdf({id:x.pdf, titre:x.quoi})} style={{color:'var(--accent)',cursor:'pointer'}}>📄 PDF</span></span>}</td><td style={{...td,...n}} className="n">{cvMoney(x.m)}</td></tr>)}
           {!deds.length && <tr><td style={td} colSpan="4">Aucun.</td></tr>}
-          <tr><td style={{...td,fontWeight:700}} colSpan="3">Total déduit</td><td style={{...td,...n,fontWeight:700}} className="n">−{cvMoney(l.deduit)}</td></tr></tbody></table>
-      <h3 style={{fontSize:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>5. Détail du matériel acheté{tous ? ' (tous les achats)' : l.depuis ? ' (depuis le règlement du '+l.depuis+')' : ''}
+          <tr><td style={{...td,fontWeight:700}} colSpan="3">Total des matériels</td><td style={{...td,...n,fontWeight:700}} className="n">{cvMoney(l.deduit)}</td></tr></tbody></table>
+      <h3 style={{fontSize:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>Détail de chaque commande{tous ? ' (tous les achats)' : l.depuis ? ' (depuis le règlement du '+l.depuis+')' : ''}
         <span className="noprint" style={{display:'inline-flex',gap:6,alignItems:'center',fontWeight:400,fontSize:12}}><label style={{cursor:'pointer'}}><input type="checkbox" checked={tous} onChange={e=>setTous(e.target.checked)}/> tous les achats</label>
           <button className="btn btn-sm" onClick={exporterCsv} title="Fichier Excel (CSV) à envoyer : chaque article, la facture, le PO et la date">⬇ Excel (CSV)</button></span></h3>
       {!factMat.length ? <div className="muted" style={{fontSize:12.5,marginBottom:10}}>Aucune facture.</div> : factMat.map((a,i)=><div key={i} style={{marginBottom:8}}>
-        <div style={{fontSize:12.5,fontWeight:700}}>{a.date} · {a.f} #{a.num}{a.ref ? ' · PO / réf. « '+a.ref+' »' : ''} — {cvMoney(a.total||a.st)} <span className="muted" style={{fontWeight:400}}>taxes incl.</span></div>
-        {a.lignes.length ? <table style={{width:'100%',borderCollapse:'collapse'}}><tbody>{a.lignes.map((x,k)=><tr key={k}><td style={{...td,width:150,color:'var(--muted)'}}>{x.code}</td><td style={td}>{x.desc}</td><td style={{...td,...n,width:50}} className="n">{x.qte}</td><td style={{...td,...n,width:90}} className="n">{cvMoney(x.montant)}</td></tr>)}</tbody></table>
+        <div style={{fontSize:12.5,fontWeight:700}}>{a.date} · {a.f} #{a.num}{a.ref ? ' · PO / réf. « '+a.ref+' »' : ''} — {cvMoney(a.total||a.st)}</div>
+        {a.lignes.length ? <table style={{width:'100%',borderCollapse:'collapse'}}><tbody>{a.lignes.map((x,k)=><tr key={k}><td style={{...td,width:150,color:'var(--muted)'}}>{x.code}</td><td style={td}>{x.desc}</td><td style={{...td,...n,width:50}} className="n">{x.qte}</td><td style={{...td,...n,width:90}} className="n">{cvMoney(x.montant*1.14975)}</td></tr>)}</tbody></table>
           : <div className="muted" style={{fontSize:12}}>Articles pas encore lus pour cette facture{a.pdf ? ' — voir le PDF' : ''}.</div>}</div>)}
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 12px',border:'2px solid var(--border2)',borderRadius:8,marginTop:6}}>
-        <b style={{fontSize:15}}>Solde à régler</b>
-        <b style={{fontSize:18,color:l.solde==null?'var(--muted)':l.solde<0?'var(--danger)':'var(--success)'}}>{l.solde!=null ? cvMoney(l.solde) : 'fixe le taux'}</b></div>
+      {/* v548 : le calcul en bas — valeur de la banque − total des matériels = solde */}
+      <h3 style={{fontSize:14}}>Calcul</h3>
+      <table style={{width:'100%',borderCollapse:'collapse',border:'2px solid var(--accent)'}}><tbody>
+        <tr><td style={td}>Valeur de sa banque ({fmtH(l.reste)} × {l.taux!=null ? cvMoney(l.taux) : '?'})</td><td style={{...td,...n}} className="n">{l.valeur!=null ? cvMoney(l.valeur) : '—'}</td></tr>
+        <tr><td style={td}>− Total des matériels</td><td style={{...td,...n}} className="n">− {cvMoney(l.deduit)}</td></tr>
+        <tr style={{background:'rgba(var(--accent-rgb),.08)'}}><td style={{...td,fontWeight:800,fontSize:15}}>= {l.solde==null ? 'Solde' : l.solde>=0 ? 'Solde dû à '+l.e.nom.split(' ')[0] : 'Solde dû par '+l.e.nom.split(' ')[0]}</td>
+          <td style={{...td,...n,fontWeight:800,fontSize:16,color:l.solde==null?'var(--muted)':l.solde<0?'var(--danger)':'var(--success)'}} className="n">{l.solde!=null ? cvMoney(Math.abs(l.solde)) : 'fixe le taux'}</td></tr>
+      </tbody></table>
       {l.solde!=null && <div className="muted" style={{fontSize:11.5,marginTop:4}}>{l.solde>=0 ? 'Montant dû à '+l.e.nom.split(' ')[0]+' (ou '+fmtH(l.taux ? l.solde/l.taux : 0)+' à reprendre en congé).' : l.e.nom.split(' ')[0]+' doit '+cvMoney(-l.solde)+' à Saran Électrique.'}</div>}
       <div style={{display:'flex',gap:40,marginTop:30,fontSize:12}}><div style={{flex:1,borderTop:'1px solid #888',paddingTop:4}}>Signature de l'employé</div><div style={{flex:1,borderTop:'1px solid #888',paddingTop:4}}>Saran Électrique inc.</div></div>
     </div>
