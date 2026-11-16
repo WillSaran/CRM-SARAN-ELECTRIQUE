@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v526';
+const APP_VERSION = 'v527';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4946,6 +4946,8 @@ function hjBlocs(jobs){ let t = HJ_DEBUT; return (jobs||[]).filter(j=>j.compte).
 function AgendaHeuresEmployes({cfg, refreshKey}){
   const [sem,setSem]=useState(()=>{ const d = new Date(); d.setDate(d.getDate()-7); return getWeek(d); });   // la semaine passée (déjà confirmée)
   const [pp,setPp]=useState(null), [err,setErr]=useState('');
+  const [ouverts,setOuverts]=useState([]);   // v527 : employés dont on voit les jobs (sinon juste les heures)
+  const basc = n => setOuverts(l=>l.includes(n) ? l.filter(x=>x!==n) : [...l, n]);
   useEffect(()=>{ let ok = true; if(!cfg.punchproSpreadsheetId){ setErr('Configure l\'ID du Sheet PunchPro dans Réglages.'); return; }
     getPunchProDataBatched(cfg.punchproSpreadsheetId).then(r=>{ if(ok) setPp(r); }).catch(e=>{ if(ok) setErr(apiErrMsg ? apiErrMsg(e) : String(e)); });
     return ()=>{ ok = false; }; },[cfg.punchproSpreadsheetId, refreshKey]);
@@ -4962,7 +4964,8 @@ function AgendaHeuresEmployes({cfg, refreshKey}){
   return <div>
     <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:10}}>
       <button className="btn btn-sm" onClick={()=>decaler(-1)}>←</button><b>Semaine du {weekRangeLabel(sem)}</b><button className="btn btn-sm" onClick={()=>decaler(1)}>→</button>
-      <span className="muted" style={{fontSize:12}}>Vraies heures des punchs (confirmées la semaine d'après) · bande pâle = 7 h à 15 h 30 · <b style={{color:'var(--danger)'}}>OT</b> = au-delà</span></div>
+      <span className="muted" style={{fontSize:12}}>Vraies heures des punchs (confirmées la semaine d'après) · journée normale 7 h – 15 h 30 · <b style={{color:'var(--danger)'}}>OT</b> = au-delà · clique un employé (▸) pour voir ses jobs</span>
+      {emps.length>0 && <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>setOuverts(ouverts.length ? [] : emps)}>{ouverts.length ? '▾ Tout replier' : '▸ Tout déplier'}</button>}</div>
     {!emps.length && <div className="card muted">Aucun punch cette semaine.</div>}
     <div style={{overflowX:'auto'}}><table style={{borderCollapse:'collapse',width:'100%',minWidth:760,fontSize:12}}>
       <thead><tr><th style={{textAlign:'left',padding:'4px 6px',width:120}}>Employé</th>{jours.map((d,i)=>vus[i] && <th key={i} style={{textAlign:'left',padding:'4px 6px',textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'short',day:'numeric'})}</th>)}<th style={{padding:'4px 6px'}}>Semaine</th></tr></thead>
@@ -4970,21 +4973,21 @@ function AgendaHeuresEmployes({cfg, refreshKey}){
         const cel = js.map((d,i)=>{ if(!vus[i]) return null; const b = hjBlocs(detail[n][d]); const h = b.reduce((t,x)=>t+(x.heures||0),0);
           const fin = b.length ? Math.max(...b.map(x=>x.f)) : 0, deb = b.length ? Math.min(...b.map(x=>x.d)) : 0;
           const otj = Math.max(0, h - (HJ_FIN-HJ_DEBUT), fin - HJ_FIN > 0.01 ? Math.min(h, fin - Math.max(HJ_FIN, deb)) : 0); tot += h; ot += otj;
-          return <td key={d} style={{verticalAlign:'top',padding:'4px 6px',borderTop:'1px solid var(--border)'}}>
-            {b.length>0 && <div title={b.map(x=>hjTxt(x.d)+' – '+hjTxt(x.f)+' · '+x.job+' ('+hjNb(x.heures)+' h)').join('\n')} style={{position:'relative',height:16,background:'var(--bg3)',borderRadius:4,overflow:'hidden',marginBottom:3}}>
-              <div style={{position:'absolute',left:echelle(HJ_DEBUT),width:'calc('+echelle(HJ_FIN)+' - '+echelle(HJ_DEBUT)+')',top:0,bottom:0,background:'rgba(63,185,80,.15)'}}/>
-              {b.map((x,k)=><div key={k} style={{position:'absolute',left:echelle(x.d),width:'calc('+echelle(x.f)+' - '+echelle(x.d)+')',top:2,bottom:2,background:x.jobColor || 'var(--accent)',opacity:x.estime ? .55 : 1,borderRadius:2,borderRight:'1px solid var(--bg)'}}/>)}
-              {fin > HJ_FIN+0.01 && <div style={{position:'absolute',left:echelle(HJ_FIN),width:'calc('+echelle(fin)+' - '+echelle(HJ_FIN)+')',top:0,height:3,background:'var(--danger)'}}/>}</div>}
-            {b.length>0 && <div style={{display:'grid',gap:3,maxHeight:190,overflowY:'auto',paddingRight:2}}>{b.map((x,k)=>{ const fond = x.jobColor || coul[n] || 'var(--accent)';   // v514 : cartes de couleur comme l'agenda, la case défile s'il y a beaucoup de jobs
-              return <div key={k} title={x.job+(x.note ? '\n📝 '+x.note : '')} style={{background:fond,color:texteSur(fond),borderLeft:'4px solid '+(coul[n]||fond),borderRadius:5,padding:'3px 6px',lineHeight:1.25,opacity:x.estime ? .8 : 1,boxShadow:'0 1px 2px rgba(0,0,0,.25)'}}>
+          const ouv = ouverts.includes(n);
+          return <td key={d} style={{verticalAlign:'top',padding:'6px 6px',borderTop:'1px solid var(--border)'}}>
+            {b.length>0 ? <div onClick={()=>basc(n)} style={{cursor:'pointer'}} title={ouv ? 'Replier' : b.length+' job'+(b.length>1?'s':'')+' — clique pour voir'}>
+              <span style={{fontSize:15,fontWeight:800}}>{hjNb(h)} h</span>
+              {otj>0.01 && <span style={{color:'var(--danger)',fontWeight:800,fontSize:12}}> · OT +{hjNb(Math.round(otj*4)/4)}</span>}
+              <div className="muted" style={{fontSize:11}}>{ouv ? '▾' : '▸'} {b.length} job{b.length>1?'s':''}</div></div> : <span className="muted">—</span>}
+            {ouv && b.length>0 && <div style={{display:'grid',gap:3,marginTop:4}}>{b.map((x,k)=>{ const fond = x.jobColor || coul[n] || 'var(--accent)';
+              return <div key={k} title={x.job+(x.note ? '\n📝 '+x.note : '')} style={{background:fond,color:texteSur(fond),borderRadius:5,padding:'3px 6px',lineHeight:1.25,opacity:x.estime ? .8 : 1}}>
                 <div style={{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{x.job}</div>
                 <div style={{fontSize:11,opacity:.9}}>{x.estime ? '≈' : ''}{hjTxt(x.d).replace(' h ','h')}–{hjTxt(x.f).replace(' h ','h')} · <b>{hjNb(x.heures)} h</b></div></div>; })}</div>}
-            {b.length>0 && <div style={{marginTop:2,fontWeight:700}}>{hjNb(h)} h{otj>0.01 && <span style={{color:'var(--danger)'}}> · OT +{hjNb(Math.round(otj*4)/4)} h</span>}</div>}
           </td>; });
-        return <tr key={n}><td style={{verticalAlign:'top',padding:'4px 6px',borderTop:'1px solid var(--border)',fontWeight:700}}><span style={{display:'inline-block',width:10,height:10,borderRadius:'50%',background:coul[n]||'var(--muted)',marginRight:6}}/>{n.split(' ')[0]}<div className="muted" style={{fontWeight:400,fontSize:11}}>{confirme(n) ? '✓ confirmée' : 'punchs'}</div></td>{cel}
-          <td style={{verticalAlign:'top',padding:'4px 6px',borderTop:'1px solid var(--border)',whiteSpace:'nowrap'}}><b>{hjNb(tot)} h</b>{ot>0.01 && <div style={{color:'var(--danger)',fontWeight:700}}>OT +{hjNb(Math.round(ot*4)/4)} h</div>}</td></tr>; })}</tbody>
+        return <tr key={n}><td onClick={()=>basc(n)} style={{cursor:'pointer',verticalAlign:'top',padding:'6px 6px',borderTop:'1px solid var(--border)',fontWeight:700}}><span className="muted" style={{fontSize:10,marginRight:4}}>{ouverts.includes(n) ? '▾' : '▸'}</span><span style={{display:'inline-block',width:10,height:10,borderRadius:'50%',background:coul[n]||'var(--muted)',marginRight:6}}/>{n.split(' ')[0]}<div className="muted" style={{fontWeight:400,fontSize:11}}>{confirme(n) ? '✓ confirmée' : 'punchs'}</div></td>{cel}
+          <td style={{verticalAlign:'top',padding:'6px 6px',borderTop:'1px solid var(--border)',whiteSpace:'nowrap'}}><b style={{fontSize:15}}>{hjNb(tot)} h</b>{ot>0.01 && <div style={{color:'var(--danger)',fontWeight:700}}>OT +{hjNb(Math.round(ot*4)/4)} h</div>}</td></tr>; })}</tbody>
     </table></div>
-    <div className="muted" style={{fontSize:11.5,marginTop:6}}>≈ = heure de début estimée (punch sans heure) · survole une barre pour le détail · la couleur = celle de la job dans PunchPro</div>
+    <div className="muted" style={{fontSize:11.5,marginTop:6}}>≈ = heure de début estimée (punch sans heure) · la couleur d'une job = celle de PunchPro</div>
   </div>;
 }
 function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // v449 : onChoisir = mode « choisir une job » (clic sur un événement)
