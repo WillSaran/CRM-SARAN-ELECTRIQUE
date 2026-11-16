@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v528';
+const APP_VERSION = 'v529';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4992,6 +4992,7 @@ function AgendaHeuresEmployes({cfg, refreshKey}){
 }
 function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // v449 : onChoisir = mode « choisir une job » (clic sur un événement)
   const [viewMode,setViewMode]=useState(()=>AGENDA_POS && AGENDA_POS.viewMode || 'semaine'); // 'jour'|'semaine'|'mois'
+  const [couloirsPlus,setCouloirsPlus]=useState([]);   // v529 : équipes sans job ajoutées en colonne (vue Jour)
   const [pjVoir,setPjVoir]=useState(null);   // v516 : pièces jointes d'une job affichées dans l'agenda {ev, i}
   const [anchor,setAnchor]=useState(()=>AGENDA_POS && AGENDA_POS.anchor ? new Date(AGENDA_POS.anchor) : new Date());
   useEffect(()=>{ AGENDA_POS = {...(AGENDA_POS||{}), viewMode, anchor:anchor.getTime()}; try{ sessionStorage.setItem('agenda_pos', JSON.stringify(AGENDA_POS)); }catch(e){} },[viewMode, anchor]);
@@ -5195,7 +5196,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   const evVisibles = events.filter(e=>!cachees.includes(agendaGroupe(e)));
   // Vue par équipe : chaque jour divisé en couloirs (Dan | Brandon | Phil …), « Autres » au bout s'il y en a
   const couloirDe = e => { const g = agendaGroupe(e); return EQUIPES_ORDRE.includes(g) ? g : 'autres'; };
-  const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>couloirDe(e)===k)); if(t.some(e=>couloirDe(e)==='autres')) l.push('autres'); return l; })();
+  const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>couloirDe(e)===k) || (viewMode==='jour' && couloirsPlus.includes(k))); if(t.some(e=>couloirDe(e)==='autres')) l.push('autres'); return l; })();   // v529 : en vue Jour, colonnes ajoutées pour les gars sans job
   const enCouloirs = parEquipe && viewMode!=='mois' && couloirs.length>1;
   function placer(dayEvents){
     if(viewMode==='jour'){   // v515 : chaque équipe (ou la journée) divisée en parts égales de 7 h à 15 h 30, dans l'ordre des heures
@@ -5429,6 +5430,15 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       {cachees.length>0 && <span style={{color:'var(--accent)',fontSize:12,cursor:'pointer'}} onClick={()=>{ setCachees([]); try{ localStorage.setItem('agenda_groupes_caches','[]'); }catch(e){} }}>Tout montrer</span>}
     </div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
+    {ongletAg==='agenda' && viewMode==='jour' && (()=>{   // v529 : les gars qui n'ont pas de job ce jour-là — un clic leur ouvre une colonne
+      const sans = EQUIPES_ORDRE.filter(k=>CREW_COLORS[k] && !couloirs.includes(k)), ajoutes = couloirsPlus.filter(k=>couloirs.includes(k) && !evVisibles.some(e=>!e.allDay && couloirDe(e)===k));
+      if(!sans.length && !ajoutes.length) return null;
+      return <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
+        <span className="muted" style={{fontSize:12}}>Ouvrir une colonne :</span>
+        {sans.map(k=><button key={k} className="btn btn-sm" style={{border:'1px dashed '+GCAL_COLOR_MAP[k],padding:'2px 9px'}} onClick={()=>{ if(!parEquipe) basculerParEquipe(); setCouloirsPlus(l=>[...l, k]); }}
+          title={'Ajouter une colonne pour '+CREW_COLORS[k]}>+ <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:GCAL_COLOR_MAP[k],margin:'0 3px'}}/>{equipeNom(k)}</button>)}
+        {ajoutes.map(k=><button key={'x'+k} className="btn btn-sm" style={{padding:'2px 9px'}} onClick={()=>setCouloirsPlus(l=>l.filter(x=>x!==k))} title="Fermer cette colonne">✕ {equipeNom(k)}</button>)}
+      </div>; })()}
     {pjVoir && (()=>{ const L = pjVoir.ev.attachments||[], a = L[pjVoir.i] || L[0], fid = a && (a.fileId || (String(a.fileUrl||'').match(/\/d\/([\w-]+)/)||[])[1]);
       return <Modal title={'📎 '+pjVoir.ev.title} onClose={()=>setPjVoir(null)} wide>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>{L.map((x,i)=><button key={i} className={'btn btn-sm'+(i===pjVoir.i?' btn-p':'')} onClick={()=>setPjVoir({...pjVoir, i})}>{x.title || 'Pièce jointe '+(i+1)}</button>)}</div>
