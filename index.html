@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v531';
+const APP_VERSION = 'v532';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4256,7 +4256,7 @@ function EmployeFiche({cfg, l, docsAbsent, onClose, relire}){
     </div>}
   </Modal>;
 }
-function BanqueSupp({cfg, emps, pts, fiche, setFiche}){
+function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf}){
   const [docs,setDocs]=useState({lu:false, l:[], absent:false});   // v510 : dossier de l'employé (ententes, factures, avances…)
   const id = cfg.memoireJobsSpreadsheetId;
   const [reg,setReg]=useState({lu:false, rows:{}, absent:false});
@@ -4283,7 +4283,7 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche}){
       if(ex.row) await sheetsUpdateRow(id, qSheet('Banque employés'), ex.row, ligne); else await sheetsAppendRow(id, qSheet('Banque employés'), ligne);
       await lire(true); }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
   const lignes = emps.map(e=>{ const r = reg.rows[cvNorm(e.nom)] || {}; const taux = r.taux!=null ? r.taux : global.taux;
-    const h = Math.round((supp[e.nom]||0)*100)/100, payees = r.payees||0, reste = Math.max(0, h - payees);
+    const h = Math.round((banqueConf ? (banqueConf[cvNorm(e.nom)]||0) : (supp[e.nom]||0))*100)/100, payees = r.payees||0, reste = Math.max(0, h - payees);
     const ach = achats.filter(a=>prenom(a.emp)===prenom(e.nom)), dos = docs.l.filter(d=>prenom(d.emp)===prenom(e.nom));
     const deduit = ach.reduce((t,a)=>t+(a.total||a.st),0) + dos.filter(d=>d.deduire).reduce((t,d)=>t+d.montant,0);
     const valeur = taux!=null ? reste*taux : null;
@@ -4294,11 +4294,11 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche}){
     {lf && <EmployeFiche cfg={cfg} l={lf} docsAbsent={docs.absent} onClose={()=>setFiche(null)} relire={()=>lire(true)}/>}
     <div style={{padding:'12px 14px',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',alignItems:'center'}}>
       <div><div className="fh" style={{fontSize:16}}>Banque d'heures supp</div>
-        <div className="muted" style={{fontSize:11.5}}>Depuis le début dans PunchPro : heures au-delà de 40 h par semaine. Valeur = heures × taux. Les achats associés à l'employé (Fournisseurs › 👷 Employé) sont déduits.</div></div>
+        <div className="muted" style={{fontSize:11.5}}>Semaines confirmées seulement : heures au-delà de 40 h, moins les heures que l'employé a pris dans sa banque pour compléter ses 40 h. Valeur = heures × taux. Les achats associés à l'employé (Fournisseurs › 👷 Employé) sont déduits.</div></div>
       <div style={{display:'flex',gap:6,alignItems:'center'}}><span className="muted" style={{fontSize:12}}>Valeur d'une heure supp :</span>{champ(global.taux, v=>ecrire('TOUS', {taux:v}), 70, '$/h')}<span className="muted">$/h</span></div>
     </div>
     <table>
-      <thead><tr><th>Employé</th><th style={{textAlign:'right'}}>H supp (total)</th><th style={{textAlign:'right'}}>Déjà payées</th><th style={{textAlign:'right'}}>Taux</th><th style={{textAlign:'right'}}>Valeur</th><th style={{textAlign:'right'}}>Achats déduits</th><th style={{textAlign:'right'}}>Solde</th></tr></thead>
+      <thead><tr><th>Employé</th><th style={{textAlign:'right'}}>Banque (h)</th><th style={{textAlign:'right'}}>Déjà payées</th><th style={{textAlign:'right'}}>Taux</th><th style={{textAlign:'right'}}>Valeur</th><th style={{textAlign:'right'}}>Achats déduits</th><th style={{textAlign:'right'}}>Solde</th></tr></thead>
       <tbody>{lignes.map(l=><tr key={l.e.nom}>
         <td style={{cursor:'pointer'}} title="Ouvrir sa fiche" onClick={()=>setFiche && setFiche(l.e.nom)}><span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:l.e.couleur,marginRight:6}}></span><span style={{color:'var(--accent)',fontWeight:700}}>{l.e.nom}</span>{l.dos.length>0 && <span className="muted" style={{fontSize:11}}> · 📎 {l.dos.length}</span>}</td>
         <td style={{textAlign:'right',fontWeight:700}}>{fmtH(l.h)}</td>
@@ -4318,6 +4318,21 @@ function HeuresView({cfg, refreshKey}){
   const [err,setErr]=useState('');
   const [week,setWeek]=useState(()=>semaineHeures(new Date()));
   const conf = useSemainesConfirmees(cfg, refreshKey);
+  const [pris,setPris]=useState({});   // v532 : heures prises de la banque (choisies par l'employé dans PunchPro) {semaine|nom: h}
+  useEffect(()=>{ if(!cfg.punchproSpreadsheetId) return; let ok = true;
+    sheetsBatchGet(cfg.punchproSpreadsheetId, ['HeuresEnBanque!A2:E']).then(([rows])=>{ if(!ok) return; const m = {};
+      (rows||[]).forEach(r=>{ const h = cvNum(r[2]); if(r[0] && r[1] && h<0){ const k = r[1]+'|'+cvNorm(r[0]); m[k] = (m[k]||0) - h; } }); setPris(m); }).catch(()=>{});
+    return ()=>{ ok = false; }; },[cfg.punchproSpreadsheetId, refreshKey]);
+  // v532 : banque d'heures supp, SEULEMENT les semaines confirmées : + ce qui dépasse 40 h, − les heures que l'employé a choisi de prendre dans la banque
+  const banque = useMemo(()=>{ const parEmp = {};
+    Object.values(conf.map||{}).forEach(c=>{ const v = conf.de(c.semaine, c.employe); if(!v || v.total==null) return; (parEmp[cvNorm(c.employe)] = parEmp[cvNorm(c.employe)] || []).push(v); });
+    const res = {};
+    Object.entries(parEmp).forEach(([k, l])=>{ l.sort((a,b)=>a.semaine<b.semaine?-1:1); let cumul = 0;
+      res[k] = l.map(c=>{ const tot = c.total||0, supp = Math.max(0, tot-40), sous = Math.max(0, 40-tot), p = pris[c.semaine+'|'+k]||0;
+        const r = {semaine:c.semaine, avant:cumul, supp, sous, pris:p, delta:supp-p}; cumul = Math.round((cumul + r.delta)*100)/100; r.apres = cumul; return r; }); });
+    return res; },[conf.map, pris]);
+  const banqueDe = (nom, sem) => { const l = banque[cvNorm(nom)] || []; const r = l.find(x=>x.semaine===sem);
+    if(r) return r; const av = l.filter(x=>x.semaine<sem); return {avant: av.length ? av[av.length-1].apres : 0, nonConf:true}; };
   const [fiche,setFiche]=useState(null);   // v510 : clic sur un employé = sa fiche
   const [ouverts,setOuverts]=useState([]);   // v531 : employés dont les jobs sont déroulées
   const basc = n => setOuverts(l=>l.includes(n) ? l.filter(x=>x!==n) : [...l, n]);
@@ -4383,6 +4398,7 @@ function HeuresView({cfg, refreshKey}){
             <th>Employé</th>
             {joursLabel.map((j,i)=><th key={i}>{j} {dates[i].getDate()}</th>)}
             <th>Semaine <span role="button" className="muted" style={{cursor:'pointer',fontSize:11,fontWeight:500}} onClick={()=>setOuverts(ouverts.length ? [] : empsSorted.map(e=>e.nom))}>{ouverts.length ? '▾ tout replier' : '▸ tout déplier'}</span></th>
+            <th title="Seulement les semaines confirmées : + les heures au-delà de 40 h, − les heures que l'employé a choisi de prendre dans sa banque (PunchPro)">Banque supp</th>
             <th>Confirmée</th>
           </tr></thead>
           <tbody>
@@ -4405,15 +4421,24 @@ function HeuresView({cfg, refreshKey}){
                 <td style={{verticalAlign:'top',whiteSpace:'nowrap'}}><span style={{fontSize:15,fontWeight:800,color:'var(--accent)'}}>{fmtH(total)}</span>
                   <div>{(()=>{ const x = Math.round((total-40)*4)/4; return Math.abs(x)<0.01 ? <span className="muted" style={{fontSize:11}}>pile 40 h</span>
                     : <span style={{fontSize:11.5,fontWeight:800,color:x>0?'var(--danger)':'var(--muted)'}}>{x>0 ? '+'+fmtH(x)+' supp' : '−'+fmtH(-x)+' sous 40 h'}</span>; })()}</div></td>
+                <td style={{verticalAlign:'top',whiteSpace:'nowrap',fontSize:11.5,lineHeight:1.45}}>{conf.pret && (()=>{ const b = banqueDe(e.nom, week);
+                  const lig = (l, v, st) => <div style={{display:'flex',justifyContent:'space-between',gap:8}}><span className="muted">{l}</span><b style={st}>{v}</b></div>;
+                  const sg = x => (x>0?'+':x<0?'−':'')+fmtH(Math.abs(x));
+                  if(b.nonConf) return <div>{lig('Avant', fmtH(b.avant))}<div className="muted" style={{fontSize:10.5}}>compte quand la semaine est confirmée</div></div>;
+                  return <div>{lig('Avant', fmtH(b.avant))}
+                    {b.supp>0 && lig('+ supp', sg(b.supp), {color:'var(--danger)'})}
+                    {b.pris>0 && lig('− pris (40 h)', '−'+fmtH(b.pris), {color:'var(--warning)'})}
+                    {b.supp===0 && b.pris===0 && lig(b.sous>0 ? '−'+fmtH(b.sous)+' sous 40' : 'pile 40 h', b.sous>0 ? 'pas pris' : '0', {color:'var(--muted)',fontWeight:500})}
+                    <div style={{borderTop:'1px solid var(--border)',marginTop:2,paddingTop:2}}>{lig('Reste', fmtH(b.apres), {color:b.apres<0?'var(--danger)':'var(--success)',fontSize:13})}</div></div>; })()}</td>
                 <td style={{verticalAlign:'top'}}>{conf.pret ? <ConfirmerMain conf={conf} week={week} nom={e.nom} total={total}/> : ''}</td>
               </tr>;
             })}
-            {empsSorted.length===0 && <tr><td colSpan="10" className="muted" style={{padding:16}}>Aucun employé trouvé dans le Sheet PunchPro.</td></tr>}
+            {empsSorted.length===0 && <tr><td colSpan="11" className="muted" style={{padding:16}}>Aucun employé trouvé dans le Sheet PunchPro.</td></tr>}
           </tbody>
         </table>
       </div>}
       {!loading && empsSorted.length>0 && <div className="muted" style={{fontSize:12,marginTop:10}}>Total équipe cette semaine: <strong style={{color:'var(--text)'}}>{fmtH(grandTotal)}</strong></div>}
-      {!loading && empsSorted.length>0 && <BanqueSupp cfg={cfg} emps={empsSorted} pts={pts} fiche={fiche} setFiche={setFiche}/>}
+      {!loading && empsSorted.length>0 && <BanqueSupp cfg={cfg} emps={empsSorted} pts={pts} fiche={fiche} setFiche={setFiche} banqueConf={Object.fromEntries(Object.entries(banque).map(([k,l])=>[k, l.length ? l[l.length-1].apres : 0]))}/>}
     </>}
   </div>;
 }
@@ -5047,7 +5072,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   const [ongletAg,setOngletAg]=useState(()=>{ try{ const o = localStorage.getItem('agenda_onglet'); return o && o!=='heures' ? o : 'agenda'; }catch(e){ return 'agenda'; } });   // v531 : Heures par employé → onglet Employés
   const choisirOnglet = k => { setOngletAg(k); try{ localStorage.setItem('agenda_onglet', k); }catch(e){} };
   const [cachees,setCachees]=useState(()=>{ try{ return JSON.parse(localStorage.getItem('agenda_groupes_caches')||'[]'); }catch(e){ return []; } });
-  const basculerGroupe = k => setCachees(l=>{ const n = l.includes(k) ? l.filter(x=>x!==k) : [...l, k]; try{ localStorage.setItem('agenda_groupes_caches', JSON.stringify(n)); }catch(e){} return n; });
+  const basculerGroupe = k => setCachees(l=>{ if(!l.includes(k)) setCouloirsPlus(c=>c.filter(x=>x!==k)); /* v532 : cacher un gars ferme aussi sa colonne ouverte */ const n = l.includes(k) ? l.filter(x=>x!==k) : [...l, k]; try{ localStorage.setItem('agenda_groupes_caches', JSON.stringify(n)); }catch(e){} return n; });
   const [attListe,setAttListe]=useState(null);
   // v437 : En attente — onglets Tous / Contracteurs / Particuliers, et depuis combien de temps chaque job attend (date de création)
   const [filtreAtt,setFiltreAtt]=useState(()=>{ try{ return localStorage.getItem('att_filtre')||'tous'; }catch(e){ return 'tous'; } });
@@ -5205,20 +5230,23 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   const ferme = d => repli && days.length>1 && estFS(d);
   const gridCols = days.map(d=>ferme(d) ? '34px' : 'minmax('+DAY_COL_MIN+',1fr)').join(' ');
 
-  const evVisibles = events.filter(e=>!cachees.includes(agendaGroupe(e)));
+  // v532 : en vue Jour, une job cachée (ex. « À attitrer ») reste visible dans la colonne d'un gars affiché dont les initiales sont dans le titre
+  const nommeVisible = e => Object.keys(CREW_COLORS).some(k=>!cachees.includes(k) && Object.keys(CREW_INITIALS).some(x=>CREW_INITIALS[x]===CREW_COLORS[k] && new RegExp('(^|\\s)'+x+'(\\s|$)').test(e.title||'')));
+  const evVisibles = events.filter(e=>!cachees.includes(agendaGroupe(e)) || (viewMode==='jour' && !e.allDay && nommeVisible(e)));
   // Vue par équipe : chaque jour divisé en couloirs (Dan | Brandon | Phil …), « Autres » au bout s'il y en a
   const couloirDe = e => { const g = agendaGroupe(e); return EQUIPES_ORDRE.includes(g) ? g : 'autres'; };
   // v530 : en vue Jour, un gars dont les initiales sont dans le titre d'une job (ex. « … BP BL ») a aussi cette job dans sa colonne (« avec »)
   const iniEquipe = k => Object.keys(CREW_INITIALS).filter(x=>CREW_INITIALS[x]===CREW_COLORS[k]);
-  const estAvec = (e, k) => viewMode==='jour' && k!=='autres' && couloirDe(e)!==k && iniEquipe(k).some(x=>new RegExp('(^|\\s)'+x+'(\\s|$)').test(e.title||''));
-  const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>couloirDe(e)===k || estAvec(e, k)) || (viewMode==='jour' && couloirsPlus.includes(k))); if(t.some(e=>couloirDe(e)==='autres')) l.push('autres'); return l; })();   // v529 : en vue Jour, colonnes ajoutées pour les gars sans job
+  const propre = (e, k) => couloirDe(e)===k && !cachees.includes(agendaGroupe(e));   // v532 : sa propre job (pas une job cachée)
+  const estAvec = (e, k) => viewMode==='jour' && k!=='autres' && !cachees.includes(k) && couloirDe(e)!==k && iniEquipe(k).some(x=>new RegExp('(^|\\s)'+x+'(\\s|$)').test(e.title||''));
+  const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>propre(e, k) || estAvec(e, k)) || (viewMode==='jour' && couloirsPlus.includes(k))); if(t.some(e=>propre(e, 'autres'))) l.push('autres'); return l; })();   // v529 : en vue Jour, colonnes ajoutées pour les gars sans job
   const enCouloirs = parEquipe && viewMode!=='mois' && couloirs.length>1;
   function placer(dayEvents){
     if(viewMode==='jour'){   // v515 : chaque équipe (ou la journée) divisée en parts égales de 7 h à 15 h 30, dans l'ordre des heures
       const etaler = (L, left, w, k) => { const t = [...L].sort((a,b)=>String(a.start).localeCompare(String(b.start))), part = 8.5/(t.length||1);
         return t.map((e,i)=>({event:e, leftPct:left, widthPct:w, vS:7+i*part, vE:7+(i+1)*part, aide:k ? estAvec(e, k) : false, lane:k||''})); };
       if(!enCouloirs) return etaler(dayEvents, 0, 100);
-      const w = 100/couloirs.length; return couloirs.flatMap((k,li)=>etaler(dayEvents.filter(e=>couloirDe(e)===k || estAvec(e, k)), li*w, w, k)); }
+      const w = 100/couloirs.length; return couloirs.flatMap((k,li)=>etaler(dayEvents.filter(e=>propre(e, k) || estAvec(e, k)), li*w, w, k)); }
     if(!enCouloirs) return layoutDayEvents(dayEvents).map(p=>({event:p.event, widthPct:100/p.totalCols, leftPct:p.col*100/p.totalCols}));
     const w = 100/couloirs.length;
     return couloirs.flatMap((k,li)=>layoutDayEvents(dayEvents.filter(e=>couloirDe(e)===k)).map(p=>({event:p.event, widthPct:w/p.totalCols, leftPct:li*w + p.col*w/p.totalCols})));
@@ -5414,18 +5442,27 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
               <span style={{flex:1,minWidth:0}}><b>{e.title}</b>{e.location ? <span className="muted" style={{fontSize:11.5}}> · {e.location.split(',')[0]}</span> : null}{agendaGroupe(e)==='attente' ? <span className="muted" style={{fontSize:11.5}}> · en attente</span> : null}</span></div>; })}
         </div>}
       </div>}
-      <div style={{display:'inline-flex',flexDirection:'column',gap:4}}>
+      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>   {/* v532 : Jour/Semaine/Mois sur la même ligne que les raccourcis de la vue choisie */}
       <div style={{display:'inline-flex',border:'1px solid var(--border2)',borderRadius:10,overflow:'hidden',background:'var(--bg3)'}}>
         {[['jour','Jour'],['semaine','Semaine'],['mois','Mois']].map(([id,label],i)=>
           <button key={id} onClick={()=>changerVue(id)} style={{border:'none',borderLeft:i?'1px solid var(--border2)':'none',padding:'7px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',
             background:viewMode===id?'var(--accent)':'transparent',color:viewMode===id?'#fff':'var(--text)'}}>{label}</button>)}
       </div>
-      {(()=>{ const lun = new Date(anchor); lun.setHours(12,0,0,0); lun.setDate(lun.getDate()-((lun.getDay()+6)%7));   // v526 : lun–ven de la semaine affichée, un clic = la journée
-        const sel = viewMode==='jour' ? localDateStr(anchor) : '', auj = localDateStr(new Date());
-        return <div style={{display:'flex',gap:3}}>{['Lun','Mar','Mer','Jeu','Ven'].map((j,i)=>{ const d = new Date(lun); d.setDate(lun.getDate()+i); const ds = localDateStr(d);
-          return <button key={j} onClick={()=>{ setAnchor(new Date(d)); setViewMode('jour'); }} title={d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})}
-            style={{flex:'1 1 0',minWidth:0,display:'flex',justifyContent:'flex-start',alignItems:'baseline',gap:4,whiteSpace:'nowrap',textAlign:'left',border:'1px solid '+(ds===auj?'var(--accent)':'var(--border2)'),borderRadius:7,padding:'3px 7px',fontSize:11.5,fontWeight:700,cursor:'pointer',lineHeight:1.15,fontVariantNumeric:'tabular-nums',
-              background:sel===ds?'var(--accent)':'var(--bg3)',color:sel===ds?'#fff':'var(--text)'}}><span style={{width:26,display:'inline-block'}}>{j}</span><span style={{opacity:.75,fontWeight:500}}>{d.getDate()}</span></button>; })}</div>; })()}
+      {(()=>{ const pastille = (cle, actif, marque, onClick, titre, l1, l2) => <button key={cle} onClick={onClick} title={titre}
+          style={{display:'inline-flex',alignItems:'baseline',gap:4,whiteSpace:'nowrap',border:'1px solid '+(marque?'var(--accent)':'var(--border2)'),borderRadius:7,padding:'5px 9px',fontSize:12,fontWeight:700,cursor:'pointer',lineHeight:1.15,fontVariantNumeric:'tabular-nums',
+            background:actif?'var(--accent)':'var(--bg3)',color:actif?'#fff':'var(--text)'}}><span>{l1}</span>{l2 && <span style={{opacity:.75,fontWeight:500}}>{l2}</span>}</button>;
+        const lundiDe = x => { const d = new Date(x); d.setHours(12,0,0,0); d.setDate(d.getDate()-((d.getDay()+6)%7)); return d; };
+        const auj = new Date(), aujS = localDateStr(auj);
+        if(viewMode==='jour'){ const lun = lundiDe(anchor), sel = localDateStr(anchor);
+          return <div style={{display:'flex',gap:3}}>{['Lun','Mar','Mer','Jeu','Ven'].map((j,i)=>{ const d = new Date(lun); d.setDate(lun.getDate()+i); const ds = localDateStr(d);
+            return pastille(j, sel===ds, ds===aujS, ()=>setAnchor(new Date(d)), d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'}), j, d.getDate()); })}</div>; }
+        if(viewMode==='semaine'){ const m0 = new Date(anchor.getFullYear(), anchor.getMonth(), 1, 12); const fin = new Date(anchor.getFullYear(), anchor.getMonth()+1, 0, 12);
+          const lst = []; for(let d = lundiDe(m0); d <= fin; d = new Date(d.getFullYear(), d.getMonth(), d.getDate()+7, 12)) lst.push(d);
+          const selS = localDateStr(lundiDe(anchor)), aujL = localDateStr(lundiDe(auj));
+          return <div style={{display:'flex',gap:3}}>{lst.map((d,i)=>{ const ds = localDateStr(d);
+            return pastille(ds, selS===ds, ds===aujL, ()=>setAnchor(new Date(d)), 'Semaine du '+d.toLocaleDateString('fr-CA',{day:'numeric',month:'long'}), 'Sem. '+(i+1), d.getDate()+' '+d.toLocaleDateString('fr-CA',{month:'short'}).replace('.','')); })}</div>; }
+        return <div style={{display:'flex',gap:3}}>{[-1,0,1].map(k=>{ const d = new Date(anchor.getFullYear(), anchor.getMonth()+k, 1, 12);
+          return pastille('m'+k, k===0, d.getFullYear()===auj.getFullYear() && d.getMonth()===auj.getMonth(), ()=>setAnchor(d), '', d.toLocaleDateString('fr-CA',{month:'long'}).replace(/^./,c=>c.toUpperCase()), d.getFullYear()!==auj.getFullYear() ? d.getFullYear() : ''); })}</div>; })()}
       </div>
       <div style={{display:'flex',gap:4,marginLeft:'auto',flexWrap:'wrap'}}>
         {ongletAg==='agenda' && viewMode!=='mois' && <button className={'btn btn-sm'+(parEquipe?' btn-p':'')} onClick={basculerParEquipe} title="Diviser chaque jour en colonnes par équipe">Par équipe</button>}
@@ -5445,11 +5482,11 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     </div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
     {ongletAg==='agenda' && viewMode==='jour' && (()=>{   // v529 : les gars qui n'ont pas de job ce jour-là — un clic leur ouvre une colonne
-      const sans = EQUIPES_ORDRE.filter(k=>CREW_COLORS[k] && !couloirs.includes(k)), ajoutes = couloirsPlus.filter(k=>couloirs.includes(k) && !evVisibles.some(e=>!e.allDay && couloirDe(e)===k));
+      const sans = EQUIPES_ORDRE.filter(k=>CREW_COLORS[k] && !couloirs.includes(k)), ajoutes = couloirsPlus.filter(k=>couloirs.includes(k) && !evVisibles.some(e=>!e.allDay && (propre(e, k) || estAvec(e, k))));
       if(!sans.length && !ajoutes.length) return null;
       return <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
         <span className="muted" style={{fontSize:12}}>Ouvrir une colonne :</span>
-        {sans.map(k=><button key={k} className="btn btn-sm" style={{border:'1px dashed '+GCAL_COLOR_MAP[k],padding:'2px 9px'}} onClick={()=>{ if(!parEquipe) basculerParEquipe(); setCouloirsPlus(l=>[...l, k]); }}
+        {sans.map(k=><button key={k} className="btn btn-sm" style={{border:'1px dashed '+GCAL_COLOR_MAP[k],padding:'2px 9px'}} onClick={()=>{ if(!parEquipe) basculerParEquipe(); if(cachees.includes(k)) basculerGroupe(k); setCouloirsPlus(l=>[...l.filter(x=>x!==k), k]); }}
           title={'Ajouter une colonne pour '+CREW_COLORS[k]}>+ <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:GCAL_COLOR_MAP[k],margin:'0 3px'}}/>{equipeNom(k)}</button>)}
         {ajoutes.map(k=><button key={'x'+k} className="btn btn-sm" style={{padding:'2px 9px'}} onClick={()=>setCouloirsPlus(l=>l.filter(x=>x!==k))} title="Fermer cette colonne">✕ {equipeNom(k)}</button>)}
       </div>; })()}
