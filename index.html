@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v549';
+const APP_VERSION = 'v550';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4406,8 +4406,13 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
         '• Heures supp en banque : '+fmtH(l.reste)+'\n'+(l.taux!=null ? '• Taux : '+cvMoney(l.taux)+' / h → '+cvMoney(l.valeur)+'\n' : '')+
         '• Achats déduits : '+cvMoney(l.deduit)+'\n'+(l.solde!=null ? '• Solde : '+cvMoney(Math.abs(l.solde))+(l.solde>=0 ? ' en ta faveur' : ' à rembourser')+'\n' : '')+(l.hRest!=null ? '• Heures qui te restent en banque : '+fmtH(l.hRest)+'\n' : '')+
         '\nLe détail de chaque semaine et de chaque commande est dans le PDF. Dis-moi si quelque chose ne marche pas.\n\nWilliam\nSaran Électrique inc.'}); };
+  // v550 : aperçu du PDF avant l'envoi (le même PDF est envoyé)
+  const apercu = async ()=>{ try{ setEnvoi(e=>({...e, etat:'PDF…'})); const b64 = await docPdfBase64(pageHtml());
+      const bin = atob(b64), u8 = new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([u8], {type:'application/pdf'}));
+      setEnvoi(e=>{ if(e && e.url) URL.revokeObjectURL(e.url); return {...e, b64, url, etat:''}; }); }catch(x){ setEnvoi(e=>({...e, etat:''})); alert('Aperçu impossible : '+apiErrMsg(x)); } };
   const envoyer = async ()=>{ if(!/@/.test(envoi.to)){ alert('Écris son adresse courriel.'); return; }
-    try{ setEnvoi(e=>({...e, etat:'PDF…'})); const b64 = await docPdfBase64(pageHtml());
+    try{ setEnvoi(e=>({...e, etat:'PDF…'})); const b64 = envoi.b64 || await docPdfBase64(pageHtml());
       setEnvoi(e=>({...e, etat:'Envoi…'})); await gmailEnvoyer({to:envoi.to, sujet:envoi.sujet, texte:envoi.texte, pj:{nom:nomPdf, type:'application/pdf', base64:b64}});
       setEnvoi(e=>({...e, etat:'Rangement dans sa fiche…'})); try{ await archiver(b64, nomPdf, 'Envoyé par courriel à '+envoi.to+' le '+new Date().toLocaleString('fr-CA')); }catch(x){}
       setEnvoi(e=>({...e, etat:'✓ Envoyé à '+envoi.to+' — le PDF est dans sa fiche'})); }
@@ -4420,7 +4425,7 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
     <div style={{display:'flex',gap:8,justifyContent:'flex-end',alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>
       {l.dernier && <span className="muted" style={{fontSize:12,marginRight:'auto'}}>Dernier règlement : {l.dernier.date}</span>}
       <button className="btn btn-sm" onClick={imprimer}>🖨 Imprimer / PDF</button>
-      <button className="btn btn-sm" onClick={ouvrirEnvoi} title={'Envoie la feuille en PDF à '+(l.e.email||'son courriel')}>✉️ Envoyer à {l.e.nom.split(' ')[0]}</button>
+      <button className="btn btn-sm" onClick={()=>{ ouvrirEnvoi(); setTimeout(apercu, 60); }} title={'Envoie la feuille en PDF à '+(l.e.email||'son courriel')}>✉️ Envoyer à {l.e.nom.split(' ')[0]}</button>
       <button className="btn btn-sm btn-p" disabled={busy} onClick={async()=>{ if(!confirm('Régler les comptes de '+l.e.nom+' aujourd\'hui ?\n\n• Le matériel ('+cvMoney(l.deduit)+') est payé avec '+fmtH(Math.max(0, l.reste-(l.hRest||0)))+' de sa banque\n• Il lui reste '+fmtH(l.hRest||0)+' en banque (CRM et PunchPro mis à jour)\n• Les achats d\'avant aujourd\'hui ne seront plus déduits')) return;
         setBusy(true); try{ await regler(); }catch(e){ alert('Pas enregistré : '+apiErrMsg(e)); } setBusy(false); }}>✓ Marquer réglé aujourd'hui</button></div>
     {envoi && <div style={{border:'1px solid var(--border2)',borderRadius:8,padding:10,marginBottom:10,display:'grid',gap:6}}>
@@ -4430,8 +4435,10 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
       <textarea value={envoi.texte} onChange={e=>setEnvoi({...envoi, texte:e.target.value})} rows={9} style={{width:'100%',boxSizing:'border-box',fontSize:12.5}}/>
       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><span className="muted" style={{fontSize:12}}>📎 {nomPdf}</span>
         <span style={{marginLeft:'auto',fontSize:12.5,fontWeight:700,color:/^✓/.test(envoi.etat)?'var(--success)':'var(--muted)'}}>{envoi.etat}</span>
-        <button className="btn btn-sm" onClick={()=>setEnvoi(null)}>Fermer</button>
-        <button className="btn btn-sm btn-p" disabled={!!envoi.etat && !/^✓/.test(envoi.etat)} onClick={envoyer}>✉️ Envoyer</button></div></div>}
+        <button className="btn btn-sm" onClick={()=>{ if(envoi.url) URL.revokeObjectURL(envoi.url); setEnvoi(null); }}>Fermer</button>
+        <button className="btn btn-sm" disabled={!!envoi.etat && !/^✓/.test(envoi.etat)} onClick={apercu}>👁 {envoi.url ? 'Refaire l\'aperçu' : 'Aperçu du PDF'}</button>
+        <button className="btn btn-sm btn-p" disabled={!!envoi.etat && !/^✓/.test(envoi.etat)} onClick={envoyer}>✉️ Envoyer</button></div>
+      {envoi.url && <iframe src={envoi.url} title="Aperçu" style={{width:'100%',height:'60vh',border:'1px solid var(--border)',borderRadius:6,background:'#fff'}}/>}</div>}
     <div ref={zone}>
       <h2 style={{margin:'0 0 2px',fontSize:18}}>Règlement de la banque d'heures — {l.e.nom}</h2>
       <div className="muted" style={{fontSize:12,marginBottom:10}}>Saran Électrique inc. · en date du {new Date().toLocaleDateString('fr-CA',{day:'numeric',month:'long',year:'numeric'})}</div>
