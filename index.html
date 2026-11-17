@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v553';
+const APP_VERSION = 'v554';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4501,6 +4501,124 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
       <div style={{display:'flex',gap:40,marginTop:30,fontSize:12}}><div style={{flex:1,borderTop:'1px solid #888',paddingTop:4}}>Signature de l'employé</div><div style={{flex:1,borderTop:'1px solid #888',paddingTop:4}}>Saran Électrique inc.</div></div>
     </div>
   </Modal>;
+}
+// v554 : Dossiers employés (paie) — feuille PRIVÉE « Paie — Dossiers employés (confidentiel) » (aucune donnée dans le code public)
+// Champs du formulaire « Information — nouveau salarié » du service de paie de l'ACQ + ce qu'il faut pour les paies, T4/RL-1, DAS et rapports CCQ.
+const DOSSIERS_EMP_ID = '1QhAK2VmGRe4xT_iozg5uBoons43DVzP8Ml3lTrjZqBw';
+const DE_COLS = ['id','actif','prenom','nom','regime','adresse','ville','cp','cell','courriel','nas','naissance','embauche','fin','actionnaire','pctActions','fedStatut','fedMontant','fedSupp','provStatut','provMontant','provSupp','premierePaie','ccqSecteur','metier','classe','noCcq','syndicat','local','bureauType','titre','cnesst','taux','vacPct','vacMode','hebdo','hebdoBrutNet','heuresPeriode','institution','transit','compte','specimen','carte','particularites','notes','modifie'];
+const DE_LETTRE = i => { let s = '', n = i+1; while(n){ const r = (n-1)%26; s = String.fromCharCode(65+r)+s; n = Math.floor((n-1)/26); } return s; };
+const DE_FIN = DE_LETTRE(DE_COLS.length-1);
+const DE_SYNDICATS = ['FTQ-Construction','CPQMC-International','CSD Construction','CSN-Construction','SQC'];
+const DE_SECTEURS = ['Résidentiel','Commercial','Industriel','Génie civil'];
+const DE_CLASSES = ['Apprenti 1','Apprenti 2','Apprenti 3','Apprenti 4','Compagnon','Manœuvre','Occupation'];
+const deNasOk = s => { const d = String(s||'').replace(/\D/g,''); if(d.length!==9) return false; let t = 0; for(let i=0;i<9;i++){ let x = +d[i]; if(i%2){ x *= 2; if(x>9) x -= 9; } t += x; } return t%10===0; };
+const deNasFmt = s => { const d = String(s||'').replace(/\D/g,''); return d.length===9 ? d.slice(0,3)+' '+d.slice(3,6)+' '+d.slice(6) : String(s||''); };
+const deNasMasque = s => { const d = String(s||'').replace(/\D/g,''); return d.length>=3 ? '••• ••• '+d.slice(-3) : ''; };
+const deNom = e => [e.prenom, e.nom].filter(Boolean).join(' ') || '(sans nom)';
+function deVide(){ const e = {}; DE_COLS.forEach(k=>e[k]=''); return {...e, actif:'Oui', regime:'CCQ', fedStatut:'Célibataire', provStatut:'Célibataire', ccqSecteur:'Résidentiel', metier:'Électricien', syndicat:'FTQ-Construction', vacMode:'Versées', vacPct:'', bureauType:'Bureau', hebdoBrutNet:'Brut'}; }
+function DossiersEmployesView({cfg, refreshKey}){
+  const [L,setL]=useState(null);
+  const [err,setErr]=useState('');
+  const [f,setF]=useState(null);         // fiche ouverte (copie modifiable) ; f.row vide = nouvel employé
+  const [voirNas,setVoirNas]=useState(false);
+  const [tous,setTous]=useState(false);
+  const [etat,setEtat]=useState('');
+  const [punch,setPunch]=useState([]);   // noms PunchPro pas encore en dossier
+  const lire = useCallback(async force=>{ setErr('');
+    try{ const r = await lireCache(DOSSIERS_EMP_ID, 'A1:'+DE_FIN, force);
+      setL((r.result.values||[]).map((x,i)=>{ const e = {row:i+1}; DE_COLS.forEach((k,j)=>e[k]=String(x[j]==null?'':x[j])); return e; }).slice(1).filter(e=>e.id||e.nom||e.prenom)); }
+    catch(e){ setErr(apiErrMsg(e)); setL([]); } },[]);
+  useEffect(()=>{ lire(false); },[lire, refreshKey]);
+  useEffect(()=>{ if(!cfg.punchproSpreadsheetId) return; let ok = true;
+    sheetsBatchGet(cfg.punchproSpreadsheetId, ['Employés!A2:H']).then(([rows])=>{ if(ok) setPunch(mapEmployeRows(rows||[])); }).catch(()=>{});
+    return ()=>{ ok = false; }; },[cfg.punchproSpreadsheetId]);
+  if(!L) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des dossiers employés…</span></div>;
+  const dejaNoms = new Set(L.map(e=>cvNorm(deNom(e))));
+  const aCreer = punch.filter(p=>!dejaNoms.has(cvNorm(p.nom)));
+  const ouvrir = e => { setVoirNas(false); setF({...e}); window.scrollTo(0,0); };
+  const nouveau = p => { const e = deVide(); if(p){ const m = p.nom.trim().split(/\s+/); e.prenom = m[0]||''; e.nom = m.slice(1).join(' '); e.courriel = p.email||''; e.cell = p.telephone||''; } ouvrir(e); };
+  const champ = (k, lab, o={}) => <label style={{display:'grid',gap:2,fontSize:12,flex:o.flex||'1 1 170px',minWidth:0}}><span className="muted">{lab}</span>
+    {o.choix ? <select value={f[k]} onChange={e=>setF({...f, [k]:e.target.value})}>{(o.vide?['']:[]).concat(o.choix).map(c=><option key={c} value={c}>{c||'—'}</option>)}</select>
+      : <input type={o.type||'text'} value={f[k]} placeholder={o.ph||''} onChange={e=>setF({...f, [k]:e.target.value})}/>}</label>;
+  const bloc = (titre, enfants) => <div style={{marginTop:12}}><div style={{fontWeight:700,fontSize:13,marginBottom:6,color:'var(--accent)'}}>{titre}</div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{enfants}</div></div>;
+  const enregistrer = async () => { const e = f;
+    if(!e.prenom.trim() || !e.nom.trim()) return alert('Le prénom et le nom sont obligatoires.');
+    if(e.nas && !deNasOk(e.nas)) { if(!confirm('Le NAS '+deNasFmt(e.nas)+' ne semble pas valide (chiffre de contrôle). Enregistrer quand même ?')) return; }
+    setEtat('Enregistrement…');
+    try{ if(typeof suivreEcritures==='function') suivreEcritures();
+      const x = {...e, id: e.id || ('EMP-'+Date.now().toString(36).toUpperCase()), nas: String(e.nas||'').replace(/\D/g,'') || e.nas, modifie: new Date().toLocaleString('fr-CA')};
+      const val = [DE_COLS.map(k=>String(x[k]==null?'':x[k]))];
+      const S = window.gapi.client.sheets.spreadsheets.values;
+      if(e.row) await S.update({spreadsheetId:DOSSIERS_EMP_ID, range:'A'+e.row+':'+DE_FIN+e.row, valueInputOption:'RAW', resource:{values:val}});
+      else await S.append({spreadsheetId:DOSSIERS_EMP_ID, range:'A:'+DE_FIN, valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:val}});
+      setF(null); setEtat(''); await lire(true); }
+    catch(er){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(er)); } };
+  const liste = L.filter(e=>tous || e.actif!=='Non').sort((a,b)=>deNom(a).localeCompare(deNom(b),'fr'));
+  if(f) return <div className="card" style={{border:'1px solid var(--accent)'}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+      <h2 className="fh" style={{margin:0,fontSize:20}}>{f.row ? deNom(f) : 'Nouvel employé'}</h2>
+      <div style={{display:'flex',gap:6}}>{['CCQ','Bureau'].map(r=><button key={r} className={'btn btn-sm'+(f.regime===r?' btn-p':'')} onClick={()=>setF({...f, regime:r})}>{r==='CCQ' ? 'CCQ (construction)' : 'Bureau / hors décret'}</button>)}</div>
+    </div>
+    {bloc('Identité', <>
+      {champ('prenom','Prénom')}{champ('nom','Nom')}
+      <label style={{display:'grid',gap:2,fontSize:12,flex:'1 1 170px'}}><span className="muted">NAS {f.nas && (deNasOk(f.nas) ? '✓' : '⚠ à vérifier')}</span>
+        <div style={{display:'flex',gap:4}}><input type={voirNas?'text':'password'} value={voirNas ? deNasFmt(f.nas) : f.nas} autoComplete="off" onChange={e=>setF({...f, nas:e.target.value})} style={{flex:1}}/><button className="btn btn-sm" onClick={()=>setVoirNas(v=>!v)}>{voirNas?'Cacher':'Voir'}</button></div></label>
+      {champ('naissance','Date de naissance',{type:'date'})}
+      {champ('actif','Actif',{choix:['Oui','Non'],flex:'0 1 90px'})}
+      {champ('actionnaire','Actionnaire',{choix:['Non','Oui'],flex:'0 1 110px'})}
+      {f.actionnaire==='Oui' && champ('pctActions','% des actions',{flex:'0 1 110px'})}
+    </>)}
+    {bloc('Coordonnées', <>{champ('adresse','Adresse',{flex:'2 1 260px'})}{champ('ville','Ville')}{champ('cp','Code postal',{flex:'0 1 110px'})}{champ('cell','Cellulaire')}{champ('courriel','Courriel',{type:'email'})}</>)}
+    {bloc('Emploi', <>{champ('embauche','Date d\'embauche',{type:'date'})}{champ('premierePaie','1re période de paie',{type:'date'})}{champ('fin','Date de fin d\'emploi',{type:'date'})}{champ('vacPct','Vacances %',{ph:f.regime==='CCQ'?'13 (CCQ)':'4 ou 6',flex:'0 1 110px'})}{champ('vacMode','Vacances',{choix:['Versées','Accumulées'],flex:'0 1 130px'})}</>)}
+    {f.regime==='CCQ' ? bloc('Construction (CCQ)', <>
+      {champ('ccqSecteur','Secteur',{choix:DE_SECTEURS})}{champ('metier','Métier')}{champ('classe','Classe',{choix:DE_CLASSES,vide:true})}
+      {champ('noCcq','No de client CCQ')}{champ('syndicat','Syndicat',{choix:DE_SYNDICATS,vide:true})}{champ('local','Local',{flex:'0 1 110px'})}{champ('taux','Taux horaire $ (si différent du décret)',{flex:'1 1 200px'})}
+    </>) : bloc('Bureau ou rénovation (hors décret)', <>
+      {champ('bureauType','Type',{choix:['Bureau','Rénovation'],flex:'0 1 140px'})}{champ('titre','Titre du poste')}{champ('cnesst','Unité de classification CNESST')}
+      {champ('taux','Salaire $/h',{flex:'0 1 120px'})}{champ('hebdo','ou salaire hebdo $/sem',{flex:'0 1 150px'})}{champ('hebdoBrutNet','Hebdo',{choix:['Brut','Net'],flex:'0 1 90px'})}{champ('heuresPeriode','Heures par période',{flex:'0 1 140px'})}
+    </>)}
+    {bloc('Impôt — crédits pour le calcul des retenues', <>
+      {champ('fedStatut','Fédéral (TD1)',{choix:['Célibataire','Autre statut'],flex:'0 1 150px'})}{f.fedStatut==='Autre statut' && champ('fedMontant','Montant TD1 / précisez')}{champ('fedSupp','Impôt fédéral supp. $/paie',{flex:'0 1 170px'})}
+      {champ('provStatut','Provincial (TP-1015.3)',{choix:['Célibataire','Autre statut'],flex:'0 1 170px'})}{f.provStatut==='Autre statut' && champ('provMontant','Montant TP-1015.3 / précisez')}{champ('provSupp','Impôt provincial supp. $/paie',{flex:'0 1 190px'})}
+    </>)}
+    {bloc('Dépôt direct', <>{champ('institution','Institution',{flex:'0 1 110px',ph:'815'})}{champ('transit','Transit',{flex:'0 1 120px'})}{champ('compte','No de compte',{flex:'1 1 160px'})}{champ('specimen','Spécimen chèque (lien Drive)',{flex:'2 1 240px'})}</>)}
+    {bloc('Documents et particularités', <>{champ('carte','Carte de compétence (lien Drive)',{flex:'2 1 240px'})}
+      <label style={{display:'grid',gap:2,fontSize:12,flex:'1 1 100%'}}><span className="muted">Particularités sur la paie (pension alimentaire, saisie, prime, bonus, RVER, fonds FTQ, allocation auto, assurance collective…)</span><textarea rows={2} value={f.particularites} onChange={e=>setF({...f, particularites:e.target.value})}/></label>
+      <label style={{display:'grid',gap:2,fontSize:12,flex:'1 1 100%'}}><span className="muted">Notes</span><textarea rows={2} value={f.notes} onChange={e=>setF({...f, notes:e.target.value})}/></label></>)}
+    <div style={{display:'flex',gap:8,marginTop:14,alignItems:'center',flexWrap:'wrap'}}>
+      <button className="btn btn-p" disabled={!!etat} onClick={enregistrer}>{etat || 'Enregistrer'}</button>
+      <button className="btn" onClick={()=>setF(null)}>Annuler</button>
+      {f.regime==='CCQ' && <span className="muted" style={{fontSize:12}}>Rappel : demande de numéro d'embauche (et avis de fin d'emploi) à la CCQ — responsabilité de l'employeur.</span>}
+    </div>
+  </div>;
+  return <div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
+      <div><h2 className="fh" style={{margin:0,fontSize:20}}>Dossiers employés</h2><div className="muted" style={{fontSize:12.5}}>Infos pour les paies, T4/RL-1, DAS et rapports CCQ. Feuille privée « Paie — Dossiers employés (confidentiel) ».</div></div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}><button className="btn btn-sm btn-p" onClick={()=>nouveau(null)}>＋ Nouvel employé</button>
+        <button className={'btn btn-sm'+(tous?' btn-p':'')} onClick={()=>setTous(t=>!t)}>{tous?'Tous':'Actifs seulement'}</button>
+        <button className="btn btn-sm" onClick={()=>lire(true)}>↻ Relire</button></div>
+    </div>
+    {err && <div className="card" style={{color:'var(--danger)',marginBottom:10}}>Impossible de lire les dossiers : {err}</div>}
+    {aCreer.length>0 && <div className="card" style={{marginBottom:10,padding:'8px 12px'}}>
+      <div style={{fontSize:12.5,marginBottom:6}}><b>Dans PunchPro sans dossier :</b> <span className="muted">clique pour créer le dossier (nom, courriel et cell déjà remplis).</span></div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{aCreer.map(p=><button key={p.nom} className="btn btn-sm" onClick={()=>nouveau(p)}>＋ {p.nom}</button>)}</div></div>}
+    {!liste.length ? <div className="card muted">Aucun dossier pour l'instant. Commence par « ＋ Nouvel employé ».</div> :
+      <div className="card" style={{padding:'4px 12px'}}>{liste.map(e=>{ const manque = [!e.nas&&'NAS', !e.naissance&&'naissance', !e.embauche&&'embauche', e.regime==='CCQ' && !e.syndicat&&'syndicat', e.regime==='CCQ' && !e.classe&&'classe', !(e.institution&&e.transit&&e.compte)&&'dépôt direct'].filter(Boolean);
+        return <div key={e.row} onClick={()=>ouvrir(e)} style={{display:'flex',gap:10,alignItems:'center',padding:'8px 0',borderTop:'1px solid var(--border)',cursor:'pointer',opacity:e.actif==='Non'?.55:1}}>
+          <div style={{flex:1,minWidth:0}}><b>{deNom(e)}</b> <span className="muted" style={{fontSize:12}}>{e.regime==='CCQ' ? [e.classe, e.metier, e.syndicat && e.syndicat+(e.local?' local '+e.local:'')].filter(Boolean).join(' · ') : [e.bureauType, e.titre].filter(Boolean).join(' · ')}</span>
+            {manque.length>0 && <div style={{fontSize:11.5,color:'var(--warning)'}}>À compléter : {manque.join(', ')}</div>}</div>
+          <span className="pill" style={{fontSize:11,padding:'2px 8px',borderRadius:10,background:e.regime==='CCQ'?'var(--accent)':'var(--bg3)',color:e.regime==='CCQ'?'#fff':'var(--text)'}}>{e.regime||'—'}</span>
+          <span className="muted" style={{fontSize:12,width:90,textAlign:'right'}}>{e.nas ? deNasMasque(e.nas) : 'NAS —'}</span>
+        </div>; })}</div>}
+  </div>;
+}
+function EmployesSection({cfg, refreshKey}){
+  const [o,setO]=useState(()=>{ try{ return localStorage.getItem('emp_onglet')||'heures'; }catch(e){ return 'heures'; } });
+  const choisir = k => { setO(k); try{ localStorage.setItem('emp_onglet', k); }catch(e){} };
+  return <div>
+    <div style={{display:'flex',gap:6,marginBottom:12}}>{[['heures','Heures'],['dossiers','Dossiers employés']].map(([k,l])=><button key={k} className={'btn btn-sm'+(o===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}</div>
+    {o==='heures' ? <HeuresView cfg={cfg} refreshKey={refreshKey}/> : <DossiersEmployesView cfg={cfg} refreshKey={refreshKey}/>}
+  </div>;
 }
 function HeuresView({cfg, refreshKey}){
   const [loading,setLoading]=useState(true);
@@ -17886,7 +18004,7 @@ function App(){
         {nav==='contacts' && <RepertoireView key={'rc'+navKey} cfg={effectiveCfg} refreshKey={refreshKey} toast={show} isDesktop={isDesktop} contacts={data.contacts}/>}
         {nav==='projets' && <ProjetsView key={'p'+navKey} data={data} cfg={effectiveCfg} toast={show} refreshKey={refreshKey}/>}
         {nav==='agenda' && <AgendaView cfg={effectiveCfg} data={data} toast={show} isDesktop={isDesktop} refreshKey={refreshKey}/>}
-        {nav==='heures' && <HeuresView cfg={cfg} refreshKey={refreshKey}/>}
+        {nav==='heures' && <EmployesSection cfg={cfg} refreshKey={refreshKey}/>}
         {CPT_NAV[nav] && <VerrouCompta cfg={effectiveCfg}><ComptabiliteView key={'cpt'+cptGroupe(nav)+navKey} onglet0={CPT_NAV[nav]} cfg={cfg} cfgRep={effectiveCfg} refreshKey={refreshKey} contacts={data.contacts} toast={show} isDesktop={isDesktop}/></VerrouCompta>}
         {nav==='rappels' && <RemindersView data={data} toast={show}/>}
         {nav==='soumissions' && <SoumissionsView key={'s'+navKey} cfg={effectiveCfg} data={data} toast={show} refreshKey={refreshKey} onNavigate={setNav}/>}
