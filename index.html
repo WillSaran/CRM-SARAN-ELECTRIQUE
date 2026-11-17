@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v555';
+const APP_VERSION = 'v556';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4518,8 +4518,9 @@ const CCQ_TAUX_ELEC = {
   'Commercial':        {'Compagnon':50.79, 'Apprenti 4':43.17, 'Apprenti 3':35.55, 'Apprenti 2':30.47, 'Apprenti 1':25.40},
   'Industriel':        {'Compagnon':50.79, 'Apprenti 4':43.17, 'Apprenti 3':35.55, 'Apprenti 2':30.47, 'Apprenti 1':25.40}
 };
-const ccqTaux = (secteur, classe) => (CCQ_TAUX_ELEC[secteur]||{})[classe];
-const CCQ_CATEGORIES = Object.entries(CCQ_TAUX_ELEC).flatMap(([sec, m])=>Object.entries(m).map(([cl, t])=>({sec, cl, t, lab: 'Électricien '+cl.toLowerCase()+' — '+sec+' ('+t.toFixed(2).replace('.',',')+' $/h)'})));
+const ccqCats = T => Object.entries(T).flatMap(([sec, m])=>Object.entries(m).map(([cl, t])=>({sec, cl, t, lab: 'Électricien '+cl.toLowerCase()+' — '+sec+' ('+(+t).toFixed(2).replace('.',',')+' $/h)'})));
+const CCQ_CLASSES_TAUX = ['Compagnon','Apprenti 4','Apprenti 3','Apprenti 2','Apprenti 1'];
+const CCQ_ONGLET = 'Taux CCQ';   // v556 : grille modifiable, gardée dans la feuille privée des dossiers (Secteur | Classe | Taux | En vigueur le)
 const DE_CLASSES = ['Apprenti 1','Apprenti 2','Apprenti 3','Apprenti 4','Compagnon','Manœuvre','Occupation'];
 const deNasOk = s => { const d = String(s||'').replace(/\D/g,''); if(d.length!==9) return false; let t = 0; for(let i=0;i<9;i++){ let x = +d[i]; if(i%2){ x *= 2; if(x>9) x -= 9; } t += x; } return t%10===0; };
 const deNasFmt = s => { const d = String(s||'').replace(/\D/g,''); return d.length===9 ? d.slice(0,3)+' '+d.slice(3,6)+' '+d.slice(6) : String(s||''); };
@@ -4534,6 +4535,14 @@ function DossiersEmployesView({cfg, refreshKey}){
   const [tous,setTous]=useState(false);
   const [etat,setEtat]=useState('');
   const [punch,setPunch]=useState([]);   // noms PunchPro pas encore en dossier
+  const [grille,setGrille]=useState({date:CCQ_TAUX_DATE, t:CCQ_TAUX_ELEC, lue:false});   // v556 : taux CCQ modifiables
+  const [edT,setEdT]=useState(null);   // éditeur de la grille : {date, t}
+  useEffect(()=>{ let ok = true;
+    lireCache(DOSSIERS_EMP_ID, "'"+CCQ_ONGLET+"'!A1:D", false).then(r=>{ const v = (r.result.values||[]).slice(1).filter(x=>x[0]&&x[1]&&x[2]); if(!ok || !v.length) return;
+      const t = {}; let d = ''; v.forEach(x=>{ (t[x[0]] = t[x[0]]||{})[x[1]] = cvNum(x[2]); if(x[3] && x[3]>d) d = x[3]; }); setGrille({date:d||CCQ_TAUX_DATE, t, lue:true}); }).catch(()=>{});
+    return ()=>{ ok = false; }; },[refreshKey]);
+  const CATS = ccqCats(grille.t);
+  const ccqTaux = (secteur, classe) => (grille.t[secteur]||{})[classe];
   const lire = useCallback(async force=>{ setErr('');
     try{ const r = await lireCache(DOSSIERS_EMP_ID, 'A1:'+DE_FIN, force);
       setL((r.result.values||[]).map((x,i)=>{ const e = {row:i+1}; DE_COLS.forEach((k,j)=>e[k]=String(x[j]==null?'':x[j])); return e; }).slice(1).filter(e=>e.id||e.nom||e.prenom)); }
@@ -4563,6 +4572,36 @@ function DossiersEmployesView({cfg, refreshKey}){
       else await S.append({spreadsheetId:DOSSIERS_EMP_ID, range:'A:'+DE_FIN, valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:val}});
       setF(null); setEtat(''); await lire(true); }
     catch(er){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(er)); } };
+  // v556 : enregistrer la grille de taux ; option : mettre à jour les employés qui étaient au taux du décret
+  const sauverGrille = async appliquer => { const g = edT; setEtat('Enregistrement des taux…');
+    try{ const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:DOSSIERS_EMP_ID});
+      if(!(meta.result.sheets||[]).some(x=>x.properties.title===CCQ_ONGLET)) await window.gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId:DOSSIERS_EMP_ID, resource:{requests:[{addSheet:{properties:{title:CCQ_ONGLET}}}]}});
+      await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:DOSSIERS_EMP_ID, range:"'"+CCQ_ONGLET+"'!A1", valueInputOption:'RAW', resource:{values:[['Secteur','Classe','Taux','En vigueur le']]}});
+      if(typeof suivreEcritures==='function') suivreEcritures();
+      const rows = []; Object.entries(g.t).forEach(([sec,m])=>CCQ_CLASSES_TAUX.forEach(cl=>{ if(m[cl]!=null && m[cl]!=='') rows.push([sec, cl, String(cvNum(m[cl]).toFixed(2)), g.date]); }));
+      const S = window.gapi.client.sheets.spreadsheets.values;
+      await S.clear({spreadsheetId:DOSSIERS_EMP_ID, range:"'"+CCQ_ONGLET+"'!A2:D"});
+      await S.update({spreadsheetId:DOSSIERS_EMP_ID, range:"'"+CCQ_ONGLET+"'!A2", valueInputOption:'RAW', resource:{values:rows}});
+      let n = 0;
+      if(appliquer){ for(const e of L){ if(e.regime!=='CCQ') continue; const ancien = (grille.t[e.ccqSecteur]||{})[e.classe], neuf = (g.t[e.ccqSecteur]||{})[e.classe];
+        if(ancien==null || neuf==null || Math.abs(cvNum(e.taux)-ancien)>=0.005 || Math.abs(ancien-cvNum(neuf))<0.005) continue;
+        await S.update({spreadsheetId:DOSSIERS_EMP_ID, range:DE_LETTRE(DE_COLS.indexOf('taux'))+e.row, valueInputOption:'RAW', resource:{values:[[cvNum(neuf).toFixed(2)]]}}); n++; } }
+      setGrille({date:g.date, t:Object.fromEntries(Object.entries(g.t).map(([k,m])=>[k, Object.fromEntries(Object.entries(m).filter(([,x])=>x!==''&&x!=null).map(([c,x])=>[c, cvNum(x)]))])), lue:true});
+      setEdT(null); setEtat(''); if(n) await lire(true); alert('Taux enregistrés.'+(appliquer ? ' '+n+' employé'+(n>1?'s':'')+' mis à jour.' : '')); }
+    catch(er){ setEtat(''); alert('Impossible d\'enregistrer les taux : '+apiErrMsg(er)); } };
+  if(edT) return <div className="card" style={{border:'1px solid var(--accent)'}}>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Taux CCQ — électricien</h2>
+    <div className="muted" style={{fontSize:12.5,marginBottom:10}}>Change les taux quand la nouvelle grille sort (en général à la fin d'avril). Les dossiers gardent leur propre taux ; tu peux les mettre à jour d'un coup.</div>
+    <label style={{display:'inline-grid',gap:2,fontSize:12,marginBottom:10}}><span className="muted">En vigueur le</span><input type="date" value={edT.date} onChange={e=>setEdT({...edT, date:e.target.value})}/></label>
+    <div style={{overflowX:'auto'}}><table style={{borderCollapse:'collapse',fontSize:13,minWidth:520}}>
+      <thead><tr><th style={{textAlign:'left',padding:4}}>Secteur</th>{CCQ_CLASSES_TAUX.map(c=><th key={c} style={{padding:4}}>{c}</th>)}</tr></thead>
+      <tbody>{Object.keys(edT.t).map(sec=><tr key={sec} style={{borderTop:'1px solid var(--border)'}}><td style={{padding:4,fontWeight:700}}>{sec}</td>
+        {CCQ_CLASSES_TAUX.map(cl=><td key={cl} style={{padding:4}}><input value={edT.t[sec][cl]==null?'':edT.t[sec][cl]} onChange={e=>setEdT({...edT, t:{...edT.t, [sec]:{...edT.t[sec], [cl]:e.target.value}}})} style={{width:80}}/></td>)}</tr>)}</tbody></table></div>
+    <div style={{display:'flex',gap:8,marginTop:12,flexWrap:'wrap'}}>
+      <button className="btn btn-p" disabled={!!etat} onClick={()=>sauverGrille(true)}>{etat || 'Enregistrer et mettre à jour les employés au taux du décret'}</button>
+      <button className="btn" disabled={!!etat} onClick={()=>sauverGrille(false)}>Enregistrer seulement la grille</button>
+      <button className="btn" onClick={()=>setEdT(null)}>Annuler</button></div>
+  </div>;
   const liste = L.filter(e=>tous || e.actif!=='Non').sort((a,b)=>deNom(a).localeCompare(deNom(b),'fr'));
   if(f) return <div className="card" style={{border:'1px solid var(--accent)'}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
@@ -4581,10 +4620,10 @@ function DossiersEmployesView({cfg, refreshKey}){
     {bloc('Coordonnées', <>{champ('adresse','Adresse',{flex:'2 1 260px'})}{champ('ville','Ville')}{champ('cp','Code postal',{flex:'0 1 110px'})}{champ('cell','Cellulaire')}{champ('courriel','Courriel',{type:'email'})}</>)}
     {bloc('Emploi', <>{champ('embauche','Date d\'embauche',{type:'date'})}{champ('premierePaie','1re période de paie',{type:'date'})}{champ('fin','Date de fin d\'emploi',{type:'date'})}{champ('vacPct','Vacances %',{ph:f.regime==='CCQ'?'13 (CCQ)':'4 ou 6',flex:'0 1 110px'})}{champ('vacMode','Vacances',{choix:['Versées','Accumulées'],flex:'0 1 130px'})}</>)}
     {f.regime==='CCQ' ? bloc('Construction (CCQ)', <>
-      <label style={{display:'grid',gap:2,fontSize:12,flex:'2 1 320px'}}><span className="muted">Catégorie salariale (électricien, taux CCQ du {CCQ_TAUX_DATE})</span>
-        <select value={CCQ_CATEGORIES.find(c=>c.sec===f.ccqSecteur && c.cl===f.classe) ? f.ccqSecteur+'|'+f.classe : ''} onChange={e=>{ const c = CCQ_CATEGORIES.find(x=>x.sec+'|'+x.cl===e.target.value); if(c) setF({...f, ccqSecteur:c.sec, classe:c.cl, metier:f.metier||'Électricien', taux:c.t.toFixed(2)}); }}>
+      <label style={{display:'grid',gap:2,fontSize:12,flex:'2 1 320px'}}><span className="muted">Catégorie salariale (électricien, taux CCQ du {grille.date})</span>
+        <select value={CATS.find(c=>c.sec===f.ccqSecteur && c.cl===f.classe) ? f.ccqSecteur+'|'+f.classe : ''} onChange={e=>{ const c = CATS.find(x=>x.sec+'|'+x.cl===e.target.value); if(c) setF({...f, ccqSecteur:c.sec, classe:c.cl, metier:f.metier||'Électricien', taux:c.t.toFixed(2)}); }}>
           <option value="">— choisir —</option>
-          {Object.keys(CCQ_TAUX_ELEC).map(sec=><optgroup key={sec} label={sec}>{CCQ_CATEGORIES.filter(c=>c.sec===sec).map(c=><option key={c.sec+'|'+c.cl} value={c.sec+'|'+c.cl}>{c.lab}</option>)}</optgroup>)}
+          {Object.keys(grille.t).map(sec=><optgroup key={sec} label={sec}>{CATS.filter(c=>c.sec===sec).map(c=><option key={c.sec+'|'+c.cl} value={c.sec+'|'+c.cl}>{c.lab}</option>)}</optgroup>)}
         </select></label>
       {champ('ccqSecteur','Secteur',{choix:DE_SECTEURS})}{champ('metier','Métier')}{champ('classe','Classe',{choix:DE_CLASSES,vide:true})}
       {champ('noCcq','No de client CCQ')}{champ('syndicat','Syndicat',{choix:DE_SYNDICATS,vide:true})}{champ('local','Local',{flex:'0 1 110px'})}
@@ -4612,6 +4651,7 @@ function DossiersEmployesView({cfg, refreshKey}){
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
       <div><h2 className="fh" style={{margin:0,fontSize:20}}>Dossiers employés</h2><div className="muted" style={{fontSize:12.5}}>Infos pour les paies, T4/RL-1, DAS et rapports CCQ. Feuille privée « Paie — Dossiers employés (confidentiel) ».</div></div>
       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}><button className="btn btn-sm btn-p" onClick={()=>nouveau(null)}>＋ Nouvel employé</button>
+        <button className="btn btn-sm" onClick={()=>setEdT({date:grille.date, t:JSON.parse(JSON.stringify(grille.t))})}>Taux CCQ ({grille.date})</button>
         <button className={'btn btn-sm'+(tous?' btn-p':'')} onClick={()=>setTous(t=>!t)}>{tous?'Tous':'Actifs seulement'}</button>
         <button className="btn btn-sm" onClick={()=>lire(true)}>↻ Relire</button></div>
     </div>
