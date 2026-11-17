@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v562';
+const APP_VERSION = 'v563';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2026,6 +2026,44 @@ function suggestionsAchat(a, clients){
   const best = l[0].fort ? l.filter(x=>x.fort) : l;                                  // si un nom concorde vraiment, on oublie les « 3 lettres pareilles »
   return best.slice(0,3).map(x=>x.cle);
 }
+// v563 : indices — ce que la facture contient (gradateurs, thermostat, fil…) comparé à ce que la job prévoit (titre + notes de l'événement)
+const ACH_FAMILLES = [
+  ['gradateurs', /variateur|gradateur|dimmer|diva|caseta|maestro|dsl01|decoraslide/i, /gradateur|dimmer|variateur|diva|caseta|intelligent/i, 'fin'],
+  ['interrupteurs', /interrupteur|switch|commutateur|3voies|3 voies/i, /interrupteur|switch|3.?voies/i, 'fin'],
+  ['prises', /prise|recept|ddft|gfi|gfci/i, /prise|ddft|gfi/i, 'fin'],
+  ['plaques', /plaque|wallplate/i, /plaque/i, 'fin'],
+  ['luminaires / encastrés', /luminaire|encastr|plafonnier|\bdel\b|\bled\b|lampe|lumi/i, /luminaire|encastr|lumi|plafonnier|del\b|led\b|spot/i, 'fin'],
+  ['thermostat', /thermostat/i, /thermostat/i, ''],
+  ['chauffage', /convecteur|plinthe|stelpro|ouellet|convectair|chauff|aerotherme/i, /convecteur|plinthe|chauff|stelpro|convectair/i, ''],
+  ['ventilateur', /ventilat|\bfan\b|panasonic|hotte/i, /ventilat|\bfan\b|hotte/i, ''],
+  ['disjoncteurs', /disjonct|breaker/i, /disjonct|breaker|panneau/i, ''],
+  ['panneau', /panneau|centre de charge/i, /panneau|entrée électrique|entree electrique|200 ?a/i, ''],
+  ['fil / câble', /\bfil\b|nmd|câble|cable|teck|ac90|rw90/i, /\bfil\b|nmd|câble|cable|rough/i, 'rough'],
+  ['boîtes', /boite|boîte|octogon/i, /boîte|boite|rough/i, 'rough'],
+  ['borne', /borne|flo |wallbox|evse/i, /borne/i, ''],
+  ['transfo', /transfo|transformateur|alimentation|driver/i, /transfo|bande|led strip|ruban/i, '']];
+// v563 : un numéro dans la référence (« CRS 585 ») qui est l'OT, l'appel de service ou la facture d'une job à l'agenda
+function achatParNumero(ref, clients){
+  const nums = (String(ref||'').match(/\b\d{3,5}\b/g)||[]).filter(n=>!/^(19|20)\d\d$/.test(n) || n.length!==4); if(!nums.length) return [];
+  const res = [], vu = new Set(), num = v => String(v||'').match(/\d{3,5}/g)||[];
+  Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>j.events.forEach(e=>{
+    [['OT', e.ot], ['appel de service', e.as], ['facture', e.fac]].forEach(([quoi, v])=>{ num(v).forEach(n=>{ if(nums.includes(n)){ const cle = achatCle(c,j), k = cle+'|'+quoi+n;
+      if(!vu.has(k)){ vu.add(k); res.push({cle, quoi, n, jour:e.day, adr:j.address||e.location||''}); } } }); });
+  })));
+  return res.sort((a,b)=>(a.quoi==='OT'?0:1)-(b.quoi==='OT'?0:1) || String(b.jour).localeCompare(String(a.jour))).slice(0,4);
+}
+function achatIndices(articles, ev){
+  const arts = (articles||[]).filter(x=>x && (x.desc||x.code)).map(x=>(x.desc||'')+' '+(x.code||'')); if(!arts.length || !ev) return {sc:0, txt:''};
+  const fams = ACH_FAMILLES.filter(f=>arts.some(t=>f[1].test(t))); if(!fams.length) return {sc:0, txt:''};
+  const texte = (ev.title||'')+' '+String(ev.desc||'').replace(/<[^>]+>/g,' '), ph = String(ev.phase||'').toUpperCase();
+  const prevus = fams.filter(f=>f[2].test(texte)).map(f=>f[0]);
+  const fin = fams.filter(f=>f[3]==='fin').length, rough = fams.filter(f=>f[3]==='rough').length;
+  let sc = prevus.length*3, raison = [];
+  if(prevus.length) raison.push('prévoit : '+prevus.join(', '));
+  if(fin && /FIN/.test(ph)){ sc += 2; raison.push('finition'); } else if(fin && /ROUGH/.test(ph)){ sc -= 2; raison.push('rough (pas de finition ce jour-là)'); }
+  if(rough && /ROUGH|RAP/.test(ph)){ sc += 2; raison.push('rough'); } else if(rough && /FIN/.test(ph)){ sc -= 1; }
+  return {sc, txt: raison.join(' · ')};
+}
 // v146 : ce qui était à l'agenda le jour de la facture (et le lendemain : on achète souvent la veille). Jamais associé tout seul.
 function agendaAchat(date, clients, ref){
   let d0 = String(date||'').slice(0,10);
@@ -2035,7 +2073,7 @@ function agendaAchat(date, clients, ref){
   const res = [];
   Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{
     const ev = j.events.filter(e=>!e.attente && jours.includes(e.day)).sort((a,b)=>a.day.localeCompare(b.day))[0];
-    if(ev) res.push({cle:achatCle(c,j), code:String(c.code||'').toUpperCase(), adr:j.address||ev.location||'', jour:ev.day, mm:ev.day===d0, phase:ev.phase||'', crew:(ev.crew||[]).join(' ')});
+    if(ev) res.push({ev, cle:achatCle(c,j), code:String(c.code||'').toUpperCase(), adr:j.address||ev.location||'', jour:ev.day, mm:ev.day===d0, phase:ev.phase||'', crew:(ev.crew||[]).join(' ')});
   }));
   // v147 : seulement ce qui ressemble au nom de la référence (la meilleure ressemblance), rien d'autre
   const sc = {}; scoresAchat(ref, clients).forEach(x=>{ sc[x.cle] = x.sc; });
@@ -2226,7 +2264,7 @@ function AchUniformiser({cfg, achats, clients, R, onFait}){
           {!v && x.choix && <button className="btn btn-sm" style={{padding:'0 7px',fontSize:11.5}} onClick={()=>setSel(s=>({...s, [x.a.row]:x.choix}))}>✓ suggéré</button>}
           {!x.sur && x.options.length>1 && <span style={{color:'var(--warning)',fontSize:12}}>{x.options.length} projets — à vérifier</span>}
           {!x.sur && x.options.length===1 && <span style={{color:'var(--warning)',fontSize:12}}>trouvé par le nom du client — à vérifier</span>}</div>
-        {autre===x.a.row && <div style={{paddingLeft:8}}><CvChoixJob clients={clients} R={R} cfg={cfg} date={x.a.date||x.a.recue} refAchat={x.a.ref}
+        {autre===x.a.row && <div style={{paddingLeft:8}}><CvChoixJob clients={clients} R={R} cfg={cfg} date={x.a.date||x.a.recue} refAchat={x.a.ref} articles={x.a.articles}
           onChoix={dest=>{ setPerso(p=>({...p, [x.a.row]:dest})); setSel(s=>({...s, [x.a.row]:dest})); setAutre(null); }}/>
           <button className="btn btn-sm" style={{marginTop:4}} onClick={()=>setAutre(null)}>Annuler</button></div>}
       </div>; })}</div>
@@ -2359,7 +2397,7 @@ function RepChoixDest({R, refAchat, onChoix, cfg}){
     </div>}
   </div>;
 }
-function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat, onChoix, R, cfg}){
+function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat, onChoix, R, cfg, articles}){
   const [groupe,setGroupe]=useState('');
   const [autre,setAutre]=useState(null);
   const [emp,setEmp]=useState(false);
@@ -2375,11 +2413,20 @@ function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat
       {pill('✏️ Autre…', ()=>setAutre(autre===null?'':null))}
     </div>
     {(R || cfg) && <RepChoixDest R={R} cfg={cfg} refAchat={refAchat} onChoix={onChoix}/>}
-    {(()=>{ const ag = agendaAchat(date, clients, refAchat).filter(x=>x.cle!==propose); if(!ag.length) return null;
+    {(()=>{ const pn = achatParNumero(refAchat, clients); if(!pn.length) return null;
+      return <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,alignItems:'center'}}>
+        <span className="muted" style={{fontSize:11.5}}>🔢 Le numéro de la référence :</span>
+        {pn.map(x=><button key={x.cle+x.quoi+x.n} className="btn btn-sm" onClick={()=>onChoix(x.cle)} style={{borderColor:'var(--success)',fontWeight:700}} title={x.adr}>
+          {x.cle} <span className="muted" style={{fontSize:10.5,fontWeight:400}}> · c'est son {x.quoi} {x.n}{x.jour ? ' · '+cvFmtDay(x.jour) : ''}</span></button>)}
+      </div>; })()}
+    {(()=>{ const ag0 = agendaAchat(date, clients, refAchat).filter(x=>x.cle!==propose); if(!ag0.length) return null;
+      const ag = ag0.map(x=>({...x, ind:achatIndices(articles, x.ev)})).sort((a,b)=>b.ind.sc-a.ind.sc);
+      const meilleur = ag.length>1 && ag[0].ind.sc>0 && ag[0].ind.sc>ag[1].ind.sc ? ag[0].cle : (ag.length===1 && ag[0].ind.sc>0 ? ag[0].cle : '');   // v563 : un seul plus probable
       return <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,alignItems:'center'}}>
         <span className="muted" style={{fontSize:11.5}}>📅 À l'agenda :</span>
-        {ag.map(x=><button key={x.cle} className="btn btn-sm" onClick={()=>onChoix(x.cle)} title={x.crew} style={(suggestions||[]).includes(x.cle)?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null}>
-          {x.cle}{x.adr && <span style={{fontSize:11}}> · 📍 {x.adr}</span>}<span className="muted" style={{fontSize:10.5}}> · {x.mm?'même jour':cvFmtDay(x.jour)}{x.phase?' · '+x.phase:''}{x.crew?' · '+x.crew:''}</span></button>)}
+        {ag.map(x=><button key={x.cle} className="btn btn-sm" onClick={()=>onChoix(x.cle)} title={(x.crew||'')+(x.ind.txt ? '\n💡 '+x.ind.txt : '')} style={x.cle===meilleur ? {borderColor:'var(--success)',color:'var(--text)',fontWeight:700,boxShadow:'0 0 0 1px var(--success) inset'} : (suggestions||[]).includes(x.cle)?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null}>
+          {x.cle===meilleur && '🎯 '}
+          {x.cle}{x.adr && <span style={{fontSize:11}}> · 📍 {x.adr}</span>}<span className="muted" style={{fontSize:10.5}}> · {x.mm?'même jour':cvFmtDay(x.jour)}{x.phase?' · '+x.phase:''}{x.crew?' · '+x.crew:''}</span>{x.ind.txt && <span style={{display:'block',fontSize:10.5,fontWeight:400,color:x.ind.sc>0?'var(--success)':'var(--muted)',textAlign:'left'}}>💡 {x.ind.txt}</span>}</button>)}
       </div>; })()}
     <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5}}>
       {groupes.map(c=>pill(c.code==='PART'?'Particuliers':c.code, ()=>setGroupe(groupe===c.code?'':c.code), groupe===c.code?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null))}
@@ -2487,7 +2534,7 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
       </div>}
       {(assoc || changer===a.row) && (busy===a.row ? <div className="muted" style={{fontSize:12}}>Enregistrement…</div>
         : partieDe && partieDe.a.row===a.row ? <AchPartie dest={partieDe.job} parties={achPartiesDe(partieDe.job, achats, null)} onOk={sous=>enregistrer(a, partieDe.job, sous)} onAnnuler={()=>setPartieDe(null)}/>
-        : <CvChoixJob clients={clients} R={R} cfg={cfg} propose={proposeAchat(a, clients)} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients)} date={date(a)} refAchat={a.ref} onChoix={job=>choisir(a, job)}/>)}
+        : <CvChoixJob clients={clients} R={R} cfg={cfg} propose={proposeAchat(a, clients)} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients)} date={date(a)} refAchat={a.ref} articles={a.articles} onChoix={job=>choisir(a, job)}/>)}
     </div>; };
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Comptes fournisseurs</h2>
@@ -3037,7 +3084,7 @@ function PjFacturesMateriel({job, factures, achats, clients, cfg, onChanged, app
           : <AchPartie dest={a.job} parties={partiesJob} onOk={sous=>ecrire(a, a.job, sous)} onAnnuler={()=>setPartie(null)}/>}</div>}
         {chg===a.row && <div style={{flexBasis:'100%',paddingLeft:8}}>{busy ? <span className="muted">Enregistrement…</span>
           : dest && dest.row===a.row ? <AchPartie dest={dest.dest} parties={achPartiesDe(dest.dest, achats, null)} onOk={sous=>ecrire(a, dest.dest, sous)} onAnnuler={()=>setDest(null)}/>
-          : <CvChoixJob clients={clients||{}} cfg={cfg} propose={proposeAchat(a, clients||{})} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients||{})} date={a.date||a.recue} refAchat={a.ref} onChoix={d=>deplacer(a, d)}/>}</div>}
+          : <CvChoixJob clients={clients||{}} cfg={cfg} propose={proposeAchat(a, clients||{})} autrePropose={a.propose} suggestions={suggestionsAchat(a, clients||{})} date={a.date||a.recue} refAchat={a.ref} articles={a.articles} onChoix={d=>deplacer(a, d)}/>}</div>}
         </div>)}</div>}</div>; }); })()}</>}</div>
   </div>;
 }
