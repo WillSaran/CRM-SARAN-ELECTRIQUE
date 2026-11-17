@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v556';
+const APP_VERSION = 'v557';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4505,7 +4505,12 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
 // v554 : Dossiers employés (paie) — feuille PRIVÉE « Paie — Dossiers employés (confidentiel) » (aucune donnée dans le code public)
 // Champs du formulaire « Information — nouveau salarié » du service de paie de l'ACQ + ce qu'il faut pour les paies, T4/RL-1, DAS et rapports CCQ.
 const DOSSIERS_EMP_ID = '1QhAK2VmGRe4xT_iozg5uBoons43DVzP8Ml3lTrjZqBw';
-const DE_COLS = ['id','actif','prenom','nom','regime','adresse','ville','cp','cell','courriel','nas','naissance','embauche','fin','actionnaire','pctActions','fedStatut','fedMontant','fedSupp','provStatut','provMontant','provSupp','premierePaie','ccqSecteur','metier','classe','noCcq','syndicat','local','bureauType','titre','cnesst','taux','vacPct','vacMode','hebdo','hebdoBrutNet','heuresPeriode','institution','transit','compte','specimen','carte','particularites','notes','modifie'];
+const DE_COLS = ['id','actif','prenom','nom','regime','adresse','ville','cp','cell','courriel','nas','naissance','embauche','fin','actionnaire','pctActions','fedStatut','fedMontant','fedSupp','provStatut','provMontant','provSupp','premierePaie','ccqSecteur','metier','classe','noCcq','syndicat','local','bureauType','titre','cnesst','taux','vacPct','vacMode','hebdo','hebdoBrutNet','heuresPeriode','institution','transit','compte','specimen','carte','particularites','notes','modifie',
+  // v557 : champs de paie du logiciel (impôt fédéral / provincial, bulletins, dépôt direct, banque d'heures) — ajoutés à la fin pour ne rien décaler
+  't4Regime','creditBaseFed','conjointFed','exempAE','loiIndiens','tauxReduitAE','exempRPC','dentaire','province','creditBaseProv','conjointProv','exempRRQ','bulletinCourriel','bulletinCompl','ddAdhesion','banqueLeger','banqueLourd'];
+const DE_ENTETES = ['Id','Actif','Prénom','Nom','Régime','Adresse','Ville','Code postal','Cellulaire','Courriel','NAS','Date de naissance',"Date d'embauche",'Date de fin','Actionnaire','% actions','Fédéral statut','Fédéral — ajustement des crédits','Impôt fédéral supp. $/paie','Provincial statut','Provincial — ajustement des crédits','Impôt provincial supp. $/paie','1re période de paie','CCQ secteur','Métier','Classe','No client CCQ','Syndicat','Local','Bureau type','Titre du poste','Unité CNESST','Taux horaire','Vacances %','Vacances mode','Salaire hebdo','Hebdo brut/net','Heures par période','Institution','Transit','Compte','Spécimen chèque (lien)','Carte de compétence (lien)','Particularités','Notes','Modifié le',
+  'T4-50 No régime de pension','Crédit impôt de base (féd.)','Crédit pour conjoint (féd.)',"Exemption d'AE",'Assujetti Loi sur les Indiens',"Taux réduit d'AE",'Exemption RPC','Prestation dentaire (T4 case 45)','Province','Crédit impôt de base (prov.)','Crédit pour conjoint (prov.)','Exemption RRQ','Bulletin par courriel','Bulletin complémentaire','Dépôt direct — date d\'adhésion',"Banque d'heures — résidentiel léger","Banque d'heures — résidentiel lourd"];
+const DE_CRED_FED = '16452.00', DE_CRED_PROV = '18952.00';   // montants personnels de base 2026 — à mettre à jour en janvier
 const DE_LETTRE = i => { let s = '', n = i+1; while(n){ const r = (n-1)%26; s = String.fromCharCode(65+r)+s; n = Math.floor((n-1)/26); } return s; };
 const DE_FIN = DE_LETTRE(DE_COLS.length-1);
 const DE_SYNDICATS = ['FTQ-Construction','CPQMC-International','CSD Construction','CSN-Construction','SQC'];
@@ -4526,7 +4531,7 @@ const deNasOk = s => { const d = String(s||'').replace(/\D/g,''); if(d.length!==
 const deNasFmt = s => { const d = String(s||'').replace(/\D/g,''); return d.length===9 ? d.slice(0,3)+' '+d.slice(3,6)+' '+d.slice(6) : String(s||''); };
 const deNasMasque = s => { const d = String(s||'').replace(/\D/g,''); return d.length>=3 ? '••• ••• '+d.slice(-3) : ''; };
 const deNom = e => [e.prenom, e.nom].filter(Boolean).join(' ') || '(sans nom)';
-function deVide(){ const e = {}; DE_COLS.forEach(k=>e[k]=''); return {...e, actif:'Oui', regime:'CCQ', fedStatut:'Célibataire', provStatut:'Célibataire', ccqSecteur:'Résidentiel léger', metier:'Électricien', syndicat:'FTQ-Construction', vacMode:'Versées', vacPct:'', bureauType:'Bureau', hebdoBrutNet:'Brut'}; }
+function deVide(){ const e = {}; DE_COLS.forEach(k=>e[k]=''); return {...e, actif:'Oui', regime:'CCQ', fedStatut:'Célibataire', provStatut:'Célibataire', fedMontant:DE_CRED_FED, provMontant:DE_CRED_PROV, creditBaseFed:'Oui', creditBaseProv:'Oui', province:'Québec', bulletinCourriel:'Oui', bulletinCompl:'Oui', ccqSecteur:'Résidentiel léger', metier:'Électricien', syndicat:'FTQ-Construction', vacMode:'Versées', vacPct:'', bureauType:'Bureau', hebdoBrutNet:'Brut'}; }
 function DossiersEmployesView({cfg, refreshKey}){
   const [L,setL]=useState(null);
   const [err,setErr]=useState('');
@@ -4554,11 +4559,12 @@ function DossiersEmployesView({cfg, refreshKey}){
   if(!L) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des dossiers employés…</span></div>;
   const dejaNoms = new Set(L.map(e=>cvNorm(deNom(e))));
   const aCreer = punch.filter(p=>!dejaNoms.has(cvNorm(p.nom)));
-  const ouvrir = e => { setVoirNas(false); setF({...e}); window.scrollTo(0,0); };
+  const ouvrir = e => { setVoirNas(false); setF({...e, fedMontant:e.fedMontant||DE_CRED_FED, provMontant:e.provMontant||DE_CRED_PROV, province:e.province||'Québec', ...(e.row && !e.province ? {creditBaseFed:'Oui', creditBaseProv:'Oui', bulletinCourriel:'Oui', bulletinCompl:'Oui'} : {})});   // dossier d'avant v557 : valeurs par défaut du logiciel window.scrollTo(0,0); };
   const nouveau = p => { const e = deVide(); if(p){ const m = p.nom.trim().split(/\s+/); e.prenom = m[0]||''; e.nom = m.slice(1).join(' '); e.courriel = p.email||''; e.cell = p.telephone||''; } ouvrir(e); };
   const champ = (k, lab, o={}) => <label style={{display:'grid',gap:2,fontSize:12,flex:o.flex||'1 1 170px',minWidth:0}}><span className="muted">{lab}</span>
     {o.choix ? <select value={f[k]} onChange={e=>setF({...f, [k]:e.target.value})}>{(o.vide?['']:[]).concat(o.choix).map(c=><option key={c} value={c}>{c||'—'}</option>)}</select>
       : <input type={o.type||'text'} value={f[k]} placeholder={o.ph||''} onChange={e=>setF({...f, [k]:e.target.value})}/>}</label>;
+  const coche = (k, lab) => <label style={{display:'flex',gap:6,alignItems:'center',fontSize:12.5,flex:'1 1 200px'}}><input type="checkbox" checked={f[k]==='Oui'} onChange={e=>setF({...f, [k]:e.target.checked?'Oui':''})}/>{lab}</label>;
   const bloc = (titre, enfants) => <div style={{marginTop:12}}><div style={{fontWeight:700,fontSize:13,marginBottom:6,color:'var(--accent)'}}>{titre}</div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{enfants}</div></div>;
   const enregistrer = async () => { const e = f;
     if(!e.prenom.trim() || !e.nom.trim()) return alert('Le prénom et le nom sont obligatoires.');
@@ -4568,6 +4574,7 @@ function DossiersEmployesView({cfg, refreshKey}){
       const x = {...e, id: e.id || ('EMP-'+Date.now().toString(36).toUpperCase()), nas: String(e.nas||'').replace(/\D/g,'') || e.nas, modifie: new Date().toLocaleString('fr-CA')};
       const val = [DE_COLS.map(k=>String(x[k]==null?'':x[k]))];
       const S = window.gapi.client.sheets.spreadsheets.values;
+      await S.update({spreadsheetId:DOSSIERS_EMP_ID, range:'A1:'+DE_FIN+'1', valueInputOption:'RAW', resource:{values:[DE_ENTETES]}});
       if(e.row) await S.update({spreadsheetId:DOSSIERS_EMP_ID, range:'A'+e.row+':'+DE_FIN+e.row, valueInputOption:'RAW', resource:{values:val}});
       else await S.append({spreadsheetId:DOSSIERS_EMP_ID, range:'A:'+DE_FIN, valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:val}});
       setF(null); setEtat(''); await lire(true); }
@@ -4633,11 +4640,17 @@ function DossiersEmployesView({cfg, refreshKey}){
       {champ('bureauType','Type',{choix:['Bureau','Rénovation'],flex:'0 1 140px'})}{champ('titre','Titre du poste')}{champ('cnesst','Unité de classification CNESST')}
       {champ('taux','Salaire $/h',{flex:'0 1 120px'})}{champ('hebdo','ou salaire hebdo $/sem',{flex:'0 1 150px'})}{champ('hebdoBrutNet','Hebdo',{choix:['Brut','Net'],flex:'0 1 90px'})}{champ('heuresPeriode','Heures par période',{flex:'0 1 140px'})}
     </>)}
-    {bloc('Impôt — crédits pour le calcul des retenues', <>
-      {champ('fedStatut','Fédéral (TD1)',{choix:['Célibataire','Autre statut'],flex:'0 1 150px'})}{f.fedStatut==='Autre statut' && champ('fedMontant','Montant TD1 / précisez')}{champ('fedSupp','Impôt fédéral supp. $/paie',{flex:'0 1 170px'})}
-      {champ('provStatut','Provincial (TP-1015.3)',{choix:['Célibataire','Autre statut'],flex:'0 1 170px'})}{f.provStatut==='Autre statut' && champ('provMontant','Montant TP-1015.3 / précisez')}{champ('provSupp','Impôt provincial supp. $/paie',{flex:'0 1 190px'})}
+    {bloc('Impôt fédéral', <>
+      {champ('t4Regime','T4-50 No de régime de pension')}{champ('fedMontant','Ajustement des crédits $ (TD1)',{ph:DE_CRED_FED,flex:'0 1 190px'})}{champ('fedSupp','Impôt supplémentaire $/paie',{flex:'0 1 180px'})}{champ('dentaire','Prestation dentaire (T4 case 45)',{choix:['','1 — aucune','2 — participant seulement','3 — participant + conjoint/enfants','4 — participant + conjoint','5 — participant + enfants'],flex:'1 1 230px'})}
+      {coche('creditBaseFed','Crédit d\'impôt de base')}{coche('conjointFed','Crédit pour conjoint')}{coche('exempAE','Exemption d\'AE')}{coche('loiIndiens','Assujetti à la Loi sur les Indiens')}{coche('tauxReduitAE','Taux réduit d\'AE')}{coche('exempRPC','Exemption RPC')}
     </>)}
-    {bloc('Dépôt direct', <>{champ('institution','Institution',{flex:'0 1 110px',ph:'815'})}{champ('transit','Transit',{flex:'0 1 120px'})}{champ('compte','No de compte',{flex:'1 1 160px'})}{champ('specimen','Spécimen chèque (lien Drive)',{flex:'2 1 240px'})}</>)}
+    {bloc('Impôt provincial', <>
+      {champ('province','Province',{choix:['Québec','Ontario','Autre'],flex:'0 1 130px'})}{champ('provMontant','Ajustement des crédits $ (TP-1015.3)',{ph:DE_CRED_PROV,flex:'0 1 210px'})}{champ('provSupp','Impôt supplémentaire $/paie',{flex:'0 1 180px'})}
+      {coche('creditBaseProv','Crédit d\'impôt de base')}{coche('conjointProv','Crédit pour conjoint')}{coche('exempRRQ','Exemption RRQ')}
+    </>)}
+    {bloc('Bulletins de paie', <>{coche('bulletinCourriel','Envoi par courriel')}{coche('bulletinCompl','Inclure le bulletin complémentaire')}</>)}
+    {bloc('Dépôt direct', <>{champ('ddAdhesion','Date d\'adhésion',{type:'date',flex:'0 1 150px'})}{champ('institution','Institution',{flex:'0 1 110px',ph:'815'})}{champ('transit','No de transit',{flex:'0 1 120px'})}{champ('compte','No de compte',{flex:'1 1 160px'})}{champ('specimen','Spécimen chèque (lien Drive)',{flex:'2 1 240px'})}</>)}
+    {bloc('Solde — banque d\'heures', <>{champ('banqueLeger','Résidentiel léger (h)',{flex:'0 1 160px'})}{champ('banqueLourd','Résidentiel lourd (h)',{flex:'0 1 160px'})}</>)}
     {bloc('Documents et particularités', <>{champ('carte','Carte de compétence (lien Drive)',{flex:'2 1 240px'})}
       <label style={{display:'grid',gap:2,fontSize:12,flex:'1 1 100%'}}><span className="muted">Particularités sur la paie (pension alimentaire, saisie, prime, bonus, RVER, fonds FTQ, allocation auto, assurance collective…)</span><textarea rows={2} value={f.particularites} onChange={e=>setF({...f, particularites:e.target.value})}/></label>
       <label style={{display:'grid',gap:2,fontSize:12,flex:'1 1 100%'}}><span className="muted">Notes</span><textarea rows={2} value={f.notes} onChange={e=>setF({...f, notes:e.target.value})}/></label></>)}
