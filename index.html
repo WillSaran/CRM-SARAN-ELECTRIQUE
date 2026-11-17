@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v560';
+const APP_VERSION = 'v561';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6864,6 +6864,25 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees,
   const [sous,setSous]=useState('confirmer');
   const [busy,setBusy]=useState('');
   const [autre,setAutre]=useState({});          // row -> numéros tapés à la main
+  // v561 : remboursement d'une dépense (un fournisseur nous renvoie de l'argent) — pas un paiement de client
+  const [remb,setRemb]=useState(null);          // {row, depense, toujours}
+  const [regles,setRegles]=useState(null);      // expéditeurs toujours classés comme fournisseurs {cle: fournisseur}
+  useEffect(()=>{ if(!id) return; let ok = true;
+    window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:"'Remboursements fournisseurs'!A2:C"})
+      .then(r=>{ if(ok) setRegles(Object.fromEntries((r.result.values||[]).filter(x=>x[0]).map(x=>[cvNorm(x[0]), x[1]||x[0]]))); }, ()=>{ if(ok) setRegles({}); });
+    return ()=>{ ok = false; }; },[id, refreshKey]);
+  const reglesAuto = useRef(new Set());
+  useEffect(()=>{ if(!data || !regles || !id) return;   // un expéditeur déjà classé fournisseur : ses virements passent tout seuls en « Remboursement »
+    const lot = data.paiements.filter(p=>!p.statut && !p.archive && regles[cvNorm(p.de)] && !reglesAuto.current.has(p.row)); if(!lot.length) return;
+    lot.forEach(p=>reglesAuto.current.add(p.row)); suivreEcritures();
+    window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:lot.map(p=>({range:'Paiements!J'+p.row+':L'+p.row,
+      values:[['', 'Remboursement', 'Remboursement de dépense — '+regles[cvNorm(p.de)]+' (automatique, le '+paiAujourdhui()+')']]}))}}).then(()=>setTick(t=>t+1), ()=>{}); },[data, regles]);
+  const enregistrerRemb = async p=>{ if(!remb || !remb.depense.trim()){ alert('Écris de quelle dépense ou facture fournisseur il s\'agit.'); return; } setBusy('p'+p.row);
+    try{ await paiEcrireStatut(id, p.row, [], 'Remboursement', 'Remboursement de dépense — '+remb.depense.trim()+' (dans le CRM le '+paiAujourdhui()+')');
+      if(remb.toujours && p.de){ try{ await ensureSheetsExist(id, [{name:'Remboursements fournisseurs', headers:['Expéditeur','Fournisseur','Ajouté le']}]); }catch(e){}
+        await sheetsAppendRow(id, "'Remboursements fournisseurs'", [p.de, remb.depense.trim().split(/[#—-]/)[0].trim() || p.de, paiAujourdhui()]);
+        setRegles(r=>({...(r||{}), [cvNorm(p.de)]:remb.depense.trim()})); }
+      setRemb(null); setTick(t=>t+1); }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } setBusy(''); };
   const [manuel,setManuel]=useState(null);       // {nums, montant, date, mode, note}
   const [voirArch,setVoirArch]=useState(false);
   const [recuF,setRecuF]=useState('tous');   // v314 : Reçus — tous / confirmés / à confirmer / ignorés
@@ -7067,7 +7086,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees,
   // v199 : argent reçu depuis le 1er juillet (virements, dépôts, chèques, comptant) — sauf les paiements marqués « Ignoré » (argent personnel, remboursement…)
   // v235 : un paiement confirmé seulement pour des factures d'avant le 1er juillet (année fiscale précédente) n'est pas compté dans le total
   const V = data.factures.__vieilles || {}, anneePrec = p => p.confirmees.length>0 && p.confirmees.every(n=>V[n]);
-  const recus = data.paiements.filter(p=>!p.archive && p.statut!=='Ignoré' && !/^escompte/i.test(p.source) && String(p.date).slice(0,10)>=PAI_DEBUT && !(/^confirm/i.test(p.statut) && anneePrec(p)));
+  const recus = data.paiements.filter(p=>!p.archive && p.statut!=='Ignoré' && !/^rembours/i.test(p.statut||'') && !/^escompte/i.test(p.source) && String(p.date).slice(0,10)>=PAI_DEBUT && !(/^confirm/i.test(p.statut) && anneePrec(p)));
   const totalRecu = recus.reduce((s,p)=>s+(p.montant||0),0);
   const nbPrec = data.paiements.filter(p=>!p.archive && String(p.date).slice(0,10)>=PAI_DEBUT && /^confirm/i.test(p.statut) && !/^escompte/i.test(p.source) && anneePrec(p)).length;
   const attente = A.attente.filter(filtreP).sort((a,b)=>b.date.localeCompare(a.date));
@@ -7077,8 +7096,8 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees,
   const payees = Object.values(A.F).filter(f=>(f.etat==='payee') && filtreF(f)).sort((a,b)=>datePaie(b).localeCompare(datePaie(a)) || String(b.num).localeCompare(String(a.num)));
   const tous = data.paiements.filter(p=>filtreP(p) || p.confirmees.some(n=>A.F[n] && filtreF(A.F[n]))).filter(p=>voirArch || !(p.archive || p.avantDebut)).sort((a,b)=>b.date.localeCompare(a.date));
   // v314 : « Reçus » remplace « Payées » et « Tous les paiements » (même argent vu deux fois)
-  const estConf = p => /^confirm/i.test(p.statut), estIgn = p => /^(ignor|annul)/i.test(p.statut), estAConf = p => !p.statut && !p.archive;
-  const tousF = tous.filter(p=>recuF==='tous' || (recuF==='confirmes' ? estConf(p) : recuF==='ignores' ? estIgn(p) : estAConf(p)));
+  const estConf = p => /^confirm/i.test(p.statut), estIgn = p => /^(ignor|annul)/i.test(p.statut), estRemb = p => /^rembours/i.test(p.statut||''), estAConf = p => !p.statut && !p.archive;
+  const tousF = tous.filter(p=>recuF==='tous' || (recuF==='confirmes' ? estConf(p) : recuF==='ignores' ? estIgn(p) : recuF==='remb' ? estRemb(p) : estAConf(p)));
   const sansVirement = payees.filter(f=>!(f.paiements||[]).length);
   const descF = n => { const f = A.F[n]; const v = !f && data.factures.__vieilles && data.factures.__vieilles[n];   // v234 : facture d'avant le 1er juillet
     if(v) return '#'+n+' '+(v.nom || paiClientNom(v))+' ('+(v.estime?'≈ ':'')+cvMoney(v.ttc)+', d\'avant le 1er juillet)';
@@ -7308,8 +7327,14 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees,
             <input value={autre[p.row]||''} onChange={e=>setAutre({...autre, [p.row]:e.target.value})} placeholder="Autre(s) facture(s) : 1234, 1235" style={{flex:'1 1 180px',width:'auto',minWidth:0,padding:'5px 9px',fontSize:12.5}}/>
             <button className="btn btn-sm" disabled={b || !paiNums(autre[p.row]).length} onClick={()=>confirmer(p, paiNums(autre[p.row]), 'Confirmé')}>Confirmer ces factures</button>
             <button className="btn btn-sm" disabled={b} title="Ne compte pour aucune facture du registre (vieille facture, argent personnel, remboursement…)" onClick={()=>confirmer(p, [], 'Ignoré')}>Ignorer</button>
+            <button className="btn btn-sm" disabled={b} title="Un fournisseur nous rembourse une partie d'une dépense : ce n'est pas un paiement de client, ça vient réduire la dépense" onClick={()=>setRemb(remb && remb.row===p.row ? null : {row:p.row, depense:(p.de||'')+' ', toujours:true})}>↩︎ Remboursement de dépense</button>
           </div>
           {paiNums(autre[p.row]).length>0 && <div className="muted" style={{fontSize:12,marginTop:3}}>{paiNums(autre[p.row]).map(descF).join(' + ')}</div>}
+          {remb && remb.row===p.row && <div style={{marginTop:6,padding:8,border:'1px solid var(--border2)',borderRadius:8,display:'grid',gap:6,fontSize:12.5}}>
+            <div><b>Remboursement de dépense</b> — {cvMoney(p.montant)} de {p.de}. Ça ne compte pas comme revenu : ça réduit la dépense.</div>
+            <input value={remb.depense} onChange={e=>setRemb({...remb, depense:e.target.value})} placeholder="De quelle dépense ? ex. Sécurité LL — facture 19253"/>
+            <label style={{display:'flex',gap:6,alignItems:'center',cursor:'pointer'}}><input type="checkbox" checked={remb.toujours} onChange={e=>setRemb({...remb, toujours:e.target.checked})}/> Toujours classer « {p.de} » comme fournisseur (ses prochains virements se classeront tout seuls)</label>
+            <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={b} onClick={()=>enregistrerRemb(p)}>✓ Enregistrer le remboursement</button><button className="btn btn-sm" onClick={()=>setRemb(null)}>Annuler</button></div></div>}
         </div>; })}
     </div>}
 
@@ -7401,7 +7426,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees,
 
     {sous==='recus' && <div className="card">
       <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
-        {[['tous','Tous',tous.length],['confirmes','Confirmés',tous.filter(estConf).length],['aconfirmer','À confirmer',tous.filter(estAConf).length],['ignores','Ignorés',tous.filter(estIgn).length]].map(([k,l,n])=>
+        {[['tous','Tous',tous.length],['confirmes','Confirmés',tous.filter(estConf).length],['aconfirmer','À confirmer',tous.filter(estAConf).length],['ignores','Ignorés',tous.filter(estIgn).length],['remb','Remboursements de dépenses',tous.filter(estRemb).length]].map(([k,l,n])=>
           <button key={k} className={'btn btn-sm'+(recuF===k?' btn-p':'')} onClick={()=>setRecuF(k)}>{l} ({n})</button>)}
         <span className="muted" style={{fontSize:12}}>une ligne par paiement reçu, le plus récent en haut</span>
       </div>
@@ -7410,6 +7435,7 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees,
       {tousF.map(p=><div key={p.row} style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',fontSize:12.5,padding:'5px 0',borderBottom:'1px dashed var(--border)',opacity:/^(ignor|annul)/i.test(p.statut)?.55:1}}>
         <span><b>{String(p.date).slice(0,10)}</b> · {p.de||'—'} · <b>{cvMoney(p.montant)}</b> <span className="muted">· {p.source}</span>{p.message ? <span className="muted"> · « {p.message} »</span> : ''}</span>
         <span style={{display:'flex',gap:8,alignItems:'center'}}>
+          {/^rembours/i.test(p.statut||'') && <span style={{color:'var(--warning)'}} title={p.note||''}>↩︎ remboursement de dépense</span>}
           {/^confirm/i.test(p.statut) ? <span style={{color:'var(--success)'}}>→ {p.confirmees.map((n,i)=><React.Fragment key={n}>{i>0 && ', '}{A.F[n] && A.F[n].pdf ? <a href={repPdf(A.F[n].pdf)} target="_blank" rel="noopener" title={descF(n)} style={{color:'inherit',textDecoration:'underline'}}>#{n}</a> : <span title={descF(n)}>#{n}</span>}</React.Fragment>)}</span> : p.statut ? <span className="muted">{p.statut}</span> : p.archive ? <span className="muted">archivé (avant le 1er juillet)</span> : p.horsRegistre ? <span className="muted">facture{p.horsRegistre.length>1?'s':''} {p.horsRegistre.join(', ')} d'avant le 1er juillet</span> : <span style={{color:'var(--warning)'}}>à confirmer</span>}
           {p.statut && !/^annul/i.test(p.statut) && <button className="btn btn-sm" disabled={busy==='p'+p.row} onClick={()=>annuler(p)}>↩</button>}
           {p.lien && <a href={p.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>↗</a>}
