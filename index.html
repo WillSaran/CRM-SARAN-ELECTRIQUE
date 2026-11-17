@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v554';
+const APP_VERSION = 'v555';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4509,13 +4509,23 @@ const DE_COLS = ['id','actif','prenom','nom','regime','adresse','ville','cp','ce
 const DE_LETTRE = i => { let s = '', n = i+1; while(n){ const r = (n-1)%26; s = String.fromCharCode(65+r)+s; n = Math.floor((n-1)/26); } return s; };
 const DE_FIN = DE_LETTRE(DE_COLS.length-1);
 const DE_SYNDICATS = ['FTQ-Construction','CPQMC-International','CSD Construction','CSN-Construction','SQC'];
-const DE_SECTEURS = ['Résidentiel','Commercial','Industriel','Génie civil'];
+const DE_SECTEURS = ['Résidentiel léger','Résidentiel lourd','Commercial','Industriel','Génie civil'];
+// v555 : taux horaires CCQ — électricien, en vigueur depuis le 26 avril 2026 (léger : document ACQ ; lourd et IC : % du taux compagnon). À mettre à jour chaque printemps.
+const CCQ_TAUX_DATE = '2026-04-26';
+const CCQ_TAUX_ELEC = {
+  'Résidentiel léger': {'Compagnon':47.85, 'Apprenti 4':40.67, 'Apprenti 3':33.50, 'Apprenti 2':28.71, 'Apprenti 1':23.93},
+  'Résidentiel lourd': {'Compagnon':50.20, 'Apprenti 4':42.67, 'Apprenti 3':35.14, 'Apprenti 2':30.12, 'Apprenti 1':25.11},
+  'Commercial':        {'Compagnon':50.79, 'Apprenti 4':43.17, 'Apprenti 3':35.55, 'Apprenti 2':30.47, 'Apprenti 1':25.40},
+  'Industriel':        {'Compagnon':50.79, 'Apprenti 4':43.17, 'Apprenti 3':35.55, 'Apprenti 2':30.47, 'Apprenti 1':25.40}
+};
+const ccqTaux = (secteur, classe) => (CCQ_TAUX_ELEC[secteur]||{})[classe];
+const CCQ_CATEGORIES = Object.entries(CCQ_TAUX_ELEC).flatMap(([sec, m])=>Object.entries(m).map(([cl, t])=>({sec, cl, t, lab: 'Électricien '+cl.toLowerCase()+' — '+sec+' ('+t.toFixed(2).replace('.',',')+' $/h)'})));
 const DE_CLASSES = ['Apprenti 1','Apprenti 2','Apprenti 3','Apprenti 4','Compagnon','Manœuvre','Occupation'];
 const deNasOk = s => { const d = String(s||'').replace(/\D/g,''); if(d.length!==9) return false; let t = 0; for(let i=0;i<9;i++){ let x = +d[i]; if(i%2){ x *= 2; if(x>9) x -= 9; } t += x; } return t%10===0; };
 const deNasFmt = s => { const d = String(s||'').replace(/\D/g,''); return d.length===9 ? d.slice(0,3)+' '+d.slice(3,6)+' '+d.slice(6) : String(s||''); };
 const deNasMasque = s => { const d = String(s||'').replace(/\D/g,''); return d.length>=3 ? '••• ••• '+d.slice(-3) : ''; };
 const deNom = e => [e.prenom, e.nom].filter(Boolean).join(' ') || '(sans nom)';
-function deVide(){ const e = {}; DE_COLS.forEach(k=>e[k]=''); return {...e, actif:'Oui', regime:'CCQ', fedStatut:'Célibataire', provStatut:'Célibataire', ccqSecteur:'Résidentiel', metier:'Électricien', syndicat:'FTQ-Construction', vacMode:'Versées', vacPct:'', bureauType:'Bureau', hebdoBrutNet:'Brut'}; }
+function deVide(){ const e = {}; DE_COLS.forEach(k=>e[k]=''); return {...e, actif:'Oui', regime:'CCQ', fedStatut:'Célibataire', provStatut:'Célibataire', ccqSecteur:'Résidentiel léger', metier:'Électricien', syndicat:'FTQ-Construction', vacMode:'Versées', vacPct:'', bureauType:'Bureau', hebdoBrutNet:'Brut'}; }
 function DossiersEmployesView({cfg, refreshKey}){
   const [L,setL]=useState(null);
   const [err,setErr]=useState('');
@@ -4571,8 +4581,15 @@ function DossiersEmployesView({cfg, refreshKey}){
     {bloc('Coordonnées', <>{champ('adresse','Adresse',{flex:'2 1 260px'})}{champ('ville','Ville')}{champ('cp','Code postal',{flex:'0 1 110px'})}{champ('cell','Cellulaire')}{champ('courriel','Courriel',{type:'email'})}</>)}
     {bloc('Emploi', <>{champ('embauche','Date d\'embauche',{type:'date'})}{champ('premierePaie','1re période de paie',{type:'date'})}{champ('fin','Date de fin d\'emploi',{type:'date'})}{champ('vacPct','Vacances %',{ph:f.regime==='CCQ'?'13 (CCQ)':'4 ou 6',flex:'0 1 110px'})}{champ('vacMode','Vacances',{choix:['Versées','Accumulées'],flex:'0 1 130px'})}</>)}
     {f.regime==='CCQ' ? bloc('Construction (CCQ)', <>
+      <label style={{display:'grid',gap:2,fontSize:12,flex:'2 1 320px'}}><span className="muted">Catégorie salariale (électricien, taux CCQ du {CCQ_TAUX_DATE})</span>
+        <select value={CCQ_CATEGORIES.find(c=>c.sec===f.ccqSecteur && c.cl===f.classe) ? f.ccqSecteur+'|'+f.classe : ''} onChange={e=>{ const c = CCQ_CATEGORIES.find(x=>x.sec+'|'+x.cl===e.target.value); if(c) setF({...f, ccqSecteur:c.sec, classe:c.cl, metier:f.metier||'Électricien', taux:c.t.toFixed(2)}); }}>
+          <option value="">— choisir —</option>
+          {Object.keys(CCQ_TAUX_ELEC).map(sec=><optgroup key={sec} label={sec}>{CCQ_CATEGORIES.filter(c=>c.sec===sec).map(c=><option key={c.sec+'|'+c.cl} value={c.sec+'|'+c.cl}>{c.lab}</option>)}</optgroup>)}
+        </select></label>
       {champ('ccqSecteur','Secteur',{choix:DE_SECTEURS})}{champ('metier','Métier')}{champ('classe','Classe',{choix:DE_CLASSES,vide:true})}
-      {champ('noCcq','No de client CCQ')}{champ('syndicat','Syndicat',{choix:DE_SYNDICATS,vide:true})}{champ('local','Local',{flex:'0 1 110px'})}{champ('taux','Taux horaire $ (si différent du décret)',{flex:'1 1 200px'})}
+      {champ('noCcq','No de client CCQ')}{champ('syndicat','Syndicat',{choix:DE_SYNDICATS,vide:true})}{champ('local','Local',{flex:'0 1 110px'})}
+      <label style={{display:'grid',gap:2,fontSize:12,flex:'1 1 200px'}}><span className="muted">Taux horaire $ {ccqTaux(f.ccqSecteur,f.classe)!=null && (Math.abs(cvNum(f.taux)-ccqTaux(f.ccqSecteur,f.classe))<0.005 ? '· taux CCQ ✓' : '· décret : '+ccqTaux(f.ccqSecteur,f.classe).toFixed(2)+' $')}</span>
+        <input value={f.taux} onChange={e=>setF({...f, taux:e.target.value})}/></label>
     </>) : bloc('Bureau ou rénovation (hors décret)', <>
       {champ('bureauType','Type',{choix:['Bureau','Rénovation'],flex:'0 1 140px'})}{champ('titre','Titre du poste')}{champ('cnesst','Unité de classification CNESST')}
       {champ('taux','Salaire $/h',{flex:'0 1 120px'})}{champ('hebdo','ou salaire hebdo $/sem',{flex:'0 1 150px'})}{champ('hebdoBrutNet','Hebdo',{choix:['Brut','Net'],flex:'0 1 90px'})}{champ('heuresPeriode','Heures par période',{flex:'0 1 140px'})}
