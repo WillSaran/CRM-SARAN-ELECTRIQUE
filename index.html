@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v551';
+const APP_VERSION = 'v552';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -15888,7 +15888,7 @@ function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.se
 
 // v202 : Comptabilité — comptes fournisseurs, factures clients (et paiements reçus), appels de service, à vérifier. Les pages gardent toutes leurs fonctions.
 const CPT_NAV = {compta:'bord', suivi:'clients', drive:'archive', factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
-const CPT_ONGLETS = [['bord','Tableau de bord'],['grand','Grand livre']];   // v507 : Comptabilité ouvre sur un tableau de bord ; Comptes fournisseurs passent dans le Grand livre
+const CPT_ONGLETS = [['bord','Tableau de bord'],['grand','Grand livre'],['plan','Plan comptable']];   // v552 : Plan comptable   // v507 : Comptabilité ouvre sur un tableau de bord ; Comptes fournisseurs passent dans le Grand livre
 //   // v506 : Comptes clients et Bons de vente sortis dans « Suivi des factures »
 const SUIVI_ONGLETS = [['clients','Comptes clients'],['factures','Bons de vente']];   // v506 : menu « Suivi des factures »
 const cptGroupe = nav => ['clients','factures','verif'].includes(CPT_NAV[nav]) ? 'suivi' : 'compta';   // v416 : Grand livre = Paiements, TPS/TVQ, Archive des factures
@@ -16593,6 +16593,54 @@ function ComptesPayerView({cfg}){
     </div>}
   </div>;
 }
+// v552 : Plan comptable (liste des comptes de GL de Gestion CMEQ) — lu dans la feuille privée « La mémoire — Plan comptable » (rien d'affaires dans le code)
+const PLAN_COMPTABLE_ID = '1LqNNfN7rf_w-m0HAY_ooS93D16tFknVMbCtgwH4ngac';
+const PLAN_CATS = ['Actif','Passif','Capital','Revenus','Dépenses'];
+const planGroupe = no => { const n = +no;
+  if(n<5000) return null;
+  if(n<6000) return 'Coûts directs des travaux (5000)';
+  if(n<7000) return 'Frais de chantier et assurances (6000)';
+  if(n<8000) return 'Ventes et représentation (7000)';
+  if(n<8100) return 'Salaires et charges sociales (8000)';
+  return 'Frais d\'administration (8100+)'; };
+function PlanComptableView(){
+  const [L,setL]=useState(null);
+  const [err,setErr]=useState('');
+  const [q,setQ]=useState('');
+  const [cat,setCat]=useState('');
+  const lire = useCallback(async force=>{ setErr('');
+    try{ const r = await lireCache(PLAN_COMPTABLE_ID, 'A1:D', force); const v = (r.result.values||[]).slice(1).filter(x=>x[0]);
+      setL(v.map(x=>({no:String(x[0]).trim(), nom:String(x[1]||'').trim(), cat:String(x[2]||'').trim(), note:String(x[3]||'').trim()})).sort((a,b)=>a.no.localeCompare(b.no))); }
+    catch(e){ setErr(apiErrMsg(e)); setL([]); } },[]);
+  useEffect(()=>{ lire(false); },[lire]);
+  if(!L) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture du plan comptable…</span></div>;
+  const nq = cvNorm(q);
+  const F = L.filter(c=>(!cat || c.cat===cat) && (!nq || cvNorm(c.no+' '+c.nom+' '+c.note).includes(nq)));
+  const parCat = PLAN_CATS.concat([...new Set(L.map(c=>c.cat))].filter(c=>!PLAN_CATS.includes(c))).map(k=>[k, F.filter(c=>c.cat===k)]).filter(([,v])=>v.length);
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Plan comptable</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Comptes du grand livre de Gestion CMEQ ({L.length} comptes). Pour ajouter ou corriger un compte : feuille « La mémoire — Plan comptable » dans le Drive, puis ↻ Relire.</div>
+    {err && <div className="card" style={{color:'var(--danger)',marginBottom:10}}>Impossible de lire le plan comptable : {err}</div>}
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un compte (no ou nom)…" style={{flex:'1 1 220px',padding:'6px 10px'}}/>
+      {['',...PLAN_CATS].map(k=><button key={k||'tous'} className={'btn btn-sm'+(cat===k?' btn-p':'')} onClick={()=>setCat(k)}>{k||'Tous'}</button>)}
+      <button className="btn btn-sm" onClick={()=>lire(true)}>↻ Relire</button>
+      <a className="btn btn-sm" href={'https://docs.google.com/spreadsheets/d/'+PLAN_COMPTABLE_ID+'/edit'} target="_blank" rel="noopener">Ouvrir la feuille</a>
+    </div>
+    {!F.length ? <div className="card muted">Aucun compte trouvé.</div> : parCat.map(([k,v])=>{
+      let g0 = null;
+      return <div key={k} className="card" style={{marginBottom:10,padding:'8px 12px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:4}}><b style={{fontSize:15}}>{k}</b><span className="muted" style={{fontSize:12}}>{v.length} compte{v.length>1?'s':''}</span></div>
+        {v.map(c=>{ const g = k==='Dépenses' ? planGroupe(c.no) : null; const titre = g && g!==g0 ? (g0=g) : null;
+          return <React.Fragment key={c.no}>
+            {titre && <div className="muted" style={{fontSize:11.5,textTransform:'uppercase',letterSpacing:'.04em',margin:'8px 0 2px'}}>{titre}</div>}
+            <div style={{display:'flex',gap:10,fontSize:13,padding:'3px 0',borderTop:'1px solid var(--border)'}}>
+              <span style={{width:46,fontVariantNumeric:'tabular-nums',fontWeight:700}}>{c.no}</span>
+              <span style={{flex:1}}>{c.nom}{c.note && <span className="muted"> · {c.note}</span>}</span>
+            </div></React.Fragment>; })}
+      </div>; })}
+  </div>;
+}
 function ComptesRecevoirView({cfg, cfgRep, refreshKey, contacts}){
   const [q,setQ]=useState('');
   return <div>
@@ -16832,6 +16880,7 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,borderBottom:'1px solid var(--border)',paddingBottom:10}}>
       {(estSuivi ? SUIVI_ONGLETS : CPT_ONGLETS).map(([k,l])=><button key={k} className={'btn btn-sm'+(onglet===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}
     </div>
+    {onglet==='plan' && <PlanComptableView/>}
     {onglet==='bord' && <ComptaTableauBord cfgRep={cfgRep} refreshKey={refreshKey} onAller={k=>{ setOnglet('grand'); setSous(k); window.scrollTo(0,0); }}/>}
     {onglet==='grand' && sous==='fourn' && <FournisseursView key={'f'+(cles.fourn||0)} cfg={cfgRep} refreshKey={refreshKey} isDesktop={isDesktop}/>}
     {onglet==='clients' && <>
