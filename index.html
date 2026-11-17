@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v552';
+const APP_VERSION = 'v553';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -16608,25 +16608,55 @@ function PlanComptableView(){
   const [err,setErr]=useState('');
   const [q,setQ]=useState('');
   const [cat,setCat]=useState('');
+  const [form,setForm]=useState(null);   // v553 : {row?, no, nom, cat, note} — ajouter ou modifier un compte
+  const [etat,setEtat]=useState('');
   const lire = useCallback(async force=>{ setErr('');
     try{ const r = await lireCache(PLAN_COMPTABLE_ID, 'A1:D', force); const v = (r.result.values||[]).slice(1).filter(x=>x[0]);
-      setL(v.map(x=>({no:String(x[0]).trim(), nom:String(x[1]||'').trim(), cat:String(x[2]||'').trim(), note:String(x[3]||'').trim()})).sort((a,b)=>a.no.localeCompare(b.no))); }
+      setL((r.result.values||[]).map((x,i)=>({row:i+1, no:String(x[0]||'').trim(), nom:String(x[1]||'').trim(), cat:String(x[2]||'').trim(), note:String(x[3]||'').trim()})).slice(1).filter(c=>c.no).sort((a,b)=>a.no.localeCompare(b.no))); }
     catch(e){ setErr(apiErrMsg(e)); setL([]); } },[]);
   useEffect(()=>{ lire(false); },[lire]);
   if(!L) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture du plan comptable…</span></div>;
+  // v553 : ajouter / modifier un compte (écrit dans la feuille ; le numéro doit être unique, 4 chiffres)
+  const enregistrer = async () => { const f = form, no = String(f.no||'').trim(), nom = String(f.nom||'').trim();
+    if(!/^\d{4}$/.test(no)) return alert('Le numéro de compte doit avoir 4 chiffres (ex. 8775).');
+    if(!nom) return alert('Le nom du compte est obligatoire.');
+    const dbl = L.find(c=>c.no===no && c.row!==f.row); if(dbl) return alert('Le compte '+no+' existe déjà : '+dbl.nom);
+    setEtat('Enregistrement…');
+    try{ if(typeof suivreEcritures==='function') suivreEcritures();
+      const val = [[no, nom, f.cat||'Dépenses', String(f.note||'').trim()]];
+      if(f.row) await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:PLAN_COMPTABLE_ID, range:'A'+f.row+':D'+f.row, valueInputOption:'RAW', resource:{values:val}});
+      else await window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:PLAN_COMPTABLE_ID, range:'A:D', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:val}});
+      setForm(null); setEtat(''); await lire(true); }
+    catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
+  const proposerNo = c => { const pris = new Set(L.map(x=>x.no)); const base = {Actif:1000, Passif:2000, Capital:3000, Revenus:4000, 'Dépenses':5000}[c] || 5000;
+    const max = L.filter(x=>x.cat===c).map(x=>+x.no).sort((a,b)=>b-a)[0] || base; for(let n=max+5; n<base+5000; n+=5) if(!pris.has(String(n))) return String(n); return ''; };
   const nq = cvNorm(q);
   const F = L.filter(c=>(!cat || c.cat===cat) && (!nq || cvNorm(c.no+' '+c.nom+' '+c.note).includes(nq)));
   const parCat = PLAN_CATS.concat([...new Set(L.map(c=>c.cat))].filter(c=>!PLAN_CATS.includes(c))).map(k=>[k, F.filter(c=>c.cat===k)]).filter(([,v])=>v.length);
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Plan comptable</h2>
-    <div className="muted" style={{fontSize:13,marginBottom:10}}>Comptes du grand livre de Gestion CMEQ ({L.length} comptes). Pour ajouter ou corriger un compte : feuille « La mémoire — Plan comptable » dans le Drive, puis ↻ Relire.</div>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Comptes du grand livre de Gestion CMEQ ({L.length} comptes). « ＋ Ajouter un compte », ou cliquer sur un compte pour le modifier.</div>
     {err && <div className="card" style={{color:'var(--danger)',marginBottom:10}}>Impossible de lire le plan comptable : {err}</div>}
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
       <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un compte (no ou nom)…" style={{flex:'1 1 220px',padding:'6px 10px'}}/>
       {['',...PLAN_CATS].map(k=><button key={k||'tous'} className={'btn btn-sm'+(cat===k?' btn-p':'')} onClick={()=>setCat(k)}>{k||'Tous'}</button>)}
+      <button className="btn btn-sm btn-p" onClick={()=>{ const c = cat||'Dépenses'; setForm({no:proposerNo(c), nom:'', cat:c, note:''}); }}>＋ Ajouter un compte</button>
       <button className="btn btn-sm" onClick={()=>lire(true)}>↻ Relire</button>
       <a className="btn btn-sm" href={'https://docs.google.com/spreadsheets/d/'+PLAN_COMPTABLE_ID+'/edit'} target="_blank" rel="noopener">Ouvrir la feuille</a>
     </div>
+    {form && <div className="card" style={{border:'1px solid var(--accent)',marginBottom:10}}>
+      <b>{form.row ? 'Modifier le compte '+form.no : 'Nouveau compte'}</b>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'end',marginTop:6}} onKeyDown={e=>{ if(e.key==='Enter') enregistrer(); if(e.key==='Escape') setForm(null); }}>
+        <label style={{display:'grid',gap:2,fontSize:12}}><span className="muted">Catégorie</span>
+          <select value={form.cat} onChange={e=>{ const c = e.target.value; setForm(f=>({...f, cat:c, no: f.row ? f.no : proposerNo(c)})); }}>{PLAN_CATS.map(c=><option key={c}>{c}</option>)}</select></label>
+        <label style={{display:'grid',gap:2,fontSize:12}}><span className="muted">No</span><input value={form.no} onChange={e=>setForm({...form, no:e.target.value.replace(/\D/g,'').slice(0,4)})} style={{width:70}}/></label>
+        <label style={{display:'grid',gap:2,fontSize:12,flex:'2 1 220px'}}><span className="muted">Nom du compte</span><input autoFocus value={form.nom} onChange={e=>setForm({...form, nom:e.target.value})}/></label>
+        <label style={{display:'grid',gap:2,fontSize:12,flex:'1 1 160px'}}><span className="muted">Note (optionnel)</span><input value={form.note} onChange={e=>setForm({...form, note:e.target.value})}/></label>
+        <button className="btn btn-sm btn-p" disabled={!!etat} onClick={enregistrer}>{etat || 'Enregistrer'}</button>
+        <button className="btn btn-sm" onClick={()=>setForm(null)}>Annuler</button>
+      </div>
+      <div className="muted" style={{fontSize:11.5,marginTop:6}}>Le compte doit aussi être créé avec le même numéro dans Gestion CMEQ pour que les écritures concordent.</div>
+    </div>}
     {!F.length ? <div className="card muted">Aucun compte trouvé.</div> : parCat.map(([k,v])=>{
       let g0 = null;
       return <div key={k} className="card" style={{marginBottom:10,padding:'8px 12px'}}>
@@ -16634,7 +16664,7 @@ function PlanComptableView(){
         {v.map(c=>{ const g = k==='Dépenses' ? planGroupe(c.no) : null; const titre = g && g!==g0 ? (g0=g) : null;
           return <React.Fragment key={c.no}>
             {titre && <div className="muted" style={{fontSize:11.5,textTransform:'uppercase',letterSpacing:'.04em',margin:'8px 0 2px'}}>{titre}</div>}
-            <div style={{display:'flex',gap:10,fontSize:13,padding:'3px 0',borderTop:'1px solid var(--border)'}}>
+            <div title="Cliquer pour modifier" onClick={()=>setForm({row:c.row, no:c.no, nom:c.nom, cat:c.cat||'Dépenses', note:c.note})} style={{display:'flex',gap:10,fontSize:13,padding:'3px 0',borderTop:'1px solid var(--border)',cursor:'pointer'}}>
               <span style={{width:46,fontVariantNumeric:'tabular-nums',fontWeight:700}}>{c.no}</span>
               <span style={{flex:1}}>{c.nom}{c.note && <span className="muted"> · {c.note}</span>}</span>
             </div></React.Fragment>; })}
