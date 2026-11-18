@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v563';
+const APP_VERSION = 'v564';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -14904,6 +14904,7 @@ function CvAcheteFacture({job, achats, facLignes}){
 
 function ClientJobDetail({job, clients, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged}){
   const [reglees, marquerRegle] = useVerifsReglees(cfg);
+  const [voirProjet,setVoirProjet]=useState(false);   // v564 : le projet (étapes, blocages, infos) ouvert par-dessus, sans changer de page — comme dans l'agenda
   appels = appels || {parNumero:{}, parFacture:{}};
   const photo = a => 'https://drive.google.com/file/d/'+a.id+'/view';
   if(!job) return <div className="card muted">Clique une job pour voir sa fiche.</div>;
@@ -14915,6 +14916,10 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
     <CvPill status={job.etatClient||job.status}/>
     <h2 className="fh" style={{margin:'8px 0 2px',fontSize:20}}>{job.client==='PART' && cvNomClientJob(job) ? <span onClick={e=>ouvrirFicheClient(cvNomClientJob(job), e)} title="Ouvrir sa fiche du Répertoire" style={{cursor:'pointer',textDecoration:'underline',textDecorationStyle:'dotted'}}>{cvTitreJob(job)}</span> : cvTitreJob(job)}</h2>
     {job.client==='PART' && <div style={{fontSize:13,color:'var(--accent)',fontWeight:600}}>{cvProjetJob(job)}</div>}
+    <button className="btn btn-sm" style={{margin:'6px 0 2px'}} onClick={()=>setVoirProjet(true)} title="Étapes, blocages et infos du projet, sans quitter cette page">📁 Voir le projet</button>
+    {voirProjet && <Modal title={'📁 '+cvTitreJob(job)} onClose={()=>setVoirProjet(false)} wide>
+      <div style={{maxHeight:'75vh',overflowY:'auto'}}>{(()=>{ NAV_FOCUS = {cible:'projets', t:Date.now(), jobIds:[job.id], ouvrir:job.client+job.id, nom:(job.client!=='PART'?job.client+' ':'')+job.name}; return null; })()}<ProjetsSuivi cfg={cfg} refreshKey={0}/></div>
+    </Modal>}
     {r.projet && <div className="muted" style={{fontSize:13}}>{r.projet}</div>}
     <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'5px 14px',margin:'12px 0'}}>
       <Row k={job.client==='CRS'?'PO':'No de job'}>{job.po || (job.client==='CRS'?'Pas de PO':'Pas encore de numéro')}{(job.posLies||[]).length>0 && <span className="muted"> + {job.posLies.join(', ')} (même projet)</span>}</Row>
