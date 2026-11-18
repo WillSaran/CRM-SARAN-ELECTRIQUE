@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v579';
+const APP_VERSION = 'v580';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11753,7 +11753,26 @@ function maisonDragons(p){ const W = (cvNum(p.pi2)||0)*10;
   if(!n){ const w = (DRAGONS.find(d=>d[0]===code)||[0,4000])[1]; n = W>5000 ? Math.ceil(W/w) : 1; }
   const d = DRAGONS.find(x=>x[0]===code) || DRAGONS[1];
   return {code:d[0], w:d[1], lib:d[2], n, relais: /C24/.test(d[0]) ? 0 : n}; }
+// v580 : chauffage d'une pièce = des SO220, avec le nombre de chaque produit : plinthe, thermostat, plancher chauffant, préparation, convecteur, radiant
+const MAISON_CHAUF_PROD = [['plinthe','Plinthe électrique','PL'],['thermostat','Thermostat','TH'],['plancher','Plancher chauffant','PL'],['prep','Préparation (plancher chauffant)','PL'],['convecteur','Convecteur','PL'],['radiant','Radiant','PL']];
+function maisonChaufQ(p){ if(p.chaufQ) return p.chaufQ; const c = p.chauf || 'aucun';
+  if(c==='aucun' || c==='aero') return {plinthe:0, thermostat:0, plancher:0, prep:0, convecteur:0, radiant:0};
+  const th = Math.max(1, Math.round(cvNum(p.thermos)||1)), plac = (p.emp||[]).filter(x=>x.c==='PL' && cvNum(x.w)).length;
+  const n = plac || Math.max(1, cvNum(p.plW) ? Math.round(cvNum(p.fenetres)||1) : maisonPlinthes(p.pi2, p.fenetres).length || 1);
+  return {plinthe:c==='plinthe' ? n : 0, thermostat:th, plancher:0, prep:0, convecteur:c==='convecteur' ? n : 0, radiant:c==='radiant' ? 1 : 0}; }
+function maisonChaufMaj(p, k, n){ const q = {...maisonChaufQ(p), [k]:Math.max(0, n)}, tot = Object.values(q).reduce((t,x)=>t+(x||0),0);
+  return {chaufQ:q, chauf:!tot ? 'aucun' : q.plinthe ? 'plinthe' : q.convecteur ? 'convecteur' : (q.plancher || q.radiant) ? 'radiant' : 'plinthe',
+    fenetres:String(Math.max(1, (q.plinthe||0)+(q.convecteur||0))), thermos:String(Math.max(1, q.thermostat||0))}; }
 function maisonChauffage(p){ const c = p.chauf || 'aucun', th = Math.max(1, Math.round(cvNum(p.thermos)||1));
+  if(p.chaufQ && c!=='aero'){ const q = p.chaufQ, nPl = (q.plinthe||0)+(q.convecteur||0);
+    const plac = (p.emp||[]).filter(x=>x.c==='PL' && cvNum(x.w)).map(x=>+x.w);
+    let pl = []; if(nPl){ pl = plac.length ? plac.slice(0, nPl) : cvNum(p.plW) ? Array.from({length:nPl}, ()=>cvNum(p.plW)) : maisonPlinthes(p.pi2, nPl).slice(0, nPl);
+      while(pl.length && pl.length < nPl) pl.push(pl[pl.length-1]); }
+    const so220 = MAISON_CHAUF_PROD.reduce((t,[k])=>t+(q[k]||0),0), plu = (n, l) => n+' '+l+(n>1 ? 's' : '');
+    const txt = [q.plinthe ? plu(q.plinthe,'plinthe')+(pl.length ? ' '+pl.slice(0,q.plinthe).map(w=>w+' W').join(' + ') : '') : '', q.thermostat ? plu(q.thermostat,'thermostat') : '',
+      q.plancher ? plu(q.plancher,'plancher chauffant').replace('planchers chauffants','planchers chauffants').replace(/plancher chauffants$/,'planchers chauffants') : '', q.prep ? plu(q.prep,'préparation')+' plancher chauffant' : '',
+      q.convecteur ? plu(q.convecteur,'convecteur') : '', q.radiant ? plu(q.radiant,'radiant') : ''].filter(Boolean).join(' + ');
+    return {w:pl.length ? pl.reduce((t,x)=>t+x,0) : undefined, so220, plinthes:pl, txt, libres:[], intel:p.intel ? (q.thermostat||0) : 0}; }
   if(c==='aucun') return {so220:0, plinthes:[], txt:'', libres:[], intel:0};
   if(c==='aero'){ const g = maisonDragons(p);
     const prod = [[g.code, g.n]]; if(g.relais) prod.push([DRAGON_RELAIS, g.relais]); prod.push([p.intel ? DRAGON_THERMO_INTEL : DRAGON_THERMO, th]);
@@ -12116,8 +12135,10 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
       <div className="muted" style={{fontSize:12}}>Dans chaque pièce, tu touches l'entrée de la porte une fois : tout ce qui est coché se place là (glisse-les ensuite où tu veux). Puis tu touches sous chaque fenêtre pour les plinthes.</div>
       <div><button className="btn btn-p" onClick={()=>{ majM({auto:aut}); setDemande(false); }}>C'est parti</button></div></div>}
     {!demande && (outil==='PORTE' || (outil==='PL' && plAFaire(p))) && <div style={{background:'rgba(88,166,255,.12)',border:'1px solid var(--accent)',borderRadius:8,padding:'4px 10px',fontSize:13.5}}>
-      {outil==='PORTE' ? <>👉 Touche <b>l'entrée de la porte</b> : {porteItems(p).map(c=>maisonOutil(c)[2]).join(' + ')} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>{ majP(p.id,{porte:true}); setOutil(plAFaire(p) ? 'PL' : 'SO01'); }}>Passer</button></>
-        : <>👉 Touche <b>sous chaque fenêtre</b> (ou un mur) : {Math.max(0, plAFaire(p) - (p.emp||[]).filter(x=>x.c==='PL').length)} plinthe(s) à placer{ch.plinthes.length ? ' — '+ch.plinthes.map(w=>w+' W').join(', ') : ''} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>setOutil('SO01')}>Passer</button></>}</div>}
+      {outil==='PORTE' ? <>👉 Touche <b>l'entrée de la porte</b> : {porteItems(p).map(c=>maisonOutil(c)[2]).join(' + ')} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>{ majP(p.id,{porte:true}); setOutil(plAFaire(p) ? 'PL' : 'SO01'); }}>Passer</button>
+          {p.chauf && p.chauf!=='aucun' && <button className="btn btn-sm" style={{marginLeft:6,color:'var(--danger)',borderColor:'var(--danger)'}} onClick={()=>majP(p.id, {chauf:'aucun', chaufQ:{plinthe:0, thermostat:0, plancher:0, prep:0, convecteur:0, radiant:0}, emp:(p.emp||[]).filter(x=>x.c!=='PL' && x.c!=='TH')})}>✕ Pas de chauffage ici</button>}</>
+        : <>👉 Touche <b>sous chaque fenêtre</b> (ou un mur) : {Math.max(0, plAFaire(p) - (p.emp||[]).filter(x=>x.c==='PL').length)} plinthe(s) à placer{ch.plinthes.length ? ' — '+ch.plinthes.map(w=>w+' W').join(', ') : ''} <button className="btn btn-sm" style={{marginLeft:6}} onClick={()=>setOutil('SO01')}>Passer</button>
+          <button className="btn btn-sm" style={{marginLeft:6,color:'var(--danger)',borderColor:'var(--danger)'}} onClick={()=>{ majP(p.id, {chauf:'aucun', chaufQ:{plinthe:0, thermostat:0, plancher:0, prep:0, convecteur:0, radiant:0}, emp:(p.emp||[]).filter(x=>x.c!=='PL' && x.c!=='TH')}); setOutil('SO01'); }}>✕ Pas de chauffage ici</button></>}</div>}
     <div style={{flex:1,minHeight:0,display:'flex',flexDirection:large ? 'row' : 'column',gap:8}}>
       <div style={{flex:1,minHeight:large ? 0 : '42vh',minWidth:0}}>
         {pg ? <MaisonCarte pg={pg} pieces={m.pieces} piece={p} outil={outil} onPlacer={placer} onEnlever={enlever} onDeplacer={deplacer}/>
@@ -12238,6 +12259,23 @@ const MAISON_SUGG = {entree:['SO02.1','SO08','SO07','SO03','SO05'], vestibule:['
   lavage:['SO01','SO01.1','SO03'], rangement:['SO01','SO03'], debarras:['SO01','SO03'], atelier:['SO01.2','SO01','SO03','SO00','SO04'], mecanique:['SO01','SO00','SO04'],
   garage:['SO01','SO01.2','SO00','SO07','SO08'], exterieur:['SO07','SO08'], ssnonfini:['SO01','SO04','SO00']};
 const maisonSortieOk = (c, type) => !/^SO22/.test(c) && !(c==='SO06' && !['cuisine','sdb','lavage'].includes(type));
+function MaisonChaufEdit({p, majP, petit}){
+  const q = maisonChaufQ(p), ch = maisonChauffage(p), so = p.chauf==='aero' ? ch.so220 : MAISON_CHAUF_PROD.reduce((t,[k])=>t+(q[k]||0),0);
+  const fs = petit ? 12 : 12.5;
+  return <div style={{display:'grid',gap:3,marginTop:4,fontSize:fs}}>
+    <div style={{display:'flex',gap:8,alignItems:'baseline'}}><b>SO220</b><span className="muted">sorties de chauffage</span>
+      {so>0 && <span style={{fontSize:11.5,color:'var(--danger)',cursor:'pointer'}} onClick={()=>majP(p.id, {chauf:'aucun', chaufQ:{plinthe:0, thermostat:0, plancher:0, prep:0, convecteur:0, radiant:0}, emp:(p.emp||[]).filter(x=>x.c!=='PL' && x.c!=='TH')})}>✕ aucun chauffage</span>}
+      <b style={{marginLeft:'auto',fontSize:fs+2,color:'var(--warning)'}}>{so}</b></div>
+    {p.chauf==='aero' ? <div style={{display:'flex',gap:6,alignItems:'center'}}><span style={{flex:1}}>{ch.txt}</span><button className="btn btn-sm" onClick={()=>majP(p.id, {...maisonChaufMaj({...p, chauf:'aucun', chaufQ:null}, 'plinthe', 1)})}>→ plinthes</button></div>
+      : MAISON_CHAUF_PROD.map(([k, lib, mq])=>{ const n = q[k]||0;
+        return <div key={k} style={{display:'flex',gap:6,alignItems:'center',opacity:n ? 1 : .6}}><MaisonMarque c={mq} petit/><span style={{flex:1}}>{lib}
+          {k==='plinthe' && n>0 && <span> <input value={p.plW||''} onChange={x=>majP(p.id,{plW:x.target.value.replace(/\D/g,'')})} inputMode="numeric" placeholder={String((ch.plinthes||[])[0]||'')} style={{width:52,padding:'1px 4px',fontSize:12}}/> W</span>}
+          {k==='thermostat' && n>0 && <label style={{display:'inline-flex',gap:3,alignItems:'center',marginLeft:6,fontSize:11.5}}><input type="checkbox" checked={!!p.intel} onChange={x=>majP(p.id,{intel:x.target.checked})} style={{width:'auto'}}/> intelligent</label>}</span>
+          <button className="btn btn-sm" style={{padding:'0 7px'}} onClick={()=>majP(p.id, maisonChaufMaj(p, k, n-1))}>−</button><b style={{minWidth:18,textAlign:'center'}}>{n}</b>
+          <button className="btn btn-sm" style={{padding:'0 7px'}} onClick={()=>majP(p.id, maisonChaufMaj(p, k, n+1))}>+</button></div>; })}
+    {p.chauf!=='aero' && p.type==='garage' && <span style={{fontSize:11.5,color:'var(--accent)',cursor:'pointer'}} onClick={()=>majP(p.id,{chauf:'aero', chaufQ:null})}>Aérotherme (dragon) à la place</span>}
+    {ch.w ? <div className="muted" style={{fontSize:11.5}}>{ch.w} W de plinthes{cvNum(p.pi2) ? ' · '+p.pi2+' pi² × 10 W' : ''}</div> : null}
+  </div>; }
 function MaisonCompteur({p, majP}){ const ch = maisonChauffage(p), it = p.items||{};
   const codes = Object.keys(it).filter(c=>it[c]>0 && !/^SO22/.test(c)), mettre = (c, n) => majP(p.id, {items:{...it, [c]:Math.max(0, n)}});
   const sugg = (MAISON_SUGG[p.type]||[]).filter(c=>!(it[c]>0));
@@ -12247,15 +12285,10 @@ function MaisonCompteur({p, majP}){ const ch = maisonChauffage(p), it = p.items|
   return <div style={{display:'grid',gap:3}}>
     {codes.map(c=>{ const o = maisonOutilDe(c); return <div key={c} style={{display:'flex',gap:6,alignItems:'center'}}>{o ? <MaisonMarque c={o[0]} petit/> : <span style={{width:20}}>•</span>}
       <span style={{flex:1}}>{MAISON_LIB[c]||c}</span><button className="btn btn-sm" style={{padding:'0 7px'}} onClick={()=>mettre(c, it[c]-1)}>−</button><b style={{minWidth:18,textAlign:'center'}}>{it[c]}</b><button className="btn btn-sm" style={{padding:'0 7px'}} onClick={()=>mettre(c, it[c]+1)}>+</button></div>; })}
-    {ligne('PL', 'plinthe', nPl, ()=>majP(p.id, nPl<=1 ? {chauf:'aucun'} : {fenetres:String(nPl-1)}), ()=>majP(p.id, plOn ? {fenetres:String(nPl+1)} : {chauf:'plinthe', fenetres:'1'}),
-      plOn ? <span> <input value={p.plW||''} onChange={x=>majP(p.id,{plW:x.target.value.replace(/\D/g,'')})} inputMode="numeric" placeholder={String(maisonPlinthes(p.pi2, p.fenetres)[0]||'')} style={{width:52,padding:'1px 4px',fontSize:12}}/> W</span> : null)}
-    {ligne('TH', 'thermostat', nTh, ()=>majP(p.id, nTh<=1 ? {chauf:'aucun'} : {thermos:String(nTh-1)}), ()=>majP(p.id, p.chauf && p.chauf!=='aucun' ? {thermos:String(nTh+1)} : {chauf:'plinthe', fenetres:'1', thermos:'1'}))}
     {sugg.length>0 && <div style={{display:'flex',gap:3,flexWrap:'wrap'}}>{sugg.map(c=>{ const o = maisonOutilDe(c); return <button key={c} className="btn btn-sm" style={{padding:'1px 6px',fontSize:11.5,display:'inline-flex',flexDirection:'row',alignItems:'center',gap:3,whiteSpace:'nowrap'}} onClick={()=>mettre(c, 1)}>＋{o ? <MaisonMarque c={o[0]} petit/> : null}{MAISON_LIB[c]||c}</button>; })}</div>}
     <select value="" onChange={e=>{ if(e.target.value) mettre(e.target.value, (it[e.target.value]||0)+1); }} style={{fontSize:12.5}}>
       <option value="">＋ Autre sortie…</option>{Object.entries(MAISON_LIB).filter(([c])=>!(it[c]>0) && !/^SO220/.test(c) && maisonSortieOk(c, p.type) && !sugg.includes(c)).map(([c,l])=><option key={c} value={c}>{l} ({c})</option>)}</select>
-    <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:2,fontSize:12}}>Chauffage
-      <select value={p.chauf} onChange={x=>majP(p.id,{chauf:x.target.value})} style={{width:'auto',fontSize:12}}>{[['plinthe','Plinthe(s)'],['convecteur','Convecteur(s)'],['radiant','Plancher radiant'],['aero','Aérotherme (dragon)'],['aucun','Aucun']].map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></div>
-    {ch.txt && <div style={{color:'var(--warning)',fontSize:12}}>{ch.txt}{ch.w ? ' ('+ch.w+' W)' : ''} · {ch.so220} sortie{ch.so220>1?'s':''} chauffage</div>}
+    <MaisonChaufEdit p={p} majP={majP} petit/>
   </div>; }
 // Petit résumé en symboles d'une pièce, posé sur le plan
 function MaisonEtiquette({p, actif, onClick}){ const it = p.items||{}, ch = maisonChauffage(p);
@@ -12585,16 +12618,12 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli}){   // v495 : partie '
                 <select value="" onChange={x=>{ const c = x.target.value; if(c) majP(p.id,{items:{...p.items, [c]:(p.items[c]||0)+1}}); }} style={{width:'auto',fontSize:12}}>
                   <option value="">+ ajouter…</option>{codesTous.filter(c=>!(p.items||{})[c] && c!=='SO220' && c!=='SO220.2').map(c=><option key={c} value={c}>{MAISON_LIB[c]} ({c})</option>)}</select>
               </div>
-              <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',fontSize:12.5}}>Chauffage :
-                <select value={p.chauf} onChange={x=>majP(p.id,{chauf:x.target.value})} style={{width:'auto',fontSize:12.5}}>{[['plinthe','Plinthe(s)'],['convecteur','Convecteur(s)'],['radiant','Plancher radiant'],['aero','Aérotherme (dragon)'],['aucun','Aucun']].map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
-                {p.chauf==='aero' && <><select value={p.dragon||''} onChange={x=>majP(p.id,{dragon:x.target.value})} style={{width:'auto',fontSize:12.5}}>
-                    <option value="">Dragon auto ({maisonDragons({...p, dragon:''}).lib})</option>{DRAGONS.map(([c,,l])=><option key={c} value={c}>Dragon {l}</option>)}</select>
-                  × <input value={p.nDragon||''} onChange={x=>majP(p.id,{nDragon:x.target.value.replace(/\D/g,'')})} inputMode="numeric" placeholder={String(maisonDragons(p).n)} style={{width:34}}/></>}
-                {['plinthe','convecteur'].includes(p.chauf) && <>fenêtres <input value={p.fenetres} onChange={x=>majP(p.id,{fenetres:x.target.value})} inputMode="numeric" style={{width:38}}/></>}
-                {p.chauf!=='aucun' && <>thermostats <input value={p.thermos} onChange={x=>majP(p.id,{thermos:x.target.value})} inputMode="numeric" style={{width:38}}/>
-                  <label style={{display:'flex',gap:3,alignItems:'center'}}><input type="checkbox" checked={!!p.intel} onChange={x=>majP(p.id,{intel:x.target.checked})} style={{width:'auto'}}/> intelligent</label></>}
-                {chf.txt && <span style={{color:'var(--warning)'}}>→ {chf.txt}{chf.w ? ' ('+chf.w+' W)' : ''} · {chf.so220} sortie{chf.so220>1?'s':''} SO220{cvNum(p.pi2) && ['plinthe','convecteur'].includes(p.chauf) ? ' ('+p.pi2+' pi² × 10 W)' : ''}</span>}
-              </div>
+              {p.chauf==='aero' ? <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',fontSize:12.5}}>Aérotherme :
+                <select value={p.dragon||''} onChange={x=>majP(p.id,{dragon:x.target.value})} style={{width:'auto',fontSize:12.5}}>
+                  <option value="">Dragon auto ({maisonDragons({...p, dragon:''}).lib})</option>{DRAGONS.map(([c,,l])=><option key={c} value={c}>Dragon {l}</option>)}</select>
+                × <input value={p.nDragon||''} onChange={x=>majP(p.id,{nDragon:x.target.value.replace(/\D/g,'')})} inputMode="numeric" placeholder={String(maisonDragons(p).n)} style={{width:34}}/>
+                thermostats <input value={p.thermos} onChange={x=>majP(p.id,{thermos:x.target.value})} inputMode="numeric" style={{width:38}}/></div> : null}
+              <div style={{maxWidth:420}}><MaisonChaufEdit p={p} majP={majP}/></div>
             </div>}
           </div>; })}
       </div>; })}
