@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v570';
+const APP_VERSION = 'v571';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3106,6 +3106,11 @@ function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, 
   const [selEt,setSelEt]=useState(null);              // {k, id} : étape choisie sur la barre d'une job
   const [typeAutre,setTypeAutre]=useState(null);      // {k, v} : type « Autre » en train d'être écrit
   const [vocOuv,setVocOuv]=useState(null);            // v364 : job dont la liste des mémos vocaux est ouverte
+  // v571 : 2e vue — les projets de la semaine ou du mois, en tableau (bloqués / à boucler / à venir / complets)
+  const [vueP,setVueP]=useState(()=>{ if(seul) return 'tous'; try{ return localStorage.getItem('projets_vue')||'tous'; }catch(e){ return 'tous'; } });
+  const [decal,setDecal]=useState(0), [detailP,setDetailP]=useState(null);
+  const ptsP = usePointagesTous(cfg);
+  const choisirVue = v => { setVueP(v); setDecal(0); try{ localStorage.setItem('projets_vue', v); }catch(e){} };
   const clients = useMemo(()=>cvBuildClients(events, registry, factures),[events, registry, factures]);
   const BJ = useMemo(()=>blocsParJob(B.liste, clients),[B.liste, clients]);   // v366 : blocages CRM + PunchPro, par job
   const ap = appels || {parNumero:{}, parFacture:{}, liste:[]};
@@ -3229,9 +3234,65 @@ function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, 
       </div>}
     </div>; };
   const totalManque = jobs.reduce((t,x)=>t+x.s.manquants.length,0);
+  const barreVue = !seul && <div style={{display:'flex',gap:6,margin:'0 0 10px',flexWrap:'wrap',alignItems:'center'}}>
+    {[['tous','Tous les projets'],['semaine','📅 Semaine'],['mois','🗓️ Mois']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vueP===k?' btn-p':'')} onClick={()=>choisirVue(k)}>{l}</button>)}</div>;
+  if(!seul && vueP!=='tous'){
+    const pad = n => String(n).padStart(2,'0'), ymd = d => d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+    const now = new Date(); let d0, d1, lib;
+    if(vueP==='semaine'){ d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()-((now.getDay()+6)%7)+decal*7); d1 = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate()+6);
+      lib = 'Semaine du '+cvFmtDay(ymd(d0))+' au '+cvFmtDay(ymd(d1)); }
+    else { d0 = new Date(now.getFullYear(), now.getMonth()+decal, 1); d1 = new Date(d0.getFullYear(), d0.getMonth()+1, 0);
+      lib = d0.toLocaleDateString('fr-CA',{month:'long', year:'numeric'}); lib = lib.charAt(0).toUpperCase()+lib.slice(1); }
+    const deb = ymd(d0), fin = ymd(d1), N = v => cvNorm(v||'');
+    const tous = Object.values(clients).flatMap(c=>c.jobs.map(j=>({c, j, s:pjEtapes(j, ap, commandes, courriels, manuels)}))).filter(x=>!(archives||{})[x.j.id]);
+    const L = tous.map(x=>{ const evP = x.j.events.filter(e=>!e.attente && e.day>=deb && e.day<=fin); if(!evP.length) return null;
+      const passes = evP.filter(e=>e.day<today), avenir = evP.filter(e=>e.day>=today);
+      const blocsO = (BJ[x.j.id]||[]).filter(b=>b.statut!=='Réglé');
+      const notes = passes.flatMap(e=>(ptsP||[]).filter(p=>p.date===e.day && p.job && String(p.note||'').trim() && (N(p.job)===N(e.title) || (x.j.po && N(p.job).includes(N(x.j.po))))).map(p=>topoNote10(p.note)).filter(v=>v!=null));
+      const vocaux = passes.reduce((t,e)=>t+(e.attachments||[]).filter(a=>a.fileUrl && topoEstVocal(a.title, a.mimeType)).length, 0);
+      const aFact = x.s.etape==='À facturer';
+      const cat = blocsO.length ? 'bloque' : (passes.length && (x.s.manquants.length || aFact)) ? 'boucler' : avenir.length ? 'avenir' : 'complet';
+      return {...x, evP, passes, avenir, blocsO, notes, vocaux, aFact, cat}; }).filter(Boolean);
+    const toutes = L.flatMap(x=>x.notes), moy = toutes.length ? Math.round(toutes.reduce((a,b)=>a+b,0)/toutes.length*10)/10 : null;
+    const coul10 = v => v>=8 ? 'var(--success)' : v>=6 ? 'var(--warning)' : 'var(--danger)';
+    const COLS = [['bloque','🚧 Bloqués','var(--danger)','Un blocage ouvert à régler'],['boucler','🧾 À boucler','var(--warning)','Passé dans la période — papiers, facture ou étape qui manque'],
+      ['avenir','📅 À venir','var(--accent)','Cédulé dans la période'],['complet','✅ Complets','var(--success)','Fait, rien qui manque']];
+    const tuile = (n, l, c) => <div className="card" style={{padding:'8px 12px',minWidth:110}}><div style={{fontSize:20,fontWeight:800,color:c||'var(--text)'}}>{n}</div><div className="muted" style={{fontSize:12}}>{l}</div></div>;
+    const Carte = ({x}) => <div onClick={()=>setDetailP(x)} style={{cursor:'pointer',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:8,background:'var(--bg2)',marginBottom:6,fontSize:12.5}}>
+      <div style={{fontWeight:700,fontSize:13}}>{x.c.code!=='PART' && <span style={{color:'var(--accent)'}}>{x.c.code} </span>}{cvTitreJob(x.j)}</div>
+      <div className="muted" style={{fontSize:11.5}}>{[x.j.po, x.j.address].filter(Boolean).join(' · ')}</div>
+      <div style={{display:'flex',gap:4,flexWrap:'wrap',margin:'5px 0 2px'}}>{x.evP.map((e,i)=><span key={i} style={{padding:'1px 6px',borderRadius:10,fontSize:11,border:'1px solid var(--border2)',background:e.day<today?'rgba(127,127,127,.12)':'transparent'}}>
+        {e.day<today?'✓ ':''}{cvFmtDay(e.day)}{e.phase?' · '+e.phase.toLowerCase():''}{e.crew&&e.crew.length?' · '+e.crew.join(' '):''}</span>)}</div>
+      {(x.notes.length>0 || x.vocaux>0) && <div style={{display:'flex',gap:8,alignItems:'baseline'}}>{x.notes.map((v,i)=><b key={i} style={{color:coul10(v)}}>{String(v).replace('.',',')}/10</b>)}{x.vocaux>0 && <span>🎤 {x.vocaux}</span>}</div>}
+      {x.blocsO.slice(0,2).map((b,i)=><div key={i} style={{color:'var(--danger)',marginTop:2}}>🚧 {b.type||'Blocage'}{b.description ? ' — '+String(b.description).slice(0,80) : ''}</div>)}
+      {x.cat==='boucler' && <div style={{marginTop:2,color:'var(--warning)'}}>{x.aFact && <div>• À facturer</div>}{x.s.manquants.slice(0,3).map((m,i)=><div key={i}>• {m.titre}</div>)}{x.s.manquants.length>3 && <div className="muted">+ {x.s.manquants.length-3} autre{x.s.manquants.length>4?'s':''}</div>}</div>}
+    </div>;
+    return <div>
+      <h2 className="fh" style={{margin:'0 0 8px',fontSize:22}}>Projets</h2>
+      {barreVue}
+      <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:10,flexWrap:'wrap'}}>
+        <button className="btn btn-sm" onClick={()=>setDecal(decal-1)}>‹</button><b style={{minWidth:200,textAlign:'center'}}>{lib}</b><button className="btn btn-sm" onClick={()=>setDecal(decal+1)}>›</button>
+        {decal!==0 && <button className="btn btn-sm" onClick={()=>setDecal(0)}>{vueP==='semaine'?'Cette semaine':'Ce mois-ci'}</button>}</div>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
+        {tuile(L.length, 'projets')}{tuile(L.reduce((t,x)=>t+x.passes.length,0)+' / '+L.reduce((t,x)=>t+x.evP.length,0), 'passages faits')}
+        {tuile(L.filter(x=>x.blocsO.length).length, 'bloqués', L.some(x=>x.blocsO.length) ? 'var(--danger)' : null)}{tuile(L.filter(x=>x.aFact).length, 'à facturer', L.some(x=>x.aFact) ? 'var(--warning)' : null)}
+        {moy!=null && tuile(String(moy).replace('.',',')+'/10', 'moyenne des gars', coul10(moy))}</div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(250px, 1fr))',gap:12,alignItems:'start'}}>
+        {COLS.map(([k,t,c,aide])=>{ const g = L.filter(x=>x.cat===k).sort((a,b)=>String(a.evP[0].day).localeCompare(String(b.evP[0].day)));
+          return <div key={k} style={{background:'var(--bg3)',borderRadius:10,padding:8,borderTop:'3px solid '+c}}>
+            <div style={{fontWeight:800,fontSize:13,padding:'2px 2px 0'}}>{t} · {g.length}</div><div className="muted" style={{fontSize:11,padding:'0 2px 6px'}}>{aide}</div>
+            {g.map(x=><Carte key={x.c.code+x.j.id} x={x}/>)}{!g.length && <div className="muted" style={{fontSize:12,padding:4}}>—</div>}</div>; })}
+      </div>
+      {!L.length && <div className="card muted" style={{marginTop:10}}>Aucun passage dans cette période.</div>}
+      {detailP && <Modal deClic tresLarge title={'📁 '+(detailP.c.code!=='PART'?detailP.c.code+' ':'')+cvTitreJob(detailP.j)} onClose={()=>setDetailP(null)}>
+        <ProjetsSuivi cfg={cfg} refreshKey={0} seul={{id:detailP.j.id, ouvrir:detailP.c.code+detailP.j.id, nom:detailP.j.name}}/>
+        <CvTopoChantier job={{...detailP.j, id:detailP.j.id}} cfg={cfg}/></Modal>}
+    </div>;
+  }
   if(seul) return <div>{jobs.map(x=><Ligne key={x.c.code+x.j.id} x={x}/>)}{!jobs.length && <div className="card muted">Projet introuvable.</div>}</div>;
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Projets</h2>
+    {barreVue}
     <div className="muted" style={{fontSize:13,marginBottom:10}}>Chaque job, ses étapes et ce qui manque — et où le compléter. {totalManque ? <b style={{color:'var(--warning)'}}>{totalManque} choses à compléter.</b> : 'Tout est complet.'}</div>
     <div style={{display:'flex',gap:6,marginBottom:8}}>
       <input value={qP} onChange={e=>setQP(e.target.value)} placeholder="Chercher un projet (nom, PO, adresse, no de facture…) — ex. « 5 », « Poulin », « 3213 »" style={{flex:1,minWidth:0,padding:'6px 10px'}}/>
