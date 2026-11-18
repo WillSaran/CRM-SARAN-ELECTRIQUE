@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v577';
+const APP_VERSION = 'v578';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4383,6 +4383,33 @@ function SemaineConfirmee({c, total}){
     ✓ {quand}{/^CRM-/.test(c.id||'') && <span style={{fontWeight:500}}> (à la main)</span>}{ecart && <span style={{fontWeight:600}}> · ⚠ confirmé {fmtH(c.total)}, maintenant {fmtH(total)}</span>}</a>;
 }
 // Confirmer / annuler à la main dans la page Heures
+const prenomAff = n => { const p = String(n||'').trim().split(/\s+/)[0]||''; return p.charAt(0).toUpperCase()+p.slice(1).toLowerCase(); };
+// v578 : 🏦 Banque de <prénom> — tout ce qui touche son overtime au même endroit
+function BanqueEmploye({l, onClose, onCorrection, onReleve}){
+  const sg = x => (x>0?'+':x<0?'−':'')+fmtH(Math.abs(x));
+  const hist = [...l.ajust.map(d=>({date:d.date, quoi:'✏️ Correction du solde', det:d.titre+(d.note ? ' · réf. '+d.note : ''), val:sg(d.montant||0)})),
+    ...l.dos.filter(d=>d.type===ENVOI).map(d=>({date:d.date, quoi:'📧 Relevé envoyé', det:d.titre||'', val:d.montant ? cvMoney(d.montant) : ''})),
+    ...l.dos.filter(d=>d.type===REGLE).map(d=>({date:d.date, quoi:'✓ Relevé payé', det:d.titre||'', val:d.montant ? cvMoney(d.montant) : ''}))]
+    .sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const ligne = (k, v, st) => <><span className="muted">{k}</span><b style={st}>{v}</b></>;
+  return <Modal title={'🏦 Banque de '+prenomAff(l.e.nom)} onClose={onClose}>
+    <div style={{display:'grid',gridTemplateColumns:'auto auto',justifyContent:'start',gap:'4px 18px',fontSize:13.5,marginBottom:14}}>
+      {ligne('Semaines confirmées', fmtH(l.base))}
+      {l.adjH!==0 && ligne('Corrections', sg(l.adjH))}
+      {ligne('Heures en banque', fmtH(l.h), {color:'var(--accent)'})}
+      {l.payees>0 && ligne('Déjà payées', '−'+fmtH(l.payees))}
+      {l.taux!=null && ligne('Taux', cvMoney(l.taux)+'/h')}
+      {l.deduit>0 && ligne('Matériel à déduire', '−'+cvMoney(l.deduit))}
+      {l.solde!=null && ligne('Solde', cvMoney(l.solde), {color:l.solde<0?'var(--danger)':'var(--success)',fontSize:15})}
+      {l.hRest!=null && ligne('Heures qui resteraient', fmtH(l.hRest))}
+    </div>
+    <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:14}}>
+      <button className="btn" onClick={onCorrection} title="Mettre le bon total d'heures supp, avec le pourquoi et la référence">✏️ Correction du solde</button>
+      <button className="btn btn-p" onClick={onReleve} title="La feuille complète : aperçu PDF, envoi à l'employé, payer le matériel avec ses heures">📄 Relevé et paiement</button></div>
+    <div className="fh" style={{fontSize:13,marginBottom:4}}>Historique</div>
+    {!hist.length ? <div className="muted" style={{fontSize:12.5}}>Aucune correction ni relevé pour l'instant.</div>
+      : <table style={{fontSize:12.5}}><tbody>{hist.map((h,i)=><tr key={i}><td style={{whiteSpace:'nowrap'}}>{h.date}</td><td style={{whiteSpace:'nowrap'}}>{h.quoi}</td><td className="muted">{h.det}</td><td style={{textAlign:'right',fontWeight:700,whiteSpace:'nowrap'}}>{h.val}</td></tr>)}</tbody></table>}
+  </Modal>; }
 // v576 : ⚙️ Réglage de la banque d'heures supp — on tape le BON total, le CRM inscrit l'écart comme « Ajustement heures »
 // (Dossier employés : Titre = pourquoi, Note = référence), avec la date. Les réglages restent visibles et annulables.
 function ReglageBanque({l, onClose, ajouter, enlever}){
@@ -4391,10 +4418,10 @@ function ReglageBanque({l, onClose, ajouter, enlever}){
   const nv = cvNum(total), ecart = nv==null ? null : Math.round((nv - l.h)*100)/100;
   const sauver = async () => { setOcc('Enregistrement…'); try{ await ajouter(date, ecart, raison.trim(), ref.trim()); onClose(); }catch(e){ alert('Impossible d\'enregistrer : '+apiErrMsg(e)); setOcc(''); } };
   const sg = x => (x>0?'+':x<0?'−':'')+fmtH(Math.abs(x));
-  return <Modal title={'⚙️ Réglage de la banque — '+l.e.nom} onClose={onClose}>
+  return <Modal title={'✏️ Correction du solde — '+prenomAff(l.e.nom)} onClose={onClose}>
     <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 14px',fontSize:13,marginBottom:12}}>
       <span className="muted">Semaines confirmées</span><b>{fmtH(l.base)}</b>
-      <span className="muted">Réglages déjà faits</span><b>{l.adjH ? sg(l.adjH) : '—'}</b>
+      <span className="muted">Corrections déjà faites</span><b>{l.adjH ? sg(l.adjH) : '—'}</b>
       <span className="muted">Banque actuelle</span><b style={{color:'var(--accent)',fontSize:15}}>{fmtH(l.h)}</b></div>
     <div className="field"><label>Nouveau total d'heures supp en banque</label>
       <input value={total} inputMode="decimal" onChange={e=>setTotal(e.target.value)} autoFocus style={{fontSize:16,fontWeight:700,width:140}}/>
@@ -4403,13 +4430,13 @@ function ReglageBanque({l, onClose, ajouter, enlever}){
     <div className="field"><label>Référence</label><input value={ref} onChange={e=>setRef(e.target.value)} placeholder="ex. talon de paie du 7 nov., semaine 2026-W45, texto du 12 nov."/></div>
     <div className="field"><label>Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)} style={{width:'auto'}}/></div>
     <div style={{display:'flex',gap:8,alignItems:'center'}}>
-      <button className="btn btn-p" disabled={!!occ || ecart==null || ecart===0 || !raison.trim()} onClick={sauver}>{occ || 'Enregistrer le réglage'}</button>
+      <button className="btn btn-p" disabled={!!occ || ecart==null || ecart===0 || !raison.trim()} onClick={sauver}>{occ || 'Enregistrer la correction'}</button>
       <button className="btn" onClick={onClose}>Annuler</button>
       {ecart===0 && <span className="muted" style={{fontSize:12}}>Même total qu'avant — rien à régler.</span>}</div>
-    {l.ajust.length>0 && <div style={{marginTop:16}}><div className="fh" style={{fontSize:13,marginBottom:4}}>Réglages déjà faits</div>
+    {l.ajust.length>0 && <div style={{marginTop:16}}><div className="fh" style={{fontSize:13,marginBottom:4}}>Corrections déjà faites</div>
       <table style={{fontSize:12.5}}><thead><tr><th>Date</th><th>Pourquoi</th><th>Référence</th><th style={{textAlign:'right'}}>Heures</th><th></th></tr></thead>
         <tbody>{l.ajust.map(d=><tr key={d.row}><td>{d.date}</td><td>{d.titre}</td><td className="muted">{d.note||'—'}</td><td style={{textAlign:'right',fontWeight:700}}>{sg(d.montant||0)}</td>
-          <td><button className="btn btn-sm" title="Annuler ce réglage" onClick={async()=>{ if(confirm('Annuler ce réglage de '+sg(d.montant||0)+' ?')){ await enlever(d); } }}>✕</button></td></tr>)}</tbody></table></div>}
+          <td><button className="btn btn-sm" title="Annuler cette correction" onClick={async()=>{ if(confirm('Annuler cette correction de '+sg(d.montant||0)+' ?')){ await enlever(d); } }}>✕</button></td></tr>)}</tbody></table></div>}
   </Modal>; }
 function ConfirmerMain({conf, week, nom, total}){
   const [ouvert,setOuvert]=useState(false); const [note,setNote]=useState('Confirmée par courriel'); const [occupe,setOccupe]=useState(false);
@@ -4465,7 +4492,7 @@ function EmployeFiche({cfg, l, docsAbsent, onClose, relire, onRegl}){
       <div style={{flex:1,minWidth:200}}><b>Depuis {l.dernier ? 'le dernier règlement ('+l.dernier.date+')' : 'le début (jamais réglé)'}</b>
         <div className="muted" style={{fontSize:12.5}}>{(l.achD||[]).length} achat{(l.achD||[]).length>1?'s':''} fournisseur + {(l.dosD||[]).length} autre{(l.dosD||[]).length>1?'s':''} à déduire = <b style={{color:'var(--danger)'}}>− {cvMoney(l.deduit)}</b> · banque {fmtH(l.reste)}{l.solde!=null ? ' · solde '+cvMoney(l.solde) : ''}{l.hRest!=null ? ' · '+fmtH(l.hRest)+' restantes' : ''}</div>
         {l.dernierEnvoi && <div style={{fontSize:12,marginTop:2}}>📧 Dernier relevé envoyé le <b>{l.dernierEnvoi.date}</b> : {l.dernierEnvoi.note.split(' · envoyé')[0]}</div>}</div>
-      {onRegl && <button className="btn btn-sm btn-p" onClick={onRegl}>📄 Feuille de règlement</button>}</div>
+      {onRegl && <button className="btn btn-sm btn-p" onClick={onRegl}>🏦 Relevé et paiement</button>}</div>
     {titre('Achats chez les fournisseurs ('+l.ach.length+') — '+cvMoney(totAch))}
     {!l.ach.length ? <div className="muted" style={{fontSize:12.5}}>Aucune facture fournisseur associée à « Employé — {e.nom.split(' ')[0]} ». (Comptabilité › Comptes fournisseurs › 👷 Employé)</div>
       : <div style={{display:'grid',gap:2,fontSize:13}}>{l.ach.sort((a,b)=>String(b.date).localeCompare(String(a.date))).map((a,k)=><div key={k} style={{display:'flex',gap:8,borderTop:k?'1px solid var(--border)':'none',padding:'3px 0'}}>
@@ -4550,7 +4577,7 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
     const hRest = taux ? Math.max(0, Math.round(((valeur!=null ? valeur : 0) - deduit)/taux*100)/100) : null;   // v549 : heures qui restent en banque une fois le matériel payé avec ses heures
     const envois = dos.filter(d=>d.type===ENVOI).sort((a,b)=>String(a.date).localeCompare(String(b.date))), dernierEnvoi = envois.length ? envois[envois.length-1] : null;
     return {e, tauxPaie, hRest, dernierEnvoi, h, base, ajust, adjH, dernier, depuis, achD, dosD, payees, reste, taux, perso:r.taux!=null, ach, dos, deduit, valeur, solde: valeur!=null ? valeur-deduit : null}; });
-  const [pdfVoir,setPdfVoir]=useState(null), [regl,setRegl]=useState(null), [reglage,setReglage]=useState(null);   // v576 : réglage de la banque d'heures d'un employé   // v542 : PDF d'un achat dans le CRM ; feuille de règlement d'un employé
+  const [pdfVoir,setPdfVoir]=useState(null), [regl,setRegl]=useState(null), [reglage,setReglage]=useState(null), [banqueOuv,setBanqueOuv]=useState(null);   // v578 : 🏦 Banque de <prénom> = correction du solde + relevé et paiement + historique   // v576 : réglage de la banque d'heures d'un employé   // v542 : PDF d'un achat dans le CRM ; feuille de règlement d'un employé
   const ajouterAjust = async (nom, date, heures, raison, ref)=>{ if(docs.absent) await ensureSheetsExist(id, [{name:EMP_DOSSIER, headers:EMP_DOSSIER_ENTETE}]);
     await sheetsAppendRow(id, qSheet(EMP_DOSSIER), ['E-'+Date.now(), nom, date, AJUST_H, raison, heures.toFixed(2), 'Non', '', ref||'', new Date().toLocaleString('fr-CA')]); await lire(true); };
   const regler = async l=>{ if(docs.absent) await ensureSheetsExist(id, [{name:EMP_DOSSIER, headers:EMP_DOSSIER_ENTETE}]);
@@ -4570,6 +4597,8 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
   const lf = fiche && lignes.find(l=>prenom(l.e.nom)===prenom(fiche));
   const champ = (val, onSave, w, ph) => <input key={String(val)} defaultValue={val==null?'':val} placeholder={ph} inputMode="decimal" onBlur={e=>{ const v=e.target.value.trim().replace(',','.'); if(v!==String(val==null?'':val)) onSave(v); }} style={{width:w||64,textAlign:'right',padding:'3px 6px'}}/>;
   return <div className="card" style={{marginTop:16,padding:0,overflowX:'auto'}}>
+    {banqueOuv && !reglage && !regl && (()=>{ const l = lignes.find(x=>x.e.nom===banqueOuv); return l ? <BanqueEmploye l={l} onClose={()=>setBanqueOuv(null)}
+      onCorrection={()=>setReglage(l.e.nom)} onReleve={()=>setRegl(l.e.nom)}/> : null; })()}
     {reglage && (()=>{ const l = lignes.find(x=>x.e.nom===reglage); return l ? <ReglageBanque l={l} onClose={()=>setReglage(null)} ajouter={(d,h,r,f)=>ajouterAjust(l.e.nom, d, h, r, f)} enlever={enleverAjust}/> : null; })()}
     {lf && !regl && <EmployeFiche cfg={cfg} l={lf} docsAbsent={docs.absent} onClose={()=>setFiche(null)} relire={()=>lire(true)} onRegl={()=>setRegl(lf.e.nom)}/>}
     {pdfVoir && <Modal title={'📄 '+pdfVoir.titre} onClose={()=>setPdfVoir(null)} wide>
@@ -4589,8 +4618,7 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
         return <React.Fragment key={l.e.nom}><tr>
         <td style={{cursor:'pointer'}} title="Ouvrir sa fiche" onClick={()=>setFiche && setFiche(l.e.nom)}><span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:l.e.couleur,marginRight:6}}></span><span style={{color:'var(--accent)',fontWeight:700}}>{l.e.nom}</span>{l.dos.length>0 && <span className="muted" style={{fontSize:11}}> · 📎 {l.dos.length}</span>}
           {l.dernierEnvoi && <div className="muted" style={{fontSize:11}} title={l.dernierEnvoi.note}>📧 relevé envoyé le {l.dernierEnvoi.date}{l.dernierEnvoi.montant ? ' — solde '+cvMoney(l.dernierEnvoi.montant) : ''}</div>}
-          <button className="btn btn-sm" style={{marginLeft:8,padding:'1px 7px',fontSize:11}} onClick={ev=>{ ev.stopPropagation(); setRegl(l.e.nom); }} title="Feuille pour régler les comptes : heures, ajustements, achats, solde">📄 Règlement</button>
-          <button className="btn btn-sm" style={{marginLeft:4,padding:'1px 7px',fontSize:11}} onClick={ev=>{ ev.stopPropagation(); setReglage(l.e.nom); }} title="Corriger ses heures supp en banque (nouveau total, pourquoi, référence)">⚙️ Réglage</button></td>
+          <button className="btn btn-sm" style={{marginLeft:8,padding:'1px 8px',fontSize:11.5}} onClick={ev=>{ ev.stopPropagation(); setBanqueOuv(l.e.nom); }} title="Sa banque d'heures supp : solde, correction du solde, relevé et paiement, historique">🏦 Banque de {prenomAff(l.e.nom)}</button></td>
         <td style={{textAlign:'right',fontWeight:700,...lien}} title="Voir le calcul semaine par semaine" onClick={()=>basculer(l.e.nom,'h')}>{ouvH?'▾ ':'▸ '}{fmtH(l.h)}</td>
         <td style={{textAlign:'right'}}>{champ(l.payees||'', v=>ecrire(l.e.nom, {payees:v}), 60, 'h')}</td>
         <td style={{textAlign:'right'}}>{champ(l.perso ? l.taux : '', v=>ecrire(l.e.nom, {taux:v}), 60, l.taux!=null ? String(l.taux) : '$/h')}
@@ -4607,7 +4635,7 @@ function BanqueSupp({cfg, emps, pts, fiche, setFiche, banqueConf, banqueDetail})
             <td style={{textAlign:'right',color:w.supp?'var(--danger)':'var(--muted)'}}>{w.supp ? '+'+fmtH(w.supp) : '—'}</td>
             <td style={{textAlign:'right',color:w.pris?'var(--warning)':'var(--muted)'}}>{w.pris ? '−'+fmtH(w.pris) : (w.sous ? <span title="Sous 40 h, mais il n'a pas choisi de prendre dans sa banque">— ({fmtH(w.sous)} sous 40)</span> : '—')}</td>
             <td style={{textAlign:'right',fontWeight:700}}>{fmtH(w.apres)}</td></tr>)}
-            {l.ajust.map(d=><tr key={'aj'+d.row}><td colSpan="4" style={{textAlign:'right'}}>⚙️ Réglage du {d.date} — {d.titre}{d.note ? <span className="muted"> · réf. {d.note}</span> : ''}</td>
+            {l.ajust.map(d=><tr key={'aj'+d.row}><td colSpan="4" style={{textAlign:'right'}}>✏️ Correction du {d.date} — {d.titre}{d.note ? <span className="muted"> · réf. {d.note}</span> : ''}</td>
               <td style={{textAlign:'right',color:d.montant<0?'var(--warning)':'var(--danger)'}}>{d.montant>0?'+':d.montant<0?'−':''}{fmtH(Math.abs(d.montant||0))}</td></tr>)}
             <tr><td colSpan="4" style={{textAlign:'right'}}>Total banque</td><td style={{textAlign:'right',fontWeight:800}}>{fmtH(l.h)}</td></tr>
             {l.payees>0 && <tr><td colSpan="4" style={{textAlign:'right'}}>− déjà payées</td><td style={{textAlign:'right'}}>−{fmtH(l.payees)}</td></tr>}
@@ -4670,7 +4698,7 @@ function FeuilleReglement({l, sem, onClose, ajouter, enlever, voirPdf, ecrirePay
     w.document.write(pageHtml());
     w.document.close(); w.focus(); setTimeout(()=>w.print(), 300); };
   const th = {textAlign:'left',padding:'4px 6px',borderBottom:'1px solid var(--border)',fontSize:12}, td = {padding:'4px 6px',borderBottom:'1px solid var(--border)',fontSize:12.5}, n = {textAlign:'right'};
-  return <Modal title={'📄 Règlement — '+l.e.nom} onClose={onClose} wide>
+  return <Modal title={'📄 Relevé et paiement — '+prenomAff(l.e.nom)} onClose={onClose} wide>
     <div style={{display:'flex',gap:8,justifyContent:'flex-end',alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>
       <span className="muted" style={{fontSize:12,marginRight:'auto',lineHeight:1.4}}>{l.dernier ? <>Dernier règlement : {l.dernier.date}<br/></> : null}{l.dernierEnvoi ? <span title={l.dernierEnvoi.note}>📧 Dernier relevé envoyé le {l.dernierEnvoi.date} : {l.dernierEnvoi.note.split(' · envoyé')[0]}</span> : 'Aucun relevé envoyé'}</span>
       <button className="btn btn-sm" onClick={imprimer}>🖨 Imprimer / PDF</button>
