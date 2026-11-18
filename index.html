@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v568';
+const APP_VERSION = 'v569';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5176,24 +5176,81 @@ function NouvelleJobAgenda({cfg, addProjet, toast, onClose, onDone, initialDate,
 // v345 : point de départ des itinéraires (la shop)
 const SHOP_ADRESSE = '560 boulevard du Séminaire Nord, Saint-Jean-sur-Richelieu, QC';
 // v521 : contenu du dossier Drive d'une job, avec aperçu, dans la fenêtre de l'événement
-function DossierApercu({id}){
+// v569 : fichiers d'un dossier de job classés — appels de service (papier), factures, OT, PO / plans, autres —
+// et, quand on connaît les passages de la job, séparés par phase (Rough / Finition / Service) selon le no d'AP ou de facture.
+function dosClasse(nom){ const n = String(nom||'').replace(/\.[a-z0-9]{2,5}$/i,'');
+  let m = n.match(/^appels?\s+(\d+)\s*[—–-]+\s*facture\s+(\d+)/i); if(m) return {g:'ap', ap:m[1], fac:m[2], lab:'AP '+m[1]+' · papier avec facture #'+m[2], tri:+m[1]};
+  m = n.match(/^appels?\s+(\d+)/i); if(m) return {g:'ap', ap:m[1], lab:'AP '+m[1]+' · papier', tri:+m[1]};
+  m = n.match(/^(?:OT|ordre de travail)\s+(\d+)/i); if(m) return {g:'ot', ot:m[1], lab:'OT '+m[1]+' · papier', tri:+m[1]};
+  m = n.match(/^facture\s+(\d+)\s*\+\s*appels?\s+([\d,\s et]+)/i); if(m){ const aps = m[2].match(/\d+/g)||[]; return {g:'fac', fac:m[1], aps, lab:'#'+m[1]+' + AP '+aps.join(', '), tri:+m[1]}; }
+  m = n.match(/^facture\s+(\d+)/i); if(m) return {g:'fac', fac:m[1], lab:'#'+m[1]+' · facture seule', tri:+m[1]};
+  if(/bon de commande|^po[\s_-]|\bP0\d{4}\b.*tout|[-–]\s*tout$|plan/i.test(n)) return {g:'po', lab:n, tri:/bon de commande/i.test(n) ? 0 : /plan/i.test(n) ? 1 : 2};
+  return {g:'autre', lab:n, tri:9}; }
+const DOS_GROUPES = [['ap','📋 Appels de service (papier)'],['fac','🧾 Factures'],['ot','📝 Ordres de travail'],['po','📑 PO, plans et documents'],['autre','📎 Autres']];
+const dosPhaseNom = p => /rough/i.test(p) ? 'Rough' : /fini/i.test(p) ? 'Finition' : /serv/i.test(p) ? 'Service' : /entr/i.test(p) ? 'Entrée électrique' : p ? p.charAt(0)+p.slice(1).toLowerCase() : '';
+// Rotation des aperçus (photo ou scan de travers) : gardée par fichier, sur cet appareil et dans La mémoire (onglet Rotations).
+let ROT_MEM = null, MEMOIRE_ID_G = '';
+function rotLire(){ if(ROT_MEM) return ROT_MEM; ROT_MEM = {}; try{ ROT_MEM = JSON.parse(localStorage.getItem('apercu_rot')||'{}')||{}; }catch(e){}
+  if(MEMOIRE_ID_G) lireCache(MEMOIRE_ID_G, 'Rotations!A1:B').then(r=>{ (r.result.values||[]).slice(1).forEach(x=>{ if(x[0]) ROT_MEM[x[0]] = +x[1]||0; }); try{ localStorage.setItem('apercu_rot', JSON.stringify(ROT_MEM)); }catch(e){} }, ()=>null);
+  return ROT_MEM; }
+async function rotEcrire(id, deg){ const m = rotLire(); m[id] = deg; try{ localStorage.setItem('apercu_rot', JSON.stringify(m)); }catch(e){}
+  if(!MEMOIRE_ID_G) return;
+  try{ await ensureSheetsExist(MEMOIRE_ID_G, [{name:'Rotations', headers:['Fichier','Degrés']}]);
+    const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:MEMOIRE_ID_G, range:'Rotations!A1:A'});
+    const i = (r.result.values||[]).findIndex(x=>x[0]===id);
+    if(i>0) await sheetsUpdateRow(MEMOIRE_ID_G, 'Rotations', i+1, [id, deg]); else await sheetsAppendRow(MEMOIRE_ID_G, 'Rotations', [id, deg]); }catch(e){} }
+function ApercuFichier({id, hauteur}){
+  const boite = useRef(null), [dim,setDim]=useState({w:0, h:0}), [rot,setRot]=useState(()=>rotLire()[id]||0);
+  useEffect(()=>{ setRot(rotLire()[id]||0); const t = setTimeout(()=>setRot(rotLire()[id]||0), 1500); return ()=>clearTimeout(t); },[id]);
+  useLayoutEffect(()=>{ const el = boite.current; if(!el) return; const maj = ()=>setDim({w:el.clientWidth, h:el.clientHeight}); maj();
+    if(window.ResizeObserver){ const o = new ResizeObserver(maj); o.observe(el); return ()=>o.disconnect(); } },[]);
+  const tourner = d => { const n = ((rot+d)%360+360)%360; setRot(n); rotEcrire(id, n); };
+  const cote = rot%180 !== 0;
+  const st = cote && dim.w ? {position:'absolute', width:dim.h, height:dim.w, left:(dim.w-dim.h)/2, top:(dim.h-dim.w)/2, transform:'rotate('+rot+'deg)'}
+    : {position:'absolute', inset:0, width:'100%', height:'100%', transform:rot ? 'rotate('+rot+'deg)' : 'none'};
+  return <div style={{display:'grid',gap:6}}>
+    <div style={{display:'flex',gap:6,justifyContent:'flex-end'}}>
+      <button className="btn btn-sm" title="Tourner à gauche" onClick={()=>tourner(-90)}>⟲</button>
+      <button className="btn btn-sm" title="Tourner à droite (gardé pour la prochaine fois)" onClick={()=>tourner(90)}>⟳</button>
+      <a className="btn btn-sm" data-drive="1" href={'https://drive.google.com/file/d/'+id+'/view'} target="_blank" rel="noopener" style={{textDecoration:'none'}}>↗ Ce fichier dans Drive</a></div>
+    <div ref={boite} style={{position:'relative',height:hauteur||'66vh',overflow:'hidden',border:'1px solid var(--border)',borderRadius:8,background:'#fff'}}>
+      <iframe key={id} src={'https://drive.google.com/file/d/'+id+'/preview'} allow="autoplay" style={{...st, border:0}}/></div>
+  </div>; }
+function DossierApercu({id, events}){
   const [l,setL]=useState(null), [voir,setVoir]=useState(null), [err,setErr]=useState('');
+  const phases = useMemo(()=>{ const ap = {}, fac = {}, ot = {}; const nums = v => String(v||'').match(/\d{3,5}/g)||[];
+    (events||[]).forEach(e=>{ const ph = dosPhaseNom(e.phase||''); if(!ph) return; nums(e.as).forEach(n=>ap[n]=ap[n]||ph); nums(e.fac).forEach(n=>fac[n]=fac[n]||ph); nums(e.ot).forEach(n=>ot[n]=ot[n]||ph); });
+    return {ap, fac, ot}; },[events]);
+  const liste = useMemo(()=>{ if(!l) return [];
+    const x = l.map(f=>{ const c = dosClasse(f.name);
+      const ph = c.g==='ap' ? (phases.ap[c.ap] || phases.fac[c.fac] || '') : c.g==='fac' ? (phases.fac[c.fac] || (c.aps||[]).map(a=>phases.ap[a]).find(Boolean) || '') : c.g==='ot' ? (phases.ot[c.ot] || '') : '';
+      return {...f, c, ph}; });
+    const ordrePh = p => ({Rough:0, Finition:1, Service:2, 'Entrée électrique':3})[p] ?? (p ? 4 : 5);
+    return x.sort((a,b)=>DOS_GROUPES.findIndex(g=>g[0]===a.c.g)-DOS_GROUPES.findIndex(g=>g[0]===b.c.g) || ordrePh(a.ph)-ordrePh(b.ph) || a.c.tri-b.c.tri || a.name.localeCompare(b.name)); },[l, phases]);
   useEffect(()=>{ let ok = true;
     driveFetch('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent("'"+id+"' in parents and trashed=false")+'&orderBy=modifiedTime%20desc&pageSize=100&fields=files(id,name,mimeType,modifiedTime)&supportsAllDrives=true&includeItemsFromAllDrives=true')
-      .then(r=>{ if(!ok) return; const f = (r.files||[]).filter(x=>x.mimeType!=='application/vnd.google-apps.folder'); setL(f); setVoir(f[0] || null); }).catch(e=>ok && setErr(apiErrMsg(e)));
+      .then(r=>{ if(!ok) return; const f = (r.files||[]).filter(x=>x.mimeType!=='application/vnd.google-apps.folder'); setL(f); }).catch(e=>ok && setErr(apiErrMsg(e)));
     return ()=>{ ok = false; }; },[id]);
+  useEffect(()=>{ if(liste.length && !voir) setVoir(liste[0]); },[liste]);
   if(err) return <div className="muted">Dossier illisible : {err}</div>;
   if(!l) return <div style={{display:'flex',gap:8,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture du dossier…</span></div>;
-  return <div style={{display:'grid',gridTemplateColumns:'minmax(200px,280px) minmax(0,1fr)',gap:14,minHeight:'60vh'}}>
-    <div style={{overflowY:'auto',maxHeight:'66vh',display:'grid',alignContent:'start',gap:2}}>
+  return <div style={{display:'grid',gridTemplateColumns:'minmax(200px,290px) minmax(0,1fr)',gap:14,minHeight:'60vh'}}>
+    <div style={{overflowY:'auto',maxHeight:'70vh',display:'grid',alignContent:'start',gap:2}}>
       {!l.length && <div className="muted" style={{fontSize:12.5}}>Dossier vide.</div>}
-      {l.map(f=><div key={f.id} onClick={()=>setVoir(f)} style={{cursor:'pointer',padding:'6px 8px',borderRadius:6,fontSize:12.5,background:voir && voir.id===f.id ? 'rgba(127,127,127,.18)' : 'transparent'}}>
-        {/pdf/.test(f.mimeType) ? '📄' : /^image/.test(f.mimeType) ? '🖼️' : /audio|video|webm/.test(f.mimeType+f.name) ? '🎤' : '📎'} {f.name}
-        <div className="muted" style={{fontSize:11}}>{String(f.modifiedTime||'').slice(0,10)}</div></div>)}
-      <a className="btn btn-sm" style={{marginTop:6}} data-drive="1" href={'https://drive.google.com/drive/folders/'+id} target="_blank" rel="noopener">↗ Ouvrir dans Drive</a>
-      {voir && <a className="btn btn-sm" data-drive="1" href={'https://drive.google.com/file/d/'+voir.id+'/view'} target="_blank" rel="noopener">↗ Ce fichier dans Drive</a>}
+      {DOS_GROUPES.map(([g, titre])=>{ const fs = liste.filter(f=>f.c.g===g); if(!fs.length) return null;
+        const phs = [...new Set(fs.map(f=>f.ph))];
+        return <div key={g} style={{marginBottom:8}}>
+          <div style={{fontWeight:700,fontSize:12.5,padding:'4px 2px',borderBottom:'1px solid var(--border)'}}>{titre} <span className="muted" style={{fontWeight:400}}>· {fs.length}</span></div>
+          {phs.map(ph=><div key={ph||'-'}>
+            {(phs.length>1 || ph) && (g==='ap' || g==='fac' || g==='ot') && <div className="muted" style={{fontSize:11,textTransform:'uppercase',letterSpacing:.5,padding:'5px 4px 1px'}}>{ph || 'Phase inconnue'}</div>}
+            {fs.filter(f=>f.ph===ph).map(f=><div key={f.id} onClick={()=>setVoir(f)} title={f.name} style={{cursor:'pointer',padding:'5px 8px',borderRadius:6,fontSize:12.5,background:voir && voir.id===f.id ? 'rgba(127,127,127,.18)' : 'transparent'}}>
+              {/^image/.test(f.mimeType) ? '🖼️ ' : /audio|video|webm/.test(f.mimeType+f.name) ? '🎤 ' : ''}{f.c.lab}
+              <span className="muted" style={{fontSize:11}}> · {String(f.modifiedTime||'').slice(0,10)}</span></div>)}
+          </div>)}
+        </div>; })}
+      <a className="btn btn-sm" style={{marginTop:6}} data-drive="1" href={'https://drive.google.com/drive/folders/'+id} target="_blank" rel="noopener">↗ Ouvrir le dossier dans Drive</a>
     </div>
-    {voir ? <iframe key={voir.id} src={'https://drive.google.com/file/d/'+voir.id+'/preview'} style={{width:'100%',height:'66vh',border:'1px solid var(--border)',borderRadius:8,background:'#fff'}}/> : <div/>}
+    {voir ? <ApercuFichier id={voir.id}/> : <div/>}
   </div>;
 }
 // v568 : les liens Drive (fichier ou dossier) s'ouvrent DANS le CRM, par-dessus la page; clic à côté = fermer.
@@ -5221,7 +5278,7 @@ function ApercuDriveGlobal(){
       <span>{a.dossier ? '📂' : '📄'} {a.titre || (a.dossier ? 'Dossier' : 'Aperçu')}</span>
       <a className="btn btn-sm" data-drive="1" href={lien} target="_blank" rel="noopener" style={{textDecoration:'none',marginLeft:'auto'}}>↗ Ouvrir dans Drive</a></div>}>
     {a.dossier ? <DossierApercu id={a.id}/>
-      : <iframe src={'https://drive.google.com/file/d/'+a.id+'/preview'} allow="autoplay" style={{width:'100%',height:'78vh',border:'1px solid var(--border)',borderRadius:8,background:'#fff'}}/>}
+      : <ApercuFichier id={a.id} hauteur="76vh"/>}
   </Modal>;
 }
 function EditEventModal({cfg, event, job, onClose, onSaved, toast}){
@@ -5344,7 +5401,7 @@ function EditEventModal({cfg, event, job, onClose, onSaved, toast}){
       {[['dossier','📁 Dossier', !!dossierJob],['commande','🛒 Commander le matériel', true],['projet','📊 La job dans Projets', true]].map(([k,l,ok])=>ok && <button key={k} type="button" className={'btn btn-sm'+(panneau===k?' btn-p':'')} onClick={()=>setPanneau(panneau===k ? null : k)}>{l}</button>)}
       {!dossierJob && <span className="muted" style={{fontSize:12}}>{job.j.po ? 'Pas de dossier rattaché à '+job.j.po : 'Pas de dossier (aucun PO)'}</span>}
     </div>}
-    {panneau==='dossier' && dossierJob && <DossierApercu id={dossierJob}/>}
+    {panneau==='dossier' && dossierJob && <DossierApercu id={dossierJob} events={job ? job.j.events : null}/>}
     {panneau==='commande' && <div style={{maxHeight:'70vh',overflowY:'auto'}}>{(()=>{ BC_PREFILL = BC_PREFILL || {id:event.id, day:String(event.start||'').slice(0,10), title:event.title}; return null; })()}<CommandesView cfg={cfg} toast={toast} refreshKey={0}/></div>}
     {panneau==='projet' && job && <div style={{maxHeight:'70vh',overflowY:'auto'}}><ProjetsSuivi cfg={cfg} refreshKey={0} seul={{id:job.j.id, ouvrir:job.c.code+job.j.id, nom:(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}}/></div>}
     <div style={{display:panneau ? 'none' : 'block'}}>
@@ -14981,7 +15038,7 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
   return <div className={enModal ? '' : 'card'} style={enModal ? {minHeight:'60vh'} : {position:'sticky',top:'calc(var(--topbar-h) + 12px)',maxHeight:'calc(100vh - var(--topbar-h) - 24px)',overflowY:'auto'}}>
     {enModal && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10,position:'sticky',top:0,background:'var(--bg2)',zIndex:2,padding:'2px 0 8px',borderBottom:'1px solid var(--border)'}}>
       {onglets.map(([k,l])=><button key={k} className={'btn btn-sm'+(ong===k?' btn-p':'')} onClick={()=>setOng(k)}>{l}</button>)}</div>}
-    {enModal && ong==='dossier' && r.dossier && <DossierApercu id={r.dossier}/>}
+    {enModal && ong==='dossier' && r.dossier && <DossierApercu id={r.dossier} events={job.events}/>}
     {enModal && ong==='projet' && <div><ProjetsSuivi cfg={cfg} refreshKey={0} seul={{id:job.id, ouvrir:job.client+job.id, nom:(job.client!=='PART'?job.client+' ':'')+job.name}}/></div>}
     {vu('fiche') && <>
     <CvPill status={job.etatClient||job.status}/>
@@ -18192,6 +18249,7 @@ function App(){
     setActiveCalsList(arr);
     try{ localStorage.setItem('crm_active_cals', JSON.stringify(arr)); }catch(e){}
   }
+  MEMOIRE_ID_G = cfg.memoireJobsSpreadsheetId || '';   // v569 : rotations des aperçus
   const effectiveCfg = {...cfg, calendarIds: configuredCals.filter(c=>activeCals.has(c)).join(',')};
   useTheme();
   const isDesktop = useIsDesktop();
