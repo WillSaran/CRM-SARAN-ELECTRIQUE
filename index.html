@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v571';
+const APP_VERSION = 'v572';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3248,7 +3248,7 @@ function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, 
     const L = tous.map(x=>{ const evP = x.j.events.filter(e=>!e.attente && e.day>=deb && e.day<=fin); if(!evP.length) return null;
       const passes = evP.filter(e=>e.day<today), avenir = evP.filter(e=>e.day>=today);
       const blocsO = (BJ[x.j.id]||[]).filter(b=>b.statut!=='Réglé');
-      const notes = passes.flatMap(e=>(ptsP||[]).filter(p=>p.date===e.day && p.job && String(p.note||'').trim() && (N(p.job)===N(e.title) || (x.j.po && N(p.job).includes(N(x.j.po))))).map(p=>topoNote10(p.note)).filter(v=>v!=null));
+      const notes = passes.flatMap(e=>(ptsP||[]).filter(p=>String(p.note||'').trim() && topoMatch(p, e, x.j)).map(p=>topoNote10(p.note)).filter(v=>v!=null));
       const vocaux = passes.reduce((t,e)=>t+(e.attachments||[]).filter(a=>a.fileUrl && topoEstVocal(a.title, a.mimeType)).length, 0);
       const aFact = x.s.etape==='À facturer';
       const cat = blocsO.length ? 'bloque' : (passes.length && (x.s.manquants.length || aFact)) ? 'boucler' : avenir.length ? 'avenir' : 'complet';
@@ -15088,8 +15088,15 @@ let PTS_JOB_CACHE = null;
 function usePointagesTous(cfg){
   const [pts,setPts]=useState(PTS_JOB_CACHE);
   useEffect(()=>{ if(PTS_JOB_CACHE) return; const sid = (cfg && cfg.punchproSpreadsheetId) || PP_SHEET_ID;
-    lireCache(sid, 'Pointages!A2:Z').then(r=>{ PTS_JOB_CACHE = mapPointageRows(r.result.values||[]); setPts(PTS_JOB_CACHE); }, ()=>setPts([])); },[]);
+    // v572 : + l'onglet « Dépôts » de PunchPro (dépôt rapide AP / OT : note sur 10, note, fichiers), lu comme des pointages rattachés au passage
+    Promise.all([lireCache(sid, 'Pointages!A2:Z').then(r=>mapPointageRows(r.result.values||[]), ()=>[]),
+      lireCache(sid, 'Dépôts!A2:M').then(r=>(r.result.values||[]).filter(x=>x[1]).map(x=>({nom:x[1], type:'depot', date:x[6]||String(x[0]||'').slice(0,10), job:x[5]||'', eventId:x[4]||'',
+        note:[(x[2]||'')+(x[3]?' '+x[3]:''), x[8] ? x[8]+'/10' : '', x[9]||''].filter(Boolean).join(' · '), fichiers:x[10]||''})), ()=>[])])
+      .then(([a, b])=>{ PTS_JOB_CACHE = [...a, ...b]; setPts(PTS_JOB_CACHE); }); },[]);
   return pts; }
+const topoMatch = (p, e, job) => { const N = v => cvNorm(v||''); const b = id => String(id||'').split('_')[0];
+  if(p.eventId && e.id && (p.eventId===e.id || b(p.eventId)===b(e.id))) return true;
+  return p.date===e.day && !!p.job && (N(p.job)===N(e.title) || (!!job.po && N(p.job).includes(N(job.po)))); };
 const topoNote10 = t => { const m = String(t||'').match(/(\d{1,2}(?:[.,]\d)?)\s*(?:\/|sur)\s*10\b/i); const v = m ? parseFloat(m[1].replace(',','.')) : NaN; return v>=0 && v<=10 ? v : null; };
 const topoFichiers = p => String(p.fichiers||'').split(/\s*\|\s*(?=https?:)/).map(x=>x.trim()).filter(Boolean).map(x=>{ const [url, ...n] = x.split('|'); return {url:url.trim(), nom:(n.join('|')||'').trim() || 'Fichier'}; });
 const topoEstVocal = (nom, mime) => /^audio\//.test(mime||'') || /^VOCAL_/i.test(nom||'') || /\.(m4a|mp3|wav|aac|ogg|caf|webm)$/i.test(nom||'') || /m[ée]mo vocal|vocal/i.test(nom||'');
@@ -15102,7 +15109,7 @@ function CvTopoChantier({job, cfg}){
   const ouverts = blocs.filter(b=>b.statut!=='Réglé'), regles = blocs.filter(b=>b.statut==='Réglé');
   const today = cvDay(new Date().toISOString()), N = v => cvNorm(v||'');
   const passages = job.events.filter(e=>!e.attente && e.day<=today).slice().sort((a,b)=>String(b.day).localeCompare(String(a.day))).map(e=>{
-    const lignes = (pts||[]).filter(p=>p.date===e.day && p.job && (N(p.job)===N(e.title) || (job.po && N(p.job).includes(N(job.po)))));
+    const lignes = (pts||[]).filter(p=>topoMatch(p, e, job));
     const notes = lignes.filter(p=>String(p.note||'').trim()).map(p=>({qui:p.nom, txt:String(p.note).replace(/\s*\[via [^\]]*\]/g,'').trim(), n10:topoNote10(p.note)})).filter(x=>x.txt);
     const vus = new Set(), vocaux = [];
     (e.attachments||[]).filter(a=>a.fileUrl && topoEstVocal(a.title, a.mimeType)).forEach(a=>{ if(!vus.has(a.fileUrl)){ vus.add(a.fileUrl); vocaux.push({url:a.fileUrl, titre:a.title}); } });
