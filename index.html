@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v574';
+const APP_VERSION = 'v575';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2951,7 +2951,22 @@ function PjPhasesReglage({job, info, basculer}){
 }
 
 // Détail d'une étape choisie : état, ce qui manque, cocher à la main, blocages (ajouter, voir, régler)
-function PjEtapeDetail({job, x, blocages, B, basculerEtape, toast}){
+// v575 : blocage rapide pour la job, à côté de « Passages » (rattaché à la prochaine étape)
+function CvBlocageRapide({job, B, etape}){
+  const [f,setF]=useState(null), [occ,setOcc]=useState('');
+  if(!f) return <button type="button" className="btn btn-sm" style={{color:'var(--warning)',borderColor:'var(--warning)'}} onClick={e=>{ e.stopPropagation(); setF({type:PJ_TYPES_BLOCAGE[0], autre:'', description:'', date:cvDay(new Date().toISOString())}); }}>🚧 + Blocage</button>;
+  const sauver = async () => { setOcc('Enregistrement…');
+    try{ await B.ajouter({job:job.id, etape:etape||'', type:f.type==='Autre' ? (f.autre.trim()||'Autre') : f.type, description:f.description.trim(), date:f.date, statut:'Ouvert', pj:[]}, []); setF(null); }
+    catch(e){ alert('Erreur : '+apiErrMsg(e)); } setOcc(''); };
+  return <div className="card" onClick={e=>e.stopPropagation()} style={{padding:8,margin:'4px 0',display:'grid',gap:6,flexBasis:'100%',borderColor:'var(--warning)'}}>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+      <select value={f.type} onChange={e=>setF({...f, type:e.target.value})} style={{width:'auto',padding:'4px 8px'}}>{[...PJ_TYPES_BLOCAGE,'Autre'].map(t=><option key={t}>{t}</option>)}</select>
+      {f.type==='Autre' && <input value={f.autre} onChange={e=>setF({...f, autre:e.target.value})} placeholder="Quel contretemps ?" style={{flex:'1 1 160px',padding:'4px 8px'}}/>}
+      <input type="date" value={f.date} onChange={e=>setF({...f, date:e.target.value})} style={{width:'auto',padding:'4px 8px'}}/></div>
+    <textarea rows={2} value={f.description} onChange={e=>setF({...f, description:e.target.value})} placeholder="Ce qui bloque, ce qu'il faut faire…" style={{padding:'5px 8px'}}/>
+    <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={!!occ || !f.description.trim()} onClick={sauver}>{occ || 'Enregistrer le blocage'}</button><button className="btn btn-sm" onClick={()=>setF(null)}>Annuler</button></div>
+  </div>; }
+function PjEtapeDetail({job, x, blocages, B, basculerEtape, toast, poSlot}){
   const [form,setForm]=useState(null);   // {type, autre, date, description, lien, note, fichiers:[]}
   const [voir,setVoir]=useState(null);   // id du blocage ouvert
   const [occupe,setOccupe]=useState('');
@@ -2994,9 +3009,10 @@ function PjEtapeDetail({job, x, blocages, B, basculerEtape, toast}){
         {x.etat!=='ok' && x.etat!=='na' && (x.etat==='manuel'
           ? <button className="btn btn-sm" onClick={()=>basculerEtape(job.id, x.id, false)}>Décocher</button>
           : <button className="btn btn-sm" title="Marquer cette étape comme faite" onClick={()=>basculerEtape(job.id, x.id, true)}>{x.titre==='Job fermée' ? 'Fermer la job' : '✓ Fait'}</button>)}
-        {!form && <button className="btn btn-sm" style={{color:'var(--warning)',borderColor:'var(--warning)'}} onClick={()=>setForm({type:PJ_TYPES_BLOCAGE[0], autre:'', date:cvDay(new Date().toISOString()), description:'', fichiers:[]})}>+ Blocage</button>}
+        {!form && !(x.titre==='PO reçu' && poSlot) && <button className="btn btn-sm" style={{color:'var(--warning)',borderColor:'var(--warning)'}} onClick={()=>setForm({type:PJ_TYPES_BLOCAGE[0], autre:'', date:cvDay(new Date().toISOString()), description:'', fichiers:[]})}>+ Blocage</button>}
       </span>
     </div>
+    {x.titre==='PO reçu' && x.etat!=='ok' && x.etat!=='manuel' && poSlot && <div style={{marginTop:8}}>{poSlot}</div>}
     {form && !form.pour && <div style={{marginTop:8,paddingTop:8,borderTop:'1px solid var(--border)',display:'grid',gap:6}}>
       <b>Nouveau blocage — {x.texte || x.titre}</b>
       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
@@ -3164,7 +3180,8 @@ function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, 
           <div className="a">Prochaine étape : <b>{s.etape}</b>{p.prochaine ? <span className="muted"> · à faire : {pjNomPhase(p.prochaine.phase)} › {p.prochaine.texte || p.prochaine.titre}</span> : ''} {p.attente ? <span className="muted">· en attente</span> : <span style={{fontWeight:800,color:p.pct===100?'var(--success)':'var(--text)'}}>· {p.pct} %</span>}</div>
           <PjBarre p={p} blocages={blocsJ} sel={selEt && selEt.k===k ? selEt.id : null} onEtape={id=>setSelEt(id ? {k, id} : null)}/>
           {o && <PjPhasesReglage job={j} info={p.phasesInfo||{}} basculer={basculerEtape}/>}
-          {selEt && selEt.k===k && (()=>{ const x = p.steps.find(y=>y.id===selEt.id); return x ? <PjEtapeDetail job={j} x={x} blocages={blocsJ} B={B} basculerEtape={basculerEtape} toast={m=>{ if(/^Erreur|^Micro/.test(m)) alert(m); }}/> : null; })()}
+          {selEt && selEt.k===k && (()=>{ const x = p.steps.find(y=>y.id===selEt.id); return x ? <PjEtapeDetail job={j} x={x} blocages={blocsJ} B={B} basculerEtape={basculerEtape} toast={m=>{ if(/^Erreur|^Micro/.test(m)) alert(m); }}
+            poSlot={c.code!=='PART' ? <CvInscrirePO key={'po'+j.id} cfg={cfg} job={j} registry={registry} onChanged={()=>setTick(t=>t+1)}/> : null}/> : null; })()}
           <div style={{display:'none'}}>{s.G.map(g=><span key={g.k} title={g.label+' — '+(g.segments && g.segments.length ? g.segments.map(x=>(x.etat==='na'?'⏳ ':x.etat==='manque'?'✗ ':'✓ ')+x.label).join(' · ') : g.L.length ? g.L.map(x=>(x.ok?'✓ ':'✗ ')+x.titre).join(' · ') : 'pas encore rendu là')} style={{display:'inline-flex',flexDirection:'column',alignItems:'center',gap:2}}>
             {(g.segments && g.segments.length>1)
               ? <span style={{width:38,height:8,display:'flex',gap:1}}>{g.segments.map((x,i)=><span key={i} title={x.label} style={{flex:1,borderRadius:2,background: x.etat==='ok'||x.etat==='manuel' ? 'var(--success)' : x.etat==='manque' ? 'var(--warning)' : 'var(--bg4)'}}/>)}</span>
@@ -3221,7 +3238,7 @@ function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, 
         <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvCreerNoJob key={'no'+j.id} cfg={cfg} job={j} registry={registry} events={events} onChanged={()=>setTick(t=>t+1)}/><CvArchiver cfg={cfg} job={j} archives={archives} onChanged={()=>setTick(t=>t+1)}/></div>
         {c.code!=='PART' && <div style={{fontSize:12.5,margin:'6px 0'}}>👤 Contracteur : <b>{CLIENT_CODES[c.code]||c.code}</b>{CLIENT_CONTACT[c.code] ? ' — '+CLIENT_CONTACT[c.code] : ''}
           {(()=>{ const gens=[...new Set(((j.po && (courriels||{})[j.po])||[]).map(f=>f.de).filter(n=>n && !/saran|william/i.test(n)))]; return gens.length ? <div className="muted" style={{fontSize:12}}>Dans les courriels de cette job : {gens.join(', ')}</div> : null; })()}</div>}
-        <PjPassages events={j.events} today={today} ajouter={<CvAjouterPassage job={j} onDone={()=>setTick(t=>t+1)}/>} ligne={(e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
+        <PjPassages events={j.events} today={today} ajouter={<><CvBlocageRapide job={j} B={B} etape={p.prochaine ? p.prochaine.id : ''}/><CvAjouterPassage job={j} onDone={()=>setTick(t=>t+1)}/></>} ligne={(e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
           {e.attente ? <b style={{color:'var(--warning)'}}>En attente</b> : <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b>} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span>
           {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac==='**' ? <span className="muted"> · pas à facturer</span> : e.fac ? <>{' · facture '}<FacNos txt={e.fac} factures={factures}/>{e.facEnvoyee===false && <span style={{color:'var(--warning)'}}> (pas envoyée)</span>}</> : (e.day<today && !e.attente ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
           {e.day<=today && <CvInscrirePassage cfg={cfg} e={e} onDone={()=>setTick(t=>t+1)}/>}
