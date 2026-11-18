@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v582';
+const APP_VERSION = 'v583';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5738,7 +5738,27 @@ function DepotBureau({cfg, data, toast, onDepose}){
   const [fait,setFait]=useState(null);
   const [ok,setOk]=useState(peutDeposer());
   const ref = useRef(null);
-  const reset = () => { setNum(''); setJob(null); setFichiers([]); setEtat(''); };
+  // v583 : glisser-déposer, aperçu des fichiers, pièces jointes de Gmail, recherche de la job sans ouvrir l'agenda
+  const [survol,setSurvol]=useState(false), [voirF,setVoirF]=useState(null), [q,setQ]=useState(''), [evs,setEvs]=useState(null), [gm,setGm]=useState(null);
+  const urls = useMemo(()=>fichiers.map(f=>URL.createObjectURL(f)),[fichiers]);
+  useEffect(()=>()=>urls.forEach(u=>URL.revokeObjectURL(u)),[urls]);
+  useEffect(()=>{ if(!ouvert || evs) return; const a = new Date(); a.setDate(a.getDate()-45); const b = new Date(); b.setDate(b.getDate()+21);
+    const ids = [...new Set((cfg.calendarIds||'').split(',').map(x=>x.trim()).filter(Boolean))];
+    listCalendarEventsRange(ids, a.toISOString(), b.toISOString()).then(l=>setEvs(l||[]), ()=>setEvs([])); },[ouvert]);
+  const ajouterF = l => setFichiers(x=>[...x, ...Array.from(l||[]).filter(f=>/^image\/|pdf/.test(f.type) || /\.(jpe?g|png|heic|pdf)$/i.test(f.name))]);
+  const chercherGmail = async () => { setGm({etat:'Lecture de tes courriels…', l:[]});
+    try{ if(!peutLireCourriels()) await requestToken('consent', SCOPE_GMAIL_LIRE);
+      const r = await gmReq('messages?maxResults=15&q='+encodeURIComponent('has:attachment newer_than:21d -in:sent (filename:jpg OR filename:jpeg OR filename:png OR filename:heic OR filename:pdf)'));
+      const l = [];
+      for(const m0 of (r.messages||[])){ const m = await gmReq('messages/'+m0.id+'?format=full');
+        const pj = gmPiecesJointes(m.payload).filter(x=>/^image\/|pdf/.test(x.type) || /\.(jpe?g|png|heic|pdf)$/i.test(x.nom||''));
+        if(pj.length) l.push({id:m.id, de:gmNom(gmEntete(m,'From')), sujet:gmEntete(m,'Subject'), date:new Date(+m.internalDate).toLocaleDateString('fr-CA',{day:'numeric',month:'short'}), pj}); }
+      setGm({etat:'', l}); }catch(e){ setGm({etat:'Erreur : '+apiErrMsg(e), l:[]}); } };
+  const prendrePJ = async (m, x) => { setGm(g=>({...g, etat:'Téléchargement de '+x.nom+'…'}));
+    try{ const d = await gmReq('messages/'+m.id+'/attachments/'+x.att), bin = atob(String(d.data||'').replace(/-/g,'+').replace(/_/g,'/'));
+      const f = new File([Uint8Array.from(bin, c=>c.charCodeAt(0))], x.nom, {type:x.type || (/\.pdf$/i.test(x.nom) ? 'application/pdf' : 'image/jpeg')});
+      setFichiers(l=>[...l, f]); setGm(g=>({...g, etat:'', pris:[...((g&&g.pris)||[]), m.id+x.att]})); }catch(e){ setGm(g=>({...g, etat:'Erreur : '+apiErrMsg(e)})); } };
+  const reset = () => { setNum(''); setJob(null); setFichiers([]); setEtat(''); setQ(''); setGm(null); };
   const deposer = async () => {
     if(!job){ setEtat('Choisis la job dans l\'agenda.'); return; }
     if(!fichiers.length){ setEtat('Ajoute la feuille (photo ou scan).'); return; }
@@ -5759,7 +5779,7 @@ function DepotBureau({cfg, data, toast, onDepose}){
       let insc = null;
       if(inscrire && num.trim()){ setEtat('Suivi Travaux…'); try{ insc = await inscrirePassage(cfg, {id:job.id, calId:job.calendarId}, type==='AP' ? {as:num.trim()} : {ot:num.trim()}); }catch(e){ insc = 'erreur'; } }
       if(typeof PAD_CACHE!=='undefined') PAD_CACHE = null;
-      setFait({type, num:num.trim(), job:job.title, n:deposes.length, secours, joint, insc});
+      setFait({type, num:num.trim(), job:job.title, n:deposes.length, secours, joint, insc, fichiers:deposes});
       toast && toast(type+' '+(num.trim()||'')+' déposé pour '+job.title, 'ok');
       reset(); onDepose && onDepose(); }
     catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
@@ -5770,25 +5790,73 @@ function DepotBureau({cfg, data, toast, onDepose}){
       <span className="muted" style={{fontSize:12}}>la feuille que les gars t'ont remise, liée à leur job</span>
       <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>{ setOuvert(false); reset(); }}>Fermer</button></div>
     {fait && <div style={{fontSize:13,color:'var(--success)'}}>✅ {fait.type} {fait.num} — {fait.job} : {fait.n} fichier{fait.n>1?'s':''} {fait.secours ? <span style={{color:'var(--warning)'}}>dans « {DEPOT_BUREAU_SECOURS} » (le CRM n'a pas pu écrire dans le dossier PAD)</span> : 'dans le dossier PAD'}{fait.joint ? ' · joint à l\'événement' : ''}{fait.insc===true ? ' · inscrit au Suivi Travaux' : fait.insc===false ? ' · inscrit dans l\'agenda (ligne du Suivi introuvable)' : fait.insc==='erreur' ? ' · numéro pas inscrit (erreur)' : ''}</div>}
-    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-      {[['AP','Appel de service'],['OT','Ordre de travail']].map(([k,l])=><button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>setType(k)}>{l}</button>)}
-      <input value={num} onChange={e=>setNum(e.target.value.replace(/[^\d]/g,''))} inputMode="numeric" placeholder={'No '+type+' (ex. 1850)'} style={{width:150}}/>
-    </div>
-    <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
-      <button className="btn btn-sm" onClick={()=>setChoix(true)}>📅 {job ? 'Changer de job' : 'Choisir la job dans l\'agenda'}</button>
-      {job ? <span style={{fontSize:13}}><b>{job.title}</b> <span className="muted">· {jour}{job.location ? ' · '+job.location : ''}</span></span> : <span className="muted" style={{fontSize:12.5}}>clique sur l'événement de la job (n'importe quel jour)</span>}
-    </div>
-    <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
-      <input ref={ref} type="file" accept="image/*,application/pdf" multiple style={{display:'none'}} onChange={e=>{ setFichiers(l=>[...l, ...Array.from(e.target.files||[])]); e.target.value=''; }}/>
-      {ok ? <button className="btn btn-sm" onClick={()=>ref.current && ref.current.click()}>📷 Ajouter la feuille (photo / scan / PDF)</button>
-        : <button className="btn btn-sm" onClick={async()=>{ try{ await requestToken('consent'); setOk(peutDeposer()); }catch(e){} }}>Autoriser le Drive (une fois)</button>}
-      {fichiers.map((f,i)=><span key={i} className="badge" style={{background:'var(--bg3)'}}>{f.name} <span style={{cursor:'pointer'}} onClick={()=>setFichiers(l=>l.filter((_,j)=>j!==i))}>✕</span></span>)}
-    </div>
-    <label style={{display:'flex',gap:6,alignItems:'center',fontSize:13}}><input type="checkbox" checked={inscrire} onChange={e=>setInscrire(e.target.checked)}/> Inscrire le numéro au passage (Suivi Travaux + agenda)</label>
-    <div style={{display:'flex',gap:8,alignItems:'center'}}>
-      <button className="btn btn-p" disabled={/…$/.test(etat)} onClick={deposer}>{/…$/.test(etat) ? etat : 'Déposer'}</button>
-      {etat && !/…$/.test(etat) && <span style={{color:'var(--danger)',fontSize:12.5}}>{etat}</span>}
-    </div>
+    {fait && (fait.fichiers||[]).length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',fontSize:12.5}}>Fichiers déposés : {fait.fichiers.map(f=><a key={f.id} href={'https://drive.google.com/file/d/'+f.id+'/view'} style={{color:'var(--accent)'}}>📄 {f.nom}</a>)}</div>}
+    {(()=>{ const lab = t => <div style={{fontSize:12,fontWeight:800,textTransform:'uppercase',letterSpacing:.4,color:'var(--muted)',paddingTop:6}}>{t}</div>;
+      const N = x => cvNorm(x||''), auj = localDateStr(new Date());
+      const liste = (evs||[]).filter(e=>e.title).filter(e=>!q.trim() ? (String(e.start).slice(0,10)<=auj && String(e.start).slice(0,10)>=localDateStr(new Date(Date.now()-4*864e5))) : q.trim().split(/\s+/).every(w=>N(e.title+' '+(e.location||'')).includes(N(w))))
+        .sort((x,y)=>Math.abs(Date.parse(String(x.start).slice(0,10))-Date.parse(auj)) - Math.abs(Date.parse(String(y.start).slice(0,10))-Date.parse(auj))).slice(0,12);
+      return <div style={{display:'grid',gridTemplateColumns:'minmax(110px,150px) minmax(0,1fr)',gap:'10px 14px',alignItems:'start'}}>
+      {lab('Papier')}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+        {[['AP','Appel de service'],['OT','Ordre de travail']].map(([k,l])=><button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>setType(k)}>{l}</button>)}
+        <input value={num} onChange={e=>setNum(e.target.value.replace(/[^\d]/g,''))} inputMode="numeric" placeholder={'No '+type+' (ex. 1850)'} style={{width:150,fontSize:15,fontWeight:700}}/>
+      </div>
+      {lab('Feuille')}
+      <div style={{display:'grid',gap:6}}>
+        <input ref={ref} type="file" accept="image/*,application/pdf" multiple style={{display:'none'}} onChange={e=>{ ajouterF(e.target.files); e.target.value=''; }}/>
+        {!ok ? <button className="btn btn-sm" onClick={async()=>{ try{ await requestToken('consent'); setOk(peutDeposer()); }catch(e){} }}>Autoriser le Drive (une fois)</button>
+        : <div onDragOver={e=>{ e.preventDefault(); setSurvol(true); }} onDragLeave={()=>setSurvol(false)} onDrop={e=>{ e.preventDefault(); setSurvol(false); ajouterF(e.dataTransfer.files); }}
+            onClick={()=>ref.current && ref.current.click()}
+            style={{border:'2px dashed '+(survol?'var(--accent)':'var(--border2)'),background:survol?'rgba(var(--accent-rgb),.08)':'var(--bg3)',borderRadius:10,padding:fichiers.length?8:'18px 10px',textAlign:'center',cursor:'pointer',fontSize:13}}>
+            {!fichiers.length ? <span>📥 <b>Glisse la photo ou le PDF ici</b> <span className="muted">— ou clique pour choisir</span></span>
+            : <div style={{display:'flex',gap:8,flexWrap:'wrap'}} onClick={e=>e.stopPropagation()}>
+                {fichiers.map((f,i)=><div key={i} style={{position:'relative',width:96,textAlign:'center',fontSize:10.5}}>
+                  <div onClick={()=>setVoirF(i)} title="Voir en grand" style={{width:96,height:96,borderRadius:6,overflow:'hidden',border:'1px solid var(--border2)',background:'#fff',cursor:'zoom-in',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    {/^image\//.test(f.type) ? <img src={urls[i]} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}}/> : <span style={{fontSize:30}}>📄</span>}</div>
+                  <div style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{f.name}</div>
+                  <span onClick={()=>setFichiers(l=>l.filter((_,j)=>j!==i))} title="Enlever" style={{position:'absolute',top:-6,right:-6,background:'var(--danger)',color:'#fff',borderRadius:10,width:18,height:18,lineHeight:'18px',cursor:'pointer',fontWeight:800}}>✕</span></div>)}
+                <div onClick={()=>ref.current && ref.current.click()} style={{width:96,height:96,borderRadius:6,border:'1px dashed var(--border2)',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:22}}>＋</div>
+              </div>}
+          </div>}
+        <div><button className="btn btn-sm" onClick={chercherGmail}>📧 Prendre une pièce jointe dans mes courriels</button></div>
+        {gm && <div className="card" style={{padding:8,display:'grid',gap:4,maxHeight:260,overflowY:'auto'}}>
+          {gm.etat && <div className="muted" style={{fontSize:12.5}}>{gm.etat}</div>}
+          {!gm.etat && !gm.l.length && <div className="muted" style={{fontSize:12.5}}>Aucune photo ni PDF reçus dans les 3 dernières semaines.</div>}
+          {gm.l.map(m=><div key={m.id} style={{fontSize:12.5,borderBottom:'1px solid var(--border)',paddingBottom:4}}>
+            <div><b>{m.de}</b> <span className="muted">· {m.date} · {m.sujet}</span></div>
+            <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:2}}>{m.pj.map(x=>{ const pris = ((gm.pris)||[]).includes(m.id+x.att);
+              return <button key={x.att} className={'btn btn-sm'+(pris?' btn-p':'')} disabled={pris} onClick={()=>prendrePJ(m, x)}>{pris ? '✓ ' : '＋ '}{/pdf/i.test(x.type+x.nom) ? '📄' : '🖼️'} {x.nom}</button>; })}</div></div>)}
+        </div>}
+      </div>
+      {lab('Job')}
+      <div style={{display:'grid',gap:6}}>
+        {job ? <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',padding:'6px 10px',border:'2px solid var(--success)',borderRadius:8}}>
+            <span>✓ <b>{job.title}</b> <span className="muted">· {jour}{job.location ? ' · '+job.location : ''}</span></span>
+            <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>setJob(null)}>Changer</button></div>
+        : <>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Cherche la job : client, adresse, PO… (vide = les passages des derniers jours)" style={{fontSize:14}}/>
+          <div style={{display:'grid',gap:3,maxHeight:220,overflowY:'auto'}}>
+            {evs==null ? <span className="muted" style={{fontSize:12.5}}>Lecture de l'agenda…</span>
+              : !liste.length ? <span className="muted" style={{fontSize:12.5}}>Rien trouvé — essaie un autre mot, ou ouvre l'agenda.</span>
+              : liste.map(e=>{ const d = String(e.start).slice(0,10); return <div key={e.calendarId+e.id} onClick={()=>setJob({id:e.id, calendarId:e.calendarId, title:e.title||'', location:e.location||'', start:e.start})}
+                  style={{display:'flex',gap:8,alignItems:'center',padding:'5px 8px',border:'1px solid var(--border)',borderRadius:6,cursor:'pointer',fontSize:13,background:d===auj?'rgba(var(--accent-rgb),.08)':'var(--bg2)'}}>
+                  <span style={{width:9,height:9,borderRadius:'50%',flexShrink:0,...agendaStyle(e)}}></span>
+                  <span style={{minWidth:64,fontVariantNumeric:'tabular-nums'}} className={d===auj?'':'muted'}>{d===auj ? "aujourd'hui" : cvFmtDay(d)}</span>
+                  <b style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.title}</b></div>; })}
+          </div>
+          <div><button className="btn btn-sm" onClick={()=>setChoix(true)}>📅 Ouvrir l'agenda à la place</button></div></>}
+      </div>
+      <div></div>
+      <label style={{display:'flex',gap:6,alignItems:'center',fontSize:13}}><input type="checkbox" checked={inscrire} onChange={e=>setInscrire(e.target.checked)} style={{width:'auto'}}/> Inscrire le numéro au passage (Suivi Travaux + agenda)</label>
+      <div></div>
+      <div style={{display:'flex',gap:8,alignItems:'center'}}>
+        <button className="btn btn-p" disabled={/…$/.test(etat)} onClick={deposer}>{/…$/.test(etat) ? etat : '📥 Déposer'}</button>
+        {etat && !/…$/.test(etat) && <span style={{color:'var(--danger)',fontSize:12.5}}>{etat}</span>}
+      </div>
+    </div>; })()}
+    {voirF!=null && fichiers[voirF] && <Modal deClic tresLarge title={'📄 '+fichiers[voirF].name} onClose={()=>setVoirF(null)}>
+      {/^image\//.test(fichiers[voirF].type) ? <img src={urls[voirF]} alt="" style={{maxWidth:'100%',maxHeight:'78vh',display:'block',margin:'0 auto'}}/>
+        : <iframe src={urls[voirF]} style={{width:'100%',height:'78vh',border:'1px solid var(--border)',borderRadius:8,background:'#fff'}}/>}</Modal>}
     {choix && <div style={{position:'fixed',inset:0,zIndex:1000,background:'var(--bg)',overflow:'auto',padding:'10px 12px'}}>
       <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,position:'sticky',top:0,background:'var(--bg)',zIndex:5,padding:'4px 0'}}>
         <b className="fh" style={{fontSize:17}}>Clique sur l'événement de la job</b><span className="muted" style={{fontSize:12.5}}>change de jour ou de semaine au besoin</span>
