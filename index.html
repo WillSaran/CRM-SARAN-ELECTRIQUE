@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v580';
+const APP_VERSION = 'v581';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11847,6 +11847,9 @@ const MAISON_INCLUS = ['Fourniture et pose des plinthes et thermostats','Raccord
 const MAISON_EXCLUS = ['Luminaires (fournis par le client)','Réfection des murs, plafonds et finis','Frais d\'Hydro-Québec','Câblage d\'alarme et caméras','Plinthes et thermostats (fournis par le client)'];
 const MAISON_TEMPORAIRE = 750;
 function maisonVide(){ return {pieces:[], entree:'200 A', entreeType:'aérienne', temporaire:false, borneA:'40', appareils:Object.fromEntries(MAISON_APPAREILS.map(([k])=>[k,'1'])), inclus:MAISON_INCLUS.slice(0,4), exclus:MAISON_EXCLUS.slice(0,3)}; }
+// v581 : sections de la soumission maison qu'on peut enlever (rénovation d'une salle de bain, d'un salon…) — par défaut tout est là
+const MAISON_SECTIONS = [['entree','Entrée électrique'],['appareils','Appareils 240 V'],['inclus','Inclus / exclus']];
+const maisonSec = (m, k) => ((m && m.sections) || {})[k]!==false;
 const maisonAppLib = (m, k, l) => k==='borne' ? l+' '+(m.borneA==='48' ? '48 A (circuit 60 A)' : '40 A') : l;
 // Petits symboles par sorte de sortie (sur le plan)
 const MAISON_SYMB = [[/^SO0(0|1)/,'🔌','prises'],[/^SO07/,'🔌ext','prise ext.'],[/^SO02/,'S','interrupteurs'],[/^SO0(3|4)|^SO08/,'💡','lumières'],[/^SO05/,'◉','détecteur'],[/^SO06/,'🌀','ventilation'],[/^SO1[0-3]/,'📶','réseau / télé'],[/^SO220/,'🔥','chauffage'],[/^SO22[1-5]/,'⚡','240 V'],[/^SO09/,'🔔','carillon']];
@@ -12400,7 +12403,7 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
                 {ech && <div style={{position:'absolute',right:2,bottom:2,background:'#dc2626',color:'#fff',fontSize:11,fontWeight:700,padding:'1px 4px',borderRadius:3}}>{maisonPi2Cadre(r, pg, ech)} pi²</div>}</div>; })()}
           </div>
         </div>
-        {(()=>{ const L = MAISON_APPAREILS.filter(([k])=>cvNum((m.appareils||{})[k])>0 || (m.app240||[]).some(a=>a.k===k)); if(!L.length) return null;
+        {maisonSec(m,'appareils') && (()=>{ const L = MAISON_APPAREILS.filter(([k])=>cvNum((m.appareils||{})[k])>0 || (m.app240||[]).some(a=>a.k===k)); if(!L.length) return null;
           return <div style={{position:'absolute',left:8,top:8,right:60,display:'flex',gap:4,flexWrap:'wrap',zIndex:4,alignItems:'center'}}>
             <span style={{background:'rgba(17,24,39,.85)',color:'#fff',fontSize:11,fontWeight:700,padding:'2px 6px',borderRadius:5}}>240 V</span>
             {L.map(([k,l])=>{ const tot = Math.round(cvNum((m.appareils||{})[k])||0), nb = (m.app240||[]).filter(a=>a.k===k).length, fini = nb>=tot;
@@ -12534,25 +12537,25 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli}){   // v495 : partie '
     const parE = m.parEtage!==false;   // v470 : sorties établies par étage (une ligne par sorte et par étage)
     maisonOrdre(m.pieces).forEach(p=>{ const ajP = (c, n) => aj(parE ? p.etage+'|'+c : c, n);
       Object.entries(p.items||{}).forEach(([c,n])=>ajP(c, n)); const ch = maisonChauffage(p); ajP('SO220', ch.so220); ajP('SO220.2', ch.intel); (ch.prod||[]).forEach(([c,n])=>ajP(c, n)); libres.push(...ch.libres); ch.plinthes.forEach(w=>plinthes.push(w+' W — '+p.nom)); });
-    const app = m.appareils||{};
+    const app = maisonSec(m,'appareils') ? (m.appareils||{}) : {}, sansEntree = !maisonSec(m,'entree'), reno = sansEntree && !maisonSec(m,'appareils');
     MAISON_APPAREILS.forEach(([k,l,c])=>{ const n = cvNum(app[k])||0; if(!n) return; if(c) aj(c, n); else libres.push(l+(n>1?' ×'+n:'')); });
-    if(m.entree) libres.push('Entrée électrique '+m.entree+' '+(m.entreeType||''));
+    if(m.entree && !sansEntree) libres.push('Entrée électrique '+m.entree+' '+(m.entreeType||''));
     const lignesM0 = [...Object.entries(q).map(([k,n])=>{ const [e,c] = k.includes('|') ? k.split('|') : ['',k]; const pr = C && C.produitDe ? C.produitDe(c) : null;
         const v = C && C.prixDe ? C.prixDe(c, 'un') : null;   // v478 : prix mis tout de suite (ton prix SO de La mémoire)
         return {code:c, desc:(e ? e+' — ' : '')+((pr && pr.desc) || ('Sortie '+(MAISON_LIB[c]||c))), unite:'un', qte:String(n), prix:v!=null ? String(v) : '', maison:true}; }),
       ...libres.map(t=>({code:'', desc:t, unite:'un', qte:'1', prix:'', maison:true}))];
     const lignesM = lignesM0.map(l=>l.code==='SO225' && m.borneA==='48' ? {...l, desc:l.desc+' — borne 48 A (circuit 60 A)'} : l);
-    if(m.temporaire) lignesM.push({code:'', desc:'Entrée temporaire (chantier)', unite:'un', qte:'1', prix:String(MAISON_TEMPORAIRE), maison:true});
+    if(m.temporaire && !sansEntree) lignesM.push({code:'', desc:'Entrée temporaire (chantier)', unite:'un', qte:'1', prix:String(MAISON_TEMPORAIRE), maison:true});
     const chauf = m.pieces.map(p=>[p, maisonChauffage(p)]).filter(([,c])=>c.txt);
-    const txt = ['Installation électrique complète — '+(m.pieces.length)+' pièces, par étage :', '',
+    const txt = [(reno ? 'Travaux électriques — '+m.pieces.length+' pièce'+(m.pieces.length>1?'s':'')+' :' : 'Installation électrique complète — '+(m.pieces.length)+' pièces, par étage :'), '',
       ...etages.flatMap(e=>[e.toUpperCase(), ...m.pieces.filter(p=>p.etage===e).map(p=>'• '+p.nom+' : '+(maisonResume(p)||'—')), '']),
       chauf.length ? 'CHAUFFAGE PRÉVU : '+chauf.map(([p,c])=>p.nom+' — '+c.txt).join(' ; ')+'.' : '',
-      m.entree ? 'ENTRÉE ÉLECTRIQUE : '+m.entree+' '+(m.entreeType||'')+(m.temporaire ? ' + entrée temporaire de chantier' : '') : '',
+      m.entree && !sansEntree ? 'ENTRÉE ÉLECTRIQUE : '+m.entree+' '+(m.entreeType||'')+(m.temporaire ? ' + entrée temporaire de chantier' : '') : '',
       MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).length ? 'APPAREILS RACCORDÉS : '+MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).map(([k,l])=>maisonAppLib(m,k,l)+(cvNum(app[k])>1?' ×'+app[k]:'')).join(', ') : ''].filter((x,i,a)=>x!=='' || a[i-1]!=='').join('\n').trim();
-    const incl = (m.inclus||[]).length ? 'INCLUS : '+m.inclus.join(' ; ')+'.' : '', excl = (m.exclus||[]).length ? 'EXCLUS : '+m.exclus.join(' ; ')+'.' : '';
+    const incOn = maisonSec(m,'inclus'), incl = incOn && (m.inclus||[]).length ? 'INCLUS : '+m.inclus.join(' ; ')+'.' : '', excl = incOn && (m.exclus||[]).length ? 'EXCLUS : '+m.exclus.join(' ; ')+'.' : '';
     setD(o=>{ const rem = String(o.remarques||'').split('\n').filter(x=>!/^(INCLUS|EXCLUS) :/.test(x)).join('\n').trim();
       const vis = String(o.visite||'').split('\n').filter(x=>!/^— Liste chauffage/.test(x)).join('\n').trim();
-      return {...o, typeProjet:o.typeProjet || 'Construction neuve', titre:o.titre || 'Installation électrique — maison', travaux:txt,
+      return {...o, typeProjet:o.typeProjet || (reno ? 'Rénovation' : 'Construction neuve'), titre:o.titre || (reno ? 'Travaux électriques — rénovation' : 'Installation électrique — maison'), travaux:txt,
         lignes:[...o.lignes.filter(l=>!l.maison), ...lignesM], remarques:[rem, incl, excl].filter(Boolean).join('\n'),
         visite:[vis, chauf.length ? '— Liste chauffage ('+chauf.reduce((t,[,c])=>t+(c.w||0),0)+' W) : '+chauf.map(([p,c])=>p.nom+' : '+c.txt).join(' ; ') : ''].filter(Boolean).join('\n')}; });
     toast && toast('Soumission remplie par étage et par pièce — vérifie le matériel et le prix'); onRempli && onRempli(); };
@@ -12645,15 +12648,20 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli}){   // v495 : partie '
           const st = m.pieces.filter(p=>p.etage===e).reduce((s,p)=>s+totalPiece(p),0);
           return <div key={e}>• <b>{e}</b> — {nb} sortie{nb>1?'s':''} · <b>{cvMoney(st)}</b> <span className="muted">: {Object.entries(t).map(([c,n])=>n+' '+(MAISON_LIB[c]||c)).join(', ')}</span></div>; })}</div>
         <label style={{display:'flex',gap:4,alignItems:'center',fontSize:12,marginTop:3}}><input type="checkbox" checked={m.parEtage!==false} onChange={e=>majM({parEtage:e.target.checked})} style={{width:'auto'}}/> Lignes de la soumission par étage</label></div>
-      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><b>Entrée électrique</b>
+      <div style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap',padding:'6px 8px',background:'var(--bg3)',borderRadius:8}}><b style={{fontSize:12.5}}>Dans cette soumission :</b>
+        <span className="btn btn-sm btn-p" style={{fontSize:11.5,padding:'2px 8px',cursor:'default'}}>✓ Pièces</span>
+        {MAISON_SECTIONS.map(([k,l])=>{ const on = maisonSec(m,k); return <button key={k} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>majM(x=>({sections:{...(x.sections||{}), [k]:!on}}))}>{on?'✓ ':'＋ '}{l}</button>; })}
+        <span style={{fontSize:11.5,color:'var(--accent)',cursor:'pointer',marginLeft:4}} onClick={()=>majM({sections:Object.fromEntries(MAISON_SECTIONS.map(([k])=>[k,false]))})}>Pièces seulement (rénovation)</span>
+        <span style={{fontSize:11.5,color:'var(--accent)',cursor:'pointer',marginLeft:4}} onClick={()=>majM({sections:{}})}>Maison complète</span></div>
+      {maisonSec(m,'entree') && <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><b>Entrée électrique</b>
         <select value={m.entree} onChange={e=>majM({entree:e.target.value})} style={{width:'auto'}}>{['','100 A','200 A','320 A','400 A'].map(x=><option key={x} value={x}>{x||'— aucune'}</option>)}</select>
         <select value={m.entreeType} onChange={e=>majM({entreeType:e.target.value})} style={{width:'auto'}}>{['aérienne','souterraine'].map(x=><option key={x}>{x}</option>)}</select>
-        <label style={{display:'flex',gap:4,alignItems:'center',fontSize:12.5}}><input type="checkbox" checked={!!m.temporaire} onChange={e=>majM({temporaire:e.target.checked})} style={{width:'auto'}}/> Entrée temporaire ({MAISON_TEMPORAIRE} $)</label></div>
-      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><b>Appareils</b>
+        <label style={{display:'flex',gap:4,alignItems:'center',fontSize:12.5}}><input type="checkbox" checked={!!m.temporaire} onChange={e=>majM({temporaire:e.target.checked})} style={{width:'auto'}}/> Entrée temporaire ({MAISON_TEMPORAIRE} $)</label></div>}
+      {maisonSec(m,'appareils') && <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><b>Appareils</b>
         {MAISON_APPAREILS.map(([k,l])=><label key={k} style={{display:'flex',gap:3,alignItems:'center',fontSize:12.5}}>{l}
           {k==='borne' && <select value={m.borneA||'40'} onChange={e=>majM({borneA:e.target.value})} style={{width:'auto',fontSize:12,padding:'2px 4px'}}><option value="40">40 A</option><option value="48">48 A (conseillé)</option></select>}
-          <input value={(m.appareils||{})[k]||''} onChange={e=>majM(x=>({appareils:{...(x.appareils||{}), [k]:e.target.value.replace(/\D/g,'')}}))} inputMode="numeric" placeholder="0" style={{width:34,padding:'2px 4px'}}/></label>)}</div>
-      {[['inclus','Inclus',MAISON_INCLUS],['exclus','Exclus',MAISON_EXCLUS]].map(([k,l,liste])=><div key={k} style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap'}}><b>{l}</b>
+          <input value={(m.appareils||{})[k]||''} onChange={e=>majM(x=>({appareils:{...(x.appareils||{}), [k]:e.target.value.replace(/\D/g,'')}}))} inputMode="numeric" placeholder="0" style={{width:34,padding:'2px 4px'}}/></label>)}</div>}
+      {maisonSec(m,'inclus') && [['inclus','Inclus',MAISON_INCLUS],['exclus','Exclus',MAISON_EXCLUS]].map(([k,l,liste])=><div key={k} style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap'}}><b>{l}</b>
         {liste.map(t=>{ const on = (m[k]||[]).includes(t); return <button key={t} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>majM(x=>({[k]: on ? (x[k]||[]).filter(y=>y!==t) : [...(x[k]||[]), t]}))}>{on?'✓ ':'+ '}{t}</button>; })}</div>)}
       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:4}}>
         {C && C.lu && (()=>{ const cs = [...new Set(m.pieces.flatMap(p=>[...Object.entries(p.items||{}).filter(([,n])=>n>0).map(([c])=>c), ...(maisonChauffage(p).so220 ? ['SO220'] : []), ...((maisonChauffage(p).prod||[]).map(([c])=>c))]))].filter(c=>!(C && C.prixDe && C.prixDe(c)));
