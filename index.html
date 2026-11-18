@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v578';
+const APP_VERSION = 'v579';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11773,6 +11773,13 @@ function maisonNouvellePiece(nom, etage, type, pi2){ const t = MAISON_TYPES[type
 // Lecture du PDF : pages, étage de chaque page, pièces (nom + dimensions)
 // v469 : pages gardées par sorte (étages, façades, certificat / arpentage) ; chaque pièce garde sa position sur la page (fx, fy) pour y afficher les sorties prévues
 const MAISON_SORTES = [['etage','Plans des étages'],['facade','Façades (élévations)'],['terrain','Certificat de localisation / arpentage'],['autre','Autres pages — identifie ici tes plans d\'étage (menu sous la vignette)']];
+// v579 : une page qui contient PLUSIEURS plans (ex. rez-de-chaussée + étage côte à côte) — chaque titre de plan devient une « zone »;
+// une pièce va à l'étage du plan où elle se trouve (côte à côte : le titre le plus proche en largeur; empilés : le titre juste en dessous).
+function maisonZoneEtage(zones, fx, fy){ if(!zones || !zones.length) return ''; if(zones.length===1) return zones[0].etage;
+  const xs = zones.map(z=>z.fx), ys = zones.map(z=>z.fy), coteACote = (Math.max(...xs)-Math.min(...xs)) > (Math.max(...ys)-Math.min(...ys));
+  if(coteACote) return zones.slice().sort((a,b)=>Math.abs(a.fx-fx)-Math.abs(b.fx-fx))[0].etage;
+  const dessous = zones.filter(z=>z.fy >= fy-0.02).sort((a,b)=>a.fy-b.fy)[0];
+  return (dessous || zones.slice().sort((a,b)=>Math.hypot(a.fx-fx,a.fy-fy)-Math.hypot(b.fx-fx,b.fy-fy))[0]).etage; }
 async function maisonLirePlan(file, onEtat, src, sauter){
   if(!window.pdfjsLib){ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }
@@ -11785,25 +11792,31 @@ async function maisonLirePlan(file, onEtat, src, sauter){
     const tout = L.map(x=>x.t).join(' | ').toUpperCase();
     const etDe = t => /SOUS[- ]SOL/.test(t) ? 'Sous-sol' : /REZ|R-D-C|RDC/.test(t) ? 'Rez-de-chaussée' : /[ÉE]TAGE|2E/.test(t) ? 'Étage' : '';
     const ets = [...new Set((tout.match(/PLAN D.AM[ÉE]NAGEMENT[^|]{0,40}/g)||[]).map(etDe).filter(Boolean))];
-    const etage = ets.length===1 ? ets[0] : '', titre = etage;   // une page index (plusieurs plans) : on saute
+    const vp1 = pg.getViewport({scale:1});
+    // v579 : plusieurs plans sur la page → une zone par titre « PLAN D'AMÉNAGEMENT … »
+    let zones = [];
+    if(ets.length>1){ L.forEach((x,k)=>{ const u = String(x.t).toUpperCase(); if(!/PLAN D.AM[ÉE]NAGEMENT|^(REZ-DE-CHAUSS[ÉE]E|SOUS-SOL|2E [ÉE]TAGE|[ÉE]TAGE)$/.test(u)) return;
+        const et = etDe((u+' '+String((L[k+1]||{}).t||'')+' '+String((L[k+2]||{}).t||'')).toUpperCase().replace(/PLAN D.AM[ÉE]NAGEMENT/, '')) || etDe(u); if(!et || zones.some(z=>z.etage===et)) return;
+        const [vx, vy] = vp1.convertToViewportPoint(x.x, x.y); zones.push({etage:et, fx:+(vx/vp1.width).toFixed(4), fy:+(vy/vp1.height).toFixed(4)}); });
+      if(zones.length<2) zones = []; }
+    const etage = ets.length===1 ? ets[0] : zones.length ? zones.map(z=>z.etage).join(' + ') : '', titre = etage;   // une page index sans titres repérables : on saute
     const dims = L.filter(x=>/^±?\s*\d+\s*'\s*-?\s*\d*.*[xX×]\s*\d+\s*'/.test(x.t));
     const noms = L.filter(x=>/^[A-ZÉÈÀÂÎÔÛÇ][A-ZÉÈÀÂÎÔÛÇ0-9 #.'’\-]{1,30}$/.test(x.t) && !/^(SCALE|PLAN|SOLIVES|COUPE|DÉTAIL|DETAIL|NOTE|LÉGENDE|MUR |POUTRE|COLONNE)/.test(x.t) && !/^([A-Z]\d*|\d+)$/.test(x.t) && maisonTypeDe(x.t)!=='autre');
     const terrain = /CERTIFICAT DE LOCALISATION|PLAN D.IMPLANTATION|IMPLANTATION|ARPENT|PLAN D.EMPLACEMENT|CADASTR/.test(tout);
     const facade = /[ÉE]L[ÉE]VATION|FA[ÇC]ADE/.test(tout);
     const sorte = etage ? 'etage' : terrain ? 'terrain' : facade ? 'facade' : (/^(1|01)$/.test(String(doc.numPages)) ? 'terrain' : 'autre');   // v482 : toutes les pages gardées (plans en image à identifier)
-    const vp1 = pg.getViewport({scale:1});
     if(sorte){ const vp = pg.getViewport({scale:Math.min(2, (sorte==='etage' ? 2800 : sorte==='autre' ? 2400 : 1600)/vp1.width)}), c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
       try{ const cx = c.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0,0,c.width,c.height); await pg.render({canvasContext:cx, viewport:vp}).promise; }catch(e){}
       const fac = sorte==='facade' ? ((tout.match(/(AVANT|ARRI[ÈE]RE|LAT[ÉE]RAL[ E]+(DROIT|GAUCHE)|DROITE|GAUCHE)/)||[])[0]||'') : '';
-      pages.push({no:i, w:c.width, h:c.height, src:src||file.name, sorte, etage, titre:(etage || fac || (sorte==='terrain' ? 'Certificat / arpentage' : 'p. '+i)).trim(), img:c.toDataURL('image/jpeg', 0.8)}); }
+      pages.push({no:i, w:c.width, h:c.height, src:src||file.name, sorte, etage, ...(zones.length ? {zones} : {}), titre:(etage || fac || (sorte==='terrain' ? 'Certificat / arpentage' : 'p. '+i)).trim(), img:c.toDataURL('image/jpeg', 0.8)}); }
     if(!etage) continue;
     // chaque dimension va au nom le plus proche ; une pièce sans dimension n'est gardée que si c'est clairement une pièce
     const proche = d => noms.map(n=>({n, k:Math.hypot(d.x-n.x, d.y-n.y)})).sort((a,b)=>a.k-b.k)[0];
     noms.forEach(n=>{ const d = dims.map(d=>({d, k:Math.hypot(d.x-n.x, d.y-n.y)})).filter(x=>x.k<60 && proche(x.d).n===n).sort((a,b)=>a.k-b.k)[0];
       if(!d && !['mecanique','garage','chambre','cuisine','salon','lavage','escalier'].includes(maisonTypeDe(n.t))) return;
       let pi2 = null; if(d){ const [a,b] = d.d.t.replace(/^±/,'').split(/[xX×]/); const fa = ft(a), fb = ft(b); if(fa && fb) pi2 = Math.round(fa*fb); }
-      const type = maisonTypeDe(n.t), et = type==='exterieur' ? 'Extérieur' : type==='garage' ? 'Garage' : etage;
       const [vx, vy] = vp1.convertToViewportPoint(n.x, n.y);
+      const type = maisonTypeDe(n.t), et = type==='exterieur' ? 'Extérieur' : type==='garage' ? 'Garage' : zones.length ? maisonZoneEtage(zones, vx/vp1.width, vy/vp1.height) : etage;
       pieces.push({...maisonNouvellePiece(n.t.charAt(0)+n.t.slice(1).toLowerCase(), et, type, pi2), src:src||file.name, pg:i, fx:+(vx/vp1.width).toFixed(4), fy:+(vy/vp1.height).toFixed(4)}); });
   }
   return {pages, pieces};
@@ -11835,7 +11848,13 @@ function MaisonVue({pg, pieces, onClose, liste, onAller, tag, onTag, m, majM}){
       else if(onTag && !(pg.sorte==='etage' && m)){ const x = MAISON_TRI.find(y=>y[2].toLowerCase()===e.key.toLowerCase()); if(x) trier(x[0]); } };
     window.addEventListener('keydown', f); return ()=>window.removeEventListener('keydown', f); });
   const actuel = tag!=null ? tag : '';
-  return <div style={{position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,.88)',overflow:'auto',padding:10}} onClick={onClose}>
+  // v579 : zoom sur le plan — ＋ / － , Ctrl + roulette (ou pincer sur le pavé tactile), double-clic; on se promène avec les barres de défilement
+  const [z,setZ]=useState(1); const fond = useRef(null);
+  useEffect(()=>{ setZ(1); },[maisonCleP(pg)]);
+  useEffect(()=>{ const el = fond.current; if(!el) return; const f = e => { if(!e.ctrlKey && !e.metaKey) return; e.preventDefault(); setZ(v=>Math.max(1, Math.min(6, v*(e.deltaY<0 ? 1.15 : 1/1.15)))); };
+    el.addEventListener('wheel', f, {passive:false}); return ()=>el.removeEventListener('wheel', f); },[]);
+  const largFit = 'min(100vw - 40px'+(onTag && L.some(x=>['etage','facade','terrain'].includes(x.sorte)) ? ' - 130px' : '')+', (100vh - 70px) * '+((pg.w||1)/(pg.h||1)).toFixed(4)+')';
+  return <div ref={fond} style={{position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,.88)',overflow:'auto',padding:10}} onClick={onClose}>
     <div onClick={e=>e.stopPropagation()} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',color:'#fff',marginBottom:6,fontSize:13,position:'sticky',top:0,zIndex:2,background:'rgba(0,0,0,.75)',padding:'4px 6px',borderRadius:6}}>
       <button className="btn btn-sm" disabled={i===0} onClick={()=>aller(i-1)}>◀</button>
       <b>Page {pg.no}{L.length>1 ? ' ('+(i+1)+' / '+L.length+')' : ''} · {pg.titre}</b>
@@ -11844,14 +11863,23 @@ function MaisonVue({pg, pieces, onClose, liste, onAller, tag, onTag, m, majM}){
         style={v==='ignore' ? {borderColor:'var(--danger)'} : null} onClick={()=>trier(v)} title={'Touche '+k}>{l} <span style={{opacity:.6,fontSize:10}}>{k}</span></button>)}</span>}
       {ps.length>0 && <><span style={{opacity:.7}}>· {ps.length} pièce{ps.length>1?'s':''}</span>
         <button className="btn btn-sm" onClick={()=>setMode(mode==='symb'?'texte':mode==='texte'?'rien':'symb')}>{mode==='symb'?'Symboles':mode==='texte'?'Texte':'Plan seul'} ⇄</button></>}
-      <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={onClose}>✕ Fermer</button></div>
+      {!(pg.sorte==='etage' && m && majM) && <span style={{display:'inline-flex',gap:3,alignItems:'center',marginLeft:'auto'}}>
+        <button className="btn btn-sm" onClick={()=>setZ(v=>Math.max(1, v/1.4))} title="Dézoomer">－</button>
+        <button className="btn btn-sm" onClick={()=>setZ(1)} title="Plan entier" style={{minWidth:52}}>{Math.round(z*100)}%</button>
+        <button className="btn btn-sm" onClick={()=>setZ(v=>Math.min(6, v*1.4))} title="Zoomer (Ctrl + roulette, ou double-clic sur le plan)">＋</button></span>}
+      {pg.zones && <span style={{opacity:.8,fontSize:12}}>· {pg.zones.length} plans sur la page : {pg.zones.map(x=>x.etage).join(', ')}</span>}
+      <button className="btn btn-sm" style={{marginLeft:(pg.sorte==='etage' && m && majM) ? 'auto' : 0}} onClick={onClose}>✕ Fermer</button></div>
     {pg.sorte==='etage' && m && majM ? <div onClick={e=>e.stopPropagation()} style={{marginRight:onTag && L.some(x=>['etage','facade','terrain'].includes(x.sorte)) ? 130 : 0}}><MaisonEncadrer key={maisonCleP(pg)} pg={pg} m={m} majM={majM} integre onClose={onClose}/></div> : null}
     {(()=>{ const bande = L.filter(x=>['etage','facade','terrain'].includes(x.sorte)); if(bande.length<1 || !onTag) return null;   // v484 : bande à droite — les pages déjà identifiées
       return <div onClick={e=>e.stopPropagation()} style={{position:'fixed',right:8,top:56,bottom:8,width:118,overflowY:'auto',zIndex:3,display:'grid',gap:6,alignContent:'start',background:'rgba(0,0,0,.6)',padding:6,borderRadius:8}}>
         {bande.map(x=>{ const ici = maisonCleP(x)===maisonCleP(pg); return <div key={maisonCleP(x)} onClick={()=>onAller(x)} style={{cursor:'pointer',textAlign:'center',color:'#fff',fontSize:11,fontWeight:700,border:ici ? '2px solid var(--accent)' : '1px solid #555',borderRadius:6,padding:3,background:ici ? 'rgba(88,166,255,.2)' : 'transparent'}}>
           <img src={x.img} alt="" style={{width:'100%',display:'block',background:'#fff',borderRadius:3}}/>{x.titre}<div style={{fontWeight:400,opacity:.7}}>p. {x.no}</div></div>; })}</div>; })()}
     {!(pg.sorte==='etage' && m && majM) && <div style={{textAlign:'center',marginRight:onTag && L.some(x=>['etage','facade','terrain'].includes(x.sorte)) ? 130 : 0}}><div onClick={e=>e.stopPropagation()} style={{position:'relative',display:'inline-block',verticalAlign:'top',opacity:actuel==='ignore' ? .35 : 1}}>
-      <img src={pg.img} alt="" style={{maxWidth:'100%',maxHeight:'calc(100vh - 70px)',display:'block',background:'#fff',borderRadius:4}}/>
+      <img src={pg.img} alt="" draggable={false} onDoubleClick={e=>{ const r = e.currentTarget.getBoundingClientRect(), px = (e.clientX-r.left)/r.width, py = (e.clientY-r.top)/r.height, nz = z<2 ? 2.5 : 1;
+          setZ(nz); setTimeout(()=>{ const el = fond.current; if(!el || nz===1) return; const im = e.target; el.scrollLeft = im.offsetLeft + px*im.offsetWidth - el.clientWidth/2; el.scrollTop = im.offsetTop + py*im.offsetHeight - el.clientHeight/2; }, 30); }}
+        style={z===1 ? {maxWidth:'100%',maxHeight:'calc(100vh - 70px)',display:'block',background:'#fff',borderRadius:4,cursor:'zoom-in'}
+          : {width:'calc('+z+' * '+largFit+')',maxWidth:'none',maxHeight:'none',display:'block',background:'#fff',borderRadius:4,cursor:'zoom-out'}}/>
+      {pg.zones && pg.zones.map((x,k)=><div key={'z'+k} style={{position:'absolute',left:(x.fx*100)+'%',top:(x.fy*100)+'%',transform:'translate(-50%,-50%)',background:'#2563eb',color:'#fff',borderRadius:6,padding:'2px 8px',fontSize:12,fontWeight:800,pointerEvents:'none',whiteSpace:'nowrap'}}>{x.etage}</div>)}
       {mode!=='rien' && ps.map(p=><div key={p.id} style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',background:'rgba(255,255,255,.93)',border:'1.5px solid #c0392b',borderRadius:6,padding:'2px 5px',fontSize:11,lineHeight:1.25,color:'#111',maxWidth:mode==='texte'?190:150,textAlign:'center',boxShadow:'0 1px 4px rgba(0,0,0,.35)',pointerEvents:'none'}}>
         <b>{p.nom}</b><div>{mode==='texte' ? maisonResume(p) : maisonSymboles(p)}</div></div>)}
     </div></div>}
@@ -12285,17 +12313,18 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
     if(cible){ majM(x=>({pieces:x.pieces.map(p=>p.id===cible ? maisonAvecCadres({...p, src:pg.src||'', pg:pg.no}, [...maisonCadres(p), r], pg, ech) : p)})); return; }
     setChoix({c:r, cs:[r], type:'chambre', nom:'', pi2:maisonPi2Cadre(r, pg, ech) ?? '', id:''}); };
   const zoom = f => setVue(v=>({...v, z:Math.max(.5, Math.min(10, v.z*f))}));
-  const etageDe = t => t==='garage' ? 'Garage' : t==='exterieur' ? 'Extérieur' : (pg.etage || 'Rez-de-chaussée');
+  const etageDe = (t, c) => t==='garage' ? 'Garage' : t==='exterieur' ? 'Extérieur' : (pg.zones && c ? maisonZoneEtage(pg.zones, (c[0]+c[2])/2, (c[1]+c[3])/2) : '') || (pg.zones ? pg.zones[0].etage : pg.etage) || 'Rez-de-chaussée';
   const nomAuto = t => { const n = (MAISON_TYPES[t]||MAISON_TYPES.autre).nom.split(' /')[0], k = m.pieces.filter(p=>p.type===t).length+1; return n+(['chambre','sdb'].includes(t) ? ' #'+k : ''); };
   const garder = (suite, typeForce) => { const ch = typeForce ? {...choix, type:typeForce} : choix; if(!ch) return; let id = ch.id;
     const fin = p => { const q = maisonAvecCadres({...p, src:pg.src||'', pg:pg.no}, [...(ch.id ? maisonCadres(p) : []), ...(ch.cs || [ch.c])], pg, ech); return ch.pi2!=='' && ch.pi2!=null && !ech ? {...q, pi2:String(ch.pi2)} : q; };
     if(id) majM(x=>({pieces:x.pieces.map(p=>p.id===id ? fin(p) : p)}));
-    else { const p = fin(maisonNouvellePiece((ch.nom||'').trim() || nomAuto(ch.type), etageDe(ch.type), ch.type, ch.pi2!=='' ? ch.pi2 : null)); id = p.id; majM(x=>({pieces:[...x.pieces, p]})); }
+    else { const p = fin(maisonNouvellePiece((ch.nom||'').trim() || nomAuto(ch.type), etageDe(ch.type, ch.c), ch.type, ch.pi2!=='' ? ch.pi2 : null)); id = p.id; majM(x=>({pieces:[...x.pieces, p]})); }
     setChoix(null); setDerniere(id); if(suite) setCible(id); };
   const garderMesure = () => { const pi = maisonPieds(mesure.txt); if(!pi) return; const c = mesure.c, u = Math.hypot(c[2]-c[0], (c[3]-c[1])*((pg.h||1)/(pg.w||1)));
     const e = +(pi/u).toFixed(3); majM(x=>({echelles:{...(x.echelles||{}), [cle]:e}, pieces:x.pieces.map(p=>p.pg===pg.no && (p.src||'')===(pg.src||'') && p.cadre && !cvNum(p.pi2) ? {...p, pi2:String(maisonPi2Cadre(p.cadre, pg, e))} : p)}));
     setMesure(null); setMode('cadre'); };
-  const typesEt = MAISON_TYPES_ETAGE[pg.etage] || Object.keys(MAISON_TYPES);
+  const typesZ = pg.zones ? [...new Set(pg.zones.flatMap(z=>MAISON_TYPES_ETAGE[z.etage]||[]))] : [];
+  const typesEt = MAISON_TYPES_ETAGE[pg.etage] || (typesZ.length ? typesZ : Object.keys(MAISON_TYPES));
   const refNom = useRef(null);   // v504 : après chaque rectangle, le curseur est dans « Nom »
   const nbCs = choix && !choix.existe ? (choix.cs||[]).length : 0;
   useEffect(()=>{ if(nbCs && refNom.current) setTimeout(()=>refNom.current && refNom.current.focus(), 0); },[nbCs]);
