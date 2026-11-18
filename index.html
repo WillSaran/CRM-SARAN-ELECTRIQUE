@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v567';
+const APP_VERSION = 'v568';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5190,10 +5190,39 @@ function DossierApercu({id}){
       {l.map(f=><div key={f.id} onClick={()=>setVoir(f)} style={{cursor:'pointer',padding:'6px 8px',borderRadius:6,fontSize:12.5,background:voir && voir.id===f.id ? 'rgba(127,127,127,.18)' : 'transparent'}}>
         {/pdf/.test(f.mimeType) ? '📄' : /^image/.test(f.mimeType) ? '🖼️' : /audio|video|webm/.test(f.mimeType+f.name) ? '🎤' : '📎'} {f.name}
         <div className="muted" style={{fontSize:11}}>{String(f.modifiedTime||'').slice(0,10)}</div></div>)}
-      <a className="btn btn-sm" style={{marginTop:6}} href={'https://drive.google.com/drive/folders/'+id} target="_blank" rel="noopener">↗ Ouvrir dans Drive</a>
+      <a className="btn btn-sm" style={{marginTop:6}} data-drive="1" href={'https://drive.google.com/drive/folders/'+id} target="_blank" rel="noopener">↗ Ouvrir dans Drive</a>
+      {voir && <a className="btn btn-sm" data-drive="1" href={'https://drive.google.com/file/d/'+voir.id+'/view'} target="_blank" rel="noopener">↗ Ce fichier dans Drive</a>}
     </div>
     {voir ? <iframe key={voir.id} src={'https://drive.google.com/file/d/'+voir.id+'/preview'} style={{width:'100%',height:'66vh',border:'1px solid var(--border)',borderRadius:8,background:'#fff'}}/> : <div/>}
   </div>;
+}
+// v568 : les liens Drive (fichier ou dossier) s'ouvrent DANS le CRM, par-dessus la page; clic à côté = fermer.
+// Ctrl/⌘-clic ou le bouton « Ouvrir dans Drive » gardent l'ancien comportement (nouvel onglet).
+let APERCU_DRIVE = null;
+function driveLienId(u){ u = String(u||''); if(!/(drive|docs)\.google\.com/.test(u)) return null;
+  let m = u.match(/drive\.google\.com\/(?:a\/[^/]+\/)?file\/d\/([\w-]{15,})/) || u.match(/drive\.google\.com\/(?:open|uc)\?(?:[^#]*&)?id=([\w-]{15,})/);
+  if(m) return {id:m[1], dossier:false};
+  m = u.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([\w-]{15,})/); if(m) return {id:m[1], dossier:true};
+  return null; }
+if(typeof document!=='undefined'){
+  document.addEventListener('click', e=>{ if(!APERCU_DRIVE || e.defaultPrevented || e.button!==0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest && e.target.closest('a[href]'); if(!a || a.dataset.drive || /dans\s+drive|drive\s*↗/i.test(a.textContent||'')) return;   // un bouton « Ouvrir dans Drive » existant garde son nouvel onglet
+    const d = driveLienId(a.getAttribute('href')); if(!d) return;
+    e.preventDefault(); APERCU_DRIVE({...d, titre:(a.getAttribute('title')||a.textContent||'').trim().slice(0,90)}); }, true);
+  const ouvrirOrig = window.open.bind(window);
+  window.open = (u, ...r) => { const d = APERCU_DRIVE && driveLienId(u); if(d){ APERCU_DRIVE({...d, titre:''}); return null; } return ouvrirOrig(u, ...r); };
+}
+function ApercuDriveGlobal(){
+  const [a,setA]=useState(null);
+  useEffect(()=>{ APERCU_DRIVE = x => setA({...x, k:Date.now()}); return ()=>{ APERCU_DRIVE = null; }; },[]);
+  if(!a) return null;
+  const lien = a.dossier ? 'https://drive.google.com/drive/folders/'+a.id : 'https://drive.google.com/file/d/'+a.id+'/view';
+  return <Modal key={a.k} deClic tresLarge onClose={()=>setA(null)} title={<div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',paddingRight:30}}>
+      <span>{a.dossier ? '📂' : '📄'} {a.titre || (a.dossier ? 'Dossier' : 'Aperçu')}</span>
+      <a className="btn btn-sm" data-drive="1" href={lien} target="_blank" rel="noopener" style={{textDecoration:'none',marginLeft:'auto'}}>↗ Ouvrir dans Drive</a></div>}>
+    {a.dossier ? <DossierApercu id={a.id}/>
+      : <iframe src={'https://drive.google.com/file/d/'+a.id+'/preview'} allow="autoplay" style={{width:'100%',height:'78vh',border:'1px solid var(--border)',borderRadius:8,background:'#fff'}}/>}
+  </Modal>;
 }
 function EditEventModal({cfg, event, job, onClose, onSaved, toast}){
   const iniDe = k => Object.keys(CREW_INITIALS).find(x=>CREW_INITIALS[x]===CREW_COLORS[k]) || '';
@@ -18293,6 +18322,7 @@ function App(){
       </div>
     </div>
     {toastNode}
+    <ApercuDriveGlobal/>
   </div>;
 }
 
