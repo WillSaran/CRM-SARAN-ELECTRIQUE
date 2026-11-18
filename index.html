@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v576';
+const APP_VERSION = 'v577';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -603,12 +603,33 @@ function getRangeDays(viewMode, anchor){
   if(viewMode==='jour'){ const d=new Date(anchor); d.setHours(0,0,0,0); return [d]; }
   if(viewMode==='mois'){
     const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
-    const startDow = (first.getDay()+6)%7;
+    const startDow = first.getDay();   // v577 : dimanche à gauche, samedi à droite
     const gridStart = new Date(first); gridStart.setDate(first.getDate()-startDow);
     return Array.from({length:42},(_,i)=>{ const d=new Date(gridStart); d.setDate(gridStart.getDate()+i); return d; });
   }
-  return weekDatesArr(getWeek(anchor));
+  const dim = new Date(anchor); dim.setHours(0,0,0,0); dim.setDate(dim.getDate()-dim.getDay());   // v577 : semaine du dimanche au samedi
+  return Array.from({length:7},(_,i)=>{ const d = new Date(dim); d.setDate(dim.getDate()+i); return d; });
 }
+// v577 : petit calendrier du mois (dimanche → samedi), aujourd'hui encerclé, la période affichée surlignée; clic = aller à ce jour
+function MiniMois({anchor, days, onPick}){
+  const [m,setM]=useState(()=>new Date(anchor.getFullYear(), anchor.getMonth(), 1));
+  useEffect(()=>{ setM(new Date(anchor.getFullYear(), anchor.getMonth(), 1)); },[anchor.getFullYear(), anchor.getMonth()]);
+  const d0 = new Date(m); d0.setDate(1 - m.getDay());
+  const cases = Array.from({length:42},(_,i)=>{ const d = new Date(d0); d.setDate(d0.getDate()+i); return d; });
+  const auj = localDateStr(new Date()), vus = new Set((days||[]).map(localDateStr));
+  const sem = cases.slice(35).every(d=>d.getMonth()!==m.getMonth()) ? cases.slice(0,35) : cases;
+  return <div style={{border:'1px solid var(--border2)',borderRadius:10,padding:'6px 8px',background:'var(--bg2)',userSelect:'none'}}>
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6,marginBottom:3}}>
+      <span role="button" style={{cursor:'pointer',padding:'0 6px'}} onClick={()=>setM(new Date(m.getFullYear(), m.getMonth()-1, 1))}>‹</span>
+      <b style={{fontSize:12,textTransform:'capitalize'}}>{m.toLocaleDateString('fr-CA',{month:'long',year:'numeric'})}</b>
+      <span role="button" style={{cursor:'pointer',padding:'0 6px'}} onClick={()=>setM(new Date(m.getFullYear(), m.getMonth()+1, 1))}>›</span></div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(7, 22px)',gap:1,fontSize:10.5,textAlign:'center'}}>
+      {['D','L','M','M','J','V','S'].map((j,i)=><div key={'j'+i} className="muted" style={{fontWeight:700}}>{j}</div>)}
+      {sem.map((d,i)=>{ const ds = localDateStr(d), dans = d.getMonth()===m.getMonth(), estAuj = ds===auj, vu = vus.has(ds);
+        return <div key={i} onClick={()=>onPick(new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12))} title={d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})}
+          style={{cursor:'pointer',height:20,lineHeight:'20px',borderRadius:10,fontWeight:estAuj?800:500,opacity:dans?1:.35,
+            background:estAuj?'var(--accent)':vu?'rgba(var(--accent-rgb),.16)':'transparent',color:estAuj?'#fff':undefined}}>{d.getDate()}</div>; })}
+    </div></div>; }
 function getJobPrefix(title){
   const u=(title||'').toUpperCase();
   for(const p of JOB_PREFIXES) if(u.startsWith(p)) return p;
@@ -5980,12 +6001,27 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     return ()=>window.removeEventListener('keydown', onKey);
   },[ongletAg]);
   // v436 : de la vue Semaine au bouton Jour (ou touche D) → le lundi de la semaine regardée
-  function changerVue(id){ if(id==='jour' && viewMode==='semaine'){ const d = new Date(anchor); d.setDate(d.getDate()-((d.getDay()+6)%7)); setAnchor(d); } setViewMode(id); }
+  function changerVue(id){ if(id==='jour' && viewMode==='semaine'){ const d = new Date(anchor); d.setDate(d.getDate()-d.getDay()+1); setAnchor(d); } setViewMode(id); }
   function openNewJob(dStr, heureStr){ setJobDate(dStr||todayISO()); setJobHeure(heureStr||null); setShowJobModal(true); }
+  // v577 : vue Mois — on « scrolle » d'un mois à l'autre comme dans Google : rendu au bas du mois, on continue de descendre = mois suivant;
+  // rendu en haut, on continue de monter = mois précédent.
+  const moisRef = useRef(null), roueRef = useRef({acc:0, t:0});
+  useEffect(()=>{ const el = moisRef.current; if(!el || viewMode!=='mois') return;
+    const parent = n => { for(let p = n.parentElement; p; p = p.parentElement){ const st = getComputedStyle(p); if(/(auto|scroll)/.test(st.overflowY) && p.scrollHeight>p.clientHeight+2) return p; } return document.scrollingElement || document.documentElement; };
+    const surRoue = ev => { if(Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) return; const sc = parent(el), r = roueRef.current, now = Date.now();
+      if(now - r.t < 650){ ev.preventDefault(); return; }   // on vient de changer de mois : on laisse la roue se calmer
+      const rect = el.getBoundingClientRect(), vh = sc===document.scrollingElement || sc===document.documentElement ? window.innerHeight : sc.getBoundingClientRect().bottom;
+      const auBas = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2 || rect.bottom <= vh + 2, enHaut = sc.scrollTop <= 1 || rect.top >= (sc===document.scrollingElement || sc===document.documentElement ? 0 : sc.getBoundingClientRect().top) - 2;
+      if((ev.deltaY>0 && !auBas) || (ev.deltaY<0 && !enHaut)){ r.acc = 0; return; }
+      ev.preventDefault(); r.acc += ev.deltaY;
+      if(Math.abs(r.acc) > 140){ const suiv = r.acc>0; r.acc = 0; r.t = now; suiv ? goRef.current.goNext() : goRef.current.goPrev();
+        setTimeout(()=>{ const top = el.getBoundingClientRect().top; if(suiv) sc.scrollTop += top - 80; else sc.scrollTop = Math.max(0, sc.scrollHeight); }, 30); } };
+    el.addEventListener('wheel', surRoue, {passive:false}); return ()=>el.removeEventListener('wheel', surRoue); },[viewMode, loading]);
   function rangeLabel(){
     if(viewMode==='jour') return anchor.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
     if(viewMode==='mois') return anchor.toLocaleDateString('fr-CA',{month:'long',year:'numeric'});
-    return weekRangeLabel(getWeek(anchor));
+    const d0 = days[0], d6 = days[days.length-1];
+    return d0.getDate()+(d0.getMonth()!==d6.getMonth() ? ' '+d0.toLocaleDateString('fr-CA',{month:'short'}) : '')+' au '+d6.toLocaleDateString('fr-CA',{day:'numeric',month:'long',year:'numeric'});
   }
 
   // v515 : vue Jour = 7 h à 15 h 30 ; les jobs de chaque équipe se partagent la journée (affichage), l'heure réelle est écrite dans le bloc
@@ -6254,7 +6290,12 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
           {[['agenda','Agenda'],['commandes','Commandes de la semaine']].map(([k,l])=><button key={k} className={'btn btn-sm'+(ongletAg===k?' btn-p':'')} onClick={()=>choisirOnglet(k)}>{l}</button>)}
         </div>
       </div>
-      {data && <button className="btn btn-p" onClick={()=>openNewJob(todayISO())}>+ Nouvelle job</button>}
+      <div style={{display:'flex',gap:10,alignItems:'flex-start',marginLeft:'auto'}}>
+        {isDesktop && <MiniMois anchor={anchor} days={days} onPick={d=>setAnchor(d)}/>}
+        <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'stretch'}}>
+          {data && <button className="btn btn-p" onClick={()=>openNewJob(todayISO())}>+ Nouvelle job</button>}
+          {isDesktop && <button className="btn btn-sm" onClick={()=>window.dispatchEvent(new Event('crm-nav-toggle'))} title="Cacher ou montrer le menu des onglets à gauche pour agrandir l'agenda">⇔ Menu</button>}
+        </div></div>
     </div>
     {ongletAg!=='heures' && <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
       <button className="btn btn-sm" onClick={goPrev} onDragOver={ev=>survolFleche(ev, -1)} onDragLeave={()=>survolFleche(null)} title="Précédent (K ou ←) — glisse un événement ici pour reculer">←</button>
@@ -6287,9 +6328,10 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         if(viewMode==='jour'){ const lun = lundiDe(anchor), sel = localDateStr(anchor);
           return <div style={{display:'flex',gap:3,width:'100%'}}>{['Lun','Mar','Mer','Jeu','Ven'].map((j,i)=>{ const d = new Date(lun); d.setDate(lun.getDate()+i); const ds = localDateStr(d);
             return pastille(j, sel===ds, ds===aujS, ()=>setAnchor(new Date(d)), d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'}), j, d.getDate()); })}</div>; }
+        const dimDe = x => { const d = new Date(x); d.setHours(12,0,0,0); d.setDate(d.getDate()-d.getDay()); return d; };   // v577 : semaines du dimanche
         if(viewMode==='semaine'){ const m0 = new Date(anchor.getFullYear(), anchor.getMonth(), 1, 12); const fin = new Date(anchor.getFullYear(), anchor.getMonth()+1, 0, 12);
-          const lst = []; for(let d = lundiDe(m0); d <= fin; d = new Date(d.getFullYear(), d.getMonth(), d.getDate()+7, 12)) lst.push(d);
-          const selS = localDateStr(lundiDe(anchor)), aujL = localDateStr(lundiDe(auj));
+          const lst = []; for(let d = dimDe(m0); d <= fin; d = new Date(d.getFullYear(), d.getMonth(), d.getDate()+7, 12)) lst.push(d);
+          const selS = localDateStr(dimDe(anchor)), aujL = localDateStr(dimDe(auj));
           return <div style={{display:'flex',gap:3,width:'100%'}}>{lst.map((d,i)=>{ const ds = localDateStr(d);
             return pastille(ds, selS===ds, ds===aujL, ()=>setAnchor(new Date(d)), 'Semaine du '+d.toLocaleDateString('fr-CA',{day:'numeric',month:'long'}), 'S'+(i+1), d.getDate()+(d.getMonth()!==anchor.getMonth() ? '/'+(d.getMonth()+1) : '')); })}</div>; }
         return <div style={{display:'flex',gap:3,width:'100%'}}>{[-1,0,1].map(k=>{ const d = new Date(anchor.getFullYear(), anchor.getMonth()+k, 1, 12);
@@ -6332,11 +6374,11 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     {loading ? <div className="muted">Chargement...</div> :
 
     viewMode==='mois' ?
-    <div className="card" style={{padding:8}}>
+    <div className="card" style={{padding:8}} ref={moisRef}>
       {/* Une seule grille (7 colonnes x 7 rangées: en-têtes + 6 semaines) pour que
           les jours de la semaine et les cases du mois restent alignés. */}
-      <div style={{display:'grid',gridTemplateColumns:[0,1,2,3,4,5,6].map(i=>i>=5 && repli ? '44px' : 'minmax(0,1fr)').join(' '),gridTemplateRows:'auto',gridAutoRows:'auto',gap:isDesktop?8:4}}>
-        {['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map((j,i)=><div key={j} style={{gridColumn:i+1,gridRow:1,cursor:i>=5?'pointer':undefined}} className="muted" onClick={i>=5 ? basculerRepli : undefined} title={i>=5 ? (repli?'Afficher':'Replier')+' la fin de semaine' : undefined}><div style={{textAlign:'center',fontSize:isDesktop?13:11,fontWeight:700}}>{i>=5 && repli ? j.charAt(0) : j}</div></div>)}
+      <div style={{display:'grid',gridTemplateColumns:[0,1,2,3,4,5,6].map(i=>(i===0||i===6) && repli ? '44px' : 'minmax(0,1fr)').join(' '),gridTemplateRows:'auto',gridAutoRows:'auto',gap:isDesktop?8:4}}>
+        {['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'].map((j,i)=><div key={j} style={{gridColumn:i+1,gridRow:1,cursor:(i===0||i===6)?'pointer':undefined}} className="muted" onClick={(i===0||i===6) ? basculerRepli : undefined} title={(i===0||i===6) ? (repli?'Afficher':'Replier')+' la fin de semaine' : undefined}><div style={{textAlign:'center',fontSize:isDesktop?13:11,fontWeight:700}}>{(i===0||i===6) && repli ? j.charAt(0) : j}</div></div>)}
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const inMonth = d.getMonth()===anchor.getMonth();
@@ -6346,7 +6388,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
           return <div key={i} onDragOver={sur} onDrop={ev=>dropMois(ev, d)} onClick={replie ? basculerRepli : undefined}
             style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+2, minWidth:0, minHeight:isDesktop?170:90,border:dStr===todayStr?'2px solid var(--accent)':'1px solid var(--border)',boxShadow:dStr===todayStr?'0 0 0 3px rgba(var(--accent-rgb),.25)':undefined,borderRadius:6,padding:replie?3:(isDesktop?8:4),opacity:inMonth?1:.45,background:dStr===todayStr?'rgba(var(--accent-rgb),.12)':'transparent',cursor:replie?'pointer':undefined}}>
             <div onClick={ev=>{ if(replie) return; ev.stopPropagation(); setViewMode('jour'); setAnchor(new Date(d)); }} title={replie?'':'Voir la journée'} style={{fontSize:isDesktop?15:11,fontWeight:800,marginBottom:5,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,...(dStr===todayStr?{background:'var(--accent)',color:'#fff',borderRadius:999,padding:'1px 9px'}:{})}}>{d.getDate()}{dStr===todayStr && !replie && isDesktop && <span style={{fontSize:11,fontWeight:700}}>Aujourd'hui</span>}</div>
-            {replie ? (dayEvents.length>0 && <div title={dayEvents.map(e=>e.title).join('\n')} style={{fontSize:11,fontWeight:700,textAlign:'center',background:'var(--bg3)',borderRadius:4,padding:'2px 0'}}>{dayEvents.length}</div>)
+            {replie ? (dayEvents.length>0 && <div title={dayEvents.map(e=>e.title).join('\n')} style={{fontSize:11,fontWeight:800,textAlign:'center',background:'#8b1a1a',color:'#fff',borderRadius:4,padding:'3px 0'}}>{dayEvents.length}</div>)
               : dayEvents.map(e=><div key={e.id} title={e.title+(isDesktop ? ' — glisse-le sur un autre jour' : '')} onClick={(ev)=>{ ev.stopPropagation(); setEditEvent(e); }}
                 draggable={isDesktop} onDragStart={ev=>{ ev.stopPropagation(); panneauDragRef.current = e; dragGrilleRef.current = true; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }} onDragEnd={()=>{ panneauDragRef.current = null; }}
                 style={{cursor:isDesktop?'grab':'pointer',...agendaStyle(e),fontSize:isDesktop?12.5:10,lineHeight:1.25,padding:isDesktop?'4px 7px':'2px 4px',borderRadius:4,marginBottom:4,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',wordBreak:'break-word'}}>{pastilles(e)}{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{!e.allDay && <b style={{fontWeight:600,opacity:.85}}>{new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'}).replace(' h ','h')} </b>}{e.title}</div>)}
@@ -6362,8 +6404,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       <div style={{display:'grid',gridTemplateColumns:'50px '+gridCols,gridTemplateRows:'auto auto '+(PX_H*hours.length)+'px',width:'100%'}}>
         <div style={{gridColumn:1,gridRow:1}}></div>
         {days.map((d,i)=>ferme(d)
-          ? <div key={'h'+i} onClick={basculerRepli} title="Afficher la fin de semaine" style={{gridColumn:i+2,gridRow:1,minWidth:0,padding:'8px 0',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:11,cursor:'pointer',background:'var(--bg3)'}}>
-              <div>{d.getDay()===6?'S':'D'}</div><div className="muted" style={{fontWeight:500}}>{d.getDate()}</div></div>
+          ? (()=>{ const occ = eventsForDay(localDateStr(d)).length + allDayForDay(localDateStr(d)).length > 0;   // v577 : quelque chose de prévu la fin de semaine = rouge foncé
+            return <div key={'h'+i} onClick={basculerRepli} title={occ ? 'Quelque chose est prévu — afficher la fin de semaine' : 'Afficher la fin de semaine'} style={{gridColumn:i+2,gridRow:1,minWidth:0,padding:'8px 0',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:11,cursor:'pointer',background:occ?'#8b1a1a':'var(--bg3)',color:occ?'#fff':undefined}}>
+              <div>{d.getDay()===6?'S':'D'}</div><div className={occ?'':'muted'} style={{fontWeight:500}}>{d.getDate()}</div></div>; })()
           : <div key={'h'+i} style={{gridColumn:i+2,gridRow:1,minWidth:0,padding:'8px 6px 4px',borderLeft:'1px solid var(--border)',textAlign:'center',fontWeight:700,fontSize:12,background:localDateStr(d)===todayStr?'var(--accent)':'transparent',color:localDateStr(d)===todayStr?'#fff':undefined,borderRadius:localDateStr(d)===todayStr?'8px 8px 0 0':undefined}}>
           <div onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }} title="Voir la journée" style={{cursor:'pointer'}}>   {/* v436 : clic sur le jour → vue Jour */}
           <div style={{textTransform:'capitalize'}}>{d.toLocaleDateString('fr-CA',{weekday:'short'})}</div>
@@ -6376,7 +6419,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         {days.map((d,i)=>{
           const dStr = localDateStr(d);
           const adEvents = allDayForDay(dStr);
-          if(ferme(d)) return <div key={'a'+i} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, true)} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',background:'var(--bg3)',minHeight:22}}></div>;
+          if(ferme(d)) return <div key={'a'+i} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, true)} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',background:(adEvents.length || eventsForDay(dStr).length)?'rgba(139,26,26,.55)':'var(--bg3)',minHeight:22}}></div>;
           return <div key={'a'+i} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, true)} style={{gridColumn:i+2,gridRow:2,minWidth:0,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',padding:4,minHeight:22}}>
             {adEvents.map(e=><div key={e.id} title={e.title+(isDesktop ? ' — glisse-le à une heure pour le céduler' : '')} onClick={()=>setEditEvent(e)}
               draggable={isDesktop} onDragStart={ev=>{ panneauDragRef.current = e; dragGrilleRef.current = true; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }} onDragEnd={()=>{ panneauDragRef.current = null; }}
@@ -6394,8 +6437,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
           const nbFerme = ferme(d) ? dayEvents.length + allDayForDay(dStr).length : 0;
           const hNow = maintenant.getHours()+maintenant.getMinutes()/60;
           return <div key={'d'+i} ref={el=>dayColRefs.current[i]=el} onDragOver={sur} onDrop={ev=>dropPanneau(ev, i, false)} style={{gridColumn:i+2,gridRow:3,minWidth:0,position:'relative',borderLeft:'1px solid var(--border)',overflow:'hidden',background:dStr===todayStr?'rgba(var(--accent-rgb),.07)':undefined,boxShadow:dStr===todayStr?'inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent)':undefined}}>
-            {ferme(d) && <div onClick={basculerRepli} title="Afficher la fin de semaine" style={{position:'absolute',inset:0,background:'var(--bg3)',zIndex:2,cursor:'pointer',display:'flex',justifyContent:'center',paddingTop:8}}>
-              {nbFerme>0 && <span style={{fontSize:11,fontWeight:700,background:'var(--bg4)',borderRadius:8,padding:'1px 6px',height:'fit-content'}}>{nbFerme}</span>}</div>}
+            {ferme(d) && <div onClick={basculerRepli} title="Afficher la fin de semaine" style={{position:'absolute',inset:0,background:nbFerme>0?'rgba(139,26,26,.55)':'var(--bg3)',zIndex:2,cursor:'pointer',display:'flex',justifyContent:'center',paddingTop:8}}>
+              {nbFerme>0 && <span style={{fontSize:11,fontWeight:800,background:'#8b1a1a',color:'#fff',borderRadius:8,padding:'1px 6px',height:'fit-content'}}>{nbFerme}</span>}</div>}
             {enCouloirs && !ferme(d) && couloirs.slice(1).map((k,li)=><div key={'s'+k} style={{position:'absolute',top:0,bottom:0,left:((li+1)*100/couloirs.length)+'%',borderLeft:'1px dashed var(--border2)',pointerEvents:'none',zIndex:1}}></div>)}
             {dStr===todayStr && hNow>=HOUR_START && hNow<=HOUR_END+1 && <div style={{position:'absolute',left:0,right:0,top:(hNow-HOUR_START)*PX_H,height:2,background:'var(--danger)',zIndex:6,pointerEvents:'none'}}><div style={{position:'absolute',left:-4,top:-4,width:10,height:10,borderRadius:'50%',background:'var(--danger)'}}></div></div>}
             {hours.map(h=><div key={h} onClick={()=>{ if(data) openNewJob(dStr, viewMode==='jour' ? '07:00' : String(h).padStart(2,'0')+':00'); }}
@@ -18515,6 +18558,7 @@ function App(){
   const isDesktop = useIsDesktop();
   const [menuMobile,setMenuMobile]=useState(false);   // v119 : menu à gauche, rétractable, sur téléphone
   function toggleNav(){ const v=!navCollapsed; setNavCollapsedState(v); try{ localStorage.setItem('crm_nav_collapsed', v?'1':'0'); }catch(e){} }
+  useEffect(()=>{ const f = ()=>toggleNav(); window.addEventListener('crm-nav-toggle', f); return ()=>window.removeEventListener('crm-nav-toggle', f); });   // v577 : bouton ⇔ Menu de l'agenda
 
   async function handleRefresh(){
     if(tokenExpired()){ await reconnecter(); return; }
