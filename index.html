@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v565';
+const APP_VERSION = 'v566';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -14662,9 +14662,26 @@ function CvPill({status}){
 }
 
 // Jauge facturé / PO. Le repère de 75 % vient des PO de Jonathan (« 75 % rough et 25 % finition »).
-function CvGauge({job}){
+// v566 : appels de service (AP) et ordres de travail (OT) de la job, dans l'ordre des passages, avec la facture et son montant
+function cvJobPapiers(job, appels, factures){
+  const pn = (appels && appels.parNumero) || {}, out = [], vus = new Set();
+  job.events.filter(e=>!e.attente).slice().sort((a,b)=>String(a.day).localeCompare(String(b.day))).forEach(e=>{
+    const facs = String(e.fac||'').split(/[\s,;/–-]+/).filter(n=>/^\d{3,5}$/.test(n));
+    const mont = facs.reduce((t,n)=>t+(((factures||{})[n]||{}).ht||0),0);
+    [['AP', e.as], ['OT', e.ot]].forEach(([t, v])=>String(v||'').split(/[\s,;/–-]+/).filter(n=>/^\d{3,5}$/.test(n)).forEach(n=>{ const k = t+n; if(vus.has(k)) return; vus.add(k);
+      out.push({type:t, n, jour:e.day, phase:e.phase||'', facs, mont, photo:(pn[n]||{}).id||''}); }));
+  });
+  return out;
+}
+function CvGauge({job, appels, factures}){
   const po = job.reg && job.reg.ht;
-  if(!po) return null;
+  const papiers = cvJobPapiers(job, appels, factures);
+  const puce = (x,i) => <a key={i} href={x.photo ? 'https://drive.google.com/file/d/'+x.photo+'/view' : undefined} target="_blank" rel="noopener" title={(x.type==='AP'?'Appel de service ':'Ordre de travail ')+x.n+' · '+cvFmtDay(x.jour)+(x.facs.length ? ' · facture '+x.facs.join(', ')+' : '+cvMoney(x.mont) : ' · pas de facture inscrite')}
+    style={{display:'inline-flex',gap:5,alignItems:'baseline',padding:'2px 8px',borderRadius:12,border:'1px solid '+(x.photo?'var(--accent)':'var(--border2)'),fontSize:11.5,color:'var(--text)',textDecoration:'none',background:'var(--bg2)',whiteSpace:'nowrap'}}>
+    <b style={{color:x.type==='AP'?'var(--accent)':'var(--success)'}}>{x.type} {x.n}</b><span className="muted">{cvFmtDay(x.jour)}</span>{x.facs.length ? <b>{cvMoney(x.mont)}</b> : <span style={{color:'var(--warning)'}}>pas facturé</span>}{x.photo && ' 📄'}</a>;
+  if(!po) return papiers.length ? <div style={{border:'1px solid var(--border2)',borderRadius:10,padding:12,margin:'10px 0',background:'var(--bg3)'}}>
+    <div style={{fontSize:13,marginBottom:6}}>Appels de service et ordres de travail <span className="muted">(pas de PO)</span></div>
+    <div style={{display:'flex',flexWrap:'wrap',gap:5}}>{papiers.map(puce)}</div></div> : null;
   const today = cvDay(new Date().toISOString());
   const b = job.billed||0, pct = b/po, w = Math.min(pct,1.5)/1.5*100, m75 = 50, m100 = 100/1.5;
   const finDone = job.events.some(e=>!e.attente && e.phase==='FINITION' && e.day<today), roughDone = job.events.some(e=>!e.attente && e.phase==='ROUGH' && e.day<today);
@@ -14681,12 +14698,15 @@ function CvGauge({job}){
       <div style={{position:'absolute',left:0,top:0,bottom:0,width:w+'%',background:col,borderRadius:6}}></div>
       <div style={{position:'absolute',top:0,bottom:0,left:m75+'%',width:2,background:'var(--muted)'}}></div>
       <div style={{position:'absolute',top:0,bottom:0,left:m100+'%',width:3,background:'var(--text)'}}></div>
+      {(()=>{ let cum = 0, vues = new Set(); return papiers.map((x,i)=>{ x.facs.forEach(n=>{ if(!vues.has(n)){ vues.add(n); cum += ((factures||{})[n]||{}).ht||0; } });   // v566 : un repère par AP/OT, là où la facturation en était rendue
+        const left = Math.min(cum/po, 1.5)/1.5*100; return <div key={'m'+i} title={x.type+' '+x.n+' · '+cvFmtDay(x.jour)+' · '+cvMoney(x.mont)} style={{position:'absolute',top:-1,bottom:-1,left:'calc('+left+'% - 1px)',width:2,background:x.type==='AP'?'var(--accent)':'#fff',opacity:.9}}></div>; }); })()}
     </div>
     <div style={{position:'relative',height:16,fontSize:11,color:'var(--muted)'}}>
       <span style={{position:'absolute',left:m75+'%',transform:'translateX(-50%)',whiteSpace:'nowrap'}}>fin du rough (75 %)</span>
       <span style={{position:'absolute',left:m100+'%',transform:'translateX(-50%)'}}>PO</span>
     </div>
     <div style={{fontSize:13,marginTop:4}}>{etape}. {msg}</div>
+    {papiers.length>0 && <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:8}}>{papiers.map(puce)}</div>}
   </div>;
 }
 
@@ -14915,10 +14935,11 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
   const maps = job.address ? 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(job.address+', QC') : '';
   const Row = ({k,children}) => children ? <><div className="muted" style={{fontSize:12.5}}>{k}</div><div style={{fontSize:13.5}}>{children}</div></> : null;
   const nbAch = (()=>{ try{ return cvMateriel(job, achats).liste.length; }catch(e){ return 0; } })();
-  const onglets = [['fiche','📋 Fiche'],['projet','📁 Projet'],['achats','🛒 Achats'+(nbAch?' ('+nbAch+')':'')],['factures','🧾 Factures'+(job.factures.length?' ('+job.factures.length+')':'')],['passages','📅 Passages ('+job.events.length+')']];
+  const onglets = [['fiche','📋 Fiche'],['projet','📁 Projet'],['achats','🛒 Achats'+(nbAch?' ('+nbAch+')':'')],['factures','🧾 Factures'+(job.factures.length?' ('+job.factures.length+')':'')],['passages','📅 Passages ('+job.events.length+')'], ...(r.dossier ? [['dossier','📂 Dossier']] : [])];
   return <div className={enModal ? '' : 'card'} style={enModal ? {minHeight:'60vh'} : {position:'sticky',top:'calc(var(--topbar-h) + 12px)',maxHeight:'calc(100vh - var(--topbar-h) - 24px)',overflowY:'auto'}}>
     {enModal && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10,position:'sticky',top:0,background:'var(--bg2)',zIndex:2,padding:'2px 0 8px',borderBottom:'1px solid var(--border)'}}>
       {onglets.map(([k,l])=><button key={k} className={'btn btn-sm'+(ong===k?' btn-p':'')} onClick={()=>setOng(k)}>{l}</button>)}</div>}
+    {enModal && ong==='dossier' && r.dossier && <DossierApercu id={r.dossier}/>}
     {enModal && ong==='projet' && <div>{(()=>{ NAV_FOCUS = {cible:'projets', t:Date.now(), jobIds:[job.id], ouvrir:job.client+job.id, nom:(job.client!=='PART'?job.client+' ':'')+job.name}; return null; })()}<ProjetsSuivi cfg={cfg} refreshKey={0}/></div>}
     {vu('fiche') && <>
     <CvPill status={job.etatClient||job.status}/>
@@ -14939,8 +14960,7 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
       <Row k="Montant PO">{r.ht!=null && <>{cvMoney(r.ht)} avant taxes · {cvMoney(r.ht*1.14975)} taxes incluses</>}</Row>
     </div>
     {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvRattacherPO job={job} clients={clients} onDone={onChanged}/><CvMemeProjet key={'mp'+job.id} cfg={cfg} job={job} clients={clients} onChanged={onChanged}/><CvInscrirePO key={'po'+job.id} cfg={cfg} job={job} registry={registry} onChanged={onChanged}/><CvCreerNoJob key={'no'+job.id} cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
-    <CvGauge job={job}/>
-    {r.dossier && enModal && <a className="btn btn-p btn-sm" href={'https://drive.google.com/drive/folders/'+r.dossier} target="_blank" rel="noopener" style={{textDecoration:'none',marginBottom:12}}>Ouvrir le dossier dans Drive ↗</a>}
+    <CvGauge job={job} appels={appels} factures={factures}/>
     {r.note && enModal && <div className="card" style={{marginTop:10,padding:10,fontSize:13,borderColor:'var(--warning)'}}>{r.note}</div>}
     </>}
     {vu('achats') && <>
