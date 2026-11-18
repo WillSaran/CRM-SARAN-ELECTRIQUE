@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v566';
+const APP_VERSION = 'v567';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3088,7 +3088,7 @@ function PjFacturesMateriel({job, factures, achats, clients, cfg, onChanged, app
         </div>)}</div>}</div>; }); })()}</>}</div>
   </div>;
 }
-function ProjetsSuivi({cfg, refreshKey}){
+function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, nom} → seulement ce projet-là, sans recherche ni filtres
   const [tick,setTick]=useState(0);
   const {loading, err, events, registry, factures, appels, courriels, archives, achats} = useClientsData(cfg, refreshKey+'|p'+tick);
   const [voirArch,setVoirArch]=useState(false);
@@ -3096,11 +3096,11 @@ function ProjetsSuivi({cfg, refreshKey}){
   const [commandes, enregistrerCommande] = useCommandes(cfg);
   const [manuels, basculerEtape] = useEtapesManuelles(cfg);
   const [propAdresses] = useAdresses(cfg);
-  const [focus,setFocus]=useState(()=>navFocus('projets'));   // v202 : projets d'un client (bouton de sa fiche)
+  const [focus,setFocus]=useState(()=>seul ? {jobIds:[seul.id], nom:seul.nom} : navFocus('projets'));   // v202 : projets d'un client (bouton de sa fiche)
   const [filtre,setFiltre]=useState(()=>(navFocus('projets')||{}).code || '');
   const [seulManque,setSeulManque]=useState(false);
   const [qP,setQP]=useState('');   // v389 : recherche (nom, PO, adresse, no de facture…)
-  const [ouvert,setOuvert]=useState(()=>(navFocus('projets')||{}).ouvrir || null);   // v318 : ouverte depuis l'agenda
+  const [ouvert,setOuvert]=useState(()=>seul ? seul.ouvrir : ((navFocus('projets')||{}).ouvrir || null));   // v318 : ouverte depuis l'agenda
   const B = useBlocages(cfg), TJ = useTypesJob(cfg);   // v224 : blocages et type de job
   const poEtapes = usePOEtapes(cfg);                   // v237 : Rough / Finition / Entrée électrique selon le PO
   const [selEt,setSelEt]=useState(null);              // {k, id} : étape choisie sur la barre d'une job
@@ -3121,7 +3121,7 @@ function ProjetsSuivi({cfg, refreshKey}){
     return motsQ.every(w=>mots.some(m=>m.startsWith(w))); });
   if(focus && focus.jobIds) jobs = jobs.filter(x=>focus.jobIds.includes(x.j.id));
   const nbArch = jobs.filter(x=>(archives||{})[x.j.id]).length;
-  jobs = jobs.filter(x=>voirArch ? (archives||{})[x.j.id] : !(archives||{})[x.j.id]);
+  if(!seul) jobs = jobs.filter(x=>voirArch ? (archives||{})[x.j.id] : !(archives||{})[x.j.id]);
   if(filtre) jobs = jobs.filter(x=>x.c.code===filtre);
   if(seulManque) jobs = jobs.filter(x=>x.s.manquants.length);
   // Terminées cachées, sauf celles qui restent à facturer.
@@ -3229,6 +3229,7 @@ function ProjetsSuivi({cfg, refreshKey}){
       </div>}
     </div>; };
   const totalManque = jobs.reduce((t,x)=>t+x.s.manquants.length,0);
+  if(seul) return <div>{jobs.map(x=><Ligne key={x.c.code+x.j.id} x={x}/>)}{!jobs.length && <div className="card muted">Projet introuvable.</div>}</div>;
   return <div>
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>Projets</h2>
     <div className="muted" style={{fontSize:13,marginBottom:10}}>Chaque job, ses étapes et ce qui manque — et où le compléter. {totalManque ? <b style={{color:'var(--warning)'}}>{totalManque} choses à compléter.</b> : 'Tout est complet.'}</div>
@@ -5316,7 +5317,7 @@ function EditEventModal({cfg, event, job, onClose, onSaved, toast}){
     </div>}
     {panneau==='dossier' && dossierJob && <DossierApercu id={dossierJob}/>}
     {panneau==='commande' && <div style={{maxHeight:'70vh',overflowY:'auto'}}>{(()=>{ BC_PREFILL = BC_PREFILL || {id:event.id, day:String(event.start||'').slice(0,10), title:event.title}; return null; })()}<CommandesView cfg={cfg} toast={toast} refreshKey={0}/></div>}
-    {panneau==='projet' && job && <div style={{maxHeight:'70vh',overflowY:'auto'}}>{(()=>{ NAV_FOCUS = {cible:'projets', t:Date.now(), jobIds:[job.j.id], ouvrir:job.c.code+job.j.id, nom:(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}; return null; })()}<ProjetsSuivi cfg={cfg} refreshKey={0}/></div>}
+    {panneau==='projet' && job && <div style={{maxHeight:'70vh',overflowY:'auto'}}><ProjetsSuivi cfg={cfg} refreshKey={0} seul={{id:job.j.id, ouvrir:job.c.code+job.j.id, nom:(job.c.code!=='PART'?job.c.code+' ':'')+job.j.name}}/></div>}
     <div style={{display:panneau ? 'none' : 'block'}}>
     <div className="ev-grille"><div className="ev-gauche">
     <div className="field"><label>Titre</label><input value={titre} onChange={e=>setTitre(e.target.value)}/></div>
@@ -14665,20 +14666,32 @@ function CvPill({status}){
 // v566 : appels de service (AP) et ordres de travail (OT) de la job, dans l'ordre des passages, avec la facture et son montant
 function cvJobPapiers(job, appels, factures){
   const pn = (appels && appels.parNumero) || {}, out = [], vus = new Set();
-  job.events.filter(e=>!e.attente).slice().sort((a,b)=>String(a.day).localeCompare(String(b.day))).forEach(e=>{
-    const facs = String(e.fac||'').split(/[\s,;/–-]+/).filter(n=>/^\d{3,5}$/.test(n));
-    const mont = facs.reduce((t,n)=>t+(((factures||{})[n]||{}).ht||0),0);
-    [['AP', e.as], ['OT', e.ot]].forEach(([t, v])=>String(v||'').split(/[\s,;/–-]+/).filter(n=>/^\d{3,5}$/.test(n)).forEach(n=>{ const k = t+n; if(vus.has(k)) return; vus.add(k);
-      out.push({type:t, n, jour:e.day, phase:e.phase||'', facs, mont, photo:(pn[n]||{}).id||''}); }));
+  const nums = v => String(v||'').split(/[\s,;/–-]+/).filter(n=>/^\d{3,5}$/.test(n));
+  const evs = job.events.filter(e=>!e.attente).slice().sort((a,b)=>String(a.day).localeCompare(String(b.day)));
+  const facsDe = e => nums(e.fac), montDe = facs => facs.reduce((t,n)=>t+(((factures||{})[n]||{}).ht||0),0);
+  const jourAP = evs.filter(e=>nums(e.as).length).map(e=>e.day);
+  evs.forEach(e=>{
+    const facs = facsDe(e);
+    nums(e.as).forEach(n=>{ if(vus.has('AP'+n)) return; vus.add('AP'+n);
+      out.push({type:'AP', n, jour:e.day, phase:e.phase||'', facs, mont:montDe(facs), photo:(pn[n]||{}).id||''}); });
+    nums(e.ot).forEach(n=>{ if(vus.has('OT'+n)) return; vus.add('OT'+n);
+      // v567 : un OT écrit le jour d'un AP (ou dans les jours qui suivent) annonce la prochaine visite (la finition) :
+      // pas de prix sur l'OT lui-même, une flèche vers le passage suivant, facturé avec lui.
+      const suiteAP = jourAP.some(d=>d<=e.day && (new Date(e.day)-new Date(d))/864e5<=7);
+      if(suiteAP){ const suiv = evs.find(x=>x.day>e.day && x!==e); const sf = suiv ? facsDe(suiv) : [];
+        out.push({type:'OT', n, jour:e.day, phase:e.phase||'', facs:sf, mont:montDe(sf), photo:(pn[n]||{}).id||'', vers:suiv ? {jour:suiv.day, phase:suiv.phase||'Prochaine visite'} : {jour:'', phase:'À venir'}}); return; }
+      out.push({type:'OT', n, jour:e.day, phase:e.phase||'', facs, mont:montDe(facs), photo:(pn[n]||{}).id||''}); });
   });
   return out;
 }
 function CvGauge({job, appels, factures}){
   const po = job.reg && job.reg.ht;
   const papiers = cvJobPapiers(job, appels, factures);
-  const puce = (x,i) => <a key={i} href={x.photo ? 'https://drive.google.com/file/d/'+x.photo+'/view' : undefined} target="_blank" rel="noopener" title={(x.type==='AP'?'Appel de service ':'Ordre de travail ')+x.n+' · '+cvFmtDay(x.jour)+(x.facs.length ? ' · facture '+x.facs.join(', ')+' : '+cvMoney(x.mont) : ' · pas de facture inscrite')}
+  const puce = (x,i) => <a key={i} href={x.photo ? 'https://drive.google.com/file/d/'+x.photo+'/view' : undefined} target="_blank" rel="noopener" title={(x.type==='AP'?'Appel de service ':'Ordre de travail ')+x.n+' · '+cvFmtDay(x.jour)+(x.vers ? ' → '+x.vers.phase+(x.vers.jour?' le '+cvFmtDay(x.vers.jour):'') : '')+(x.facs.length ? ' · facture '+x.facs.join(', ')+' : '+cvMoney(x.mont) : ' · pas de facture inscrite')}
     style={{display:'inline-flex',gap:5,alignItems:'baseline',padding:'2px 8px',borderRadius:12,border:'1px solid '+(x.photo?'var(--accent)':'var(--border2)'),fontSize:11.5,color:'var(--text)',textDecoration:'none',background:'var(--bg2)',whiteSpace:'nowrap'}}>
-    <b style={{color:x.type==='AP'?'var(--accent)':'var(--success)'}}>{x.type} {x.n}</b><span className="muted">{cvFmtDay(x.jour)}</span>{x.facs.length ? <b>{cvMoney(x.mont)}</b> : <span style={{color:'var(--warning)'}}>pas facturé</span>}{x.photo && ' 📄'}</a>;
+    <b style={{color:x.type==='AP'?'var(--accent)':'var(--success)'}}>{x.type} {x.n}</b><span className="muted">{cvFmtDay(x.jour)}</span>
+    {x.vers ? <><span>→</span><b>{x.vers.phase}</b>{x.vers.jour && <span className="muted">{cvFmtDay(x.vers.jour)}</span>}{x.vers.jour && (x.facs.length ? <b>{cvMoney(x.mont)}</b> : <span style={{color:'var(--warning)'}}>pas facturé</span>)}</>
+      : x.facs.length ? <b>{cvMoney(x.mont)}</b> : <span style={{color:'var(--warning)'}}>pas facturé</span>}{x.photo && ' 📄'}</a>;
   if(!po) return papiers.length ? <div style={{border:'1px solid var(--border2)',borderRadius:10,padding:12,margin:'10px 0',background:'var(--bg3)'}}>
     <div style={{fontSize:13,marginBottom:6}}>Appels de service et ordres de travail <span className="muted">(pas de PO)</span></div>
     <div style={{display:'flex',flexWrap:'wrap',gap:5}}>{papiers.map(puce)}</div></div> : null;
@@ -14940,14 +14953,14 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
     {enModal && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10,position:'sticky',top:0,background:'var(--bg2)',zIndex:2,padding:'2px 0 8px',borderBottom:'1px solid var(--border)'}}>
       {onglets.map(([k,l])=><button key={k} className={'btn btn-sm'+(ong===k?' btn-p':'')} onClick={()=>setOng(k)}>{l}</button>)}</div>}
     {enModal && ong==='dossier' && r.dossier && <DossierApercu id={r.dossier}/>}
-    {enModal && ong==='projet' && <div>{(()=>{ NAV_FOCUS = {cible:'projets', t:Date.now(), jobIds:[job.id], ouvrir:job.client+job.id, nom:(job.client!=='PART'?job.client+' ':'')+job.name}; return null; })()}<ProjetsSuivi cfg={cfg} refreshKey={0}/></div>}
+    {enModal && ong==='projet' && <div><ProjetsSuivi cfg={cfg} refreshKey={0} seul={{id:job.id, ouvrir:job.client+job.id, nom:(job.client!=='PART'?job.client+' ':'')+job.name}}/></div>}
     {vu('fiche') && <>
     <CvPill status={job.etatClient||job.status}/>
     <h2 className="fh" style={{margin:'8px 0 2px',fontSize:20}}>{job.client==='PART' && cvNomClientJob(job) ? <span onClick={e=>ouvrirFicheClient(cvNomClientJob(job), e)} title="Ouvrir sa fiche du Répertoire" style={{cursor:'pointer',textDecoration:'underline',textDecorationStyle:'dotted'}}>{cvTitreJob(job)}</span> : cvTitreJob(job)}</h2>
     {job.client==='PART' && <div style={{fontSize:13,color:'var(--accent)',fontWeight:600}}>{cvProjetJob(job)}</div>}
     {!enModal && <button className="btn btn-sm" style={{margin:'6px 0 2px'}} onClick={()=>setVoirProjet(true)} title="Étapes, blocages et infos du projet, sans quitter cette page">📁 Voir le projet</button>}
     {voirProjet && <Modal title={'📁 '+cvTitreJob(job)} onClose={()=>setVoirProjet(false)} wide>
-      <div style={{maxHeight:'75vh',overflowY:'auto'}}>{(()=>{ NAV_FOCUS = {cible:'projets', t:Date.now(), jobIds:[job.id], ouvrir:job.client+job.id, nom:(job.client!=='PART'?job.client+' ':'')+job.name}; return null; })()}<ProjetsSuivi cfg={cfg} refreshKey={0}/></div>
+      <div style={{maxHeight:'75vh',overflowY:'auto'}}><ProjetsSuivi cfg={cfg} refreshKey={0} seul={{id:job.id, ouvrir:job.client+job.id, nom:(job.client!=='PART'?job.client+' ':'')+job.name}}/></div>
     </Modal>}
     {r.projet && <div className="muted" style={{fontSize:13}}>{r.projet}</div>}
     <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'5px 14px',margin:'12px 0'}}>
