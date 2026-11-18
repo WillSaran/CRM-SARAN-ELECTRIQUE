@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v569';
+const APP_VERSION = 'v570';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -15021,6 +15021,67 @@ function CvAcheteFacture({job, achats, facLignes}){
   </div>;
 }
 
+// v570 : topo de chantier d'une job — blocages et, par passage, ce que les gars ont laissé dans PunchPro
+// (note sur 10, notes écrites au punch out, mémos vocaux attachés au passage).
+let PTS_JOB_CACHE = null;
+function usePointagesTous(cfg){
+  const [pts,setPts]=useState(PTS_JOB_CACHE);
+  useEffect(()=>{ if(PTS_JOB_CACHE) return; const sid = (cfg && cfg.punchproSpreadsheetId) || PP_SHEET_ID;
+    lireCache(sid, 'Pointages!A2:Z').then(r=>{ PTS_JOB_CACHE = mapPointageRows(r.result.values||[]); setPts(PTS_JOB_CACHE); }, ()=>setPts([])); },[]);
+  return pts; }
+const topoNote10 = t => { const m = String(t||'').match(/(\d{1,2}(?:[.,]\d)?)\s*(?:\/|sur)\s*10\b/i); const v = m ? parseFloat(m[1].replace(',','.')) : NaN; return v>=0 && v<=10 ? v : null; };
+const topoFichiers = p => String(p.fichiers||'').split(/\s*\|\s*(?=https?:)/).map(x=>x.trim()).filter(Boolean).map(x=>{ const [url, ...n] = x.split('|'); return {url:url.trim(), nom:(n.join('|')||'').trim() || 'Fichier'}; });
+const topoEstVocal = (nom, mime) => /^audio\//.test(mime||'') || /^VOCAL_/i.test(nom||'') || /\.(m4a|mp3|wav|aac|ogg|caf|webm)$/i.test(nom||'') || /m[ée]mo vocal|vocal/i.test(nom||'');
+function CvTopoChantier({job, cfg}){
+  const pts = usePointagesTous(cfg);
+  const B = useBlocages(cfg || {});
+  const [voirRegles,setVoirRegles]=useState(false);
+  const ids = new Set(job.events.flatMap(e=>[e.id, String(e.id||'').split('_')[0]]).filter(Boolean));
+  const blocs = (B.liste||[]).filter(b=>b.source==='punchpro' ? (ids.has(b.eventId) || ids.has(String(b.eventId||'').split('_')[0])) : b.job===job.id);
+  const ouverts = blocs.filter(b=>b.statut!=='Réglé'), regles = blocs.filter(b=>b.statut==='Réglé');
+  const today = cvDay(new Date().toISOString()), N = v => cvNorm(v||'');
+  const passages = job.events.filter(e=>!e.attente && e.day<=today).slice().sort((a,b)=>String(b.day).localeCompare(String(a.day))).map(e=>{
+    const lignes = (pts||[]).filter(p=>p.date===e.day && p.job && (N(p.job)===N(e.title) || (job.po && N(p.job).includes(N(job.po)))));
+    const notes = lignes.filter(p=>String(p.note||'').trim()).map(p=>({qui:p.nom, txt:String(p.note).replace(/\s*\[via [^\]]*\]/g,'').trim(), n10:topoNote10(p.note)})).filter(x=>x.txt);
+    const vus = new Set(), vocaux = [];
+    (e.attachments||[]).filter(a=>a.fileUrl && topoEstVocal(a.title, a.mimeType)).forEach(a=>{ if(!vus.has(a.fileUrl)){ vus.add(a.fileUrl); vocaux.push({url:a.fileUrl, titre:a.title}); } });
+    lignes.forEach(p=>topoFichiers(p).filter(f=>topoEstVocal(f.nom)).forEach(f=>{ const id = (driveLienId(f.url)||{}).id;
+      if(!vus.has(f.url) && !(id && [...vus].some(u=>u.includes(id)))){ vus.add(f.url); vocaux.push({url:f.url, titre:f.nom}); } }));
+    const autres = (e.attachments||[]).filter(a=>a.fileUrl && !topoEstVocal(a.title, a.mimeType));
+    return {e, notes, vocaux, autres}; });
+  const toutes = passages.flatMap(p=>p.notes.map(n=>n.n10)).filter(v=>v!=null);
+  const moy = toutes.length ? Math.round(toutes.reduce((a,b)=>a+b,0)/toutes.length*10)/10 : null;
+  const coul10 = v => v>=8 ? 'var(--success)' : v>=6 ? 'var(--warning)' : 'var(--danger)';
+  const Bloc = ({b}) => <div style={{padding:'6px 8px',borderLeft:'3px solid '+(b.statut==='Réglé'?'var(--border2)':'var(--danger)'),background:b.statut==='Réglé'?'transparent':'rgba(248,81,73,.06)',borderRadius:4,fontSize:12.5,marginBottom:4}}>
+    <b>{b.type || 'Blocage'}</b>{b.auteur && <span className="muted"> · {b.auteur}</span>}{(b.date||b.cree) && <span className="muted"> · {/^\d{4}-\d{2}-\d{2}/.test(b.date||b.cree) ? cvFmtDay(cvDay(b.date||b.cree)) : (b.date||b.cree)}</span>}
+    {b.description && <div style={{whiteSpace:'pre-wrap'}}>{b.description}</div>}
+    {b.statut==='Réglé' && b.regle && <div className="muted">✓ {b.regle}</div>}
+    {(b.pj||[]).length>0 && <div>{b.pj.map((f,i)=>f.id ? <a key={i} href={'https://drive.google.com/file/d/'+f.id+'/view'} style={{color:'var(--accent)',marginRight:8}}>📎 {f.nom||'Fichier'}</a> : null)}</div>}
+  </div>;
+  return <div style={{marginTop:14}}>
+    <div className="fh" style={{fontSize:14,margin:'0 0 6px'}}>🚧 Blocages</div>
+    {!B.lu ? <div className="muted" style={{fontSize:12.5}}>Lecture…</div>
+      : !blocs.length ? <div style={{fontSize:13,color:'var(--success)'}}>✓ Aucun blocage</div>
+      : <>{ouverts.length ? ouverts.map(b=><Bloc key={b.id} b={b}/>) : <div style={{fontSize:13,color:'var(--success)',marginBottom:4}}>✓ Aucun blocage ouvert</div>}
+        {regles.length>0 && <div className="muted" style={{fontSize:12,cursor:'pointer'}} onClick={()=>setVoirRegles(!voirRegles)}>{voirRegles?'▼':'▶'} {regles.length} réglé{regles.length>1?'s':''}</div>}
+        {voirRegles && regles.map(b=><Bloc key={b.id} b={b}/>)}</>}
+    <div className="fh" style={{fontSize:14,margin:'14px 0 6px',display:'flex',gap:8,alignItems:'baseline'}}>🗣️ Topo des passages
+      {moy!=null && <span style={{fontSize:13,fontWeight:700,color:coul10(moy)}}>moyenne {String(moy).replace('.',',')}/10</span>}
+      {pts==null && <span className="muted" style={{fontSize:12,fontWeight:400}}>lecture de PunchPro…</span>}</div>
+    {!passages.length && <div className="muted" style={{fontSize:12.5}}>Aucun passage fait.</div>}
+    {passages.map(({e, notes, vocaux, autres},i)=><div key={e.id||i} style={{padding:'7px 10px',border:'1px solid var(--border2)',borderRadius:8,marginBottom:6,fontSize:12.5}}>
+      <div style={{display:'flex',gap:8,alignItems:'baseline',flexWrap:'wrap'}}><b>{cvFmtDay(e.day)}</b>{e.phase && <span className="badge">{e.phase}</span>}
+        {notes.filter(n=>n.n10!=null).map((n,k)=><b key={k} style={{color:coul10(n.n10)}}>{String(n.n10).replace('.',',')}/10</b>)}
+        {!notes.length && !vocaux.length && <span className="muted">rien de laissé par les gars</span>}</div>
+      {notes.map((n,k)=><div key={k} style={{marginTop:3,whiteSpace:'pre-wrap'}}><span className="muted">{n.qui} : </span>{n.txt}</div>)}
+      {vocaux.length>0 && <div style={{marginTop:4,display:'flex',gap:6,flexWrap:'wrap'}}>{vocaux.map((v,k)=><a key={k} href={v.url} className="btn btn-sm" style={{textDecoration:'none'}}>🎤 {cvVocalTitre(v.titre)}</a>)}</div>}
+      {autres.length>0 && <div style={{marginTop:3}}>{autres.map((a,k)=><a key={k} href={a.fileUrl} style={{color:'var(--accent)',marginRight:8}}>📎 {a.title||'Fichier'}</a>)}</div>}
+    </div>)}
+  </div>; }
+// Chargé de projet : l'expéditeur du premier courriel du PO (pas nous)
+function cvChargeProjet(job, courriels){ const l = (job.po && (courriels||{})[job.po]) || [];
+  const c = l.filter(x=>x.de && !/saran/i.test(x.de)).sort((a,b)=>String(a.premier).localeCompare(String(b.premier)))[0];
+  return c ? String(c.de).replace(/<[^>]*>/g,'').replace(/"/g,'').trim() : ''; }
 function ClientJobDetail({job, clients, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged, enModal}){
   const [reglees, marquerRegle] = useVerifsReglees(cfg);
   const [ong,setOng]=useState('fiche');   // v565 : en grand, des onglets pour suivre la job
@@ -15049,18 +15110,20 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
       <div style={{maxHeight:'75vh',overflowY:'auto'}}><ProjetsSuivi cfg={cfg} refreshKey={0} seul={{id:job.id, ouvrir:job.client+job.id, nom:(job.client!=='PART'?job.client+' ':'')+job.name}}/></div>
     </Modal>}
     {r.projet && <div className="muted" style={{fontSize:13}}>{r.projet}</div>}
-    <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'5px 14px',margin:'12px 0'}}>
-      <Row k={job.client==='CRS'?'PO':'No de job'}>{job.po || (job.client==='CRS'?'Pas de PO':'Pas encore de numéro')}{(job.posLies||[]).length>0 && <span className="muted"> + {job.posLies.join(', ')} (même projet)</span>}</Row>
-      <Row k="Adresse">{job.address && <>{job.address} {maps && <a href={maps} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5}}>Maps ↗</a>}</>}</Row>
-      <Row k="Client">{r.client}</Row>
-      <Row k="Téléphone">{r.tel && <span style={{userSelect:'all'}}>{r.tel}</span>}</Row>
-      <Row k="Courriel">{r.courriel && <span style={{userSelect:'all'}}>{r.courriel}</span>}</Row>
-      <Row k="Équipe">{job.crew.join(', ')}</Row>
-      <Row k="Montant PO">{r.ht!=null && <>{cvMoney(r.ht)} avant taxes · {cvMoney(r.ht*1.14975)} taxes incluses</>}</Row>
+    <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 14px',margin:'10px 0'}}>
+      <Row k={job.client==='PART'?'No de job':'PO'}>{job.po || (job.client==='PART'?'Pas encore de numéro':'Pas de PO')}{(job.posLies||[]).length>0 && <span className="muted"> + {job.posLies.join(', ')}</span>}</Row>
+      <Row k="Travaux">{job.address && <>{job.address} {maps && <a href={maps} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5}}>Maps ↗</a>}</>}</Row>
+      <Row k="Chargé de projet">{job.client!=='PART' && cvChargeProjet(job, courriels)}</Row>
+      <Row k="Montant PO">{r.ht!=null && <><b>{cvMoney(r.ht)}</b> <span className="muted">avant taxes</span></>}</Row>
     </div>
+    {(r.client || r.tel || r.courriel) && <details style={{fontSize:13,margin:'0 0 8px'}}><summary style={{cursor:'pointer',color:'var(--muted)'}}>👤 Client{r.client ? ' — '+r.client : ''}</summary>
+      <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 14px',margin:'6px 0 0 16px'}}>
+        <Row k="Nom">{r.client}</Row><Row k="Téléphone">{r.tel && <span style={{userSelect:'all'}}>{r.tel}</span>}</Row>
+        <Row k="Courriel">{r.courriel && <span style={{userSelect:'all'}}>{r.courriel}</span>}</Row><Row k="Équipe">{job.crew.join(', ')}</Row></div></details>}
     {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvRattacherPO job={job} clients={clients} onDone={onChanged}/><CvMemeProjet key={'mp'+job.id} cfg={cfg} job={job} clients={clients} onChanged={onChanged}/><CvInscrirePO key={'po'+job.id} cfg={cfg} job={job} registry={registry} onChanged={onChanged}/><CvCreerNoJob key={'no'+job.id} cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
     <CvGauge job={job} appels={appels} factures={factures}/>
     {r.note && enModal && <div className="card" style={{marginTop:10,padding:10,fontSize:13,borderColor:'var(--warning)'}}>{r.note}</div>}
+    <CvTopoChantier job={job} cfg={cfg}/>
     </>}
     {vu('achats') && <>
     <CvAcheteFacture job={job} achats={achats} facLignes={facLignes}/>
