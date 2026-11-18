@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v581';
+const APP_VERSION = 'v582';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11849,6 +11849,9 @@ const MAISON_TEMPORAIRE = 750;
 function maisonVide(){ return {pieces:[], entree:'200 A', entreeType:'aérienne', temporaire:false, borneA:'40', appareils:Object.fromEntries(MAISON_APPAREILS.map(([k])=>[k,'1'])), inclus:MAISON_INCLUS.slice(0,4), exclus:MAISON_EXCLUS.slice(0,3)}; }
 // v581 : sections de la soumission maison qu'on peut enlever (rénovation d'une salle de bain, d'un salon…) — par défaut tout est là
 const MAISON_SECTIONS = [['entree','Entrée électrique'],['appareils','Appareils 240 V'],['inclus','Inclus / exclus']];
+// v582 : clause rénovation (texte du produit SORTIES RÉNOVATIONS) — par défaut en mode « pièces seulement », au choix en maison complète
+const MAISON_CLAUSE_RENO = "Cette soumission est basée sur des conditions comparables à une maison neuve. Dans le cas présent, puisqu'il s'agit de travaux de rénovation, certaines variables demeurent inconnues au moment de l'estimation, notamment l'état des murs, de la structure existante et des installations électriques en place. En raison de ces éléments hors de notre contrôle, le prix pourrait varier selon l'ampleur réelle des travaux à effectuer une fois les murs ouverts et l'étendue des modifications requises constatée sur place.";
+const maisonClauseOn = m => m && m.clauseReno!=null ? !!m.clauseReno : (m && m.sections && m.sections.entree===false && m.sections.appareils===false);
 const maisonSec = (m, k) => ((m && m.sections) || {})[k]!==false;
 const maisonAppLib = (m, k, l) => k==='borne' ? l+' '+(m.borneA==='48' ? '48 A (circuit 60 A)' : '40 A') : l;
 // Petits symboles par sorte de sortie (sur le plan)
@@ -12119,11 +12122,11 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
   const utiles = permis.filter(o=>!(p.type==='sdb' && o[0]==='SO05' && !(p.emp||[]).some(x=>x.c==='SO05') && outil!=='SO05')).filter(o=>MAISON_BASE.includes(o[0]) || ctx.includes(o[0]) || (o[0]!=='MUR' && lignes.some(([so,a,b])=>so===o[5] && (a||b) && !MAISON_OUTILS.some(x=>x[5]===so && x!==o && (MAISON_BASE.includes(x[0]) || ctx.includes(x[0]))))) || o[0]===outil);
   const reste = permis.filter(o=>!utiles.includes(o));
   const bouton = o => { const n = MAISON_NUMEROS.indexOf(o[0]);
-    return <button key={o[0]} onClick={()=>setOutil(o[0])} onDoubleClick={()=>{ if(o[0]==='SO01' || o[0]==='SO04') setOutil('SO00'); }} title={o[2]+(o[4] ? ' — touche '+o[4] : '')+(o[0]==='SO01' || o[0]==='SO04' ? ' (2 fois = circuit dédié)' : '')} style={{display:'inline-flex',gap:4,alignItems:'center',padding:'3px 7px 3px 3px',borderRadius:14,cursor:'pointer',fontSize:11.5,
+    return <button key={o[0]} onClick={()=>setOutil(o[0])} onDoubleClick={()=>{ if(o[0]==='SO01' || o[0]==='SO04') setOutil('SO00'); }} title={o[2]+(o[4] ? ' — touche '+o[4] : '')+(o[0]==='SO01' || o[0]==='SO04' ? ' (2 fois = circuit dédié)' : '')} style={{display:'inline-flex',gap:5,alignItems:'center',padding:'5px 10px 5px 5px',borderRadius:16,cursor:'pointer',fontSize:13.5,
       border:outil===o[0] ? '2px solid var(--accent)' : '1px solid var(--border2)',background:outil===o[0] ? 'rgba(88,166,255,.15)' : 'var(--bg2)',color:'var(--text)'}}>
       <MaisonMarque c={o[0]} petit/>{o[2]}<span className="muted" style={{fontSize:10,fontFamily:'monospace'}}>{[n>=0 ? n+1 : '', p.type==='sdb' && o[0]==='SO06' ? 'F' : p.type==='sdb' && o[0]==='SO05' ? '' : o[4]].filter(Boolean).join('·')}</span></button>; };
   const large = window.innerWidth >= 900;
-  const btnO = (actif, rouge) => ({padding:'4px 9px',borderRadius:14,cursor:'pointer',fontSize:11.5,border:actif ? '2px solid var(--'+(rouge?'danger':'accent')+')' : '1px solid var(--border2)',background:actif && !rouge ? 'rgba(88,166,255,.15)' : 'var(--bg2)',color:'var(--text)'});
+  const btnO = (actif, rouge) => ({padding:'6px 11px',borderRadius:16,cursor:'pointer',fontSize:13.5,border:actif ? '2px solid var(--'+(rouge?'danger':'accent')+')' : '1px solid var(--border2)',background:actif && !rouge ? 'rgba(88,166,255,.15)' : 'var(--bg2)',color:'var(--text)'});
   return <div style={{position:'fixed',inset:0,zIndex:1000,background:'var(--bg)',padding:8,display:'flex',flexDirection:'column',gap:6,overflow:'hidden',boxSizing:'border-box'}}>
     <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
       <b style={{fontSize:15}}>🧭 {p.etage} › {p.nom}</b><span className="muted" style={{fontSize:12.5}}>{i+1} / {ordre.length} · {faits} vérifiée{faits>1?'s':''}{cvNum(p.pi2) ? ' · '+p.pi2+' pi²' : ''}</span>
@@ -12147,8 +12150,9 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
         {pg ? <MaisonCarte pg={pg} pieces={m.pieces} piece={p} outil={outil} onPlacer={placer} onEnlever={enlever} onDeplacer={deplacer}/>
           : <div className="muted" style={{padding:20,textAlign:'center',border:'1px dashed var(--border2)',borderRadius:8,height:'100%',boxSizing:'border-box'}}>Le plan se charge (ou aucun plan lu) — lis le plan PDF pour placer les sorties dessus.</div>}
       </div>
-      <div style={{width:large ? 330 : 'auto',flexShrink:0,overflow:'auto',display:'flex',flexDirection:'column',gap:8,maxHeight:large ? 'none' : '34vh'}}>
-        <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+      <div style={{width:large ? 410 : 'auto',flexShrink:0,overflow:'auto',display:'flex',flexDirection:'column',gap:10,maxHeight:large ? 'none' : '40vh',fontSize:14}}>
+        <div style={{fontSize:12,fontWeight:800,textTransform:'uppercase',letterSpacing:.5,color:'var(--muted)'}}>① Placer sur le plan</div>
+        <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
           <button onClick={()=>setOutil('PORTE')} title="Entrée de la porte (touche A)" style={btnO(outil==='PORTE')}>🚪 Entrée <span className="muted" style={{fontSize:10}}>A</span></button>
           <button className="btn btn-sm" disabled={!pg} onClick={()=>rapide('L')} title="Un plafonnier au centre de la pièce">💡 Plafonnier au centre</button>
           <button className="btn btn-sm" disabled={!pg} onClick={()=>rapide('E')} title="4 encastrés en carré au centre — glisse un coin, la grille reste symétrique">▦ 4 encastrés</button>
@@ -12168,13 +12172,15 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
           </div>; })()}
         {reste.length>0 && <div><button className="btn btn-sm" onClick={()=>setExtras(!extras)}>{extras ? '▾' : '▸'} Catalogue de sorties ({reste.length})</button>
           {extras && <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:4}}>{reste.map(bouton)}</div>}</div>}
-        <div style={{display:'grid',gap:2,border:'1px solid var(--border)',borderRadius:8,padding:'6px 10px',fontSize:13}}>
+        <div style={{fontSize:12,fontWeight:800,textTransform:'uppercase',letterSpacing:.5,color:'var(--muted)',marginTop:4}}>② Chauffage de la pièce</div>
+        <div style={{border:'1px solid var(--border2)',borderRadius:10,padding:'8px 10px',background:'var(--bg2)'}}><MaisonChaufEdit p={p} majP={(id, patch)=>{ memo(); majP(id, patch); }}/></div>
+        <div style={{fontSize:12,fontWeight:800,textTransform:'uppercase',letterSpacing:.5,color:'var(--muted)',marginTop:4}}>③ Dans cette pièce</div>
+        <div style={{display:'grid',gap:4,border:'1px solid var(--border2)',borderRadius:10,padding:'8px 10px',fontSize:14,background:'var(--bg2)'}}>
           <div style={{display:'flex',gap:6,flexWrap:'wrap'}}><b>Placées / prévues</b>{manque>0 ? <span style={{color:'var(--warning)'}}>· il en reste {manque} à placer</span> : lignes.length ? <span style={{color:'var(--success)'}}>· tout est placé</span> : null}</div>
           {lignes.map(([so,a,b])=>{ const o = MAISON_OUTILS.find(x=>x[5]===so && maisonOutilPermis(x, p)) || MAISON_OUTILS.find(x=>x[5]===so); return <div key={so} style={{display:'flex',gap:6,alignItems:'center'}}><MaisonMarque c={o ? o[0] : so} petit/><span style={{flex:1}}>{so==='SO04' ? 'plafonnier / murale' : o ? o[2] : so}</span>
             <b style={{color:b<a ? 'var(--warning)' : 'var(--success)'}}>{b} / {a}</b>
             {MAISON_LIB[so] ? <span style={{display:'inline-flex',gap:2}}><button className="btn btn-sm" style={{padding:'0 6px'}} onClick={()=>{ memo(); majP(p.id,{items:{...p.items, [so]:Math.max(0,(p.items[so]||0)-1)}}); }}>−</button>
               <button className="btn btn-sm" style={{padding:'0 6px'}} onClick={()=>{ memo(); majP(p.id,{items:{...p.items, [so]:(p.items[so]||0)+1}}); }}>+</button></span> : <span style={{width:52}}/>}</div>; })}
-          {ch.txt && <div style={{color:'var(--warning)',fontSize:12.5}}>Chauffage prévu : {ch.txt}{ch.w ? ' ('+ch.w+' W)' : ''}</div>}
         </div>
         <div className="muted" style={{fontSize:11}}>Touche le plan pour placer · glisse le plan pour te déplacer, une marque pour la déplacer · 1-7 ou les lettres pour changer d'outil · ← → pièce précédente / suivante</div>
       </div>
@@ -12264,18 +12270,18 @@ const MAISON_SUGG = {entree:['SO02.1','SO08','SO07','SO03','SO05'], vestibule:['
 const maisonSortieOk = (c, type) => !/^SO22/.test(c) && !(c==='SO06' && !['cuisine','sdb','lavage'].includes(type));
 function MaisonChaufEdit({p, majP, petit}){
   const q = maisonChaufQ(p), ch = maisonChauffage(p), so = p.chauf==='aero' ? ch.so220 : MAISON_CHAUF_PROD.reduce((t,[k])=>t+(q[k]||0),0);
-  const fs = petit ? 12 : 12.5;
+  const fs = petit ? 12.5 : 14, bt = {padding:petit?'1px 8px':'3px 12px',fontSize:petit?13:15,fontWeight:700};
   return <div style={{display:'grid',gap:3,marginTop:4,fontSize:fs}}>
     <div style={{display:'flex',gap:8,alignItems:'baseline'}}><b>SO220</b><span className="muted">sorties de chauffage</span>
       {so>0 && <span style={{fontSize:11.5,color:'var(--danger)',cursor:'pointer'}} onClick={()=>majP(p.id, {chauf:'aucun', chaufQ:{plinthe:0, thermostat:0, plancher:0, prep:0, convecteur:0, radiant:0}, emp:(p.emp||[]).filter(x=>x.c!=='PL' && x.c!=='TH')})}>✕ aucun chauffage</span>}
       <b style={{marginLeft:'auto',fontSize:fs+2,color:'var(--warning)'}}>{so}</b></div>
     {p.chauf==='aero' ? <div style={{display:'flex',gap:6,alignItems:'center'}}><span style={{flex:1}}>{ch.txt}</span><button className="btn btn-sm" onClick={()=>majP(p.id, {...maisonChaufMaj({...p, chauf:'aucun', chaufQ:null}, 'plinthe', 1)})}>→ plinthes</button></div>
       : MAISON_CHAUF_PROD.map(([k, lib, mq])=>{ const n = q[k]||0;
-        return <div key={k} style={{display:'flex',gap:6,alignItems:'center',opacity:n ? 1 : .6}}><MaisonMarque c={mq} petit/><span style={{flex:1}}>{lib}
+        return <div key={k} style={{display:'flex',gap:8,alignItems:'center',minHeight:petit?26:34,padding:'0 6px',borderRadius:6,background:n ? 'rgba(225,29,72,.08)' : 'transparent'}}><MaisonMarque c={mq} petit={petit}/><span style={{flex:1,fontWeight:n?700:400,color:n?'var(--text)':'var(--muted)'}}>{lib}
           {k==='plinthe' && n>0 && <span> <input value={p.plW||''} onChange={x=>majP(p.id,{plW:x.target.value.replace(/\D/g,'')})} inputMode="numeric" placeholder={String((ch.plinthes||[])[0]||'')} style={{width:52,padding:'1px 4px',fontSize:12}}/> W</span>}
           {k==='thermostat' && n>0 && <label style={{display:'inline-flex',gap:3,alignItems:'center',marginLeft:6,fontSize:11.5}}><input type="checkbox" checked={!!p.intel} onChange={x=>majP(p.id,{intel:x.target.checked})} style={{width:'auto'}}/> intelligent</label>}</span>
-          <button className="btn btn-sm" style={{padding:'0 7px'}} onClick={()=>majP(p.id, maisonChaufMaj(p, k, n-1))}>−</button><b style={{minWidth:18,textAlign:'center'}}>{n}</b>
-          <button className="btn btn-sm" style={{padding:'0 7px'}} onClick={()=>majP(p.id, maisonChaufMaj(p, k, n+1))}>+</button></div>; })}
+          <button className="btn btn-sm" style={bt} disabled={!n} onClick={()=>majP(p.id, maisonChaufMaj(p, k, n-1))}>−</button><b style={{minWidth:22,textAlign:'center',fontSize:fs+1}}>{n}</b>
+          <button className="btn btn-sm" style={bt} onClick={()=>majP(p.id, maisonChaufMaj(p, k, n+1))}>+</button></div>; })}
     {p.chauf!=='aero' && p.type==='garage' && <span style={{fontSize:11.5,color:'var(--accent)',cursor:'pointer'}} onClick={()=>majP(p.id,{chauf:'aero', chaufQ:null})}>Aérotherme (dragon) à la place</span>}
     {ch.w ? <div className="muted" style={{fontSize:11.5}}>{ch.w} W de plinthes{cvNum(p.pi2) ? ' · '+p.pi2+' pi² × 10 W' : ''}</div> : null}
   </div>; }
@@ -12552,11 +12558,12 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli}){   // v495 : partie '
       chauf.length ? 'CHAUFFAGE PRÉVU : '+chauf.map(([p,c])=>p.nom+' — '+c.txt).join(' ; ')+'.' : '',
       m.entree && !sansEntree ? 'ENTRÉE ÉLECTRIQUE : '+m.entree+' '+(m.entreeType||'')+(m.temporaire ? ' + entrée temporaire de chantier' : '') : '',
       MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).length ? 'APPAREILS RACCORDÉS : '+MAISON_APPAREILS.filter(([k])=>cvNum(app[k])).map(([k,l])=>maisonAppLib(m,k,l)+(cvNum(app[k])>1?' ×'+app[k]:'')).join(', ') : ''].filter((x,i,a)=>x!=='' || a[i-1]!=='').join('\n').trim();
+    const clause = maisonClauseOn(m) ? 'RÉNOVATION : '+((C && C.produitDe && ((C.produitDe('SORTIES RÉNOVATIONS')||{}).desc||'').replace(/\s*\n\s*/g,' ').trim()) || MAISON_CLAUSE_RENO) : '';
     const incOn = maisonSec(m,'inclus'), incl = incOn && (m.inclus||[]).length ? 'INCLUS : '+m.inclus.join(' ; ')+'.' : '', excl = incOn && (m.exclus||[]).length ? 'EXCLUS : '+m.exclus.join(' ; ')+'.' : '';
-    setD(o=>{ const rem = String(o.remarques||'').split('\n').filter(x=>!/^(INCLUS|EXCLUS) :/.test(x)).join('\n').trim();
+    setD(o=>{ const rem = String(o.remarques||'').split('\n').filter(x=>!/^(INCLUS|EXCLUS|RÉNOVATION) :/.test(x)).join('\n').trim();
       const vis = String(o.visite||'').split('\n').filter(x=>!/^— Liste chauffage/.test(x)).join('\n').trim();
       return {...o, typeProjet:o.typeProjet || (reno ? 'Rénovation' : 'Construction neuve'), titre:o.titre || (reno ? 'Travaux électriques — rénovation' : 'Installation électrique — maison'), travaux:txt,
-        lignes:[...o.lignes.filter(l=>!l.maison), ...lignesM], remarques:[rem, incl, excl].filter(Boolean).join('\n'),
+        lignes:[...o.lignes.filter(l=>!l.maison), ...lignesM], remarques:[rem, clause, incl, excl].filter(Boolean).join('\n'),
         visite:[vis, chauf.length ? '— Liste chauffage ('+chauf.reduce((t,[,c])=>t+(c.w||0),0)+' W) : '+chauf.map(([p,c])=>p.nom+' : '+c.txt).join(' ; ') : ''].filter(Boolean).join('\n')}; });
     toast && toast('Soumission remplie par étage et par pièce — vérifie le matériel et le prix'); onRempli && onRempli(); };
   const ch = l => <input type="checkbox" checked={l} readOnly style={{width:'auto'}}/>;
@@ -12651,8 +12658,10 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli}){   // v495 : partie '
       <div style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap',padding:'6px 8px',background:'var(--bg3)',borderRadius:8}}><b style={{fontSize:12.5}}>Dans cette soumission :</b>
         <span className="btn btn-sm btn-p" style={{fontSize:11.5,padding:'2px 8px',cursor:'default'}}>✓ Pièces</span>
         {MAISON_SECTIONS.map(([k,l])=>{ const on = maisonSec(m,k); return <button key={k} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>majM(x=>({sections:{...(x.sections||{}), [k]:!on}}))}>{on?'✓ ':'＋ '}{l}</button>; })}
-        <span style={{fontSize:11.5,color:'var(--accent)',cursor:'pointer',marginLeft:4}} onClick={()=>majM({sections:Object.fromEntries(MAISON_SECTIONS.map(([k])=>[k,false]))})}>Pièces seulement (rénovation)</span>
-        <span style={{fontSize:11.5,color:'var(--accent)',cursor:'pointer',marginLeft:4}} onClick={()=>majM({sections:{}})}>Maison complète</span></div>
+        {(()=>{ const on = maisonClauseOn(m); return <button className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} title={MAISON_CLAUSE_RENO} onClick={()=>majM({clauseReno:!on})}>{on?'✓ ':'＋ '}📝 Clause rénovation</button>; })()}
+        <span style={{fontSize:11.5,color:'var(--accent)',cursor:'pointer',marginLeft:4}} onClick={()=>majM({sections:Object.fromEntries(MAISON_SECTIONS.map(([k])=>[k,false])), clauseReno:true})}>Pièces seulement (rénovation)</span>
+        <span style={{fontSize:11.5,color:'var(--accent)',cursor:'pointer',marginLeft:4}} onClick={()=>majM({sections:{}, clauseReno:null})}>Maison complète</span></div>
+      {maisonClauseOn(m) && <div className="muted" style={{fontSize:12,padding:'0 8px',fontStyle:'italic'}}>📝 Ajouté aux remarques : « {MAISON_CLAUSE_RENO.slice(0,140)}… »</div>}
       {maisonSec(m,'entree') && <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><b>Entrée électrique</b>
         <select value={m.entree} onChange={e=>majM({entree:e.target.value})} style={{width:'auto'}}>{['','100 A','200 A','320 A','400 A'].map(x=><option key={x} value={x}>{x||'— aucune'}</option>)}</select>
         <select value={m.entreeType} onChange={e=>majM({entreeType:e.target.value})} style={{width:'auto'}}>{['aérienne','souterraine'].map(x=><option key={x}>{x}</option>)}</select>
