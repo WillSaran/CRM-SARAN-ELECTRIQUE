@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v598';
+const APP_VERSION = 'v599';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10600,9 +10600,24 @@ function docImprimer(d, calc, plan, w0){
   w.document.open(); w.document.write(docHtml(d, calc, plan, true)); w.document.close();
   return true;
 }
+// v599 : inclusions / exclusions juste avant d'envoyer — écrites dans les remarques (lignes « INCLUS : » / « EXCLUS : »)
+function InclusExclusFin({d, setD}){
+  const lire = k => { const l = String(d.remarques||'').split('\n').find(x=>x.startsWith(k+' : ')); return l ? l.slice(k.length+3).replace(/\.$/,'').split(/\s*;\s*/).filter(Boolean) : ((d.maison||{})[k==='INCLUS'?'inclus':'exclus']||[]); };
+  const [aj,setAj]=useState({INCLUS:'', EXCLUS:''});
+  const ecrire = (k, l) => setD(o=>{ const autres = String(o.remarques||'').split('\n').filter(x=>!x.startsWith(k+' : ')), ligne = l.length ? k+' : '+l.join(' ; ')+'.' : '';
+    const rem = k==='INCLUS' ? [ligne, ...autres.filter(x=>x.trim())] : [...autres.filter(x=>x.trim()), ligne];
+    return {...o, remarques:rem.filter(Boolean).join('\n'), ...(o.maison ? {maison:{...o.maison, [k==='INCLUS'?'inclus':'exclus']:l}} : {})}; });
+  return <div style={{border:'1px solid var(--border2)',borderRadius:8,padding:'6px 10px',marginBottom:8,display:'grid',gap:6}}>
+    {[['INCLUS','✅ Inclus',MAISON_INCLUS],['EXCLUS','🚫 Exclus',MAISON_EXCLUS]].map(([k,l,base])=>{ const cur = lire(k), tous = [...new Set([...base, ...cur])];
+      return <div key={k} style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap',fontSize:12.5}}><b style={{minWidth:70}}>{l}</b>
+        {tous.map(t=>{ const on = cur.includes(t); return <button key={t} className={'btn btn-sm'+(on?' btn-p':'')} style={{fontSize:11.5,padding:'2px 8px'}} onClick={()=>ecrire(k, on ? cur.filter(y=>y!==t) : [...cur, t])}>{on?'✓ ':'+ '}{t}</button>; })}
+        <input value={aj[k]} onChange={e=>setAj({...aj, [k]:e.target.value})} onKeyDown={e=>{ if(e.key==='Enter' && aj[k].trim()){ ecrire(k, [...cur, aj[k].trim()]); setAj({...aj, [k]:''}); } }} placeholder="+ autre (Entrée)" style={{width:150,fontSize:12,padding:'2px 6px'}}/></div>; })}
+  </div>; }
 // v113 : aperçu du PDF dans le CRM — se met à jour pendant que tu modifies la soumission
 function ApercuPdf({d, setD, prixDe, onImprimer, onFermer}){
   const [html,setHtml]=useState('');
+  const [fin,setFin]=useState(null);   // v599 : plans d'étage bâtis dans le CRM (titres) — pour les cocher / décocher
+  useEffect(()=>{ let ok = true; if(!d.maison) { setFin([]); return; } maisonPlansFin(d).then(l=>{ if(ok) setFin(l.map(x=>x.titre)); }, ()=>{ if(ok) setFin([]); }); return ()=>{ ok = false; }; },[JSON.stringify([d.maison && d.maison.pieces, d.maison && d.maison.pagesTag])]);
   const cle = JSON.stringify(d);
   useEffect(()=>{ let vivant=true;
     const t = setTimeout(async()=>{ let plan=[]; try{ plan = await planPourImpression(d); }catch(e){}
@@ -10613,10 +10628,15 @@ function ApercuPdf({d, setD, prixDe, onImprimer, onFermer}){
       <b style={{fontSize:13.5}}>👁 Aperçu du PDF</b><span className="muted" style={{fontSize:12}}>ce que le client va recevoir — modifie plus haut, l'aperçu suit</span>
       <span style={{marginLeft:'auto',display:'flex',gap:5}}><button className="btn btn-sm btn-p" onClick={onImprimer}>🖨️ PDF / Imprimer</button><button className="btn btn-sm" onClick={onFermer}>Fermer</button></span>
     </div>
-    {setD && (d.plan||[]).length>0 && <div style={{marginBottom:6}}><PlanPlace d={d} setD={setD} compact/>
+    {setD && d.type==='Soumission' && <InclusExclusFin d={d} setD={setD}/>}
+    {setD && fin && fin.length>0 && <div style={{display:'flex',gap:8,flexWrap:'wrap',margin:'0 0 6px',fontSize:12.5,alignItems:'center'}}><b>🏠 Tes plans à la fin :</b>
+      {fin.map(t=>{ const on = !(d.plansMasques||[]).includes(t); return <label key={t} style={{display:'inline-flex',gap:4,alignItems:'center',padding:'2px 9px',border:'1px solid '+(on?'var(--accent)':'var(--border2)'),borderRadius:12,cursor:'pointer',opacity:on?1:.55}}>
+        <input type="checkbox" checked={on} onChange={()=>setD(o=>({...o, plansMasques: on ? [...(o.plansMasques||[]), t] : (o.plansMasques||[]).filter(y=>y!==t)}))} style={{width:'auto'}}/>{t.replace(/^Plan par pièce — /,'')}</label>; })}</div>}
+    {setD && fin==null && d.maison && <div className="muted" style={{fontSize:12,marginBottom:6}}><span className="spin" style={{display:'inline-block',marginRight:6}}></span>Préparation de tes plans d'étage pour la fin du PDF…</div>}
+    {setD && (d.plan||[]).filter(x=>!/^Plan par pièce — /.test(x.titre||'')).length>0 && <div style={{marginBottom:6}}><PlanPlace d={d} setD={setD} compact/>
       {/* v597 : chaque plan / photo du PDF, à cocher ou décocher */}
       <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:6,fontSize:12.5}}><span className="muted">Dans le PDF :</span>
-        {(d.plan||[]).map((x,i)=><label key={x.id+i} style={{display:'inline-flex',gap:4,alignItems:'center',padding:'2px 8px',border:'1px solid var(--border2)',borderRadius:12,cursor:'pointer',opacity:x.masque?.55:1}}>
+        {(d.plan||[]).map((x,i)=>/^Plan par pièce — /.test(x.titre||'') ? null : <label key={x.id+i} style={{display:'inline-flex',gap:4,alignItems:'center',padding:'2px 8px',border:'1px solid var(--border2)',borderRadius:12,cursor:'pointer',opacity:x.masque?.55:1}}>
           <input type="checkbox" checked={!x.masque} onChange={e=>{ const v = !e.target.checked; setD(o=>({...o, plan:(o.plan||[]).map((y,j)=>j===i ? {...y, masque:v} : y)})); }} style={{width:'auto'}}/>
           {/^Plan par pièce/.test(x.titre||'') ? '🏠 ' : /^Plan annoté/.test(x.titre||'') ? '📍 ' : '🖼️ '}{x.titre || 'Photo '+(i+1)}</label>)}</div></div>}
     {html ? <iframe title="Aperçu" srcDoc={html} style={{width:'100%',height:'78vh',border:'1px solid var(--border2)',borderRadius:6,background:'#fff'}}/> : <div className="muted" style={{padding:20}}>Préparation…</div>}
@@ -12770,14 +12790,6 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli, lireTick}){   // v495 
       setD(o=>({...o, plan:[...(o.plan||[]).filter(y=>!/^Plan par pièce — /.test(y.titre||'')), ...items]}));
       setEtat(''); toast && toast(items.length+' plan'+(items.length>1?'s':'')+' par pièce ajouté'+(items.length>1?'s':'')+' au PDF du client'); }
     catch(e){ setEtat(''); toast && toast('Erreur : '+apiErrMsg(e)); } };
-  // v598 : les plans par pièce se refont tout seuls (quelques secondes après un changement) — rien à cliquer; décochables dans l'aperçu du PDF
-  const sigPP = JSON.stringify(m.pieces.map(p=>[p.id, p.pg, p.src, maisonCadres(p), p.emp, p.items, p.chauf, p.chaufQ, p.plW, p.fx, p.fy]));
-  useEffect(()=>{ if(!pagesV.length || !m.pieces.some(p=>maisonCadres(p).length || (p.emp||[]).length) || d.plansPiecesSig===sigPP || !peutDeposer()) return;
-    const t = setTimeout(async()=>{ try{ const L = await maisonPlansResume(pagesV, m.pieces); if(!L.length) return;
-      const anciens = (d.plan||[]).filter(y=>/^Plan par pièce — /.test(y.titre||'')), items = [];
-      for(const x of L){ const id = await planGarderImage(d, setD, x.blob, x.titre); const avant = anciens.find(y=>y.titre===x.titre); items.push({id, titre:x.titre, notes:'', ...(avant && avant.masque ? {masque:true} : {})}); }
-      setD(o=>({...o, plansPiecesSig:sigPP, plan:[...(o.plan||[]).filter(y=>!/^Plan par pièce — /.test(y.titre||'')), ...items]})); }catch(e){} }, 3000);
-    return ()=>clearTimeout(t); },[sigPP, pagesV.length]);
   const prix = c => C && C.prixDe ? (C.prixDe(c)||0) : 0;
   const totalPiece = p => { const ch = maisonChauffage(p); return Object.entries(p.items||{}).reduce((t,[c,q])=>t+prix(c)*q,0) + ch.so220*prix('SO220') + ch.intel*prix('SO220.2') + (ch.prod||[]).reduce((t,[c,q])=>t+prix(c)*q,0); };
   const etages = MAISON_ETAGES.filter(e=>m.pieces.some(p=>p.etage===e));
@@ -12927,7 +12939,6 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli, lireTick}){   // v495 
           return cs.length ? <div style={{width:'100%',color:'var(--danger)',fontSize:12.5}}>⚠ Pas de prix dans le catalogue pour : {cs.join(', ')} — ces lignes arriveront à 0 $ (mets le prix dans Inventaire › À la sortie).</div> : null; })()}
         <b>Total des sorties : {cvMoney(m.pieces.reduce((t,p)=>t+totalPiece(p),0))}</b><span className="muted" style={{fontSize:12}}>(tes prix SO, avant entrée, appareils sans code et buffer)</span>
         <button className="btn" style={{marginLeft:'auto'}} disabled={!!etat || !m.pieces.some(p=>(p.emp||[]).length)} title="Un plan par étage avec les emplacements placés pendant le tour — va dans le plan des travaux (PDF du client)" onClick={plansClient}>📎 Plans annotés → PDF</button>
-        <button className="btn" disabled={!!etat || !m.pieces.some(p=>maisonCadres(p).length || p.fx!=null)} title="Chaque pièce encadrée sur le plan, avec au centre ce qui est prévu (prises, interrupteurs, chauffage…) — sans montrer où va chaque sortie. Va dans le PDF du client." onClick={plansResume}>📎 Plans par pièce → PDF</button>
         <button className="btn btn-p" disabled={!(C && C.lu)} title={C && C.lu ? '' : 'Les prix du catalogue chargent encore'} onClick={appliquer}>{C && C.lu ? '↳ Remplir la soumission' : '⏳ Prix en chargement…'}</button></div>
     </div>}</>}
   </div>;
@@ -12944,8 +12955,75 @@ function PlanPlace({d, setD, compact}){
 async function planPourImpression(doc){
   try{ await planImage(LOGO_ID); }catch(e){}   // v114 : logo pour l'en-tête
   const out = [];
-  for(const p of (doc.plan||[])){ if(p.masque) continue; try{ out.push({...p, src: await planImage(p.id)}); }catch(e){} }   // v597 : décoché = pas dans le PDF
+  for(const p of (doc.plan||[])){ if(p.masque || /^Plan par pièce — /.test(p.titre||'')) continue; try{ out.push({...p, src: await planImage(p.id)}); }catch(e){} }   // v597 : décoché = pas dans le PDF
+  // v599 : à la fin, tes plans d'étage tels que tu les as bâtis (pièces encadrées + étiquette de symboles et quantités), une page chacun
+  try{ const fin = await maisonPlansFin(doc); fin.filter(x=>!(doc.plansMasques||[]).includes(x.titre)).forEach(x=>out.push(x)); }catch(e){}
   return out;
+}
+// v599 : plans d'étage de la soumission maison, dessinés comme dans le CRM — cadres bleus + étiquette (nom, symboles × quantité) + appareils 240 V
+let MAISON_FIN_CACHE = {sig:'', out:[]}, MAISON_PAGES_CACHE = {};
+let MAISON_FIN_EN_COURS = {sig:'', p:null};
+async function maisonPlansFin(doc){
+  const m = doc && doc.maison; if(!m || !(m.pieces||[]).some(p=>maisonCadres(p).length || p.fx!=null)) return [];
+  const sig = JSON.stringify([m.pieces, m.app240, m.pagesTag, m.plans, m.planId]);
+  if(MAISON_FIN_CACHE.sig===sig) return MAISON_FIN_CACHE.out;
+  if(MAISON_FIN_EN_COURS.sig===sig && MAISON_FIN_EN_COURS.p) return MAISON_FIN_EN_COURS.p;
+  const p = maisonPlansFin2(m, sig); MAISON_FIN_EN_COURS = {sig, p}; return p; }
+async function maisonPlansFin2(m, sig){
+  const ids = [...new Set([...(m.plans||[]).map(x=>x.id), m.planId].filter(Boolean))], out = [];
+  for(const id of ids){
+    const nos = [...new Set(m.pieces.filter(p=>(p.src||'')===id).map(p=>p.pg))]; if(!nos.length) continue;
+    const ck = id+'|'+nos.sort().join(',');
+    if(!MAISON_PAGES_CACHE[ck]){ const tok = window.gapi.client.getToken() && window.gapi.client.getToken().access_token;
+      const r = await fetch('https://www.googleapis.com/drive/v3/files/'+id+'?alt=media&supportsAllDrives=true', {headers:{Authorization:'Bearer '+tok}}); if(!r.ok) continue;
+      MAISON_PAGES_CACHE[ck] = (await maisonLirePlan(new File([await r.blob()], 'plan.pdf', {type:'application/pdf'}), null, id, i=>!nos.includes(i))).pages; }
+    for(const pg of maisonPagesVues(MAISON_PAGES_CACHE[ck], m)){
+      const ps = m.pieces.filter(p=>p.pg===pg.no && (p.src||'')===id); if(!ps.length) continue;
+      const img = await new Promise((ok,ko)=>{ const im = new Image(); im.onload = ()=>ok(im); im.onerror = ko; im.src = pg.img; });
+      const W = img.width, H = img.height, lh = Math.round(W/70), pied = lh*3.4;
+      const c = document.createElement('canvas'); c.width = W; c.height = H + pied; const x = c.getContext('2d');
+      x.fillStyle = '#fff'; x.fillRect(0,0,c.width,c.height); x.drawImage(img, 0, 0);
+      ps.forEach(p=>maisonCadres(p).forEach(k=>{ const rr = [Math.min(k[0],k[2])*W, Math.min(k[1],k[3])*H, Math.abs(k[2]-k[0])*W, Math.abs(k[3]-k[1])*H];
+        x.fillStyle = 'rgba(37,99,235,.06)'; x.fillRect(...rr); x.strokeStyle = '#2563eb'; x.lineWidth = Math.max(2, W/700); x.strokeRect(...rr); }));
+      const fs = Math.max(12, Math.round(W/95)), sy = fs*1.5;
+      for(const p of ps){
+        // même étiquette que dans le CRM : le nom (et les pi²), puis chaque symbole avec sa quantité
+        const it = p.items||{}, ch = maisonChauffage(p);
+        const l = Object.entries(it).filter(([cc,n])=>n>0 && !/^SO22/.test(cc)).map(([cc,n])=>[maisonOutilDe(cc), n]).filter(([o])=>o).map(([o,n])=>[o[0], n]);
+        const nPl = ['plinthe','convecteur'].includes(p.chauf) ? ((ch.plinthes||[]).length||1) : ['radiant','aero'].includes(p.chauf) ? 1 : 0;
+        const nTh = p.chaufQ ? (p.chaufQ.thermostat||0) : (p.chauf && p.chauf!=='aucun' ? Math.max(1, Math.round(cvNum(p.thermos)||1)) : 0);
+        if(nPl) l.push(['PL', nPl]); if(nTh) l.push(['TH', nTh]);
+        const cs = maisonCadres(p); let cx = p.fx!=null ? p.fx*W : null, cy = p.fy!=null ? p.fy*H : null;
+        if(cx==null && cs.length){ const xs = cs.flatMap(k=>[k[0],k[2]]), ys = cs.flatMap(k=>[k[1],k[3]]); cx = (Math.min(...xs)+Math.max(...xs))/2*W; cy = (Math.min(...ys)+Math.max(...ys))/2*H; }
+        if(cx==null) continue;
+        const titre = p.nom + (cvNum(p.pi2) ? ' · '+p.pi2+' pi²' : '');
+        x.font = 'bold '+fs+'px sans-serif'; const tw = x.measureText(titre).width;
+        x.font = 'bold '+Math.round(fs*.95)+'px sans-serif';
+        const items = l.map(([cc,n])=>{ const sv = maisonSymSvg(cc,''), sh = sy, sw = sh*sv.w/sv.h; return {cc, n, sw, sh, w: sw + fs*0.15 + x.measureText(String(n)).width}; });
+        const maxW = Math.max(tw, fs*12), rows = []; let cur = [], cw = 0;
+        items.forEach(o=>{ if(cur.length && cw + o.w + fs*0.4 > maxW){ rows.push(cur); cur = []; cw = 0; } cur.push(o); cw += o.w + fs*0.4; }); if(cur.length) rows.push(cur);
+        const rowW = r => r.reduce((t,o)=>t+o.w,0) + (r.length-1)*fs*0.4;
+        const bw = Math.max(tw, ...rows.map(rowW), fs*3) + fs*0.8, bh = fs*1.3 + rows.length*sy*1.05 + fs*0.4;
+        const bx = Math.max(2, Math.min(W-bw-2, cx-bw/2)), by = Math.max(2, Math.min(H-bh-2, cy-bh/2));
+        x.fillStyle = 'rgba(255,255,255,.95)'; x.strokeStyle = '#2563eb'; x.lineWidth = Math.max(1.5, fs/9);
+        if(x.roundRect){ x.beginPath(); x.roundRect(bx, by, bw, bh, fs*0.45); x.fill(); x.stroke(); } else { x.fillRect(bx, by, bw, bh); x.strokeRect(bx, by, bw, bh); }
+        x.fillStyle = '#111'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.font = 'bold '+fs+'px sans-serif'; x.fillText(titre, bx + bw/2, by + fs*0.8);
+        x.textAlign = 'left'; x.font = 'bold '+Math.round(fs*.95)+'px sans-serif';
+        for(let ri=0; ri<rows.length; ri++){ const r = rows[ri]; let xx = bx + (bw - rowW(r))/2; const yy = by + fs*1.3 + ri*sy*1.05 + sy/2;
+          for(const o of r){ try{ const im = await maisonSymImage(o.cc, ''); x.drawImage(im, xx, yy - o.sh/2, o.sw, o.sh); }catch(e){}
+            x.fillStyle = '#111'; x.fillText(String(o.n), xx + o.sw + fs*0.15, yy); xx += o.w + fs*0.4; } }
+      }
+      (m.app240||[]).filter(a=>a.pg===pg.no && (a.src||'')===id).forEach(a=>{ const t = MAISON_APP_COURT[a.k]||a.k; x.font = 'bold '+Math.round(fs*.9)+'px sans-serif';
+        const tw2 = x.measureText(t).width + fs*0.6, ax = a.x*W - tw2/2, ay = a.y*H - fs*0.7; x.fillStyle = '#fff'; x.strokeStyle = '#111827'; x.lineWidth = 2;
+        x.fillRect(ax, ay, tw2, fs*1.4); x.strokeRect(ax, ay, tw2, fs*1.4); x.fillStyle = '#111'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(t, a.x*W, a.y*H); });
+      x.fillStyle = '#111'; x.textAlign = 'left'; x.textBaseline = 'middle'; x.font = 'bold '+lh+'px sans-serif'; x.fillText(pg.etage || pg.titre || 'Plan', lh, H + lh);
+      x.font = 'italic '+Math.round(lh*.72)+'px sans-serif'; x.fillStyle = '#374151';
+      x.fillText('Aperçu approximatif pour aider à visualiser le projet — une base de départ. Le nombre et l\'emplacement des sorties pourront', lh, H + lh*2.1);
+      x.fillText('changer selon vos choix et ce qu\'on constatera sur le chantier.', lh, H + lh*2.9);
+      out.push({titre:'Plan par pièce — '+(pg.etage || pg.titre || 'p. '+pg.no), src:c.toDataURL('image/jpeg', 0.85), notes:''});
+    }
+  }
+  MAISON_FIN_CACHE = {sig, out}; return out;
 }
 
 // Pré-remplissage quand on part d'une soumission « À faire » (bouton « 📝 Faire la soumission »).
