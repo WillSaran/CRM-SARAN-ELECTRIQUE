@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v603';
+const APP_VERSION = 'v604';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8265,11 +8265,13 @@ function useSoumissions(cfg, refreshKey){
     await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!'+col+s.row, valueInputOption:'RAW', resource:{values:[[val]]}});
   };
   // Soumission à faire ajoutée à la main.
-  const ajouter = async (texte, details, photos)=>{
+  const ajouter = async (texte, details, photos, infos)=>{   // v604 : infos du client (Répertoire) en colonne Q ; retourne la clé
     if(!etat.existe) await ensureSheetsExist(id, [{name:'Soumissions', headers:SOUM_ONGLET_ENTETE}]);
-    const ligne = ['M-'+Date.now(), 'À faire', cvDay(new Date().toISOString()), '', texte, '', texte, details||'', '', '', '', '', '', '', '', photos||''];
+    const cle = 'M-'+Date.now();
+    const ligne = [cle, 'À faire', cvDay(new Date().toISOString()), '', (infos && infos.nom) || texte, (infos && infos.courriel) || '', texte, details||'', '', '', '', '', '', '', '', photos||'', infos ? JSON.stringify(infos) : ''];
     await sheetsAppendRow(id, 'Soumissions', ligne);
     await lire(true);
+    return cle;
   };
   // v584 : une demande reçue par courriel, ajoutée tout de suite (sans attendre La mémoire) — même clé que le script (T-<fil>), pièces jointes dans Drive
   const ajouterCourriel = async (m, onEtat)=>{
@@ -8811,6 +8813,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const [q,setQ]=useState(()=>(navFocus('soumissions')||{}).q || '');
   const [nouveau,setNouveau]=useState(null);
   const [details,setDetails]=useState('');
+  const [clientAF,setClientAF]=useState(null), [adrAF,setAdrAF]=useState('');   // v604 : client choisi dans le Répertoire + adresse des travaux
   const [fichiers,setFichiers]=useState([]);
   const [tick,setTick]=useState(0);
   const [ouverte,setOuverte]=useState('');
@@ -9036,7 +9039,18 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
         <div style={{marginTop:4}}><button className="btn btn-sm" onClick={()=>{ setFicheOuv(''); DOC_PREFILL = null; DOC_OUVRIR = null; setPrepKey(k=>k+1); setOnglet('preparer'); }}>Passer — soumission vide</button></div>
       </>}
       {nouveau!==null && <div style={{margin:'6px 0',display:'grid',gap:6}}>
-        <input autoFocus value={nouveau} onChange={e=>setNouveau(e.target.value)} placeholder="Pour qui / où — ex. : Borne — Jean Tremblay, 12 rue X"/>
+        <ChampClient cfg={cfg} contacts={data && data.contacts} value={nouveau} autoFocus placeholder="Pour qui — cherche dans le Répertoire (nom, adresse, tél.)…"
+          onChange={v=>{ setNouveau(v); setClientAF(null); }} onChoix={x=>{ setNouveau(x.nom); setClientAF(x); setAdrAF(x.adresse || ''); }}/>
+        {clientAF && <div className="muted" style={{fontSize:12.5}}>📇 {clientAF.nom}{clientAF.tel ? ' · '+clientAF.tel : ''}{clientAF.courriel ? ' · '+clientAF.courriel : ''}</div>}
+        {!clientAF && String(nouveau||'').trim().length>=3 && <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:12.5}}>
+          <span className="muted">Pas choisi dans le Répertoire.</span>
+          <button className="btn btn-sm" disabled={occupe==='fiche'} onClick={async()=>{ setOccupe('fiche');
+            try{ const parts = String(adrAF||'').split(/\s*,\s*/);
+              await ficheEcrire(cfg, {type:'Client', code:'PART', nom:nouveau.trim(), alias:[], adresse:parts[0]||'', ville:parts.slice(1).filter(x=>!/^(QC|Québec|Quebec|Canada)$/i.test(x)).join(', '), tel:'', courriel:'', notes:''});
+              setClientAF({nom:nouveau.trim(), adresse:adrAF||''}); toast && toast(nouveau.trim()+' ajouté au Répertoire'); }
+            catch(e){ toast && toast('Pas ajouté : '+apiErrMsg(e)); }
+            setOccupe(''); }}>{occupe==='fiche' ? '…' : '+ Ajouter au Répertoire'}</button></div>}
+        <ChampAdresse value={adrAF} onChange={setAdrAF} placeholder="Adresse des travaux (celle du client par défaut)"/>
         <textarea value={details} onChange={e=>setDetails(e.target.value)} rows={4} placeholder={"Ce qu'il faut faire et le stock nécessaire (une ligne par article)…"} style={{resize:'vertical',fontFamily:'inherit'}}/>
         <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
           {peutDeposer() ? <>
@@ -9045,20 +9059,26 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
             {fichiers.length>0 && <button className="btn btn-sm" onClick={()=>setFichiers([])} title="Enlever les photos choisies">✕</button>}
           </> : <button className="btn btn-sm" title="Une seule fois : permet au CRM de déposer des photos dans ton Drive"
               onClick={async()=>{ try{ await requestToken('consent'); }catch(e){} setTick(t=>t+1); if(!peutDeposer()) toast && toast('Permission refusée — coche « fichiers Drive » dans la fenêtre Google.'); }}>🔓 Autoriser les photos</button>}
-          <button className="btn btn-sm btn-p" disabled={!nouveau.trim() || occupe==='+'} onClick={async()=>{
-            setOccupe('+');
+          {[['ajout','Ajouter',true],['soum','📝 Ajouter et faire la soumission',false]].map(([k,l,prim])=><button key={k} className={'btn btn-sm'+(prim?' btn-p':'')} disabled={!String(nouveau||'').trim() || !!occupe} onClick={async()=>{
+            setOccupe('+'+k);
             try{
+              const nom = String(nouveau||'').trim(), adr = String(adrAF||'').trim(), texte = nom+(adr ? ', '+adr.split(',')[0] : '');
               let d = '';
               if(fichiers.length){
-                d = await driveDossier(nouveau.trim().slice(0,60)+' ('+cvDay(new Date().toISOString())+')', await driveDossier(PHOTOS_RACINE));
+                d = await driveDossier(texte.slice(0,60)+' ('+cvDay(new Date().toISOString())+')', await driveDossier(PHOTOS_RACINE));
                 for(let i=0;i<fichiers.length;i++){ toast && toast('Photo '+(i+1)+'/'+fichiers.length+'…'); await driveDeposer(fichiers[i], d); }
               }
-              await S.ajouter(nouveau.trim(), details.trim(), d);
-              setNouveau(null); setDetails(''); setFichiers([]); toast && toast('Soumission à faire ajoutée');
+              const c = clientAF || {}, infos = {nom, tel:c.tel||'', courriel:c.courriel||'', adresse:adr, travaux:details.trim()};
+              const cle = await S.ajouter(texte, details.trim(), d, infos);
+              setNouveau(null); setDetails(''); setFichiers([]); setClientAF(null); setAdrAF('');
+              if(k==='soum'){ DOC_OUVRIR = null; DOC_PREFILL = {type:'Soumission', origine:cle, nom, tel:infos.tel, courriel:infos.courriel, adresse:adr, titre:'', travaux:'',
+                  visite: infos.travaux ? '— À faire —\n'+infos.travaux : '', dossier:d};
+                setPrepKey(x=>x+1); setOnglet('preparer'); window.scrollTo(0,0); }
+              else toast && toast('Soumission à faire ajoutée');
             }catch(e){ toast && toast('Erreur : '+(e.message||apiErrMsg(e))); }
             setOccupe('');
-          }}>{occupe==='+' ? 'Ajout…' : 'Ajouter'}</button>
-          <button className="btn btn-sm" onClick={()=>{ setNouveau(null); setDetails(''); setFichiers([]); }}>Annuler</button>
+          }}>{occupe==='+'+k ? 'Ajout…' : l}</button>)}
+          <button className="btn btn-sm" onClick={()=>{ setNouveau(null); setDetails(''); setFichiers([]); setClientAF(null); setAdrAF(''); }}>Annuler</button>
         </div>
       </div>}
       {listeAFaire.map(s=><React.Fragment key={s.cle}>{CarteAFaire({s})}</React.Fragment>)}
