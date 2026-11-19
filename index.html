@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v605';
+const APP_VERSION = 'v606';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -15638,14 +15638,22 @@ function cvJobPapiers(job, appels, factures){
 function CvGauge({job, appels, factures}){
   const po = job.reg && job.reg.ht;
   const papiers = cvJobPapiers(job, appels, factures);
-  const puce = (x,i) => <a key={i} href={x.photo ? 'https://drive.google.com/file/d/'+x.photo+'/view' : undefined} target="_blank" rel="noopener" title={(x.type==='AP'?'Appel de service ':'Ordre de travail ')+x.n+' · '+cvFmtDay(x.jour)+(x.vers ? ' → '+x.vers.phase+(x.vers.jour?' le '+cvFmtDay(x.vers.jour):'') : '')+(x.facs.length ? ' · facture '+x.facs.join(', ')+' : '+cvMoney(x.mont) : ' · pas de facture inscrite')}
-    style={{display:'inline-flex',gap:5,alignItems:'baseline',padding:'2px 8px',borderRadius:12,border:'1px solid '+(x.photo?'var(--accent)':'var(--border2)'),fontSize:11.5,color:'var(--text)',textDecoration:'none',background:'var(--bg2)',whiteSpace:'nowrap'}}>
-    <b style={{color:x.type==='AP'?'var(--accent)':'var(--success)'}}>{x.type} {x.n}</b><span className="muted">{cvFmtDay(x.jour)}</span>
-    {x.vers ? <><span>→</span><b>{x.vers.phase}</b>{x.vers.jour && <span className="muted">{cvFmtDay(x.vers.jour)}</span>}{x.vers.jour && (x.facs.length ? <b>{cvMoney(x.mont)}</b> : <span style={{color:'var(--warning)'}}>pas facturé</span>)}</>
-      : x.facs.length ? <b>{cvMoney(x.mont)}</b> : <span style={{color:'var(--warning)'}}>pas facturé</span>}{x.photo && ' 📄'}</a>;
+  // v606 : chaque AP / OT en carte : le papier en haut, sa facture (numéro, montant, PDF) juste en dessous.
+  const lienDrv = id => 'https://drive.google.com/file/d/'+id+'/view';
+  const puce = (x,i) => <div key={i} title={(x.type==='AP'?'Appel de service ':'Ordre de travail ')+x.n+' · '+cvFmtDay(x.jour)+(x.vers ? ' → '+x.vers.phase+(x.vers.jour?' le '+cvFmtDay(x.vers.jour):'') : '')}
+    style={{display:'flex',flexDirection:'column',minWidth:118,borderRadius:8,border:'1px solid var(--border2)',background:'var(--bg2)',overflow:'hidden',fontSize:12}}>
+    <a href={x.photo ? lienDrv(x.photo) : undefined} target="_blank" rel="noopener" style={{display:'flex',gap:6,alignItems:'baseline',padding:'4px 8px',textDecoration:'none',color:'var(--text)',borderBottom:'1px solid var(--border2)',cursor:x.photo?'pointer':'default'}}>
+      <b style={{color:x.type==='AP'?'var(--accent)':'var(--success)'}}>{x.type} {x.n}</b><span className="muted">{cvFmtDay(x.jour)}</span>{x.photo && <span style={{marginLeft:'auto'}}>📄</span>}</a>
+    <div style={{padding:'4px 8px',display:'grid',gap:2}}>
+      {x.vers && <div className="muted" style={{fontSize:11}}>→ <b>{x.vers.phase}</b>{x.vers.jour ? ' '+cvFmtDay(x.vers.jour) : ''}</div>}
+      {x.facs.length ? x.facs.map(n=>{ const f=(factures||{})[n]||{}; return <div key={n} style={{display:'flex',gap:6,alignItems:'baseline'}}>
+          <span className="muted">Facture</span>{f.pdf ? <a href={lienDrv(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>#{n}</a> : <b>#{n}</b>}
+          <b style={{marginLeft:'auto'}}>{f.ht!=null ? cvMoney(f.ht) : '—'}</b></div>; })
+        : <span style={{color:'var(--warning)',fontWeight:700}}>{x.vers && !x.vers.jour ? 'à venir' : 'pas facturé'}</span>}
+    </div></div>;
   if(!po) return papiers.length ? <div style={{border:'1px solid var(--border2)',borderRadius:10,padding:12,margin:'10px 0',background:'var(--bg3)'}}>
     <div style={{fontSize:13,marginBottom:6}}>Appels de service et ordres de travail <span className="muted">(pas de PO)</span></div>
-    <div style={{display:'flex',flexWrap:'wrap',gap:5}}>{papiers.map(puce)}</div></div> : null;
+    <div style={{display:'flex',flexWrap:'wrap',gap:6}}>{papiers.map(puce)}</div></div> : null;
   const today = cvDay(new Date().toISOString());
   const b = job.billed||0, pct = b/po, w = Math.min(pct,1.5)/1.5*100, m75 = 50, m100 = 100/1.5;
   const finDone = job.events.some(e=>!e.attente && e.phase==='FINITION' && e.day<today), roughDone = job.events.some(e=>!e.attente && e.phase==='ROUGH' && e.day<today);
@@ -15670,7 +15678,7 @@ function CvGauge({job, appels, factures}){
       <span style={{position:'absolute',left:m100+'%',transform:'translateX(-50%)'}}>PO</span>
     </div>
     <div style={{fontSize:13,marginTop:4}}>{etape}. {msg}</div>
-    {papiers.length>0 && <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:8}}>{papiers.map(puce)}</div>}
+    {papiers.length>0 && <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:10}}>{papiers.map(puce)}</div>}
   </div>;
 }
 
