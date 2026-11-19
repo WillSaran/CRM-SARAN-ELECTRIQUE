@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v608';
+const APP_VERSION = 'v609';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5027,7 +5027,7 @@ function DossiersEmployesView({cfg, refreshKey}){
 // v608 : Registre CCQ — salariés au régime CCQ (tirés des dossiers employés) + déclaration mensuelle (heures des semaines confirmées)
 // Semaine CRM = lundi → dimanche ; « semaine se terminant le » = samedi (comme les talons de paie) ; le mois de la déclaration = le mois de ce samedi.
 const CCQ_DECL = 'Déclarations CCQ';
-const CCQ_DECL_ENTETE = ['Mois','Employé','Id dossier','No client CCQ','Métier','Classe','Secteur','Heures normales','Heures supp','Taux','Salaire brut','Vacances et fériés','Cotisation syndicale','Semaines','Statut','Envoyée le','Note'];
+const CCQ_DECL_ENTETE = ['Mois','Employé','Id dossier','No client CCQ','Métier','Classe','Secteur','Heures payées','Heures en banque (non déclarées)','Taux','Salaire brut','Vacances et fériés','Cotisation syndicale','Semaines','Statut','Envoyée le','Note'];
 const ccqFinSemaine = w => { const d = mondayOfWeek(w); d.setDate(d.getDate()+5); return d; };
 const ccqMoisDe = w => localDateStr(ccqFinSemaine(w)).slice(0,7);
 const CCQ_MOIS = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
@@ -5041,6 +5041,11 @@ function RegistreCcqView({cfg, refreshKey}){
   const [mois,setMois]=useState(()=>{ const d = new Date(); d.setDate(1); d.setMonth(d.getMonth()-1); return localDateStr(d).slice(0,7); });
   const [etat,setEtat]=useState('');
   const [voirNas,setVoirNas]=useState(false);
+  const [pris,setPris]=useState({});   // v609 : heures prises dans la banque (PunchPro) pour compléter la semaine — payées, donc déclarées
+  useEffect(()=>{ if(!cfg.punchproSpreadsheetId) return; let ok = true;
+    sheetsBatchGet(cfg.punchproSpreadsheetId, ['HeuresEnBanque!A2:E']).then(([rows])=>{ if(!ok) return; const m = {};
+      (rows||[]).forEach(r=>{ const h = cvNum(r[2]); if(r[0] && r[1] && h<0){ const k = r[1]+'|'+cvNorm(r[0]); m[k] = (m[k]||0) - h; } }); setPris(m); }).catch(()=>{});
+    return ()=>{ ok = false; }; },[cfg.punchproSpreadsheetId, refreshKey]);
   const lire = useCallback(async force=>{ setErr('');
     try{ const r = await lireCache(DOSSIERS_EMP_ID, 'A1:'+DE_FIN, force);
       setL((r.result.values||[]).map(x=>{ const e = {}; DE_COLS.forEach((k,j)=>e[k]=String(x[j]==null?'':x[j])); return e; }).slice(1).filter(e=>(e.id||e.nom) && /ccq/i.test(e.regime||''))); }
@@ -5058,14 +5063,15 @@ function RegistreCcqView({cfg, refreshKey}){
   const tauxDe = e => cvNum(e.taux) || (grille[e.ccqSecteur]||{})[e.classe] || null;
   const lignes = presents.map(e=>{ const nom = deNom(e), k = cvNorm(nom);
     const sem = Object.values(conf.map||{}).filter(c=>cvNorm(c.employe)===k && conf.de(c.semaine, c.employe) && c.total!=null && ccqMoisDe(c.semaine)===mois).sort((a,b)=>a.semaine<b.semaine?-1:1);
-    const tot = sem.reduce((t,c)=>t+(c.total||0),0), supp = sem.reduce((t,c)=>t+Math.max(0,(c.total||0)-40),0), norm = tot-supp;
+    sem.forEach(c=>{ const p = pris[c.semaine+'|'+k]||0; c.paye = Math.min(40, (c.total||0)+p); c.pris = Math.max(0, c.paye-Math.min(40, c.total||0)); c.banque = Math.max(0,(c.total||0)-40); });   // v609 : seulement les heures payées — max 40 h / semaine (le surplus va en banque)
+    const tot = sem.reduce((t,c)=>t+c.paye,0), supp = sem.reduce((t,c)=>t+c.banque,0), norm = tot;
     const taux = tauxDe(e), brut = taux!=null ? norm*taux : null, vacPct = cvNum(String(e.vacPct||'').replace(',','.')) || 13, vac = brut!=null ? brut*vacPct/100 : null;
     const sc = String(e.syndCotis||'').trim(), pct = /%/.test(sc) ? cvNum(sc.replace('%','').replace(',','.')) : null, synd = pct!=null && brut!=null ? brut*pct/100 : null;
     return {e, nom, sem, tot, norm, supp, taux, brut, vacPct, vac, synd, sc, manque:manque(e)}; });
   const tot = k => lignes.reduce((t,l)=>t+(l[k]||0),0);
   const dejaEnv = (decl||[]).filter(d=>d.mois===mois && /envoy/i.test(d.statut));
   const pasConf = lignes.filter(l=>!l.sem.length);
-  const ligneSheet = (l, statut) => [mois, l.nom, l.e.id, l.e.noCcq, l.e.metier||'Électricien', l.e.classe, l.e.ccqSecteur, l.norm.toFixed(2), l.supp.toFixed(2), l.taux!=null ? l.taux.toFixed(2) : '', l.brut!=null ? l.brut.toFixed(2) : '', l.vac!=null ? l.vac.toFixed(2) : '', l.synd!=null ? l.synd.toFixed(2) : l.sc, l.sem.map(c=>localDateStr(ccqFinSemaine(c.semaine))+' : '+c.total).join(' | '), statut, statut==='Envoyée' ? new Date().toLocaleString('fr-CA') : '', ''];
+  const ligneSheet = (l, statut) => [mois, l.nom, l.e.id, l.e.noCcq, l.e.metier||'Électricien', l.e.classe, l.e.ccqSecteur, l.norm.toFixed(2), l.supp.toFixed(2), l.taux!=null ? l.taux.toFixed(2) : '', l.brut!=null ? l.brut.toFixed(2) : '', l.vac!=null ? l.vac.toFixed(2) : '', l.synd!=null ? l.synd.toFixed(2) : l.sc, l.sem.map(c=>localDateStr(ccqFinSemaine(c.semaine))+' : '+c.paye).join(' | '), statut, statut==='Envoyée' ? new Date().toLocaleString('fr-CA') : '', ''];
   const enregistrer = async statut => { if(statut==='Envoyée' && !confirm('Marquer la déclaration CCQ de '+ccqMoisTxt(mois)+' comme envoyée ?\n\n'+lignes.length+' salarié(s), '+fmtH(tot('tot'))+'. Les chiffres du moment sont gardés dans la feuille privée.')) return;
     setEtat('Enregistrement…');
     try{ await ensureSheetsExist(DOSSIERS_EMP_ID, [{name:CCQ_DECL, headers:CCQ_DECL_ENTETE}]);
@@ -5073,8 +5079,8 @@ function RegistreCcqView({cfg, refreshKey}){
       setEtat(statut==='Envoyée' ? 'Déclaration marquée envoyée.' : 'Brouillon enregistré.'); await lire(true); }
     catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
   const exporter = () => { const q = v => '"'+String(v==null?'':v).replace(/"/g,'""')+'"', nb = x => x==null ? '' : (Math.round(x*100)/100).toFixed(2).replace('.',',');
-    const rows = [['Mois','Employé','No client CCQ','NAS','Métier','Classe','Secteur','Syndicat','Local','Semaines (se terminant le : heures)','Heures normales','Heures supp','Total heures','Taux','Salaire brut','Vacances et fériés %','Vacances et fériés','Cotisation syndicale']];
-    lignes.forEach(l=>rows.push([ccqMoisTxt(mois), l.nom, l.e.noCcq, deNasFmt(l.e.nas), l.e.metier||'Électricien', l.e.classe, l.e.ccqSecteur, l.e.syndicat, l.e.local, l.sem.map(c=>localDateStr(ccqFinSemaine(c.semaine))+' : '+String(c.total).replace('.',',')).join(' | '), nb(l.norm), nb(l.supp), nb(l.tot), nb(l.taux), nb(l.brut), String(l.vacPct).replace('.',','), nb(l.vac), l.synd!=null ? nb(l.synd) : l.sc]));
+    const rows = [['Mois','Employé','No client CCQ','NAS','Métier','Classe','Secteur','Syndicat','Local','Semaines (se terminant le : heures payées)','Heures payées (déclarées)','Heures en banque (non déclarées)','Total heures déclarées','Taux','Salaire brut','Vacances et fériés %','Vacances et fériés','Cotisation syndicale']];
+    lignes.forEach(l=>rows.push([ccqMoisTxt(mois), l.nom, l.e.noCcq, deNasFmt(l.e.nas), l.e.metier||'Électricien', l.e.classe, l.e.ccqSecteur, l.e.syndicat, l.e.local, l.sem.map(c=>localDateStr(ccqFinSemaine(c.semaine))+' : '+String(c.paye).replace('.',',')).join(' | '), nb(l.norm), nb(l.supp), nb(l.tot), nb(l.taux), nb(l.brut), String(l.vacPct).replace('.',','), nb(l.vac), l.synd!=null ? nb(l.synd) : l.sc]));
     rows.push([]); rows.push(['Total','','','','','','','','','',nb(tot('norm')),nb(tot('supp')),nb(tot('tot')),'',nb(tot('brut')),'',nb(tot('vac')),nb(tot('synd'))]);
     const blob = new Blob(['﻿'+rows.map(r=>r.map(q).join(';')).join('\r\n')], {type:'text/csv;charset=utf-8'});
     const u = URL.createObjectURL(blob), a = document.createElement('a'); a.href = u; a.download = 'Declaration CCQ '+mois+'.csv'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u), 2000); };
@@ -5112,17 +5118,17 @@ function RegistreCcqView({cfg, refreshKey}){
       {dejaEnv.length>0 && <div style={{fontSize:12.5,marginBottom:8,color:'var(--accent)'}}>Déjà marquée envoyée le {dejaEnv[dejaEnv.length-1].envoyee} ({dejaEnv.length} ligne{dejaEnv.length>1?'s':''}).</div>}
       {etat && <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{etat}</div>}
       {pasConf.length>0 && <div style={{fontSize:12.5,marginBottom:8,color:'var(--warning)'}}>Aucune semaine confirmée ce mois-ci pour : {pasConf.map(l=>l.nom).join(', ')}. Confirme leurs semaines dans l'onglet Heures avant d'envoyer.</div>}
-      <div style={{overflowX:'auto'}}><table style={{fontSize:13,width:'100%'}}><thead><tr><th>Employé</th><th>Semaines (se terminant le)</th><th style={th}>Heures normales</th><th style={th}>Heures supp</th><th style={th}>Taux</th><th style={th}>Salaire brut</th><th style={th}>Vacances et fériés</th><th style={th}>Cotisation syndicale</th></tr></thead>
+      <div style={{overflowX:'auto'}}><table style={{fontSize:13,width:'100%'}}><thead><tr><th>Employé</th><th>Semaines (se terminant le)</th><th style={th}>Heures payées (déclarées)</th><th style={th}>En banque (non déclarées)</th><th style={th}>Taux</th><th style={th}>Salaire brut</th><th style={th}>Vacances et fériés</th><th style={th}>Cotisation syndicale</th></tr></thead>
         <tbody>{lignes.map(l=><tr key={l.nom}>
           <td><b>{l.nom}</b><div className="muted" style={{fontSize:11.5}}>{[l.e.classe, l.e.ccqSecteur].filter(Boolean).join(' · ')}</div></td>
-          <td style={{fontSize:12}}>{l.sem.length ? l.sem.map(c=><div key={c.semaine}>{localDateStr(ccqFinSemaine(c.semaine))} : {fmtH(c.total)}</div>) : <span className="muted">aucune</span>}</td>
+          <td style={{fontSize:12}}>{l.sem.length ? l.sem.map(c=><div key={c.semaine}>{localDateStr(ccqFinSemaine(c.semaine))} : {fmtH(c.paye)}{c.banque ? <span className="muted"> (+{fmtH(c.banque)} en banque)</span> : null}{c.pris ? <span className="muted"> (dont {fmtH(c.pris)} pris dans la banque)</span> : null}</div>) : <span className="muted">aucune</span>}</td>
           <td style={{...th,fontVariantNumeric:'tabular-nums'}}>{fmtH(l.norm)}</td><td style={{...th,fontVariantNumeric:'tabular-nums'}}>{l.supp ? fmtH(l.supp) : '—'}</td>
           <td style={{...th,fontVariantNumeric:'tabular-nums'}}>{l.taux!=null ? ccqArg(l.taux) : '—'}</td><td style={{...th,fontVariantNumeric:'tabular-nums'}}>{l.brut!=null ? ccqArg(l.brut) : '—'}</td>
           <td style={{...th,fontVariantNumeric:'tabular-nums'}}>{l.vac!=null ? ccqArg(l.vac) : '—'} <span className="muted" style={{fontSize:11}}>({String(l.vacPct).replace('.',',')} %)</span></td>
           <td style={{...th,fontVariantNumeric:'tabular-nums'}}>{l.synd!=null ? ccqArg(l.synd) : (l.sc || <span className="muted">à inscrire au dossier</span>)}</td></tr>)}
           {lignes.length>0 && <tr style={{fontWeight:700}}><td colSpan="2">Total — {lignes.length} salarié{lignes.length>1?'s':''}</td><td style={th}>{fmtH(tot('norm'))}</td><td style={th}>{tot('supp') ? fmtH(tot('supp')) : '—'}</td><td></td><td style={th}>{ccqArg(tot('brut'))}</td><td style={th}>{ccqArg(tot('vac'))}</td><td style={th}>{tot('synd') ? ccqArg(tot('synd')) : ''}</td></tr>}
         </tbody></table></div>
-      <div className="muted" style={{fontSize:11.5,marginTop:8}}>Heures supp = ce qui dépasse 40 h dans la semaine (elles vont dans la banque d'heures). Salaire brut = heures normales × taux. Cotisation syndicale : calculée si le dossier l'inscrit en % (ex. « 2,5 % »), sinon le montant du dossier est repris tel quel. Les cotisations d'assurance, de retraite, de formation et le prélèvement sont calculés par la CCQ à partir des heures déclarées.</div>
+      <div className="muted" style={{fontSize:11.5,marginTop:8}}>Seulement les heures payées sont déclarées : au plus 40 h par semaine. Ce qui dépasse 40 h va dans la banque d'heures et n'est pas déclaré ; les heures prises dans la banque pour compléter une semaine (PunchPro) sont payées, donc déclarées. Salaire brut = heures payées × taux. Cotisation syndicale : calculée si le dossier l'inscrit en % (ex. « 2,5 % »), sinon le montant du dossier est repris tel quel. Les cotisations d'assurance, de retraite, de formation et le prélèvement sont calculés par la CCQ à partir des heures déclarées.</div>
     </div>
   </div>;
 }
