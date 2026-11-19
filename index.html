@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v606';
+const APP_VERSION = 'v607';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -15613,6 +15613,58 @@ function CvPill({status}){
   return <span className="badge" style={{background:'var(--bg3)',color:c,border:'1px solid var(--border2)'}}>{t}</span>;
 }
 
+// v607 : fichiers du dossier Drive de la job (AP papier, factures, plans) — pour que chaque AP / facture / plan de la fiche s'ouvre en aperçu.
+const DOS_FICH_CACHE = {};
+function useDosFichiers(id){
+  const [L,setL]=useState(()=>id ? DOS_FICH_CACHE[id]||null : []);
+  useEffect(()=>{ if(!id){ setL([]); return; } if(DOS_FICH_CACHE[id]){ setL(DOS_FICH_CACHE[id]); return; } let ok = true;
+    driveFetch('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent("'"+id+"' in parents and trashed=false")+'&pageSize=200&fields=files(id,name,mimeType)&supportsAllDrives=true&includeItemsFromAllDrives=true')
+      .then(r=>{ const l = (r.files||[]).filter(f=>f.mimeType!=='application/vnd.google-apps.folder').map(f=>({...f, c:dosClasse(f.name)})); DOS_FICH_CACHE[id] = l; if(ok) setL(l); })
+      .catch(()=>{ if(ok) setL([]); });
+    return ()=>{ ok = false; }; },[id]);
+  return L||[]; }
+const lienDrvF = id => 'https://drive.google.com/file/d/'+id+'/view';
+// Lien du papier : registre des appels, sinon dossier de la job, sinon fichier AP_ attaché à un passage; facture : PDF du registre, sinon dossier.
+function cvLienPapier(type, n, {appels, factures, dosF, job}){
+  const pn = (appels && appels.parNumero) || {};
+  if(type==='FAC'){ const f = (factures||{})[n]; if(f && f.pdf) return lienDrvF(f.pdf);
+    const d = (dosF||[]).find(x=>x.c.g==='fac' && x.c.fac===n) || (dosF||[]).find(x=>x.c.g==='ap' && x.c.fac===n); return d ? lienDrvF(d.id) : ''; }
+  if(pn[n] && pn[n].id) return lienDrvF(pn[n].id);
+  const d = (dosF||[]).find(x=> type==='OT' ? x.c.ot===n : x.c.ap===n); if(d) return lienDrvF(d.id);
+  if(type==='AP' && job){ const a = cvJobAppels(job, appels).find(x=>x.as===n); if(a && a.url) return a.url; }
+  return ''; }
+// Pas trouvé ? On cherche dans tout le Drive (« Appel 1234 », « AP_1234 », « Facture 1234 »…) et on ouvre l'aperçu.
+async function cvChercherPapier(type, n){
+  const mots = type==='FAC' ? ["name contains 'Facture "+n+"'", "name contains 'facture "+n+"'", "name contains '"+n+"'"] : type==='OT' ? ["name contains 'OT "+n+"'", "name contains 'OT_"+n+"'", "name contains '"+n+"'"] : ["name contains 'Appel "+n+"'", "name contains 'AP_"+n+"'", "name contains 'AP "+n+"'", "name contains '"+n+"'"];
+  const r = await driveFetch('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent('trashed=false and mimeType != \'application/vnd.google-apps.folder\' and ('+mots.join(' or ')+')')+'&orderBy=modifiedTime%20desc&pageSize=30&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true');
+  const re = type==='FAC' ? new RegExp('facture\\D{0,3}'+n+'(?!\\d)','i') : type==='OT' ? new RegExp('(^|\\W)(OT|ordre)\\D{0,12}'+n+'(?!\\d)','i') : new RegExp('(appels?|AP|AS)\\D{0,3}'+n+'(?!\\d)','i');
+  return (r.files||[]).find(f=>re.test(f.name)) || null; }
+function Papier({type, n, ctx, children, style}){
+  const [etat,setEtat]=useState('');
+  const url = cvLienPapier(type, n, ctx||{});
+  const st = {color:'var(--accent)',fontWeight:700,cursor:'pointer',...(style||{})};
+  if(url) return <a href={url} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} style={st}>{children}</a>;
+  const chercher = async e => { e.stopPropagation(); e.preventDefault(); setEtat('…');
+    try{ const f = await cvChercherPapier(type, n);
+      if(f){ setEtat(''); APERCU_DRIVE ? APERCU_DRIVE({id:f.id, dossier:false, titre:f.name}) : window.open(lienDrvF(f.id)); }
+      else if(type==='FAC'){ setEtat(''); window.open(facLien(n, null), '_blank'); }
+      else setEtat('pas trouvé'); }
+    catch(err){ setEtat('erreur'); } };
+  return <span role="button" onClick={chercher} title="Chercher le document dans le Drive" style={st}>{children}{etat && <span className="muted" style={{fontWeight:400,fontSize:11}}> {etat}</span>}</span>; }
+// Bouton rapide : les plans de la job (dossier Drive + pièces jointes « plan » des passages), ouverts en aperçu.
+function CvBoutonPlans({job, dosF, dossier}){
+  const [ouv,setOuv]=useState(false);
+  const plans = [...(dosF||[]).filter(f=>f.c.plan || /plan/i.test(f.name) && !/bon de commande/i.test(f.name)).map(f=>({id:f.id, nom:f.name})),
+    ...(job.events||[]).flatMap(e=>e.attachments||[]).filter(a=>/plan/i.test(a.title||'')).map(a=>({id:(driveLienId(a.fileUrl)||{}).id, nom:a.title}))].filter(p=>p.id)
+    .filter((p,i,L)=>L.findIndex(q=>q.id===p.id)===i);
+  const voir = p => APERCU_DRIVE ? APERCU_DRIVE({id:p.id, dossier:false, titre:p.nom}) : window.open(lienDrvF(p.id));
+  if(!plans.length && !dossier) return null;
+  const clic = () => plans.length===1 ? voir(plans[0]) : plans.length ? setOuv(!ouv) : (APERCU_DRIVE && APERCU_DRIVE({id:dossier, dossier:true, titre:'Dossier — '+job.name}));
+  return <span style={{position:'relative',display:'inline-block'}}>
+    <button className="btn btn-sm btn-p" onClick={clic} title={plans.length ? plans.length+' plan'+(plans.length>1?'s':'') : 'Aucun fichier « plan » trouvé — ouvre le dossier'}>📐 Plans{plans.length>1 ? ' ('+plans.length+')' : ''}</button>
+    {ouv && <div className="card" style={{position:'absolute',zIndex:20,top:'110%',left:0,minWidth:260,padding:6,display:'grid',gap:3}}>
+      {plans.map(p=><button key={p.id} className="btn btn-sm" style={{justifyContent:'flex-start',textAlign:'left'}} onClick={()=>{ setOuv(false); voir(p); }}>📄 {p.nom}</button>)}</div>}
+  </span>; }
 // Jauge facturé / PO. Le repère de 75 % vient des PO de Jonathan (« 75 % rough et 25 % finition »).
 // v566 : appels de service (AP) et ordres de travail (OT) de la job, dans l'ordre des passages, avec la facture et son montant
 function cvJobPapiers(job, appels, factures){
@@ -15635,19 +15687,19 @@ function cvJobPapiers(job, appels, factures){
   });
   return out;
 }
-function CvGauge({job, appels, factures}){
+function CvGauge({job, appels, factures, dosF}){
+  const ctx = {appels, factures, dosF, job};
   const po = job.reg && job.reg.ht;
   const papiers = cvJobPapiers(job, appels, factures);
-  // v606 : chaque AP / OT en carte : le papier en haut, sa facture (numéro, montant, PDF) juste en dessous.
-  const lienDrv = id => 'https://drive.google.com/file/d/'+id+'/view';
+  // v606-607 : chaque AP / OT en carte : le papier en haut, sa facture juste en dessous — tout s'ouvre en aperçu.
   const puce = (x,i) => <div key={i} title={(x.type==='AP'?'Appel de service ':'Ordre de travail ')+x.n+' · '+cvFmtDay(x.jour)+(x.vers ? ' → '+x.vers.phase+(x.vers.jour?' le '+cvFmtDay(x.vers.jour):'') : '')}
     style={{display:'flex',flexDirection:'column',minWidth:118,borderRadius:8,border:'1px solid var(--border2)',background:'var(--bg2)',overflow:'hidden',fontSize:12}}>
-    <a href={x.photo ? lienDrv(x.photo) : undefined} target="_blank" rel="noopener" style={{display:'flex',gap:6,alignItems:'baseline',padding:'4px 8px',textDecoration:'none',color:'var(--text)',borderBottom:'1px solid var(--border2)',cursor:x.photo?'pointer':'default'}}>
-      <b style={{color:x.type==='AP'?'var(--accent)':'var(--success)'}}>{x.type} {x.n}</b><span className="muted">{cvFmtDay(x.jour)}</span>{x.photo && <span style={{marginLeft:'auto'}}>📄</span>}</a>
+    <div style={{display:'flex',gap:6,alignItems:'baseline',padding:'4px 8px',borderBottom:'1px solid var(--border2)'}}>
+      <Papier type={x.type} n={x.n} ctx={ctx} style={{color:x.type==='AP'?'var(--accent)':'var(--success)'}}>{x.type} {x.n} 📄</Papier><span className="muted">{cvFmtDay(x.jour)}</span></div>
     <div style={{padding:'4px 8px',display:'grid',gap:2}}>
       {x.vers && <div className="muted" style={{fontSize:11}}>→ <b>{x.vers.phase}</b>{x.vers.jour ? ' '+cvFmtDay(x.vers.jour) : ''}</div>}
       {x.facs.length ? x.facs.map(n=>{ const f=(factures||{})[n]||{}; return <div key={n} style={{display:'flex',gap:6,alignItems:'baseline'}}>
-          <span className="muted">Facture</span>{f.pdf ? <a href={lienDrv(f.pdf)} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>#{n}</a> : <b>#{n}</b>}
+          <span className="muted">Facture</span><Papier type="FAC" n={n} ctx={ctx}>#{n}</Papier>
           <b style={{marginLeft:'auto'}}>{f.ht!=null ? cvMoney(f.ht) : '—'}</b></div>; })
         : <span style={{color:'var(--warning)',fontWeight:700}}>{x.vers && !x.vers.jour ? 'à venir' : 'pas facturé'}</span>}
     </div></div>;
@@ -15969,6 +16021,8 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
   const [voirProjet,setVoirProjet]=useState(false);   // v564 : le projet (étapes, blocages, infos) ouvert par-dessus, sans changer de page — comme dans l'agenda
   appels = appels || {parNumero:{}, parFacture:{}};
   const photo = a => 'https://drive.google.com/file/d/'+a.id+'/view';
+  const dosF = useDosFichiers(job && job.reg && job.reg.dossier || '');
+  const ctxP = {appels, factures, dosF, job};
   if(!job) return <div className="card muted">Clique une job pour voir sa fiche.</div>;
   const r = job.reg || {};
   const today = cvDay(new Date().toISOString());
@@ -15985,7 +16039,7 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
     <CvPill status={job.etatClient||job.status}/>
     <h2 className="fh" style={{margin:'8px 0 2px',fontSize:20}}>{job.client==='PART' && cvNomClientJob(job) ? <span onClick={e=>ouvrirFicheClient(cvNomClientJob(job), e)} title="Ouvrir sa fiche du Répertoire" style={{cursor:'pointer',textDecoration:'underline',textDecorationStyle:'dotted'}}>{cvTitreJob(job)}</span> : cvTitreJob(job)}</h2>
     {job.client==='PART' && <div style={{fontSize:13,color:'var(--accent)',fontWeight:600}}>{cvProjetJob(job)}</div>}
-    {!enModal && <button className="btn btn-sm" style={{margin:'6px 0 2px'}} onClick={()=>setVoirProjet(true)} title="Étapes, blocages et infos du projet, sans quitter cette page">📁 Voir le projet</button>}
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',margin:'6px 0 2px'}}>{!enModal && <button className="btn btn-sm" onClick={()=>setVoirProjet(true)} title="Étapes, blocages et infos du projet, sans quitter cette page">📁 Voir le projet</button>}<CvBoutonPlans job={job} dosF={dosF} dossier={r.dossier}/></div>
     {voirProjet && <Modal title={'📁 '+cvTitreJob(job)} onClose={()=>setVoirProjet(false)} wide>
       <div style={{maxHeight:'75vh',overflowY:'auto'}}><ProjetsSuivi cfg={cfg} refreshKey={0} seul={{id:job.id, ouvrir:job.client+job.id, nom:(job.client!=='PART'?job.client+' ':'')+job.name}}/></div>
     </Modal>}
@@ -16001,7 +16055,7 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
         <Row k="Nom">{r.client}</Row><Row k="Téléphone">{r.tel && <span style={{userSelect:'all'}}>{r.tel}</span>}</Row>
         <Row k="Courriel">{r.courriel && <span style={{userSelect:'all'}}>{r.courriel}</span>}</Row><Row k="Équipe">{job.crew.join(', ')}</Row></div></details>}
     {cfg && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'flex-start'}}><CvRattacherPO job={job} clients={clients} onDone={onChanged}/><CvMemeProjet key={'mp'+job.id} cfg={cfg} job={job} clients={clients} onChanged={onChanged}/><CvInscrirePO key={'po'+job.id} cfg={cfg} job={job} registry={registry} onChanged={onChanged}/><CvCreerNoJob key={'no'+job.id} cfg={cfg} job={job} registry={registry} events={events} onChanged={onChanged}/><CvArchiver cfg={cfg} job={job} archives={archives} onChanged={onChanged}/></div>}
-    <CvGauge job={job} appels={appels} factures={factures}/>
+    <CvGauge job={job} appels={appels} factures={factures} dosF={dosF}/>
     {r.note && enModal && <div className="card" style={{marginTop:10,padding:10,fontSize:13,borderColor:'var(--warning)'}}>{r.note}</div>}
     <CvTopoChantier job={job} cfg={cfg}/>
     </>}
@@ -16044,13 +16098,9 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
         <div>
           <div style={{fontSize:11,fontWeight:800,letterSpacing:'.05em',color: e.phase==='ROUGH'?'var(--warning)':e.phase==='FINITION'?'var(--success)':'var(--accent)'}}>{e.phase||'—'}</div>
           <div className="muted" style={{fontSize:12.5,display:'flex',flexWrap:'wrap',gap:'2px 12px'}}>
-            {e.as && <span>Appel {String(e.as).split(/[\s,–-]+/).filter(t=>/\d/.test(t)).map(n=>appels.parNumero[n]
-              ? <a key={n} href={photo(appels.parNumero[n])} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700,marginRight:4}}>{n} ↗</a>
-              : <b key={n} style={{color:'var(--text)',marginRight:4}}>{n}</b>)}</span>}
-            {e.ot && <span>OT {appels.parNumero[e.ot]
-              ? <a href={photo(appels.parNumero[e.ot])} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>{e.ot} ↗</a>
-              : <b style={{color:'var(--text)'}}>{e.ot}</b>}</span>}
-            {e.fac==='**' ? <span>Pas à facturer</span> : e.fac ? <span>Facture <FacNos txt={e.fac} factures={factures}/>{String(e.fac).split(/[\s,–-]+/).filter(n=>factures[n]&&factures[n].ht!=null).map(n=><span key={n}> · <b style={{color:'var(--text)'}}>{cvMoney(factures[n].ht)}</b></span>)}</span>
+            {e.as && <span>Appel {String(e.as).split(/[\s,–-]+/).filter(t=>/\d/.test(t)).map(n=><Papier key={n} type="AP" n={n} ctx={ctxP} style={{marginRight:4}}>{n} ↗</Papier>)}</span>}
+            {e.ot && <span>OT {String(e.ot).split(/[\s,–-]+/).filter(t=>/\d/.test(t)).map(n=><Papier key={n} type="OT" n={n} ctx={ctxP} style={{marginRight:4}}>{n} ↗</Papier>)}</span>}
+            {e.fac==='**' ? <span>Pas à facturer</span> : e.fac ? <span>Facture {String(e.fac).split(/[\s,;–-]+/).filter(x=>/^\d{3,6}$/.test(x)).map((n,k)=><React.Fragment key={n}>{k>0?', ':''}<Papier type="FAC" n={n} ctx={ctxP}>{n} ↗</Papier></React.Fragment>)}{String(e.fac).split(/[\s,–-]+/).filter(n=>factures[n]&&factures[n].ht!=null).map(n=><span key={n}> · <b style={{color:'var(--text)'}}>{cvMoney(factures[n].ht)}</b></span>)}</span>
               : (e.day<today ? <span style={{color:'var(--danger)',fontWeight:700}}>Pas de facture inscrite</span> : <span>Planifié</span>)}
             {e.day<=today && <CvInscrirePassage cfg={cfg} e={e} onDone={onChanged}/>}
           </div>
