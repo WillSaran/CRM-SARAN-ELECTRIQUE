@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v599';
+const APP_VERSION = 'v600';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -12986,8 +12986,9 @@ async function maisonPlansFin2(m, sig){
       ps.forEach(p=>maisonCadres(p).forEach(k=>{ const rr = [Math.min(k[0],k[2])*W, Math.min(k[1],k[3])*H, Math.abs(k[2]-k[0])*W, Math.abs(k[3]-k[1])*H];
         x.fillStyle = 'rgba(37,99,235,.06)'; x.fillRect(...rr); x.strokeStyle = '#2563eb'; x.lineWidth = Math.max(2, W/700); x.strokeRect(...rr); }));
       const fs = Math.max(12, Math.round(W/95)), sy = fs*1.5;
+      // v600 : étiquettes de même largeur, placées pour ne jamais se chevaucher (décalées vers le haut / le bas, avec un petit trait vers la pièce)
+      const etq = [];
       for(const p of ps){
-        // même étiquette que dans le CRM : le nom (et les pi²), puis chaque symbole avec sa quantité
         const it = p.items||{}, ch = maisonChauffage(p);
         const l = Object.entries(it).filter(([cc,n])=>n>0 && !/^SO22/.test(cc)).map(([cc,n])=>[maisonOutilDe(cc), n]).filter(([o])=>o).map(([o,n])=>[o[0], n]);
         const nPl = ['plinthe','convecteur'].includes(p.chauf) ? ((ch.plinthes||[]).length||1) : ['radiant','aero'].includes(p.chauf) ? 1 : 0;
@@ -13000,17 +13001,28 @@ async function maisonPlansFin2(m, sig){
         x.font = 'bold '+fs+'px sans-serif'; const tw = x.measureText(titre).width;
         x.font = 'bold '+Math.round(fs*.95)+'px sans-serif';
         const items = l.map(([cc,n])=>{ const sv = maisonSymSvg(cc,''), sh = sy, sw = sh*sv.w/sv.h; return {cc, n, sw, sh, w: sw + fs*0.15 + x.measureText(String(n)).width}; });
-        const maxW = Math.max(tw, fs*12), rows = []; let cur = [], cw = 0;
-        items.forEach(o=>{ if(cur.length && cw + o.w + fs*0.4 > maxW){ rows.push(cur); cur = []; cw = 0; } cur.push(o); cw += o.w + fs*0.4; }); if(cur.length) rows.push(cur);
-        const rowW = r => r.reduce((t,o)=>t+o.w,0) + (r.length-1)*fs*0.4;
-        const bw = Math.max(tw, ...rows.map(rowW), fs*3) + fs*0.8, bh = fs*1.3 + rows.length*sy*1.05 + fs*0.4;
-        const bx = Math.max(2, Math.min(W-bw-2, cx-bw/2)), by = Math.max(2, Math.min(H-bh-2, cy-bh/2));
-        x.fillStyle = 'rgba(255,255,255,.95)'; x.strokeStyle = '#2563eb'; x.lineWidth = Math.max(1.5, fs/9);
+        etq.push({cx, cy, titre, tw, items});
+      }
+      const larg = Math.min(fs*16, Math.max(fs*9, ...etq.map(e=>e.tw + fs*0.8)));   // même largeur pour toutes
+      const rowW = r => r.reduce((t,o)=>t+o.w,0) + (r.length-1)*fs*0.4;
+      etq.forEach(e=>{ const rows = []; let cur = [], cw = 0; const maxW = larg - fs*0.8;
+        e.items.forEach(o=>{ if(cur.length && cw + o.w + fs*0.4 > maxW){ rows.push(cur); cur = []; cw = 0; } cur.push(o); cw += o.w + fs*0.4; }); if(cur.length) rows.push(cur);
+        e.rows = rows; e.bw = larg; e.bh = fs*1.3 + rows.length*sy*1.05 + fs*0.4; });
+      const poses = [], marge = fs*0.35, chevauche = (a, b) => a.x < b.x + b.w + marge && b.x < a.x + a.w + marge && a.y < b.y + b.h + marge && b.y < a.y + a.h + marge;
+      etq.slice().sort((a,b)=>a.cy-b.cy || a.cx-b.cx).forEach(e=>{ let best = null;
+        for(let k=0; k<40 && !best; k++){ const dy = (k%2 ? 1 : -1)*Math.ceil(k/2)*e.bh*0.55;
+          for(const dx of [0, -e.bw*0.6, e.bw*0.6]){ const r = {x:Math.max(2, Math.min(W-e.bw-2, e.cx-e.bw/2+dx)), y:Math.max(2, Math.min(H-e.bh-2, e.cy-e.bh/2+dy)), w:e.bw, h:e.bh};
+            if(!poses.some(q=>chevauche(r, q))){ best = r; break; } } }
+        e.r = best || {x:Math.max(2, Math.min(W-e.bw-2, e.cx-e.bw/2)), y:Math.max(2, Math.min(H-e.bh-2, e.cy-e.bh/2)), w:e.bw, h:e.bh}; poses.push(e.r); });
+      for(const e of etq){ const {x:bx, y:by, w:bw, h:bh} = e.r;
+        if(Math.hypot(bx+bw/2-e.cx, by+bh/2-e.cy) > fs*1.5){ x.strokeStyle = '#2563eb'; x.lineWidth = Math.max(1.5, fs/10); x.beginPath(); x.moveTo(e.cx, e.cy);
+          x.lineTo(Math.max(bx, Math.min(bx+bw, e.cx)), by+bh/2 < e.cy ? by+bh : by); x.stroke(); x.fillStyle = '#2563eb'; x.beginPath(); x.arc(e.cx, e.cy, fs*0.25, 0, Math.PI*2); x.fill(); }
+        x.fillStyle = 'rgba(255,255,255,.96)'; x.strokeStyle = '#2563eb'; x.lineWidth = Math.max(1.5, fs/9);
         if(x.roundRect){ x.beginPath(); x.roundRect(bx, by, bw, bh, fs*0.45); x.fill(); x.stroke(); } else { x.fillRect(bx, by, bw, bh); x.strokeRect(bx, by, bw, bh); }
-        x.fillStyle = '#111'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.font = 'bold '+fs+'px sans-serif'; x.fillText(titre, bx + bw/2, by + fs*0.8);
+        x.fillStyle = '#111'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.font = 'bold '+fs+'px sans-serif'; x.fillText(e.titre, bx + bw/2, by + fs*0.8, bw - fs*0.4);
         x.textAlign = 'left'; x.font = 'bold '+Math.round(fs*.95)+'px sans-serif';
-        for(let ri=0; ri<rows.length; ri++){ const r = rows[ri]; let xx = bx + (bw - rowW(r))/2; const yy = by + fs*1.3 + ri*sy*1.05 + sy/2;
-          for(const o of r){ try{ const im = await maisonSymImage(o.cc, ''); x.drawImage(im, xx, yy - o.sh/2, o.sw, o.sh); }catch(e){}
+        for(let ri=0; ri<e.rows.length; ri++){ const r = e.rows[ri]; let xx = bx + (bw - rowW(r))/2; const yy = by + fs*1.3 + ri*sy*1.05 + sy/2;
+          for(const o of r){ try{ const im = await maisonSymImage(o.cc, ''); x.drawImage(im, xx, yy - o.sh/2, o.sw, o.sh); }catch(err){}
             x.fillStyle = '#111'; x.fillText(String(o.n), xx + o.sw + fs*0.15, yy); xx += o.w + fs*0.4; } }
       }
       (m.app240||[]).filter(a=>a.pg===pg.no && (a.src||'')===id).forEach(a=>{ const t = MAISON_APP_COURT[a.k]||a.k; x.font = 'bold '+Math.round(fs*.9)+'px sans-serif';
