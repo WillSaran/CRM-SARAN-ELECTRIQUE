@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v604';
+const APP_VERSION = 'v605';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11248,6 +11248,9 @@ const CALC_SOUMISSION = {
             marge {n('marge',40)} %</div>
           <div style={{fontSize:13.5}}>Bandes : <b>{g.watts} W</b> au total → {g.transfos.map((t,i)=><span key={i}>{i?', ':''}<b>{t.q} × {t.w} W</b>{t.charge ? <span className="muted"> ({t.charge} W + {cvNum(v.marge)||0} %)</span> : null}</span>)}
             {g.depasse && <span style={{color:'var(--warning)'}}> — trop de watts pour un seul transfo : séparé en plusieurs</span>}</div>
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>Transfo : {sel(String(cvNum(v.transfoW)||''), x=>maj({transfoW:x}), [['','Auto (suggéré avec la marge)'], ...(v.gradable ? LED_TRANSFOS_G : LED_TRANSFOS_NG).map(z=>[String(z[0]), z[0]+' W'])])}
+            {g.force && g.serre && <span style={{color:'var(--warning)',fontSize:12.5}}>⚠ moins que la marge de {cvNum(v.marge)!=null ? cvNum(v.marge) : 20} % — ça passe, mais c'est serré</span>}
+            {g.force && !g.serre && <span style={{color:'var(--success)',fontSize:12.5}}>✓ ton choix, la marge est respectée</span>}</div>
           <label style={{display:'flex',gap:4,alignItems:'center'}}><input type="checkbox" checked={!!v.alim} onChange={e=>maj({alim:e.target.checked})}/> Amener l'alimentation 120 V jusqu'au transfo {v.alim && <>— {n('hAlim',44)} h</>}</label>
           <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>Fil basse tension du transfo aux bandes : {n('fil',56,'pi')} pi <span className="muted" style={{fontSize:12}}>(vide = pas de fil)</span></div>
         </div>
@@ -11321,12 +11324,15 @@ function ledCalcul(v){
   else if(v.groupe==='bande') runs.forEach(r=>{ for(let i=0;i<r.n;i++) if(r.watts) charges.push(Math.round(r.watts/r.n*10)/10); });
   else { const w = runs.reduce((a,r)=>a+r.watts,0); if(w) charges.push(Math.round(w*10)/10); }
   const parT = {}; let depasse = false;
-  charges.forEach(c=>{ const besoin = c*marge, k = Math.max(1, Math.ceil(besoin/max)); if(k>1) depasse = true;
-    const t = liste.find(z=>z[0] >= besoin/k) || liste[liste.length-1]; const x = parT[t[1]] = parT[t[1]] || {code:t[1], desc:t[2], w:t[0], q:0, charge:0}; x.q += k; x.charge = Math.round((x.charge + c)*10)/10; });
+  // v605 : transfo choisi à la main (ex. 96 W pour 85 W de bandes, même si la marge en suggère 200 W) — on prend alors juste ce qu'il faut pour la charge réelle
+  const force = cvNum(v.transfoW) ? liste.find(z=>z[0]===cvNum(v.transfoW)) : null; let serre = false;
+  charges.forEach(c=>{ const besoin = c*marge, k = force ? Math.max(1, Math.ceil(c/force[0] - 1e-9)) : Math.max(1, Math.ceil(besoin/max)); if(k>1) depasse = true;
+    if(force && c/k*marge > force[0]) serre = true;
+    const t = force || liste.find(z=>z[0] >= besoin/k) || liste[liste.length-1]; const x = parT[t[1]] = parT[t[1]] || {code:t[1], desc:t[2], w:t[0], q:0, charge:0}; x.q += k; x.charge = Math.round((x.charge + c)*10)/10; });
   const transfos = Object.values(parT).sort((a,b)=>b.w-a.w), nTransfos = transfos.reduce((a,x)=>a+x.q,0);
   const hBandes = Math.round(tranches*hB*100)/100, hTransfos = Math.round(nTransfos*hT*100)/100, hAlim = v.alim ? (cvNum(v.hAlim)||0) : 0;
   const heures = Math.round((hBandes + hTransfos + hAlim + (cvNum(v.hAjout)||0))*100)/100;
-  return {runs, rubans, profils, transfos, nTransfos, depasse, tranches, piTotal, hBandes, hTransfos, hAlim, heures, watts:Math.round(runs.reduce((a,r)=>a+r.watts,0)*10)/10};
+  return {serre, force:!!force, runs, rubans, profils, transfos, nTransfos, depasse, tranches, piTotal, hBandes, hTransfos, hAlim, heures, watts:Math.round(runs.reduce((a,r)=>a+r.watts,0)*10)/10};
 }
 
 // v443 : circuits proposés pour la génératrice — [clé, nom, disjoncteur par défaut, mots pour deviner]
