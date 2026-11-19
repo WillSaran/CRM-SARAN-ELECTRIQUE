@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v596';
+const APP_VERSION = 'v597';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10612,7 +10612,12 @@ function ApercuPdf({d, setD, prixDe, onImprimer, onFermer}){
       <b style={{fontSize:13.5}}>👁 Aperçu du PDF</b><span className="muted" style={{fontSize:12}}>ce que le client va recevoir — modifie plus haut, l'aperçu suit</span>
       <span style={{marginLeft:'auto',display:'flex',gap:5}}><button className="btn btn-sm btn-p" onClick={onImprimer}>🖨️ PDF / Imprimer</button><button className="btn btn-sm" onClick={onFermer}>Fermer</button></span>
     </div>
-    {setD && (d.plan||[]).length>0 && <div style={{marginBottom:6}}><PlanPlace d={d} setD={setD} compact/></div>}
+    {setD && (d.plan||[]).length>0 && <div style={{marginBottom:6}}><PlanPlace d={d} setD={setD} compact/>
+      {/* v597 : chaque plan / photo du PDF, à cocher ou décocher */}
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:6,fontSize:12.5}}><span className="muted">Dans le PDF :</span>
+        {(d.plan||[]).map((x,i)=><label key={x.id+i} style={{display:'inline-flex',gap:4,alignItems:'center',padding:'2px 8px',border:'1px solid var(--border2)',borderRadius:12,cursor:'pointer',opacity:x.masque?.55:1}}>
+          <input type="checkbox" checked={!x.masque} onChange={e=>{ const v = !e.target.checked; setD(o=>({...o, plan:(o.plan||[]).map((y,j)=>j===i ? {...y, masque:v} : y)})); }} style={{width:'auto'}}/>
+          {/^Plan par pièce/.test(x.titre||'') ? '🏠 ' : /^Plan annoté/.test(x.titre||'') ? '📍 ' : '🖼️ '}{x.titre || 'Photo '+(i+1)}</label>)}</div></div>}
     {html ? <iframe title="Aperçu" srcDoc={html} style={{width:'100%',height:'78vh',border:'1px solid var(--border2)',borderRadius:6,background:'#fff'}}/> : <div className="muted" style={{padding:20}}>Préparation…</div>}
   </div>;
 }
@@ -12790,7 +12795,9 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli, lireTick}){   // v495 
       return {...o, typeProjet:o.typeProjet || (reno ? 'Rénovation' : 'Construction neuve'), titre:o.titre || (reno ? 'Travaux électriques — rénovation' : 'Installation électrique — maison'), travaux:txt,
         lignes:[...o.lignes.filter(l=>!l.maison), ...lignesM], remarques:[rem, clause, incl, excl].filter(Boolean).join('\n'),
         visite:[vis, chauf.length ? '— Liste chauffage ('+chauf.reduce((t,[,c])=>t+(c.w||0),0)+' W) : '+chauf.map(([p,c])=>p.nom+' : '+c.txt).join(' ; ') : ''].filter(Boolean).join('\n')}; });
-    toast && toast('Soumission remplie par étage et par pièce — vérifie le matériel et le prix'); onRempli && onRempli(); };
+    toast && toast('Soumission remplie par étage et par pièce — vérifie le matériel et le prix'); onRempli && onRempli();
+    if(pagesV.length && m.pieces.some(p=>maisonCadres(p).length) && !(d.plan||[]).some(y=>/^Plan par pièce — /.test(y.titre||''))) plansResume();   // v597 : les plans par pièce vont dans le PDF tout seuls (décochables dans l'aperçu)
+  };
   const ch = l => <input type="checkbox" checked={l} readOnly style={{width:'auto'}}/>;
   return <div style={{display:'grid',gap:8}}>
     {bandeRelit}
@@ -12921,7 +12928,7 @@ function PlanPlace({d, setD, compact}){
 async function planPourImpression(doc){
   try{ await planImage(LOGO_ID); }catch(e){}   // v114 : logo pour l'en-tête
   const out = [];
-  for(const p of (doc.plan||[])){ try{ out.push({...p, src: await planImage(p.id)}); }catch(e){} }
+  for(const p of (doc.plan||[])){ if(p.masque) continue; try{ out.push({...p, src: await planImage(p.id)}); }catch(e){} }   // v597 : décoché = pas dans le PDF
   return out;
 }
 
