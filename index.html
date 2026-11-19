@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v615';
+const APP_VERSION = 'v616';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -16567,6 +16567,24 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
     [client.active,'en cours ou à venir'],
     [av.n,'à vérifier']
   ];
+  // v616 : liste imprimable des factures manquantes du client — chaque visite faite dont la facture n'est pas envoyée (jobs non archivées)
+  const manquantesLst = useMemo(()=>client.jobs.filter(j=>!arch(j)).flatMap(j=>cvVisites(j).filter(v=>v.faite && !v.facturee).map(v=>({j, v}))).sort((a,b)=>a.v.debut.localeCompare(b.v.debut)),[client, archives]);
+  const imprimerManquantes = ()=>{ const w = window.open('', '_blank'); if(!w){ alert('Autorise les fenêtres surgissantes pour imprimer.'); return; }
+    const e = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const nums = (v, k) => [...new Set(v.events.map(x=>x[k]).filter(x=>x && x!=='**'))].join(', ');
+    const jours = d => Math.floor((Date.now()-new Date(d+'T12:00:00').getTime())/864e5);
+    const lignes = manquantesLst.map(({j, v})=>'<tr><td>'+e(cvFmtDay(v.debut)+(v.fin!==v.debut ? '–'+cvFmtDay(v.fin) : ''))+'<div class="m">il y a '+jours(v.debut)+' j</div></td>'
+      +'<td>'+e(j.po||'—')+'</td><td><b>'+e(cvTitreJob(j))+'</b><div class="m">'+e(j.address)+'</div></td>'
+      +'<td>'+e(v.phase.charAt(0)+v.phase.slice(1).toLowerCase())+'</td><td>'+e([...new Set(v.events.flatMap(x=>x.crew||[]))].join(', '))+'</td>'
+      +'<td>'+e(nums(v,'as')||'—')+'</td><td>'+(v.facNonEnvoyee ? e(nums(v,'fac'))+' <span class="m">(pas envoyée)</span>' : nums(v,'as') ? 'à faire' : '<b>rien d\'inscrit</b>')+'</td><td class="c">☐</td></tr>').join('');
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Factures manquantes — '+e(client.label)+'</title><style>'
+      +'body{font-family:Arial,Helvetica,sans-serif;margin:24px;color:#111}h1{font-size:20px;margin:0 0 4px}.s{color:#555;font-size:12px;margin-bottom:14px}'
+      +'table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;background:#eee;border-bottom:2px solid #999;padding:5px 6px}td{border-bottom:1px solid #ccc;padding:5px 6px;vertical-align:top}'
+      +'.m{color:#666;font-size:11px}.c{text-align:center;font-size:16px}@media print{body{margin:10mm}tr{page-break-inside:avoid}}</style></head><body>'
+      +'<h1>Factures manquantes — '+e(client.label)+'</h1><div class="s">Saran Électrique inc. · imprimé le '+e(new Date().toLocaleDateString('fr-CA',{day:'numeric',month:'long',year:'numeric'}))+' · '+manquantesLst.length+' visite'+(manquantesLst.length>1?'s':'')+' faite'+(manquantesLst.length>1?'s':'')+' sans facture envoyée</div>'
+      +(manquantesLst.length ? '<table><thead><tr><th>Date</th><th>PO</th><th>Job</th><th>Étape</th><th>Gars</th><th>AP</th><th>Facture</th><th>Fait</th></tr></thead><tbody>'+lignes+'</tbody></table>' : '<p>✅ Aucune facture manquante.</p>')
+      +'</body></html>');
+    w.document.close(); w.focus(); setTimeout(()=>w.print(), 300); };
   return <div>
     <button className="btn btn-sm btn-s" onClick={onBack} style={{marginBottom:10}}>← Tous les clients</button>
     <h2 className="fh" style={{margin:'0 0 2px',fontSize:22}}>{client.label}{client.contact ? ' — '+client.contact : ''}</h2>
@@ -16581,6 +16599,7 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
           {[['all','Toutes'],['afacturer','À facturer'],['done','Terminées'],['cours','En cours'],['avenir','À venir'],['flag','À vérifier'],['arch','Archivées']].map(([k,l])=>
             <button key={k} className={'btn btn-sm'+(filter===k?' btn-p':'')} onClick={()=>setFilter(k)}>{l}</button>)}
           <CaseTerminees v={voirTerm} set={setVoirTerm} n={nbTerm}/>
+          <button className="btn btn-sm" onClick={imprimerManquantes} title="Imprimer la liste des visites faites dont la facture n'est pas envoyée">🖨 Factures manquantes ({manquantesLst.length})</button>
           <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,whiteSpace:'nowrap'}} title="Barre orange : % des étapes faites (comme dans Projets)"><input type="checkbox" checked={voirAv} onChange={e=>setVoirAv(e.target.checked)}/> Avancement</label>
           <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Nom, PO, ville, facture…" style={{flex:'1 1 150px',width:'auto',minWidth:0,padding:'6px 10px'}}/>
         </div>
