@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v595';
+const APP_VERSION = 'v596';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -12395,6 +12395,42 @@ async function maisonPlansAnnotes(pages, pieces, apps){
   }
   return out;
 }
+// v596 : plans « par pièce » pour le client — chaque pièce encadrée, et au centre ce qui est prévu (sans montrer où va chaque prise)
+async function maisonPlansResume(pages, pieces){
+  const out = [];
+  for(const pg of pages.filter(x=>x.sorte==='etage')){
+    const ps = pieces.filter(p=>p.pg===pg.no && (p.src||'')===(pg.src||'') && (maisonCadres(p).length || p.fx!=null));
+    if(!ps.length) continue;
+    const img = await new Promise((ok,ko)=>{ const im = new Image(); im.onload = ()=>ok(im); im.onerror = ko; im.src = pg.img; });
+    const W = img.width, H = img.height, lh = Math.round(W/70), pied = lh*4.2;
+    const c = document.createElement('canvas'); c.width = W; c.height = H + pied; const x = c.getContext('2d');
+    x.fillStyle = '#fff'; x.fillRect(0,0,c.width,c.height); x.drawImage(img, 0, 0);
+    const fs = Math.max(11, Math.round(W/115));
+    for(const p of ps){ const cs = maisonCadres(p);
+      cs.forEach(k=>{ const r = [Math.min(k[0],k[2])*W, Math.min(k[1],k[3])*H, Math.abs(k[2]-k[0])*W, Math.abs(k[3]-k[1])*H];
+        x.fillStyle = 'rgba(37,99,235,.07)'; x.fillRect(...r); x.strokeStyle = '#2563eb'; x.lineWidth = Math.max(2, W/700); x.strokeRect(...r); });
+      let cx, cy; if(cs.length){ const xs = cs.flatMap(k=>[k[0],k[2]]), ys = cs.flatMap(k=>[k[1],k[3]]); cx = (Math.min(...xs)+Math.max(...xs))/2*W; cy = (Math.min(...ys)+Math.max(...ys))/2*H; } else { cx = p.fx*W; cy = p.fy*H; }
+      const it = p.items||{}, ch = maisonChauffage(p);
+      const lignes = Object.entries(it).filter(([k,n])=>n>0 && !/^SO220/.test(k)).map(([k,n])=>n+' × '+(MAISON_LIB[k]||k));
+      if(ch.txt) lignes.push('Chauffage : '+ch.txt);
+      x.font = 'bold '+Math.round(fs*1.1)+'px sans-serif'; const titre = p.nom + (cvNum(p.pi2) ? ' · '+p.pi2+' pi²' : '');
+      let lw = x.measureText(titre).width; x.font = fs+'px sans-serif'; lignes.forEach(t=>{ lw = Math.max(lw, x.measureText(t).width); });
+      const bw = lw + fs*1.4, bh = fs*1.5*(lignes.length+1) + fs*0.6;
+      let bx = Math.max(4, Math.min(W - bw - 4, cx - bw/2)), by = Math.max(4, Math.min(H - bh - 4, cy - bh/2));
+      x.fillStyle = 'rgba(255,255,255,.93)'; x.strokeStyle = '#1e3a8a'; x.lineWidth = Math.max(1.5, W/1200);
+      if(x.roundRect){ x.beginPath(); x.roundRect(bx, by, bw, bh, fs*0.5); x.fill(); x.stroke(); } else { x.fillRect(bx, by, bw, bh); x.strokeRect(bx, by, bw, bh); }
+      x.textAlign = 'left'; x.textBaseline = 'middle'; x.fillStyle = '#1e3a8a'; x.font = 'bold '+Math.round(fs*1.1)+'px sans-serif'; x.fillText(titre, bx + fs*0.7, by + fs*1.05);
+      x.fillStyle = '#111'; x.font = fs+'px sans-serif'; lignes.forEach((t,i)=>x.fillText(t, bx + fs*0.7, by + fs*1.05 + fs*1.5*(i+1)));
+    }
+    x.fillStyle = '#111'; x.font = 'bold '+lh+'px sans-serif'; x.textAlign = 'left'; x.textBaseline = 'middle';
+    x.fillText((pg.etage||pg.titre)+' — sorties prévues par pièce', lh, H + lh*1.1);
+    x.font = 'italic '+Math.round(lh*.8)+'px sans-serif'; x.fillStyle = '#374151';   // v596 : c'est une base, pas un plan final
+    x.fillText('Aperçu approximatif pour aider à visualiser le projet — une base de départ. Le nombre et l\'emplacement des sorties pourront changer', lh, H + lh*2.3);
+    x.fillText('selon vos choix et ce qu\'on constatera sur le chantier.', lh, H + lh*3.3);
+    out.push({titre:'Plan par pièce — '+(pg.etage||pg.titre), blob:await new Promise(ok=>c.toBlob(ok, 'image/jpeg', 0.85))});
+  }
+  return out;
+}
 // v482 : plans en image (ex. scannés, noms en anglais) — on identifie les pages d'étage, puis on encadre chaque pièce à la main.
 // Une cote connue tracée une fois (échelle) → chaque cadre donne ses pi². Sans échelle, on tape les pi².
 const MAISON_TAGS = [['','—'],['ignore','✕ Pas besoin'],['Sous-sol','Plan · Sous-sol'],['Rez-de-chaussée','Plan · Rez-de-chaussée'],['Étage','Plan · Étage'],['Garage','Plan · Garage'],['facade','Façade'],['terrain','Certificat / arpentage'],['autre','Autre page']];
@@ -12712,6 +12748,14 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli, lireTick}){   // v495 
       setD(o=>({...o, plan:[...(o.plan||[]).filter(y=>!/^Plan annoté — /.test(y.titre||'')), ...items]}));
       setEtat(''); toast && toast(items.length+' plan'+(items.length>1?'s':'')+' annoté'+(items.length>1?'s':'')+' ajouté'+(items.length>1?'s':'')+' au plan des travaux (PDF)'); }
     catch(e){ setEtat(''); toast && toast('Erreur : '+apiErrMsg(e)); } };
+  const plansResume = async () => { if(!pagesV.length){ toast && toast('Le plan n\'est pas chargé — ouvre ou relis le plan'); return; }
+    setEtat('Plans par pièce…');
+    try{ if(!peutDeposer()) await requestToken('consent');
+      const L = await maisonPlansResume(pagesV, m.pieces); if(!L.length){ setEtat(''); toast && toast('Aucune pièce encadrée sur les plans d\'étage'); return; }
+      const items = []; for(const x of L){ const id = await planGarderImage(d, setD, x.blob, x.titre); items.push({id, titre:x.titre, notes:''}); }
+      setD(o=>({...o, plan:[...(o.plan||[]).filter(y=>!/^Plan par pièce — /.test(y.titre||'')), ...items]}));
+      setEtat(''); toast && toast(items.length+' plan'+(items.length>1?'s':'')+' par pièce ajouté'+(items.length>1?'s':'')+' au PDF du client'); }
+    catch(e){ setEtat(''); toast && toast('Erreur : '+apiErrMsg(e)); } };
   const prix = c => C && C.prixDe ? (C.prixDe(c)||0) : 0;
   const totalPiece = p => { const ch = maisonChauffage(p); return Object.entries(p.items||{}).reduce((t,[c,q])=>t+prix(c)*q,0) + ch.so220*prix('SO220') + ch.intel*prix('SO220.2') + (ch.prod||[]).reduce((t,[c,q])=>t+prix(c)*q,0); };
   const etages = MAISON_ETAGES.filter(e=>m.pieces.some(p=>p.etage===e));
@@ -12860,6 +12904,7 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli, lireTick}){   // v495 
           return cs.length ? <div style={{width:'100%',color:'var(--danger)',fontSize:12.5}}>⚠ Pas de prix dans le catalogue pour : {cs.join(', ')} — ces lignes arriveront à 0 $ (mets le prix dans Inventaire › À la sortie).</div> : null; })()}
         <b>Total des sorties : {cvMoney(m.pieces.reduce((t,p)=>t+totalPiece(p),0))}</b><span className="muted" style={{fontSize:12}}>(tes prix SO, avant entrée, appareils sans code et buffer)</span>
         <button className="btn" style={{marginLeft:'auto'}} disabled={!!etat || !m.pieces.some(p=>(p.emp||[]).length)} title="Un plan par étage avec les emplacements placés pendant le tour — va dans le plan des travaux (PDF du client)" onClick={plansClient}>📎 Plans annotés → PDF</button>
+        <button className="btn" disabled={!!etat || !m.pieces.some(p=>maisonCadres(p).length || p.fx!=null)} title="Chaque pièce encadrée sur le plan, avec au centre ce qui est prévu (prises, interrupteurs, chauffage…) — sans montrer où va chaque sortie. Va dans le PDF du client." onClick={plansResume}>📎 Plans par pièce → PDF</button>
         <button className="btn btn-p" disabled={!(C && C.lu)} title={C && C.lu ? '' : 'Les prix du catalogue chargent encore'} onClick={appliquer}>{C && C.lu ? '↳ Remplir la soumission' : '⏳ Prix en chargement…'}</button></div>
     </div>}</>}
   </div>;
