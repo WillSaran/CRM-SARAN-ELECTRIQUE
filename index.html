@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v601';
+const APP_VERSION = 'v602';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9446,7 +9446,7 @@ const PROD_ENTETE = ['Code','Description','Catégorie','Sous-catégorie','Unité
 const OFFRE_ENTETE = ['Fournisseur','Code fournisseur','Code fabricant','Marque','Description','Catégorie','Unité','Mon prix','Prix de liste','Stock','Succursale','URL','Photo','Vendu par','Code CRM','Correspondance','Date',"Prix d'ami"];   // v201 : colonne R = ton vrai prix payé (prix d'ami), jamais écrasée par les imports
 const CAT_TOUJOURS = ['FIL','CONDUIT','CONNECTEURS','BOÎTES','QUINCAILLERIE'];   // v358 : boutons toujours visibles dans le catalogue, même à 0
 const CAT_ORDRE = ['FIL','CONDUIT','CONNECTEURS','BOÎTES','DÉCORA','ENTRÉE ÉLECTRIQUE','PANNEAUX','DISJONCTEURS','CHAUFFAGE','ÉCLAIRAGE','BORNES','CONNEXIONS / MALT','CONTRÔLE','DÉTECTION','QUINCAILLERIE','DIVERS','Stock personnalisé','SERVICES','À CLASSER','ADMINISTRATIF'];
-const FOURN_ORDRE = ['Dubo','Lumen','Gagnon'];
+const FOURN_ORDRE = ['Dubo','Lumen','Gagnon','LEDCO'];
 function catSimple(c){
   const u = String(c||'').trim().toUpperCase(); if(!u) return 'À CLASSER';
   const m = [[/^D[ÉE]CORA/,'DÉCORA'],[/^BORNE/,'BORNES'],[/^CONTR[ÔO]LE/,'CONTRÔLE'],[/^D[ÉE]TECTION/,'DÉTECTION'],[/^SERVICE/,'SERVICES'],[/^ADMIN/,'ADMINISTRATIF'],
@@ -11189,7 +11189,125 @@ const CALC_SOUMISSION = {
         titre:'Panneau de transfert manuel pour génératrice ('+(trente?'30':'60')+' A)', travaux:txt.join('\n'), remarques:rem, lignes:L, heures:h};
     }
   },
+  // v602 : Bandes LED 24 V (LEDCO) — une ligne par endroit, watts, transfo(s), profilé en option, temps calculé et modifiable
+  ledRuban: {
+    nom:'💡 Bandes LED', ordre:'fin', typeProjet:'Éclairage', gars:1,
+    tarifs:[['LED-PI','Bande LED installée ($/pi)'],['LED-TRANSFO','Transformateur installé ($)']],
+    defaut:{runs:[{nom:'', long:'', n:'1', ruban:'48', profil:''}], couleur:'3000K', groupe:'un', gradable:false, marge:'20',
+      hBande:'0.5', piBande:'15', hTransfo:'0.5', alim:false, hAlim:'1', hAjout:'', fil:'', note:''},
+    deviner(txt){ const t=String(txt||''), v={};
+      const m=t.match(/(\d+(?:[.,]\d+)?)\s*(pi\b|pieds?|')/i), b=t.match(/(\d+)\s*bandes?/i);
+      if(m || b) v.runs=[{nom:'', long:m ? m[1].replace(',','.') : '', n:b ? b[1] : '1', ruban:'48', profil:''}];
+      if(/gradable|dimm|gradateur/i.test(t)) v.gradable=true;
+      return v; },
+    champs(v, maj){
+      const sel = (val, on, opts, st) => <select value={val} onChange={e=>on(e.target.value)} style={st}>{opts.map(([a,b])=><option key={a} value={a}>{b}</option>)}</select>;
+      const n = (k, w, ph) => <input value={v[k]==null?'':v[k]} inputMode="decimal" placeholder={ph||''} onChange={e=>maj({[k]:e.target.value})} style={{width:w||52}}/>;
+      const runs = v.runs||[], majR = (i, p) => maj({runs:runs.map((r,k)=>k===i?{...r,...p}:r)});
+      const g = ledCalcul(v);
+      return <div style={{display:'grid',gap:10,fontSize:13}}>
+        <div style={{display:'grid',gap:6,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+          <b>1. Les bandes — une ligne par endroit</b>
+          {runs.map((r,i)=>{ const x = g.runs[i]||{}; return <div key={i} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+            <input value={r.nom||''} placeholder={'Endroit (ex. dessus des séparateurs)'} onChange={e=>majR(i,{nom:e.target.value})} style={{width:200}}/>
+            <input value={r.n||''} inputMode="numeric" onChange={e=>majR(i,{n:e.target.value})} style={{width:36}}/> bande{(+r.n||1)>1?'s':''} de
+            <input value={r.long||''} inputMode="decimal" placeholder="pi" onChange={e=>majR(i,{long:e.target.value})} style={{width:56}}/> pi
+            {sel(r.ruban||'48', y=>majR(i,{ruban:y}), LED_RUBANS.map(z=>[z[0], z[3]]))}
+            profilé {sel(r.profil||'', y=>majR(i,{profil:y}), [['','aucun'], ...LED_PROFILS.map(z=>[z[0], z[3]])])}
+            <span className="muted" style={{fontSize:12}}>{x.watts ? '= '+x.watts+' W' : ''}{x.trop ? ' — plus de 10 m : alimenter aux deux bouts' : ''}</span>
+            {runs.length>1 && <button className="btn btn-sm" onClick={()=>maj({runs:runs.filter((_,k)=>k!==i)})}>✕</button>}
+          </div>; })}
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><button className="btn btn-sm" onClick={()=>maj({runs:[...runs, {nom:'', long:'', n:'1', ruban:(runs[runs.length-1]||{}).ruban||'48', profil:(runs[runs.length-1]||{}).profil||''}]})}>+ Un autre endroit</button>
+            couleur du blanc <input value={v.couleur||''} onChange={e=>maj({couleur:e.target.value})} style={{width:70}}/></div>
+        </div>
+        <div style={{display:'grid',gap:6,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+          <b>2. Transformateur 24 V</b>
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+            {[[false,'Non gradable'],[true,'Gradable']].map(([k,l])=><button key={l} className={'btn btn-sm'+(!!v.gradable===k?' btn-p':'')} onClick={()=>maj({gradable:k})}>{l}</button>)}
+            {sel(v.groupe||'un', x=>maj({groupe:x}), [['un','toutes les bandes sur le même transfo'],['ligne','un transfo par endroit'],['bande','un transfo par bande']])}
+            marge {n('marge',40)} %</div>
+          <div style={{fontSize:13.5}}>Bandes : <b>{g.watts} W</b> au total → {g.transfos.map((t,i)=><span key={i}>{i?', ':''}<b>{t.q} × {t.w} W</b>{t.charge ? <span className="muted"> ({t.charge} W + {cvNum(v.marge)||0} %)</span> : null}</span>)}
+            {g.depasse && <span style={{color:'var(--warning)'}}> — trop de watts pour un seul transfo : séparé en plusieurs</span>}</div>
+          <label style={{display:'flex',gap:4,alignItems:'center'}}><input type="checkbox" checked={!!v.alim} onChange={e=>maj({alim:e.target.checked})}/> Amener l'alimentation 120 V jusqu'au transfo {v.alim && <>— {n('hAlim',44)} h</>}</label>
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>Fil basse tension du transfo aux bandes : {n('fil',56,'pi')} pi <span className="muted" style={{fontSize:12}}>(vide = pas de fil)</span></div>
+        </div>
+        <div style={{display:'grid',gap:6,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+          <b>3. Temps calculé</b> <span className="muted" style={{fontSize:12}}>tous les chiffres sont modifiables</span>
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>Bandes : {n('hBande',44)} h par bande de {n('piBande',40)} pi et moins (plus long = une tranche de plus) → <b>{g.hBandes} h</b> <span className="muted">({g.tranches} tranche{g.tranches>1?'s':''})</span></div>
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>Transfos : {n('hTransfo',44)} h par transfo → <b>{g.hTransfos} h</b> <span className="muted">({g.nTransfos} transfo{g.nTransfos>1?'s':''})</span></div>
+          {v.alim && <div>Alimentation du transfo → <b>{g.hAlim} h</b></div>}
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>Temps ajouté : {n('hAjout',44,'0')} h <span className="muted" style={{fontSize:12}}>(profilés, accès difficile, etc.)</span></div>
+          <div style={{fontSize:14}}>Total : <b>{g.heures} h</b></div>
+        </div>
+        <input value={v.note||''} onChange={e=>maj({note:e.target.value})} placeholder="Note (emplacement, accès…)"/>
+      </div>; },
+    calculer(v, t){
+      const manque = []; const T = key => { const x = t(key); if(x==null) manque.push(key); return x||0; };
+      const g = ledCalcul(v), L = [];
+      const ajout = (code, desc, qte, unite) => { if(qte>0){ const ex = L.find(l=>l.code===code); if(ex) ex.qte = String(+ex.qte + qte); else L.push({code, desc, unite:unite||'un', qte:String(qte), prix:''}); } };
+      Object.values(g.rubans).forEach(x=>ajout(x.code, x.desc+' '+(v.couleur||'3000K')+' — rouleau de 5 m ('+x.m+' m posés)', x.rouleaux, 'rouleau'));
+      Object.values(g.profils).forEach(x=>ajout(x.code, x.desc+' — longueur de '+x.L+' pi, avec lentille', x.q, 'un'));
+      g.transfos.forEach(x=>ajout(x.code, x.desc, x.q, 'un'));
+      const fil = Math.ceil(cvNum(v.fil)||0); if(fil) ajout('LVT18-2','Fil basse tension 18/2 (transfo → bandes)', fil, 'pi');
+      const px = g.piTotal*T('LED-PI') + g.nTransfos*T('LED-TRANSFO');
+      const txt = ['Fourniture et installation de bandes LED 24 V'+(v.couleur ? ' (blanc '+v.couleur+')' : '')+' :',
+        ...g.runs.filter(r=>r.watts).map(r=>'– '+(r.nom ? r.nom+' : ' : '')+r.n+' bande'+(r.n>1?'s':'')+' de '+r.long+' pi'+(r.profil ? ' dans un profilé d\'aluminium avec diffuseur' : '')+'.'),
+        'Transformateur'+(g.nTransfos>1?'s':'')+' 24 V '+(v.gradable ? 'gradable'+(g.nTransfos>1?'s':'') : 'non gradable'+(g.nTransfos>1?'s':''))+' : '+g.transfos.map(x=>x.q+' × '+x.w+' W').join(', ')+'.',
+        v.alim ? 'Alimentation 120 V du transformateur incluse.' : '',
+        'Raccordement et vérification selon les normes en vigueur.'].filter(Boolean);
+      const rem = [v.note ? 'Note : '+v.note : '', 'Bandes : '+g.watts+' W au total ('+g.runs.filter(r=>r.watts).map(r=>r.watts+' W').join(' + ')+').',
+        g.runs.some(r=>r.trop) ? 'Bande de plus de 10 m : alimentation aux deux bouts.' : ''].filter(Boolean).join('\n');
+      return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(px), installation:arr5(px), borne:0,
+        titre:'Éclairage par bandes LED', travaux:txt.join('\n'), remarques:rem, lignes:L, heures:g.heures};
+    }
+  },
 };
+
+// v602 : Bandes LED (LEDCO) — [clé, code LEDCO, description, libellé du menu, W/m]
+const LED_RUBANS = [['24','LCLS24V-24W-30K-IP22','Ruban LED 24 V 4,8 W/m intérieur IP22','4,8 W/m',4.8],['48','LCLS24V-48W-30K-IP22','Ruban LED 24 V 9,6 W/m intérieur IP22','9,6 W/m',9.6],
+  ['96','LCLS24V-96W-30K-IP22','Ruban LED 24 V 19,2 W/m intérieur IP22','19,2 W/m',19.2],['144','LCLS24V-144W-30K-IP22','Ruban LED 24 V 28,8 W/m intérieur IP22','28,8 W/m',28.8],
+  ['cob','LCLS24VCOB-11W-30K','Ruban LED 24 V COB 11 W/m (ligne continue)','COB 11 W/m',11],['cct','LCLS24V-100W-IP22-CCT','Ruban LED 24 V 20 W/m blanc ajustable (CCT)','CCT 20 W/m',20],
+  ['dtw','LCLS24V-17W-DTW-2440K-IP22','Ruban LED 24 V 17 W/m dim to warm','Dim to warm 17 W/m',17],['ww','LCLS24V-OPT-24W-30K-IP22','Ruban LED 24 V wall washer 24 W/m','Wall washer 24 W/m',24],
+  ['48x','LCLS24V-48W-30K-IP66','Ruban LED 24 V 9,6 W/m étanche IP66','9,6 W/m étanche IP66',9.6],['96x','LCLS24V-96W-30K-IP66','Ruban LED 24 V 19,2 W/m étanche IP66','19,2 W/m étanche IP66',19.2]];
+// [clé, code, description, libellé, longueur (pi)]
+const LED_PROFILS = [['84','LCPROF-84-8FT','Profilé aluminium LED #84 surface mince 19 × 7 mm','#84 surface mince',8],['85','LCPROF-85-8FT','Profilé aluminium LED #85 surface 19 × 13 mm','#85 surface standard',8],
+  ['80','LCPROF-80-8FT','Profilé aluminium LED #80 compact 12 × 10 mm','#80 compact (lattes)',8],['90','LCPROF-90-8FT','Profilé aluminium LED #90 de coin 90°','#90 coin',8],
+  ['91','LCPROF-91-10FT','Profilé aluminium LED #91 de coin 15,6 mm','#91 coin',10],['86','LCPROF-86-8FT','Profilé aluminium LED #86 encastré (rainure)','#86 encastré',8],
+  ['88','LCPROF-88-8FT','Profilé aluminium LED #88 encastré rebord 32 mm','#88 encastré',8],['89','LCPROF-89-10FT','Profilé aluminium LED #89 à encastrer dans le gypse','#89 dans le gypse',10],
+  ['97','LCPROF-97-9FT','Profilé aluminium LED #97 gypse à fleur','#97 gypse à fleur',9],['983','LCPROF-983-10FT-WH-C','Profilé aluminium LED #983 gypse blanc sans bordure','#983 gypse sans bordure',10],
+  ['87','LCPROF-87-10FT','Profilé aluminium LED #87 suspendu','#87 suspendu',10],['81','LCPROF-81-8FT','Profilé aluminium LED #81 carré 25 mm (surface ou suspendu)','#81 carré 25 mm',8],
+  ['49','LCPROF-49-8FT','Profilé aluminium LED #49 carré 43 mm (surface ou suspendu)','#49 carré 43 mm',8]];
+// Transformateurs 24 V : [watts, code, description] — non gradables : le moins cher par format
+const LED_TRANSFOS_NG = [[12,'LCPSLCO-24V-12WIP67','Transformateur LED 24 V 12 W non gradable IP67'],[24,'LCPSLCO-24V-24WIP67','Transformateur LED 24 V 24 W non gradable IP67'],
+  [36,'LCPSLCO-24V-36WIP67','Transformateur LED 24 V 36 W non gradable IP67'],[60,'LCPSLCO-24V-60WIP67','Transformateur LED 24 V 60 W non gradable IP67'],
+  [96,'LCPSLCO-HW-24V-96W','Transformateur LED 24 V 96 W non gradable (hardwire)'],[200,'LCPSLCO-HW-24V-200W','Transformateur LED 24 V 200 W non gradable (hardwire)'],
+  [350,'LCPSLCO-HW-24V-350W','Transformateur LED 24 V 350 W non gradable (hardwire)'],[500,'LCPSLCO-HW-24V-500W','Transformateur LED 24 V 500 W non gradable (hardwire)']];
+const LED_TRANSFOS_G = [[24,'LCPSLCODIM-24V-24W','Transformateur LED 24 V 24 W gradable'],[48,'LCPSLCODIM-24V-48W','Transformateur LED 24 V 48 W gradable'],
+  [96,'LCPSLCODIM-24V-96W','Transformateur LED 24 V 96 W gradable'],[200,'LCPSLCODIM-24V-200W','Transformateur LED 24 V 200 W gradable'],[300,'LCPSLCODIM-24V-300W','Transformateur LED 24 V 300 W gradable']];
+function ledCalcul(v){
+  const PI_M = 0.3048, marge = 1 + (cvNum(v.marge)!=null ? cvNum(v.marge) : 20)/100, liste = v.gradable ? LED_TRANSFOS_G : LED_TRANSFOS_NG, max = liste[liste.length-1][0];
+  const piB = cvNum(v.piBande) || 15, hB = cvNum(v.hBande)!=null ? cvNum(v.hBande) : 0.5, hT = cvNum(v.hTransfo)!=null ? cvNum(v.hTransfo) : 0.5;
+  const rubans = {}, profils = {}; let tranches = 0, piTotal = 0;
+  const runs = (v.runs||[]).map(r=>{ const long = cvNum(r.long)||0, nb = Math.max(1, Math.round(cvNum(r.n)||1)), rb = LED_RUBANS.find(z=>z[0]===r.ruban) || LED_RUBANS[1];
+    const watts = Math.round(rb[4]*long*PI_M*nb*10)/10;
+    if(long){ const m = long*PI_M*nb; const x = rubans[rb[1]] = rubans[rb[1]] || {code:rb[1], desc:rb[2], m:0}; x.m += m;
+      tranches += nb*Math.max(1, Math.ceil(long/piB)); piTotal += long*nb;
+      const pf = LED_PROFILS.find(z=>z[0]===r.profil); if(pf){ const y = profils[pf[1]] = profils[pf[1]] || {code:pf[1], desc:pf[2], L:pf[4], q:0}; y.q += nb*Math.ceil(long/pf[4]); } }
+    return {nom:String(r.nom||'').trim(), long, n:nb, watts, trop: long*PI_M > 10}; });
+  Object.values(rubans).forEach(x=>{ x.m = Math.round(x.m*10)/10; x.rouleaux = Math.ceil(x.m/5 - 1e-9); });
+  // Charges : une seule, une par endroit ou une par bande
+  const charges = [];
+  if(v.groupe==='ligne') runs.forEach(r=>{ if(r.watts) charges.push(r.watts); });
+  else if(v.groupe==='bande') runs.forEach(r=>{ for(let i=0;i<r.n;i++) if(r.watts) charges.push(Math.round(r.watts/r.n*10)/10); });
+  else { const w = runs.reduce((a,r)=>a+r.watts,0); if(w) charges.push(Math.round(w*10)/10); }
+  const parT = {}; let depasse = false;
+  charges.forEach(c=>{ const besoin = c*marge, k = Math.max(1, Math.ceil(besoin/max)); if(k>1) depasse = true;
+    const t = liste.find(z=>z[0] >= besoin/k) || liste[liste.length-1]; const x = parT[t[1]] = parT[t[1]] || {code:t[1], desc:t[2], w:t[0], q:0, charge:0}; x.q += k; x.charge = Math.round((x.charge + c)*10)/10; });
+  const transfos = Object.values(parT).sort((a,b)=>b.w-a.w), nTransfos = transfos.reduce((a,x)=>a+x.q,0);
+  const hBandes = Math.round(tranches*hB*100)/100, hTransfos = Math.round(nTransfos*hT*100)/100, hAlim = v.alim ? (cvNum(v.hAlim)||0) : 0;
+  const heures = Math.round((hBandes + hTransfos + hAlim + (cvNum(v.hAjout)||0))*100)/100;
+  return {runs, rubans, profils, transfos, nTransfos, depasse, tranches, piTotal, hBandes, hTransfos, hAlim, heures, watts:Math.round(runs.reduce((a,r)=>a+r.watts,0)*10)/10};
+}
 
 // v443 : circuits proposés pour la génératrice — [clé, nom, disjoncteur par défaut, mots pour deviner]
 const GEN_CIRCUITS = [['frigo','Frigo','1P15',/fri(go|gidaire|gidère)|r[ée]frig/i],['congel','Congélateur','1P15',/cong[ée]l/i],
@@ -11270,15 +11388,19 @@ function surtensionCalc(v, ajout, T){
 }
 // v348 : choix du calcul — Borne, puis la catégorie « Entrée électrique » et ses sous-catégories
 const CALC_CATS = {entree:{nom:'Entrée électrique', avenir:'sous-panneau, panneau secondaire'}, gen:{nom:'Génératrice', avenir:''}};
-function ChoixCalcul({type, onChoisir, avecAvenir}){
+function ChoixCalcul({type, onChoisir, avecAvenir, avant, apres}){
   const [cat,setCat]=useState(()=>(CALC_SOUMISSION[type]||{}).cat || '');
   useEffect(()=>{ const c = (CALC_SOUMISSION[type]||{}).cat; if(c) setCat(c); },[type]);
   const nomCourt = x => String(x.nom).replace(/^[^A-Za-zÀ-ÿ]+/,'');
-  const seuls = Object.entries(CALC_SOUMISSION).filter(([k,x])=>!x.cat);
+  const seuls = Object.entries(CALC_SOUMISSION).filter(([k,x])=>!x.cat && x.ordre!=='fin'), fin = Object.entries(CALC_SOUMISSION).filter(([k,x])=>!x.cat && x.ordre==='fin');   // v602
+  const btnSeul = ([k,x]) => <button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>{ setCat(''); onChoisir(k); }}>{nomCourt(x)}</button>;
   return <div style={{display:'grid',gap:6}}>
     <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
+      {avant}
       {seuls.map(([k,x])=><button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>{ setCat(''); onChoisir(k); }}>{nomCourt(x)}</button>)}
       {Object.entries(CALC_CATS).map(([c,x])=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(cat===c?'':c)}>{x.nom} {cat===c?'▾':'▸'}</button>)}
+      {fin.map(btnSeul)}
+      {apres}
     </div>
     {cat && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',paddingLeft:12,borderLeft:'2px solid var(--accent)'}}>
       {Object.entries(CALC_SOUMISSION).filter(([k,x])=>x.cat===cat).map(([k,x])=><button key={k} className={'btn btn-sm'+(type===k?' btn-p':'')} onClick={()=>onChoisir(k)}>{x.sous||nomCourt(x)}</button>)}
@@ -11426,7 +11548,7 @@ async function soumAccepteeVersEnAttente(cfg, s, toast){
   }catch(e){ toast && toast('Agenda : '+apiErrMsg(e)); }
 }
 
-function CalculRapide({C, d, setD, toast, onRempli}){
+function CalculRapide({C, d, setD, toast, onRempli, avant, apres}){
   const [type,setType]=useState('');
   const [v,setV]=useState({});
   const [tarifs,setTarifs]=useState(false);
@@ -11471,10 +11593,10 @@ function CalculRapide({C, d, setD, toast, onRempli}){
   };
   return <div style={{marginTop:8}}>
     <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
-      <span className="muted" style={{fontSize:12}}>Calculer :</span>
-      <ChoixCalcul type={type} onChoisir={k=>ouvrir(k)}/>   {/* v401 : recliquer ferme la soumission rapide */}
+      {!avant && <span className="muted" style={{fontSize:12}}>Calculer :</span>}
+      <ChoixCalcul type={type} onChoisir={k=>ouvrir(k)} avant={avant} apres={apres}/>   {/* v401 : recliquer ferme la soumission rapide */}
       {type && <button className="btn btn-sm" onClick={()=>setType('')} title="Fermer la soumission rapide et continuer la soumission">✕ Fermer</button>}
-      <span className="muted" style={{fontSize:11.5}}>(rough, finition, cuisine, salle de bain, maison neuve, blocs : à venir)</span>
+      {!avant && <span className="muted" style={{fontSize:11.5}}>(rough, finition, cuisine, salle de bain, maison neuve, blocs : à venir)</span>}
     </div>
     {def && <div className="calc-rapide" style={{marginTop:8,padding:10,background:'var(--bg3)',borderRadius:8}}>
       {def.champs(v, patch=>setV(x=>({...x, ...patch})), {photo:<PhotoEmplacement d={d} setD={setD} toast={toast} note={v.note} bouton/>, photoVue:<PhotoEmplacement d={d} setD={setD} toast={toast} note={v.note}/>})}
@@ -13402,13 +13524,13 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
         <div style={{whiteSpace:'pre-wrap',fontSize:12.5,marginTop:4,maxHeight:220,overflowY:'auto'}}>{d.visite}</div></details>}
     </div>}
     {d.type==='Soumission' && vue(2) && <div className="card" style={{marginBottom:10}}>
-      {wiz && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10,paddingBottom:10,borderBottom:'1px solid var(--border2)'}}>
-        <button className={'btn'+(estMaison?' btn-p':'')} onClick={()=>{ setD(o=>({...o, typeProjet:o.typeProjet || 'Construction neuve', maison:{...(o.maison||maisonVide()), on:true}})); window.scrollTo(0,0); }}>🏠 Maison — plan par étage et par pièce</button>
-        <button className="btn" onClick={()=>setEtape(4)}>✏️ Sans calcul (je remplis moi-même)</button>
-        <span className="muted" style={{fontSize:12}}>ou un modèle / un calcul ci-dessous</span>
-      </div>}
-      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginBottom:6}}>
-        <b style={{fontSize:13.5}}>⚡ Soumission rapide</b>
+      {/* v602 : un seul choix « Quelle soumission ? » — Maison, Borne, Entrée électrique, Génératrice, Bandes LED, Sans calcul ; les modèles en dessous */}
+      <b style={{fontSize:14}}>{wiz ? 'Quelle soumission ?' : '⚡ Calculs'}</b>
+      <CalculRapide C={C} d={d} setD={setD} toast={toast} onRempli={()=>{ if(wiz) setEtape(5); voirApercu(); }}
+        avant={wiz ? <button className={'btn btn-sm'+(estMaison?' btn-p':'')} onClick={()=>{ setD(o=>({...o, typeProjet:o.typeProjet || 'Construction neuve', maison:{...(o.maison||maisonVide()), on:true}})); window.scrollTo(0,0); }}>🏠 Maison</button> : null}
+        apres={wiz ? <button className="btn btn-sm" onClick={()=>setEtape(4)}>✏️ Sans calcul</button> : null}/>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:12,paddingTop:8,borderTop:'1px solid var(--border2)',marginBottom:6}}>
+        <b style={{fontSize:12.5}}>Mes modèles</b>
         <select value={d.typeProjet} onChange={e=>maj({typeProjet:e.target.value})} style={{marginLeft:'auto'}}><option value="">Type de projet…</option>{TYPES_PROJET.map(t=><option key={t}>{t}</option>)}</select>
       </div>
       {modeles.length ? <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
@@ -13417,7 +13539,6 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
           <button className="btn btn-sm" title="Enlever ce modèle" style={{padding:'0 6px',opacity:.5}} onClick={async()=>{ if(!confirm('Enlever le modèle « '+m.nom+' » ?')) return; try{ await M.enlever(m); }catch(e){ toast&&toast('Erreur : '+apiErrMsg(e)); } }}>×</button>
         </span>)}
       </div> : <div className="muted" style={{fontSize:12}}>Pas encore de modèle. Prépare une soumission type (ex. une borne : heures, déplacement, fil, disjoncteur…), puis « Garder comme modèle ». La prochaine fois, un clic remplit tout.</div>}
-      <CalculRapide C={C} d={d} setD={setD} toast={toast} onRempli={()=>{ if(wiz) setEtape(5); voirApercu(); }}/>
       <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:8}}>
         {nomModele===null ? <button className="btn btn-sm" disabled={!d.lignes.some(l=>cvNum(l.qte)) && !d.forfait && !d.jours.some(j=>cvNum(j.sa01))} onClick={()=>setNomModele(d.typeProjet ? d.typeProjet+(d.titre?' — '+d.titre:'') : d.titre||'')}>💾 Garder comme modèle</button>
         : <><input autoFocus value={nomModele} onChange={e=>setNomModele(e.target.value)} placeholder="Nom du modèle (ex. Borne 48 A — 15 m)" style={{flex:'1 1 220px'}}/>
