@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v588';
+const APP_VERSION = 'v589';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -14085,7 +14085,8 @@ function CommandesView({cfg, toast, refreshKey}){
   const choisirPassage = x => { choisirOngletC('bon'); setBc(b=>({...b, ref:refDe(x), job:(x.c.code!=='PART'?x.c.code+' ':'')+x.j.name, passage:x, employe:(x.e.crew||[])[0]||b.employe, pour:x.e.day>today ? cvDay(new Date(new Date(x.e.day+'T12:00:00').getTime()-864e5).toISOString()) : today })); window.scrollTo(0,0); };
   const choisirDest = d => setBc(b=>({...b, ref:CV_DEST_REF[d]||d.toUpperCase(), job:d, passage:null, passageId:''}));
   // v587 : commande pour un employé (ses jobines) — référence « PERSO <PRÉNOM> » + une description; la facture du fournisseur s'associe toute seule à sa banque
-  const choisirEmp = n => setBc(b=>({...b, ref:'PERSO '+n.toUpperCase()+(b.descEmp ? ' '+String(b.descEmp).toUpperCase() : ''), job:'Employé — '+n, passage:null, passageId:'', empPerso:n}));
+  const choisirEmp = n => { const pr = x => cvNorm(String(x||'').split(/\s+/)[0]), qui = employes.find(x=>pr(x)===pr(n)) || n;   // v589 : c'est lui qui va le chercher
+    setBc(b=>({...b, ref:'PERSO '+n.toUpperCase()+(b.descEmp ? ' '+String(b.descEmp).toUpperCase() : ''), job:'Employé — '+n, passage:null, passageId:'', empPerso:n, employe:qui})); };
   const choisirEv = e => setBc(b=>({...b, ref:bcRefTitre(e), job:e.title||'', passage:null, passageId:'', empPerso:''}));
   // v304 : arrivé d'une soumission / d'un ordre de travail (« Matériel à commander ») : le bon est rempli avec ses articles
   useEffect(()=>{ const p = BC_PREFILL; if(!p || !p.lignes) return; BC_PREFILL = null; choisirOngletC('bon');
@@ -14291,7 +14292,7 @@ function CommandesView({cfg, toast, refreshKey}){
           <input value={bc.ref} onChange={e=>maj({ref:e.target.value.toUpperCase()})} placeholder="ex. CRS FINITION CURPAS P03056" style={{width:'100%',boxSizing:'border-box'}}/>
           <span className="muted" style={{fontSize:11}}>Le texte que le fournisseur écrit sur sa facture (tu peux le raccourcir).</span>
           <BcChoixJob cfg={cfg} onChoisir={choisirEv}/></label>
-        <label style={{fontSize:12}}>Qui va chercher<select value={bc.employe} onChange={e=>maj({employe:e.target.value})} style={{width:'100%'}}><option value="">—</option>{employes.map(n=><option key={n}>{n}</option>)}</select></label>
+        <label style={{fontSize:12}}>Qui va chercher<select value={bc.employe} onChange={e=>maj({employe:e.target.value})} style={{width:'100%'}}><option value="">—</option>{[...employes, ...(bc.employe && !employes.includes(bc.employe) ? [bc.employe] : [])].map(n=><option key={n}>{n}</option>)}</select></label>
         <label style={{fontSize:12}}>{bc.mode==='À aller chercher'?'Pour le':'Livraison le'}<input type="date" value={bc.pour} onChange={e=>maj({pour:e.target.value})} style={{width:'100%',boxSizing:'border-box'}}/></label>
         <label style={{fontSize:12}}>Mode<select value={bc.mode} onChange={e=>maj({mode:e.target.value})} style={{width:'100%'}}><option>À aller chercher</option><option>Livraison</option></select></label>
       </div>
