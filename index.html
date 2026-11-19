@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v610';
+const APP_VERSION = 'v611';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5132,146 +5132,12 @@ function RegistreCcqView({cfg, refreshKey}){
     </div>
   </div>;
 }
-// v610 : Paramètres de paie — employeur, retenues par année, unités CNESST, avantages CCQ, jours fériés CCQ.
-// Les valeurs par défaut ci-dessous sont des chiffres publics (ARC, Revenu Québec, CCQ). Tout ce qui est propre à l'entreprise
-// (numéros d'employeur, taux CNESST, choix) va SEULEMENT dans la feuille privée « Paie — Dossiers employés » (onglets PP_*).
-const PP_ONGLET = 'Paramètres paie', PP_ENTETE = ['Année','Clé','Valeur','Note','Modifié le'];
-const PP_CNESST = 'Unités CNESST', PP_CNESST_ENTETE = ['Unité','Description','Taux (par 100 $)','Année','Note','Modifié le'];
-const PP_FERIES = 'Jours fériés', PP_FERIES_ENTETE = ['Date','Nom','Actif','Note','Modifié le'];
-const PP_AVCCQ = 'Avantages CCQ', PP_AVCCQ_ENTETE = ['Élément','Part employé','Part employeur','Unité','Année','Note','Modifié le'];
-// Paramètres par année : [clé, libellé, unité, section]
-const PP_CHAMPS = [
-  ['fedPaliers','Paliers d\'imposition (séparés par ;)','$','Impôt fédéral'],['fedTaux','Taux par palier (séparés par ;)','%','Impôt fédéral'],
-  ['fedBpaMax','Montant personnel de base — maximum','$','Impôt fédéral'],['fedBpaMin','Montant personnel de base — minimum','$','Impôt fédéral'],
-  ['fedAbattQc','Abattement du Québec','%','Impôt fédéral'],['fedCEA','Montant canadien pour emploi','$','Impôt fédéral'],
-  ['qcPaliers','Paliers d\'imposition (séparés par ;)','$','Impôt du Québec'],['qcTaux','Taux par palier (séparés par ;)','%','Impôt du Québec'],
-  ['qcMpb','Montant personnel de base','$','Impôt du Québec'],['qcDedTrav','Déduction pour travailleurs — taux','%','Impôt du Québec'],['qcDedTravMax','Déduction pour travailleurs — maximum','$','Impôt du Québec'],
-  ['rrqMga','Maximum des gains admissibles (MGA)','$','RRQ'],['rrqExemp','Exemption générale','$','RRQ'],['rrqTaux','Taux de base (employé = employeur)','%','RRQ'],
-  ['rrqMsga','Maximum supplémentaire (MSGA)','$','RRQ'],['rrqTaux2','Taux supplémentaire (entre MGA et MSGA)','%','RRQ'],
-  ['aeMra','Maximum de la rémunération assurable','$','Assurance-emploi'],['aeTaux','Taux employé (Québec)','%','Assurance-emploi'],['aeMult','Multiplicateur employeur','×','Assurance-emploi'],
-  ['rqapMra','Maximum du revenu assurable','$','RQAP'],['rqapTauxE','Taux employé','%','RQAP'],['rqapTauxP','Taux employeur','%','RQAP'],
-  ['fss','Fonds des services de santé (FSS)','%','Cotisations de l\'employeur'],['cnt','Normes du travail (CNT)','%','Cotisations de l\'employeur'],['cntMax','Normes du travail — maximum','$','Cotisations de l\'employeur'],
-  ['cnesstMax','CNESST — maximum annuel assurable','$','Cotisations de l\'employeur'],['ccqVac','Vacances et fériés CCQ (versés à la CCQ)','%','CCQ']];
-const PP_DEF_2026 = {fedPaliers:'58523;117045;181440;258482', fedTaux:'14;20,5;26;29;33', fedBpaMax:'16452', fedBpaMin:'14829', fedAbattQc:'16,5', fedCEA:'1501',
-  qcPaliers:'54345;108680;132245', qcTaux:'14;19;24;25,75', qcMpb:'18952', qcDedTrav:'6', qcDedTravMax:'',
-  rrqMga:'74600', rrqExemp:'3500', rrqTaux:'6,30', rrqMsga:'85000', rrqTaux2:'4', aeMra:'68900', aeTaux:'1,30', aeMult:'1,4',
-  rqapMra:'103000', rqapTauxE:'0,430', rqapTauxP:'0,602', fss:'1,65', cnt:'0,06', cntMax:'103000', cnesstMax:'', ccqVac:'13'};
-// 2027 : seuls l'AE (rapport actuariel 2027 : MRA 70 800 $, taux Québec 1,27 %) est connu au 19 nov. 2026 — le reste reprend 2026 et doit être confirmé.
-const PP_DEF = {'2026':PP_DEF_2026, '2027':{...PP_DEF_2026, aeMra:'70800', aeTaux:'1,27'}};
-const PP_CONNU_2027 = ['aeMra','aeTaux','aeMult','rrqExemp','fedAbattQc','ccqVac'];
-const PP_EMPLOYEUR = [['empNom','Nom légal'],['empAdresse','Adresse'],['empVille','Ville'],['empCp','Code postal'],['empNe','No d\'entreprise / compte de retenues ARC (RP)'],
-  ['empRq','No d\'identification et dossier Revenu Québec (RS)'],['empNeq','NEQ'],['empCcq','No d\'employeur CCQ'],['empCnesst','No de dossier CNESST'],
-  ['empFreq','Fréquence de paie'],['empRemise','Fréquence des remises'],['empBanque','Compte de paie (versement des salaires)']];
-const PP_EMP_DEF = {empFreq:'Hebdomadaire', empRemise:'Mensuelle (le 15 du mois suivant)', empBanque:'Desjardins'};
-// Jours fériés chômés CCQ (ccq.org, Dates des congés et vacances) — vacances : été 2026 19 juil.–1er août ; hiver 20 déc. 2026–2 janv. 2027 ; été 2027 25 juil.–7 août
-const PP_FERIES_DEF = [['2026-01-01','Jour de l\'An'],['2026-04-03','Vendredi saint'],['2026-04-06','Lundi de Pâques'],['2026-05-18','Journée nationale des patriotes'],
-  ['2026-06-24','Fête nationale'],['2026-07-01','Fête du Canada'],['2026-09-07','Fête du Travail'],['2026-10-12','Action de grâces'],['2026-11-13','Jour du Souvenir'],['2026-12-25','Noël'],
-  ['2027-01-01','Jour de l\'An'],['2027-03-26','Vendredi saint'],['2027-03-29','Lundi de Pâques'],['2027-05-24','Journée nationale des patriotes'],['2027-06-24','Fête nationale'],
-  ['2027-07-02','Fête du Canada'],['2027-09-06','Fête du Travail'],['2027-10-11','Action de grâces'],['2027-11-12','Jour du Souvenir'],['2027-12-25','Noël']];
-const PP_AVCCQ_DEF = ['Assurance (MÉDIC Construction)','Régime de retraite','Fonds de formation (FFSIC)','Prélèvement CCQ','Cotisation patronale ACQ'];
-const ppNb = v => cvNum(String(v==null?'':v).replace(/\s/g,'').replace(',','.'));
-// Lecture commune (utilisée aussi par le calcul de paie)
-async function lireParametresPaie(force){
-  const lireT = async (t, plage) => { try{ const r = await lireCache(DOSSIERS_EMP_ID, qSheet(t)+'!'+plage, force); return {rows:(r.result.values||[]).slice(1), absent:false}; }catch(e){ return {rows:[], absent:true}; } };
-  const [p, u, f, a] = await Promise.all([lireT(PP_ONGLET,'A1:E'), lireT(PP_CNESST,'A1:F'), lireT(PP_FERIES,'A1:E'), lireT(PP_AVCCQ,'A1:G')]);
-  const val = {}; p.rows.forEach(x=>{ if(x[0] && x[1]) (val[x[0]] = val[x[0]] || {})[x[1]] = {v:x[2]==null?'':String(x[2]), note:x[3]||'', le:x[4]||''}; });   // la dernière ligne gagne
-  const unites = {}; u.rows.forEach(x=>{ if(x[0]) unites[String(x[0]).trim()+'|'+(x[3]||'')] = {unite:String(x[0]).trim(), desc:x[1]||'', taux:x[2]==null?'':String(x[2]), annee:String(x[3]||''), note:x[4]||''}; });
-  const feries = {}; PP_FERIES_DEF.forEach(([d,n])=>feries[d] = {date:d, nom:n, actif:true, def:true});
-  f.rows.forEach(x=>{ if(x[0]) feries[x[0]] = {date:x[0], nom:x[1]||(feries[x[0]]||{}).nom||'', actif:!/^non/i.test(x[2]||''), def:!!(feries[x[0]]||{}).def}; });
-  const av = {}; a.rows.forEach(x=>{ if(x[0]) av[x[0]+'|'+(x[4]||'')] = {el:x[0], emp:x[1]==null?'':String(x[1]), pat:x[2]==null?'':String(x[2]), unite:x[3]||'$/h', annee:String(x[4]||''), note:x[5]||''}; });
-  return {val, unites:Object.values(unites), feries:Object.values(feries).sort((a,b)=>a.date.localeCompare(b.date)), av, absent:{p:p.absent, u:u.absent, f:f.absent, a:a.absent}};
-}
-const ppValeur = (P, annee, k) => { const o = ((P.val||{})[annee]||{})[k]; return o ? o.v : ((PP_DEF[annee]||PP_DEF['2026'])[k] ?? ''); };
-function ParametresPaieView({refreshKey}){
-  const [P,setP]=useState(null), [err,setErr]=useState(''), [etat,setEtat]=useState('');
-  const [annee,setAnnee]=useState(()=>String(new Date().getMonth()>=10 ? new Date().getFullYear()+1 : new Date().getFullYear()));
-  const [ed,setEd]=useState(null);   // {k, v} en édition
-  const [dos,setDos]=useState([]);
-  const [nu,setNu]=useState({unite:'', desc:'', taux:''}), [nf,setNf]=useState({date:'', nom:''});
-  const lire = useCallback(async force=>{ setErr(''); try{ setP(await lireParametresPaie(force)); }catch(e){ setErr(apiErrMsg(e)); setP({val:{}, unites:[], feries:[], av:{}, absent:{}}); }
-    try{ const r = await lireCache(DOSSIERS_EMP_ID, 'A1:'+DE_FIN, force); setDos((r.result.values||[]).slice(1).map(x=>{ const e = {}; DE_COLS.forEach((k,j)=>e[k]=String(x[j]==null?'':x[j])); return e; }).filter(e=>(e.id||e.nom) && !/^non/i.test(e.actif||''))); }catch(e){} },[]);
-  useEffect(()=>{ lire(false); },[lire, refreshKey]);
-  if(!P) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des paramètres de paie…</span></div>;
-  const ecrire = async (onglet, entete, ligne, msg) => { setEtat('Enregistrement…');
-    try{ await ensureSheetsExist(DOSSIERS_EMP_ID, [{name:onglet, headers:entete}]); await sheetsAppendRow(DOSSIERS_EMP_ID, qSheet(onglet), ligne); await lire(true); setEtat(msg||'Enregistré.'); }
-    catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
-  const maintenant = () => new Date().toLocaleString('fr-CA');
-  const sauverVal = (an, k, v) => ecrire(PP_ONGLET, PP_ENTETE, [an, k, v, '', maintenant()]).then(()=>setEd(null));
-  const annees = [...new Set(['2026','2027', ...Object.keys(P.val).filter(a=>/^\d{4}$/.test(a))])].sort();
-  const cellule = (an, k, unite) => { const o = ((P.val||{})[an]||{})[k], v = ppValeur(P, an, k), aConf = an==='2027' && !o && !PP_CONNU_2027.includes(k) && v!=='';
-    if(ed && ed.k===an+'|'+k) return <span style={{display:'flex',gap:4}}><input autoFocus value={ed.v} onChange={e=>setEd({...ed, v:e.target.value})} onKeyDown={e=>{ if(e.key==='Enter') sauverVal(an, k, ed.v.trim()); if(e.key==='Escape') setEd(null); }} style={{width:170}}/><button className="btn btn-sm btn-p" onClick={()=>sauverVal(an, k, ed.v.trim())}>OK</button><button className="btn btn-sm" onClick={()=>setEd(null)}>✕</button></span>;
-    return <span style={{cursor:'pointer'}} title="Cliquer pour modifier" onClick={()=>setEd({k:an+'|'+k, v})}>
-      <b style={{fontVariantNumeric:'tabular-nums'}}>{v!=='' ? v+(unite==='%' ? ' %' : unite==='$' && !/;/.test(v) ? ' $' : '') : <span className="muted">à inscrire</span>}</b>
-      {o && <span className="muted" style={{fontSize:11}}> · modifié</span>}{aConf && <span style={{fontSize:11,color:'var(--warning)'}}> · à confirmer</span>}</span>; };
-  const sections = [...new Set(PP_CHAMPS.map(c=>c[3]))];
-  const unitesDos = [...new Set(dos.map(e=>String(e.cnesst||'').trim()).filter(Boolean))];
-  const unitesAn = P.unites.filter(u=>!u.annee || u.annee===annee);
-  const sansTaux = unitesDos.filter(u=>!unitesAn.some(x=>x.unite===u && x.taux!==''));
-  const sansUnite = dos.filter(e=>!String(e.cnesst||'').trim());
-  const ferAn = P.feries.filter(f=>f.date.startsWith(annee));
-  const carte = (titre, enfants, extra) => <div className="card" style={{marginBottom:12,padding:'10px 12px'}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,flexWrap:'wrap',marginBottom:6}}><b style={{fontSize:15}}>{titre}</b>{extra}</div>{enfants}</div>;
-  return <div>
-    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Paramètres de paie</h2>
-    <div className="muted" style={{fontSize:13,marginBottom:10}}>Ce que le calcul de paie utilisera. Cliquer sur une valeur pour la modifier ; chaque changement est gardé avec sa date dans la feuille privée de paie. Les chiffres par défaut viennent de l'ARC, de Revenu Québec et de la CCQ.</div>
-    {err && <div className="card" style={{color:'var(--danger)',marginBottom:10}}>{err}</div>}
-    {etat && <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{etat}</div>}
-
-    {carte('Employeur', <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:'6px 16px'}}>
-      {PP_EMPLOYEUR.map(([k,l])=>{ const o = (P.val.Employeur||{})[k], v = o ? o.v : (PP_EMP_DEF[k]||'');
-        return <div key={k} style={{fontSize:13,minWidth:0}}><div className="muted" style={{fontSize:11.5}}>{l}</div>
-          {ed && ed.k==='Employeur|'+k ? <span style={{display:'flex',gap:4}}><input autoFocus value={ed.v} onChange={e=>setEd({...ed, v:e.target.value})} onKeyDown={e=>{ if(e.key==='Enter') sauverVal('Employeur', k, ed.v.trim()); if(e.key==='Escape') setEd(null); }} style={{flex:1,minWidth:0}}/><button className="btn btn-sm btn-p" onClick={()=>sauverVal('Employeur', k, ed.v.trim())}>OK</button></span>
-            : <span style={{cursor:'pointer'}} onClick={()=>setEd({k:'Employeur|'+k, v})}>{v ? <b>{v}</b> : <span style={{color:'var(--warning)'}}>à inscrire</span>}</span>}</div>; })}
-    </div>)}
-
-    {carte('Retenues et cotisations '+annee, <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:12}}>
-      {sections.map(s=><div key={s} style={{minWidth:0}}><div style={{fontWeight:700,fontSize:13,color:'var(--accent)',marginBottom:4}}>{s}</div>
-        <table style={{fontSize:12.5,width:'100%'}}><tbody>{PP_CHAMPS.filter(c=>c[3]===s).map(([k,l,u])=><tr key={k}><td style={{paddingRight:8}}>{l}</td><td style={{textAlign:'right',whiteSpace:'nowrap'}}>{cellule(annee, k, u)}</td></tr>)}</tbody></table></div>)}
-    </div>, <span style={{display:'flex',gap:4}}>{annees.map(a=><button key={a} className={'btn btn-sm'+(a===annee?' btn-p':'')} onClick={()=>setAnnee(a)}>{a}</button>)}
-      <button className="btn btn-sm" onClick={()=>{ const a = String(+annees[annees.length-1]+1); if(confirm('Créer '+a+' à partir de '+annees[annees.length-1]+' ? Il faudra mettre à jour les chiffres quand l\'ARC et Revenu Québec les publient.')) setAnnee(a); }}>＋ Année</button></span>)}
-    {annee==='2027' && <div className="card" style={{marginTop:-6,marginBottom:12,fontSize:12.5,borderColor:'var(--warning)'}}>2027 : seule l'assurance-emploi est connue (maximum 70 800 $, taux Québec 1,27 %). Les autres valeurs reprennent 2026 et sont marquées « à confirmer » jusqu'à la publication des tables de l'ARC (T4032-QC) et de Revenu Québec (TP-1015.F), habituellement en décembre.</div>}
-
-    {carte('Unités CNESST ('+annee+')', <>
-      {(sansTaux.length>0 || sansUnite.length>0) && <div style={{fontSize:12.5,color:'var(--warning)',marginBottom:6}}>
-        {sansTaux.length>0 && <div>Unité(s) inscrite(s) aux dossiers sans taux pour {annee} : {sansTaux.join(', ')}.</div>}
-        {sansUnite.length>0 && <div>Dossier(s) sans unité CNESST : {sansUnite.map(deNom).join(', ')} (Dossiers employés › Paye › Fonctions).</div>}</div>}
-      <table style={{fontSize:13,width:'100%'}}><thead><tr><th>Unité</th><th>Description</th><th style={{textAlign:'right'}}>Taux par 100 $</th><th>Employés</th></tr></thead>
-        <tbody>{unitesAn.map(u=><tr key={u.unite}><td><b>{u.unite}</b></td><td>{u.desc}</td><td style={{textAlign:'right'}}>{u.taux!=='' ? u.taux+' $' : '—'}</td><td style={{fontSize:12}}>{dos.filter(e=>String(e.cnesst).trim()===u.unite).map(deNom).join(', ')||'—'}</td></tr>)}
-          {!unitesAn.length && <tr><td colSpan="4" className="muted">Aucune unité pour {annee}. Les taux sont sur l'avis de cotisation CNESST.</td></tr>}</tbody></table>
-      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8}}>
-        <input value={nu.unite} onChange={e=>setNu({...nu, unite:e.target.value})} placeholder="Unité (ex. 80030)" style={{width:140}}/>
-        <input value={nu.desc} onChange={e=>setNu({...nu, desc:e.target.value})} placeholder="Description (ex. Électricité / Bureau)" style={{flex:'1 1 200px'}}/>
-        <input value={nu.taux} onChange={e=>setNu({...nu, taux:e.target.value})} placeholder="Taux / 100 $" style={{width:110}}/>
-        <button className="btn btn-sm btn-p" disabled={!nu.unite.trim() || ppNb(nu.taux)==null} onClick={()=>ecrire(PP_CNESST, PP_CNESST_ENTETE, [nu.unite.trim(), nu.desc.trim(), String(nu.taux).trim(), annee, '', maintenant()], 'Unité '+nu.unite.trim()+' enregistrée.').then(()=>setNu({unite:'', desc:'', taux:''}))}>Enregistrer l'unité</button>
-      </div>
-      <div className="muted" style={{fontSize:11.5,marginTop:4}}>Le calcul prend l'unité inscrite au dossier de chaque employé (électricien ou bureau). Réenregistrer une unité remplace son taux pour l'année.</div></>)}
-
-    {carte('Avantages sociaux CCQ ('+annee+')', <>
-      <table style={{fontSize:13,width:'100%'}}><thead><tr><th>Élément</th><th style={{textAlign:'right'}}>Part employé</th><th style={{textAlign:'right'}}>Part employeur</th><th>Unité</th></tr></thead>
-        <tbody>{PP_AVCCQ_DEF.concat(Object.values(P.av).map(a=>a.el).filter(el=>!PP_AVCCQ_DEF.includes(el))).filter((v,i,t)=>t.indexOf(v)===i).map(el=>{ const a = P.av[el+'|'+annee] || P.av[el+'|'] || {emp:'', pat:'', unite:'$/h'};
-          const champ = (q, lab) => ed && ed.k==='AV|'+el+'|'+q ? <span style={{display:'inline-flex',gap:4}}><input autoFocus value={ed.v} onChange={e=>setEd({...ed, v:e.target.value})} style={{width:80}}/><button className="btn btn-sm btn-p" onClick={()=>ecrire(PP_AVCCQ, PP_AVCCQ_ENTETE, [el, q==='emp' ? ed.v.trim() : a.emp, q==='pat' ? ed.v.trim() : a.pat, a.unite||'$/h', annee, '', maintenant()]).then(()=>setEd(null))}>OK</button></span>
-            : <span style={{cursor:'pointer'}} title={'Modifier la '+lab} onClick={()=>setEd({k:'AV|'+el+'|'+q, v:a[q]||''})}>{a[q]!=='' && a[q]!=null ? <b>{a[q]}</b> : <span className="muted">à inscrire</span>}</span>;
-          return <tr key={el}><td>{el}</td><td style={{textAlign:'right'}}>{champ('emp','part employé')}</td><td style={{textAlign:'right'}}>{champ('pat','part employeur')}</td><td>{a.unite||'$/h'}</td></tr>; })}</tbody></table>
-      <div className="muted" style={{fontSize:11.5,marginTop:4}}>Taux horaires du secteur résidentiel pour les électriciens, selon la convention et le rapport mensuel CCQ (ccq.org). Vacances et fériés : {ppValeur(P, annee, 'ccqVac')} % (section Retenues et cotisations).</div></>)}
-
-    {carte('Jours fériés chômés CCQ ('+annee+')', <>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(230px,1fr))',gap:'2px 16px',fontSize:13}}>
-        {ferAn.map(f=><div key={f.date} style={{display:'flex',justifyContent:'space-between',gap:6,opacity:f.actif?1:.45}}><span><b style={{fontVariantNumeric:'tabular-nums'}}>{f.date}</b> {f.nom}</span>
-          <button className="btn btn-sm" title={f.actif ? 'Retirer ce férié' : 'Remettre ce férié'} onClick={()=>ecrire(PP_FERIES, PP_FERIES_ENTETE, [f.date, f.nom, f.actif ? 'Non' : 'Oui', '', maintenant()])}>{f.actif ? '✕' : '↺'}</button></div>)}
-        {!ferAn.length && <span className="muted">Aucun férié inscrit pour {annee}.</span>}</div>
-      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8}}>
-        <input type="date" value={nf.date} onChange={e=>setNf({...nf, date:e.target.value})}/>
-        <input value={nf.nom} onChange={e=>setNf({...nf, nom:e.target.value})} placeholder="Nom du férié" style={{flex:'1 1 200px'}}/>
-        <button className="btn btn-sm btn-p" disabled={!nf.date || !nf.nom.trim()} onClick={()=>ecrire(PP_FERIES, PP_FERIES_ENTETE, [nf.date, nf.nom.trim(), 'Oui', '', maintenant()]).then(()=>setNf({date:'', nom:''}))}>Ajouter</button>
-      </div>
-      <div className="muted" style={{fontSize:11.5,marginTop:4}}>Règle de paie : une semaine qui contient un férié est payée et déclarée à 32 h au maximum (24 h s'il y en a deux) ; le surplus va en banque. Vacances de la construction (payées par la CCQ) : été 2026 du 19 juil. au 1er août, hiver du 20 déc. 2026 au 2 janv. 2027, été 2027 du 25 juil. au 7 août.</div></>)}
-  </div>;
-}
 function EmployesSection({cfg, refreshKey}){
   const [o,setO]=useState(()=>{ try{ return localStorage.getItem('emp_onglet')||'heures'; }catch(e){ return 'heures'; } });
   const choisir = k => { setO(k); try{ localStorage.setItem('emp_onglet', k); }catch(e){} };
   return <div>
-    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>{[['heures','Heures'],['dossiers','Dossiers employés'],['ccq','Registre CCQ'],['param','Paramètres de paie']].map(([k,l])=><button key={k} className={'btn btn-sm'+(o===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}</div>
-    {o==='heures' ? <HeuresView cfg={cfg} refreshKey={refreshKey}/> : o==='ccq' ? <RegistreCcqView cfg={cfg} refreshKey={refreshKey}/> : o==='param' ? <ParametresPaieView refreshKey={refreshKey}/> : <DossiersEmployesView cfg={cfg} refreshKey={refreshKey}/>}
+    <div style={{display:'flex',gap:6,marginBottom:12}}>{[['heures','Heures'],['dossiers','Dossiers employés'],['ccq','Registre CCQ']].map(([k,l])=><button key={k} className={'btn btn-sm'+(o===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}</div>
+    {o==='heures' ? <HeuresView cfg={cfg} refreshKey={refreshKey}/> : o==='ccq' ? <RegistreCcqView cfg={cfg} refreshKey={refreshKey}/> : <DossiersEmployesView cfg={cfg} refreshKey={refreshKey}/>}
   </div>;
 }
 function HeuresView({cfg, refreshKey}){
