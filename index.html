@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v613';
+const APP_VERSION = 'v614';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5167,12 +5167,164 @@ function RegistreCcqView({cfg, refreshKey}){
     </div>
   </div>;
 }
+// v614 : Préparation de la paie — feuille de groupe hebdomadaire (même format que le « Relevé des heures travaillées » envoyé à l'ACQ)
+// Règles de William : au plus 40 h payées par semaine (le surplus va en banque) ; semaine avec un jour férié = 32 h au maximum (8 h de moins par férié).
+// Les heures de la banque ne sont payées que si l'employé l'a demandé dans PunchPro. Approuver = la semaine est figée dans la feuille privée (onglet « Préparation paie »).
+const PAIE_FERIES = ['2026-01-01','2026-04-03','2026-04-06','2026-05-18','2026-06-24','2026-07-01','2026-09-07','2026-10-12','2026-11-13','2026-12-25',
+  '2027-01-01','2027-03-26','2027-03-29','2027-05-24','2027-06-24','2027-07-02','2027-09-06','2027-10-11','2027-11-12','2027-12-25'];   // jours fériés chômés CCQ
+const PAIE_VAC_CCQ = [['2026-07-19','2026-08-01'],['2026-12-20','2027-01-02'],['2027-07-25','2027-08-07']];   // vacances de la construction (payées par la CCQ)
+const PREP_ONGLET = 'Préparation paie';
+const PREP_ENTETE = ['Semaine','Se terminant le','Employé','Id dossier','Régime','Métier','Secteur','Région','Simple','Temps et demi','Double','Férié','Banque utilisée','Vacances','Mis en banque','Autres revenus / retenues','Unité CNESST','Taux','Brut estimé','Note','Statut','Le'];
+const PREP_AUTRES = [['Bonus',1],['Temps de voyagement',1],['Primes',1],['Gîte et pension',1],['Stationnement',1],['Remb. frais divers',1],['Pension alimentaire',-1],['Saisie de salaire',-1],['REER',-1]];
+const PREP_SECT = {'Résidentiel léger':'D','Résidentiel lourd':'R1','Commercial':'C','Industriel':'B','Génie civil':'A'};
+const prepNb = x => x ? String(Math.round(x*100)/100).replace('.',',') : '';
+const prepAutresTxt = l => (l||[]).filter(a=>a.type && cvNum(a.montant)).map(a=>a.type+' '+prepNb(Math.abs(cvNum(a.montant)))+' $').join(' ; ');
+const prepAutresLire = s => String(s||'').split(';').map(x=>x.trim()).filter(Boolean).map(x=>{ const m = x.match(/^(.*?)\s+([\d.,]+)\s*\$?$/); return m ? {type:m[1], montant:m[2]} : null; }).filter(Boolean);
+const prepAutresVal = l => (l||[]).reduce((t,a)=>{ const d = PREP_AUTRES.find(x=>x[0]===a.type); return t + (d ? d[1] : 1)*Math.abs(cvNum(a.montant)||0); },0);
+const prepMaintenant = () => { const d = new Date(), z = n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+' '+z(d.getHours())+':'+z(d.getMinutes())+':'+z(d.getSeconds()); };
+const PREP_CHAMPS = ['simple','demi','double','ferie','banqueUtil','vac'];
+function PrepPaieView({cfg, refreshKey}){
+  const conf = useSemainesConfirmees(cfg, refreshKey);
+  const [L,setL]=useState(null), [err,setErr]=useState('');
+  const [pris,setPris]=useState({});
+  const [hist,setHist]=useState([]);
+  const [week,setWeek]=useState(()=>{ const d = new Date(); d.setDate(d.getDate()-7); return getWeek(d); });
+  const [mod,setMod]=useState({});
+  const [etat,setEtat]=useState('');
+  const [autresDe,setAutresDe]=useState(null);
+  useEffect(()=>{ if(!cfg.punchproSpreadsheetId) return; let ok = true;
+    sheetsBatchGet(cfg.punchproSpreadsheetId, ['HeuresEnBanque!A2:E']).then(([rows])=>{ if(!ok) return; const m = {};
+      (rows||[]).forEach(r=>{ const h = cvNum(r[2]); if(r[0] && r[1] && h<0){ const k = r[1]+'|'+cvNorm(r[0]); m[k] = (m[k]||0) - h; } }); setPris(m); }).catch(()=>{});
+    return ()=>{ ok = false; }; },[cfg.punchproSpreadsheetId, refreshKey]);
+  const lire = useCallback(async force=>{ setErr('');
+    try{ const r = await lireCache(DOSSIERS_EMP_ID, 'A1:'+DE_FIN, force);
+      setL((r.result.values||[]).map(x=>{ const e = {}; DE_COLS.forEach((k,j)=>e[k]=String(x[j]==null?'':x[j])); return e; }).slice(1).filter(e=>e.id||e.nom)); }
+    catch(e){ setErr(apiErrMsg(e)); setL([]); }
+    try{ const h = await lireCache(DOSSIERS_EMP_ID, qSheet(PREP_ONGLET)+'!A1:V', force); setHist((h.result.values||[]).slice(1).filter(x=>x[0])); }
+    catch(e){ setHist([]); } },[]);
+  useEffect(()=>{ lire(false); },[lire, refreshKey]);
+  const cle = 'prepPaie_'+week;
+  useEffect(()=>{ let m = {}; try{ m = JSON.parse(localStorage.getItem(cle)||'{}')||{}; }catch(e){} setMod(m); setEtat(''); },[cle]);
+  const garder = n => { try{ localStorage.setItem(cle, JSON.stringify(n)); }catch(e){} return n; };
+  const changer = (k, champ, v) => setMod(m=>garder({...m, [k]:{...(m[k]||{}), [champ]:v}}));
+  if(!L || !conf.pret) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Préparation de la paie…</span></div>;
+
+  const lundi = mondayOfWeek(week), jours = [...Array(7)].map((_,i)=>{ const d = new Date(lundi); d.setDate(d.getDate()+i); return localDateStr(d); });
+  const feries = jours.slice(0,5).filter(d=>PAIE_FERIES.includes(d));
+  const vacCcq = PAIE_VAC_CCQ.some(([a,b])=>jours[0]<=b && jours[6]>=a);
+  const maxH = 40 - 8*feries.length;
+  const fin = ccqFinSemaine(week), finTxt = fin.toLocaleDateString('fr-CA',{day:'numeric',month:'long',year:'numeric'});
+  // Dernier lot enregistré pour la semaine : figé si « Approuvée »
+  const lots = hist.filter(x=>x[0]===week), dernier = lots.reduce((m,x)=>(x[21]||'')>m ? x[21] : m, '');
+  const lot = lots.filter(x=>x[21]===dernier), fige = lot.length>0 && lot[0][20]==='Approuvée';
+  const dossierDe = (id, nom) => L.find(e=>id && e.id===id) || L.find(e=>cvNorm(deNom(e))===cvNorm(nom)) || {};
+  const tauxDe = e => cvNum(e.taux);
+  const brutDe = r => { const t = tauxDe(r.e); if(t==null){ const h = cvNum(r.e.hebdo); return h!=null && !/net/i.test(r.e.hebdoBrutNet||'') ? h + prepAutresVal(r.autres) : null; }
+    return (r.simple+r.banqueUtil+r.ferie+r.vac)*t + r.demi*t*1.5 + r.double*t*2 + prepAutresVal(r.autres); };
+  let rangs;
+  if(fige) rangs = lot.filter(x=>x[2]).map(x=>{ const e = dossierDe(x[3], x[2]); return {k:cvNorm(x[2]), nom:x[2], e, ccq:/ccq/i.test(x[4]||''), conf:true, metier:x[5], secteur:x[6], region:x[7],
+    simple:cvNum(x[8])||0, demi:cvNum(x[9])||0, double:cvNum(x[10])||0, ferie:cvNum(x[11])||0, banqueUtil:cvNum(x[12])||0, vac:cvNum(x[13])||0, enBanque:cvNum(x[14])||0, autres:prepAutresLire(x[15]), cnesst:x[16], note:x[19]||''}; });
+  else {
+    const actifs = L.filter(e=>{ if(e.embauche && e.embauche > jours[6]) return false; if(e.fin && e.fin < jours[0]) return false; return !/^non/i.test(e.actif||'') || (e.fin && e.fin >= jours[0]); })
+      .sort((a,b)=>(/ccq/i.test(b.regime||'')-/ccq/i.test(a.regime||'')) || deNom(a).localeCompare(deNom(b)));
+    rangs = actifs.map(e=>{ const nom = deNom(e), k = cvNorm(nom), ccq = /ccq/i.test(e.regime||''), c = conf.de(week, nom), p = pris[week+'|'+k]||0;
+      const tot = c && c.total!=null ? c.total : (!ccq && cvNum(e.heuresPeriode)!=null ? cvNum(e.heuresPeriode) : null);
+      const ferie = ccq ? 0 : 8*feries.length, simple = tot!=null ? Math.min(maxH, tot) : 0;
+      const d = {k, nom, e, ccq, conf:!!c, tot, metier: ccq ? (/[ée]lectric/i.test(e.metier||'Électricien') ? '220' : e.metier) : '', secteur: ccq ? (PREP_SECT[e.ccqSecteur]||e.ccqSecteur||'') : 'R', region: e.region||'8',
+        simple, demi:0, double:0, ferie, banqueUtil: Math.max(0, Math.min(p, maxH - simple)), vac:0, enBanque: tot!=null ? Math.max(0, tot-maxH) : 0, autres:[], cnesst:[e.cnesst, e.cnesstTaux && String(e.cnesstTaux).replace('.',',')+' %'].filter(Boolean).join(' · '),
+        note: ccq && vacCcq ? 'Vacances de la construction (CCQ)' : ''};
+      const m = mod[k]||{}; PREP_CHAMPS.forEach(f=>{ if(m[f]!=null && m[f]!=='') d[f] = cvNum(m[f])||0; });
+      if(m.autres) d.autres = m.autres; if(m.note!=null) d.note = m.note; if(m.region!=null) d.region = m.region; if(m.secteur!=null) d.secteur = m.secteur;
+      return d; });
+  }
+  rangs.forEach(r=>{ r.brut = brutDe(r); r.paye = r.simple+r.banqueUtil+r.ferie; });
+  const tot = f => rangs.reduce((t,r)=>t+(r[f]||0),0);
+  const alertes = fige ? [] : rangs.filter(r=>r.tot==null).map(r=>r.nom);
+  const ligne = (r, statut, le) => [week, localDateStr(fin), r.nom, r.e.id||'', r.ccq ? 'CCQ' : 'Bureau', r.metier, r.secteur, r.region, r.simple, r.demi, r.double, r.ferie, r.banqueUtil, r.vac, r.enBanque, prepAutresTxt(r.autres), r.cnesst, tauxDe(r.e)!=null ? tauxDe(r.e).toFixed(2) : '', r.brut!=null ? r.brut.toFixed(2) : '', r.note, statut, le];
+  const approuver = async () => {
+    if(alertes.length && !confirm('Semaine pas confirmée pour : '+alertes.join(', ')+'.\nLeurs heures sont à 0 sauf si tu les as inscrites. Approuver quand même ?')) return;
+    if(!confirm('Approuver la préparation de la paie de la semaine se terminant le '+finTxt+' ?\n\n'+rangs.length+' employé(s), '+fmtH(tot('paye'))+' payées. La semaine sera figée dans la feuille privée.')) return;
+    setEtat('Enregistrement…');
+    try{ await ensureSheetsExist(DOSSIERS_EMP_ID, [{name:PREP_ONGLET, headers:PREP_ENTETE}]); const le = prepMaintenant();
+      for(const r of rangs) await sheetsAppendRow(DOSSIERS_EMP_ID, qSheet(PREP_ONGLET), ligne(r, 'Approuvée', le));
+      try{ localStorage.removeItem(cle); }catch(e){} setMod({}); setEtat('Semaine approuvée et figée.'); await lire(true); }
+    catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
+  const rouvrir = async () => { if(!confirm('Rouvrir la semaine pour corriger ? Tu devras l\'approuver de nouveau.')) return;
+    const m = {}; rangs.forEach(r=>{ m[r.k] = {simple:r.simple, demi:r.demi, double:r.double, ferie:r.ferie, banqueUtil:r.banqueUtil, vac:r.vac, autres:r.autres, note:r.note, region:r.region, secteur:r.secteur}; });
+    setEtat('Réouverture…');
+    try{ await sheetsAppendRow(DOSSIERS_EMP_ID, qSheet(PREP_ONGLET), [week, localDateStr(fin), '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Rouverte pour correction', 'Rouverte', prepMaintenant()]);
+      setMod(garder(m)); setEtat('Semaine rouverte.'); await lire(true); }
+    catch(e){ setEtat(''); alert('Impossible : '+apiErrMsg(e)); } };
+  const imprimer = () => { const w = window.open('', '_blank'); if(!w){ alert('Autorise les fenêtres surgissantes pour imprimer.'); return; }
+    const esc = s => String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    const lignesHtml = rangs.map(r=>'<tr><td>'+esc(r.nom)+'</td><td>'+esc(r.metier)+'</td><td>'+esc(r.secteur)+'</td><td>'+esc(r.region)+'</td>'+[r.simple+r.banqueUtil, r.demi, r.double, r.ferie, r.vac].map(x=>'<td class="n">'+prepNb(x)+'</td>').join('')+'<td>'+esc(r.cnesst)+'</td><td>'+esc(prepAutresTxt(r.autres))+(r.banqueUtil ? (r.autres.length?' ; ':'')+'dont '+prepNb(r.banqueUtil)+' h prises dans la banque' : '')+'</td><td>'+esc(r.note)+'</td></tr>').join('');
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Relevé des heures — '+esc(localDateStr(fin))+'</title><style>body{font:12px Arial,sans-serif;margin:18px;color:#000}h1{font-size:17px;margin:0 0 2px}table{border-collapse:collapse;width:100%;margin-top:10px}th,td{border:1px solid #000;padding:4px 5px;vertical-align:top}th{background:#e8e8e8;font-size:10.5px}td.n{text-align:right;white-space:nowrap}.pied{margin-top:14px;font-size:10.5px}@page{size:landscape;margin:12mm}</style></head><body>'
+      +'<h1>RELEVÉ DES HEURES TRAVAILLÉES</h1><div><b>Saran Électrique inc.</b> — semaine se terminant le <b>'+esc(finTxt)+'</b>'+(feries.length ? ' — jour férié : '+feries.map(cvFmtDay).join(', ') : '')+'</div>'
+      +'<table><thead><tr><th rowspan="2">Noms</th><th rowspan="2">Métier</th><th rowspan="2">Secteur</th><th rowspan="2">Région</th><th colspan="3">Heures</th><th rowspan="2">Férié</th><th rowspan="2">Vacances</th><th rowspan="2">Unité classification</th><th rowspan="2">Autres revenus ou retenues</th><th rowspan="2">Note</th></tr><tr><th>Simple</th><th>1/2</th><th>Double</th></tr></thead><tbody>'+lignesHtml
+      +'<tr><td colspan="4"><b>Total — '+rangs.length+' employé(s)</b></td>'+[tot('simple')+tot('banqueUtil'), tot('demi'), tot('double'), tot('ferie'), tot('vac')].map(x=>'<td class="n"><b>'+prepNb(x)+'</b></td>').join('')+'<td colspan="3"></td></tr></tbody></table>'
+      +'<div class="pied">Métier 220 = électricien. Secteur : D résidentiel léger, R1 résidentiel lourd, C commercial, B industriel, A génie civil, R bureau. '+(fige ? 'Préparation approuvée le '+esc(dernier)+'.' : 'Brouillon — pas encore approuvé.')+'<br><br>Signature : ______________________________</div>'
+      +'</body></html>');
+    w.document.close(); w.focus(); setTimeout(()=>w.print(), 300); };
+  const decaler = n => { const d = mondayOfWeek(week); d.setDate(d.getDate()+7*n); setWeek(getWeek(d)); };
+  const th = {textAlign:'right'}, inp = {width:54, textAlign:'right', padding:'3px 4px', fontVariantNumeric:'tabular-nums'};
+  const cellule = (r, f) => fige ? <td style={{...th,fontVariantNumeric:'tabular-nums'}}>{r[f] ? prepNb(r[f]) : ''}</td>
+    : <td style={th}><input type="number" step="0.25" min="0" style={inp} value={(mod[r.k]||{})[f]!=null ? mod[r.k][f] : (r[f]||'')} onChange={ev=>changer(r.k, f, ev.target.value)}/></td>;
+  const rAutres = autresDe && rangs.find(r=>r.k===autresDe);
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Préparation de la paie</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Feuille de groupe de la semaine, comme le relevé des heures envoyé à l'ACQ. Remplie avec les <b>semaines confirmées</b> et les <b>dossiers employés</b> ; tu peux corriger chaque case avant d'approuver.</div>
+    {err && <div className="card" style={{color:'var(--danger)',marginBottom:10}}>Impossible de lire les dossiers : {err}</div>}
+    <div className="card" style={{padding:'10px 12px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8,marginBottom:8}}>
+        <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><button className="btn btn-sm" onClick={()=>decaler(-1)}>←</button><b style={{fontSize:15}}>Semaine se terminant le {finTxt}</b><button className="btn btn-sm" onClick={()=>decaler(1)}>→</button><span className="muted" style={{fontSize:12}}>({weekRangeLabel(week)})</span></span>
+        <span style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          <button className="btn btn-sm" onClick={imprimer} disabled={!rangs.length}>Imprimer / PDF</button>
+          {fige ? <button className="btn btn-sm" onClick={rouvrir} disabled={etat.endsWith('…')}>Rouvrir pour corriger</button>
+            : <>{Object.keys(mod).length>0 && <button className="btn btn-sm" onClick={()=>{ if(confirm('Effacer tes corrections et revenir aux heures de PunchPro ?')){ setMod(garder({})); } }}>Effacer mes corrections</button>}
+              <button className="btn btn-sm btn-p" onClick={approuver} disabled={!rangs.length || etat.endsWith('…')}>Approuver la préparation</button></>}
+        </span>
+      </div>
+      <div style={{fontSize:12.5,marginBottom:8,display:'flex',gap:14,flexWrap:'wrap'}}>
+        <span>Maximum payé : <b>{maxH} h</b>{feries.length ? <> — semaine avec férié ({feries.map(cvFmtDay).join(', ')})</> : null}</span>
+        {vacCcq && <span style={{color:'var(--accent)'}}>Vacances de la construction cette semaine (payées par la CCQ).</span>}
+        {fige && <span style={{color:'var(--success)',fontWeight:700}}>✓ Approuvée le {dernier} — figée</span>}
+      </div>
+      {etat && <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{etat}</div>}
+      {alertes.length>0 && <div style={{fontSize:12.5,marginBottom:8,color:'var(--warning)'}}>Semaine pas confirmée pour : {alertes.join(', ')}. Confirme-la dans l'onglet Heures ou inscris les heures à la main.</div>}
+      <div style={{overflowX:'auto'}}><table style={{fontSize:13,width:'100%'}}><thead><tr><th>Employé</th><th>Métier</th><th>Secteur</th><th>Région</th><th style={th}>Simple</th><th style={th}>½ (×1,5)</th><th style={th}>Double</th><th style={th}>Férié</th><th style={th}>Banque utilisée</th><th style={th}>Vacances</th><th style={th}>Mis en banque</th><th>Autres revenus / retenues</th><th>Unité CNESST</th><th style={th}>Brut estimé</th><th>Note</th></tr></thead>
+        <tbody>{rangs.map(r=><tr key={r.k}>
+          <td><b>{r.nom}</b><div className="muted" style={{fontSize:11.5}}>{r.ccq ? [r.e.classe, r.e.ccqSecteur].filter(Boolean).join(' · ') : 'Bureau'}{!fige && r.tot!=null ? ' · PunchPro '+fmtH(r.tot) : ''}{!fige && !r.conf && r.tot!=null ? ' (dossier)' : ''}</div></td>
+          <td>{r.metier||'—'}</td>
+          <td>{fige ? r.secteur : <input style={{width:40}} value={r.secteur} onChange={ev=>changer(r.k,'secteur',ev.target.value)}/>}</td>
+          <td>{fige ? r.region : <input style={{width:34}} value={r.region} onChange={ev=>changer(r.k,'region',ev.target.value)}/>}</td>
+          {cellule(r,'simple')}{cellule(r,'demi')}{cellule(r,'double')}{cellule(r,'ferie')}{cellule(r,'banqueUtil')}{cellule(r,'vac')}
+          <td style={{...th,fontVariantNumeric:'tabular-nums'}} className="muted">{r.enBanque ? '+'+fmtH(r.enBanque) : '—'}</td>
+          <td style={{fontSize:12}}>{prepAutresTxt(r.autres) || <span className="muted">—</span>} {!fige && <button className="btn btn-sm" style={{padding:'1px 7px'}} onClick={()=>setAutresDe(r.k)}>{r.autres.length ? 'Modifier' : '+'}</button>}</td>
+          <td style={{fontSize:12}}>{r.cnesst||<span className="muted">—</span>}</td>
+          <td style={{...th,fontVariantNumeric:'tabular-nums'}}>{r.brut!=null ? ccqArg(r.brut) : <span className="muted">—</span>}</td>
+          <td>{fige ? r.note : <input style={{width:150}} value={r.note} onChange={ev=>changer(r.k,'note',ev.target.value)}/>}</td></tr>)}
+          {rangs.length>0 && <tr style={{fontWeight:700}}><td colSpan="4">Total — {rangs.length} employé{rangs.length>1?'s':''}</td>{['simple','demi','double','ferie','banqueUtil','vac','enBanque'].map(f=><td key={f} style={th}>{tot(f) ? prepNb(tot(f)) : ''}</td>)}<td></td><td></td><td style={th}>{ccqArg(tot('brut'))}</td><td></td></tr>}
+        </tbody></table></div>
+      <div className="muted" style={{fontSize:11.5,marginTop:8}}>Simple = heures confirmées dans PunchPro, au plus {maxH} h ; ce qui dépasse va dans la banque (« Mis en banque », non payé). « Banque utilisée » = heures que l'employé a demandé de prendre dans sa banque dans PunchPro, sans dépasser le maximum. Férié : électriciens CCQ, payé par l'indemnité de 13 % (0 h ici) ; bureau, 8 h par férié. Bureau sans PunchPro : heures par période du dossier. Brut estimé = heures × taux du dossier (½ à 1,5, double à 2) + autres revenus − retenues ; le calcul des déductions viendra avec le journal de paie.</div>
+    </div>
+    {rAutres && <Modal title={'Autres revenus / retenues — '+rAutres.nom} onClose={()=>setAutresDe(null)}>
+      <div style={{display:'grid',gap:6}}>
+        {rAutres.autres.map((a,i)=><div key={i} style={{display:'flex',gap:6,alignItems:'center'}}>
+          <select value={a.type} onChange={ev=>{ const l = rAutres.autres.map((x,j)=>j===i ? {...x, type:ev.target.value} : x); changer(rAutres.k,'autres',l); }}>{PREP_AUTRES.map(([t,s])=><option key={t} value={t}>{t}{s<0 ? ' (retenue)' : ''}</option>)}</select>
+          <input type="number" step="0.01" min="0" style={{width:90,textAlign:'right'}} value={a.montant} onChange={ev=>{ const l = rAutres.autres.map((x,j)=>j===i ? {...x, montant:ev.target.value} : x); changer(rAutres.k,'autres',l); }}/> $
+          <button className="btn btn-sm" onClick={()=>changer(rAutres.k,'autres',rAutres.autres.filter((_,j)=>j!==i))}>✕</button></div>)}
+        <div><button className="btn btn-sm" onClick={()=>changer(rAutres.k,'autres',[...rAutres.autres, {type:'Bonus', montant:''}])}>+ Ajouter</button></div>
+        <div className="muted" style={{fontSize:11.5}}>Revenus : bonus, temps de voyagement, primes, gîte et pension, stationnement, remboursement de frais. Retenues : pension alimentaire, saisie de salaire, REER.</div>
+      </div>
+    </Modal>}
+  </div>;
+}
 function EmployesSection({cfg, refreshKey}){
   const [o,setO]=useState(()=>{ try{ return localStorage.getItem('emp_onglet')||'heures'; }catch(e){ return 'heures'; } });
   const choisir = k => { setO(k); try{ localStorage.setItem('emp_onglet', k); }catch(e){} };
   return <div>
-    <div style={{display:'flex',gap:6,marginBottom:12}}>{[['heures','Heures'],['dossiers','Dossiers employés'],['ccq','Registre CCQ']].map(([k,l])=><button key={k} className={'btn btn-sm'+(o===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}</div>
-    {o==='heures' ? <HeuresView cfg={cfg} refreshKey={refreshKey}/> : o==='ccq' ? <RegistreCcqView cfg={cfg} refreshKey={refreshKey}/> : <DossiersEmployesView cfg={cfg} refreshKey={refreshKey}/>}
+    <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>{[['heures','Heures'],['prep','Préparation de la paie'],['dossiers','Dossiers employés'],['ccq','Registre CCQ']].map(([k,l])=><button key={k} className={'btn btn-sm'+(o===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}</div>
+    {o==='heures' ? <HeuresView cfg={cfg} refreshKey={refreshKey}/> : o==='prep' ? <PrepPaieView cfg={cfg} refreshKey={refreshKey}/> : o==='ccq' ? <RegistreCcqView cfg={cfg} refreshKey={refreshKey}/> : <DossiersEmployesView cfg={cfg} refreshKey={refreshKey}/>}
   </div>;
 }
 function HeuresView({cfg, refreshKey}){
