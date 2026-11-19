@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v589';
+const APP_VERSION = 'v590';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8486,6 +8486,34 @@ function SoumNbPhotos({dossiers, tick, onClick}){
   if(!n) return null;
   return <span className="badge" onClick={onClick} style={{background:'rgba(88,166,255,0.15)',color:'var(--accent)',cursor:onClick?'pointer':'default'}} title="Voir les photos">📷 {n} photo{n>1?'s':''} jointe{n>1?'s':''}</span>;
 }
+// v590 : page 2 — chaque plan / photo reçu du client : « Utiliser pour soumissionner ».
+// Les PDF choisis sont lus comme plans de maison (pièces, étages) ; les photos choisies vont dans le plan des travaux (PDF client).
+let MAISON_A_LIRE = null;
+function SoumChoixPlans({dossier, d, setD, toast, onMaison}){
+  const [fichiers,setFichiers]=useState(null), [choix,setChoix]=useState([]);
+  useEffect(()=>{ let ok = true; driveFetch('https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent("'"+dossier+"' in parents and trashed=false")+'&fields=files(id,name,mimeType,thumbnailLink)&pageSize=60&supportsAllDrives=true&includeItemsFromAllDrives=true')
+    .then(r=>{ if(ok) setFichiers((r.files||[]).filter(f=>f.mimeType!=='application/vnd.google-apps.folder')); }, ()=>{ if(ok) setFichiers([]); }); return ()=>{ ok = false; }; },[dossier]);
+  const dansPlan = id => (d.plan||[]).some(x=>x.id===id), dejaLu = id => ((d.maison||{}).plans||[]).some(x=>x.id===id);
+  const estPdf = f => /pdf/.test(f.mimeType) || /\.pdf$/i.test(f.name);
+  const basc = f => { if(estPdf(f)) setChoix(c=>c.includes(f.id) ? c.filter(x=>x!==f.id) : [...c, f.id]);
+    else setD(o=>({...o, plan:dansPlan(f.id) ? (o.plan||[]).filter(x=>x.id!==f.id) : [...(o.plan||[]), {id:f.id, titre:f.name.replace(/\.[a-z0-9]{2,5}$/i,''), notes:''}]})); };
+  if(fichiers==null) return <div className="muted" style={{fontSize:12.5,marginTop:6}}>Lecture du dossier…</div>;
+  if(!fichiers.length) return <div className="muted" style={{fontSize:12.5,marginTop:6}}>Le dossier est vide.</div>;
+  const pdfs = fichiers.filter(estPdf), choisisPdf = pdfs.filter(f=>choix.includes(f.id));
+  return <div style={{marginTop:8,display:'grid',gap:8}}>
+    <div className="muted" style={{fontSize:12}}>Coche ce qui sert à soumissionner — les <b>plans PDF</b> deviennent ta soumission par pièce 🏠, les <b>photos</b> vont dans le plan des travaux du PDF.</div>
+    <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+      {fichiers.map(f=>{ const pdf = estPdf(f), on = pdf ? (choix.includes(f.id) || dejaLu(f.id)) : dansPlan(f.id);
+        return <div key={f.id} style={{width:132,border:'2px solid '+(on?'var(--success)':'var(--border2)'),borderRadius:8,padding:4,background:on?'rgba(63,185,80,.08)':'var(--bg2)',fontSize:11.5}}>
+          <a href={'https://drive.google.com/file/d/'+f.id+'/view'} title="Voir en grand" style={{display:'block',height:96,borderRadius:5,overflow:'hidden',background:'#fff',textAlign:'center'}}>
+            {f.thumbnailLink ? <img src={f.thumbnailLink} alt="" referrerPolicy="no-referrer" style={{width:'100%',height:'100%',objectFit:'cover'}}/> : <span style={{fontSize:34,lineHeight:'96px'}}>{pdf?'📄':'🖼️'}</span>}</a>
+          <div style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',margin:'3px 2px'}} title={f.name}>{f.name}</div>
+          {pdf && dejaLu(f.id) ? <div style={{color:'var(--success)',fontWeight:700,padding:'2px'}}>✓ plan déjà lu</div>
+            : <label style={{display:'flex',gap:4,alignItems:'center',cursor:'pointer',fontWeight:on?700:400}}><input type="checkbox" checked={on} onChange={()=>basc(f)} style={{width:'auto'}}/> Utiliser{pdf ? ' (plan)' : ' (photo)'}</label>}
+        </div>; })}
+    </div>
+    {choisisPdf.length>0 && <div><button className="btn btn-p" onClick={()=>onMaison(choisisPdf.map(f=>({id:f.id, name:f.name})))}>🏠 Soumissionner avec {choisisPdf.length>1 ? 'ces '+choisisPdf.length+' plans' : 'ce plan'} → lire les pièces</button></div>}
+  </div>; }
 function SoumPhotos({dossier, tick}){
   const [fichiers,setFichiers]=useState(SOUM_PHOTOS[dossier]||null);
   useEffect(()=>{
@@ -12628,6 +12656,8 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli}){   // v495 : partie '
       majM(o=>({planId:x.id, planNom:x.name, plans:[...(o.plans||[]).filter(y=>y.id!==x.id), {id:x.id, name:x.name}]})); await lire(f, true, x.id); }
     catch(e){ setEtat(''); toast && toast('Plan illisible : '+(e && e.message || e)); } };
   const garderPages = (srcId, pp) => setPages(x=>[...x.filter(p=>p.src!==srcId), ...pp]);
+  useEffect(()=>{ if(!MAISON_A_LIRE || !MAISON_A_LIRE.length || !vP) return; const l = MAISON_A_LIRE; MAISON_A_LIRE = null;   // v590 : plans choisis à la page 2
+    (async()=>{ for(const x of l){ if((m.plans||[]).some(y=>y.id===x.id)) continue; await lireDrive(x); } })(); },[]);
   const lire = async (f, dejaDansDrive, srcId) => { if(!f) return; setEtat('Lecture du plan…');
     try{ const r = await maisonLirePlan(f, setEtat, srcId);
       garderPages(srcId||f.name, r.pages); majM(x=>({pieces:[...x.pieces, ...r.pieces]}));
@@ -13123,8 +13153,8 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       {DOC_TYPES.map(([k,l])=><button key={k} className={'btn btn-sm'+(d.type===k?' btn-p':'')} onClick={()=>maj({type:k})}>{l}</button>)}
     </div>}
     {wiz && <div className="defile-x" style={{display:'flex',gap:4,alignItems:'center',marginBottom:10,overflowX:'auto',paddingBottom:2}}>
-      {ETAPES.map(([n,l],i)=><React.Fragment key={n}>{i>0 && <span className="muted" style={{fontSize:11}}>›</span>}
-        <button className={'btn btn-sm'+(etape===n?' btn-p':'')} style={{whiteSpace:'nowrap',flexShrink:0}} onClick={()=>setEtape(n)}>{n}. {l}{n===3 && estMaison ? ' 🏠' : ''}</button></React.Fragment>)}
+      {ETAPES.filter(([n])=>n!==3 || estMaison).map(([n,l],i)=><React.Fragment key={n}>{i>0 && <span className="muted" style={{fontSize:11}}>›</span>}
+        <button className={'btn btn-sm'+(etape===n?' btn-p':'')} style={{whiteSpace:'nowrap',flexShrink:0}} onClick={()=>setEtape(n)}>{n===3 ? '3. Plans 🏠' : n===2 ? '2. Type, plans et photos' : n+'. '+l}</button></React.Fragment>)}
       <button className="btn btn-sm" style={{marginLeft:'auto',flexShrink:0}} disabled={!!occupe} onClick={enregistrer} title="Enregistrer la soumission (sans changer de page)">{occupe==='save' ? '…' : '💾'}</button>
     </div>}
 
@@ -13158,9 +13188,9 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
     {wiz && estMaison && vue(3,4) && <div className="card" style={{marginBottom:10}}>
       <b style={{fontSize:14}}>🏠 Maison — {etape===3 ? 'plans : lis le PDF, trie les pages, encadre les pièces' : 'sorties estimées par pièce : chauffage, entrée et appareils'}</b>
       <div style={{marginTop:8}}><Parechoc nom="La soumission maison"><MaisonPlan d={d} setD={setD} C={C} toast={toast} partie={etape===3 ? 'plans' : 'pieces'} onRempli={()=>{ setEtape(5); voirApercu(); }}/></Parechoc></div></div>}
-    {vue(1,3) && <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
+    {(vue(1,3) || (wiz && etape===2 && !estMaison)) && <div className="card" style={{display:'grid',gap:6,marginBottom:10}}>
       {vue(1) && <TravauxChamp d={d} maj={maj}/>}
-      {vue(3) && d.type!=='Facture' && <Repli key={'ph'+(d.numero||'n')+((d.plan||[]).length?'p':'')} titre="Photos et plan" info={(d.plan||[]).length ? (d.plan||[]).length+' photo'+((d.plan||[]).length>1?'s':'')+' — page à part dans le PDF' : 'photos annotées — page à part dans le PDF'} ouvert0={(d.plan||[]).length>0 || !!d.dossier}>
+      {(vue(3) || (wiz && etape===2 && !estMaison)) && d.type!=='Facture' && <Repli key={'ph'+(d.numero||'n')+((d.plan||[]).length?'p':'')} titre="Photos et plan" info={(d.plan||[]).length ? (d.plan||[]).length+' photo'+((d.plan||[]).length>1?'s':'')+' — page à part dans le PDF' : 'photos annotées — page à part dans le PDF'} ouvert0={(d.plan||[]).length>0 || !!d.dossier}>
         {d.dossier && <div style={{marginBottom:6}}><span className="muted" style={{fontSize:12}}>PDF et photos du client :</span><SoumPhotos dossier={d.dossier}/></div>}
         <Parechoc nom="Le plan des travaux"><PlanTravaux d={d} setD={setD} toast={toast} dansCarte/></Parechoc>
       </Repli>}
@@ -13175,7 +13205,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
     {d.type==='Soumission' && wiz && vue(2) && (d.dossier || String(d.visite||'').trim()) && <div className="card" style={{marginBottom:10}}>
       {/* v586 : en page 2, on voit tout de suite les plans et photos reçus (et la demande du client) pour choisir comment enligner la soumission */}
       <b style={{fontSize:14}}>📎 Ce que le client a envoyé</b>
-      {d.dossier && <div style={{marginTop:6}}><SoumPhotos dossier={d.dossier}/></div>}
+      {d.dossier && <SoumChoixPlans dossier={d.dossier} d={d} setD={setD} toast={toast} onMaison={pdfs=>{ MAISON_A_LIRE = pdfs; setD(o=>({...o, typeProjet:o.typeProjet || 'Construction neuve', maison:{...(o.maison||maisonVide()), on:true}})); setEtape(3); }}/>}
       {String(d.visite||'').trim() && <details style={{marginTop:6}}><summary className="muted" style={{cursor:'pointer',fontSize:12.5}}>Sa demande (notes privées)</summary>
         <div style={{whiteSpace:'pre-wrap',fontSize:12.5,marginTop:4,maxHeight:220,overflowY:'auto'}}>{d.visite}</div></details>}
     </div>}
@@ -13302,8 +13332,8 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       </div>; })()}
 
     {wiz && etape<5 && <div style={{display:'flex',gap:8,justifyContent:'space-between',marginBottom:12}}>
-      <button className="btn" disabled={etape===1} onClick={()=>setEtape(etape-1)}>‹ Précédent</button>
-      <button className="btn btn-p" onClick={()=>{ const n = etape===2 && !estMaison && !d.lignes.some(l=>cvNum(l.qte)) ? 3 : etape+1; setEtape(n); if(n===5) voirApercu(); }}>{etape===4 ? 'Voir l\'aperçu et le prix ›' : 'Suivant ›'}</button>
+      <button className="btn" disabled={etape===1} onClick={()=>setEtape(etape===4 && !estMaison ? 2 : etape-1)}>‹ Précédent</button>
+      <button className="btn btn-p" onClick={()=>{ const n = etape===2 && !estMaison ? 4 : etape+1; setEtape(n); if(n===5) voirApercu(); }}>{etape===4 ? 'Voir l\'aperçu et le prix ›' : 'Suivant ›'}</button>
     </div>}
     {vue(5) && <div className="card" style={{marginBottom:10}}>
       {wiz && <button className="btn btn-sm" style={{marginBottom:8}} onClick={()=>setEtape(4)}>‹ Retour au matériel et sorties</button>}
