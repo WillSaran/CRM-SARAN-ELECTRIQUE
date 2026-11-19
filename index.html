@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v583';
+const APP_VERSION = 'v584';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8266,8 +8266,55 @@ function useSoumissions(cfg, refreshKey){
     await sheetsAppendRow(id, 'Soumissions', ligne);
     await lire(true);
   };
-  return {...etat, marquer, ajouter, dossierPhotos, majCol, relire:()=>lire(true)};
+  // v584 : une demande reçue par courriel, ajoutée tout de suite (sans attendre La mémoire) — même clé que le script (T-<fil>), pièces jointes dans Drive
+  const ajouterCourriel = async (m, onEtat)=>{
+    if(!etat.existe) await ensureSheetsExist(id, [{name:'Soumissions', headers:SOUM_ONGLET_ENTETE}]);
+    let dossier = '';
+    const pj = m.pj.filter(x=>(x.taille||0) > 15000 || /pdf/i.test(x.type+x.nom));
+    if(pj.length && peutDeposer()){
+      dossier = await driveDossier((m.sujet||'Demande').replace(/[\\/:*?"<>|]/g,' ').slice(0,70)+' ('+m.jour+')', await driveDossier('Saran CRM — Demandes de soumission'));
+      for(let i=0;i<pj.length;i++){ const x = pj[i]; onEtat && onEtat('Pièce jointe '+(i+1)+'/'+pj.length+' : '+x.nom+'…');
+        const d = await gmReq('messages/'+m.id+'/attachments/'+x.att), bin = atob(String(d.data||'').replace(/-/g,'+').replace(/_/g,'/'));
+        await driveDeposer(new File([Uint8Array.from(bin, c=>c.charCodeAt(0))], x.nom, {type:x.type||'application/octet-stream'}), dossier); } }
+    onEtat && onEtat('Ajout à la liste…');
+    await sheetsAppendRow(id, 'Soumissions', ['T-'+m.fil, 'À faire', m.jour, '', m.nom, m.courriel, m.sujet, String(m.extrait||'').slice(0,1500), '', dossier, 'https://mail.google.com/mail/u/0/#all/'+m.fil, '']);
+    await lire(true);
+  };
+  return {...etat, marquer, ajouter, ajouterCourriel, dossierPhotos, majCol, relire:()=>lire(true)};
 }
+// v584 : courriels reçus récemment, pour en faire une demande de soumission en un clic
+function SoumDeCourriel({S, toast, onFini}){
+  const [l,setL]=useState(null), [occ,setOcc]=useState(''), [err,setErr]=useState('');
+  const charger = async () => { setErr(''); setL(null);
+    try{ if(!peutLireCourriels()) await requestToken('consent', SCOPE_GMAIL_LIRE);
+      const r = await gmReq('messages?maxResults=25&q='+encodeURIComponent('in:inbox newer_than:10d -in:sent -category:promotions -category:social'));
+      const deja = new Set(S.liste.map(x=>x.cle)), vus = new Set(), out = [];
+      for(const m0 of (r.messages||[])){ if(vus.has(m0.threadId)) continue; vus.add(m0.threadId);
+        const m = await gmReq('messages/'+m0.id+'?format=full'), de = gmEntete(m,'From'), mail = (de.match(/<([^>]+)>/)||[,de])[1].trim().toLowerCase();
+        if(/saranelectrique|noreply|no-reply|notify|interac|dubo\.qc|lumen\.ca|nedco|linkeo\.c/i.test(mail)) continue;
+        const corps = gmCorps(m.payload), txt = (corps.txt || String(corps.html||'').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&#39;/g,"'").replace(/&amp;/g,'&')).replace(/\s+/g,' ').trim();
+        out.push({id:m.id, fil:m.threadId, nom:gmNom(de), courriel:mail, sujet:gmEntete(m,'Subject'), jour:localDateStr(new Date(+m.internalDate)), quand:new Date(+m.internalDate).toLocaleString('fr-CA',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}),
+          extrait:txt, pj:gmPiecesJointes(m.payload).filter(x=>!/^image\/(gif)/.test(x.type)), deja:deja.has('T-'+m.threadId), demande:/soumission|estimation|prix|devis|quote|plans?\b|budg/i.test(gmEntete(m,'Subject')+' '+txt.slice(0,400))}); }
+      setL(out); }catch(e){ setErr(apiErrMsg(e)); setL([]); } };
+  useEffect(()=>{ charger(); },[]);
+  const ajouter = async m => { setOcc(m.id); try{ await S.ajouterCourriel(m, t=>setOcc(m.id+'|'+t)); toast && toast('Demande ajoutée : '+m.sujet); onFini && onFini(); }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } setOcc(''); };
+  return <div style={{margin:'6px 0 10px',padding:10,border:'1px solid var(--accent)',borderRadius:10,background:'var(--bg3)',display:'grid',gap:6}}>
+    <div style={{display:'flex',gap:8,alignItems:'center'}}><b>📧 Tes derniers courriels reçus</b><span className="muted" style={{fontSize:12}}>clique ＋ pour en faire une soumission à faire (pièces jointes copiées dans Drive)</span>
+      <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={charger}>⟳</button><button className="btn btn-sm" onClick={onFini}>Fermer</button></div>
+    {err && <div style={{color:'var(--danger)',fontSize:12.5}}>{err}</div>}
+    {l==null ? <div className="muted" style={{display:'flex',gap:8,alignItems:'center',fontSize:12.5}}><span className="spin"></span> Lecture de Gmail…</div>
+      : !l.length ? <div className="muted" style={{fontSize:12.5}}>Aucun courriel reçu dans les 10 derniers jours.</div>
+      : l.sort((a,b)=>(b.demande-a.demande) || b.jour.localeCompare(a.jour)).map(m=>{ const enCours = String(occ).startsWith(m.id);
+        return <div key={m.id} style={{display:'flex',gap:10,alignItems:'flex-start',padding:'7px 9px',border:'1px solid '+(m.demande?'var(--accent)':'var(--border)'),borderRadius:8,background:'var(--bg2)',opacity:m.deja?.55:1}}>
+          <div style={{flex:1,minWidth:0,fontSize:13}}>
+            <div><b>{m.sujet || '(sans sujet)'}</b>{m.demande && !m.deja && <span className="badge" style={{marginLeft:6,background:'rgba(var(--accent-rgb),.18)'}}>demande ?</span>}</div>
+            <div className="muted" style={{fontSize:12}}>{m.nom} · {m.courriel} · {m.quand}{m.pj.length ? ' · 📎 '+m.pj.length+' pièce'+(m.pj.length>1?'s':'')+' jointe'+(m.pj.length>1?'s':'') : ''}</div>
+            <div className="muted" style={{fontSize:12,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{m.extrait.slice(0,180)}</div>
+            {enCours && <div style={{fontSize:12,color:'var(--accent)'}}>{String(occ).split('|')[1]||'…'}</div>}</div>
+          {m.deja ? <span className="muted" style={{fontSize:12,whiteSpace:'nowrap'}}>✓ déjà dans la liste</span>
+            : <button className="btn btn-sm btn-p" disabled={!!occ} onClick={()=>ajouter(m)}>{enCours ? 'Ajout…' : '＋ Soumission à faire'}</button>}
+        </div>; })}
+  </div>; }
 
 // Puce bien visible : la référence / le projet (ex. « DL-EC2 », « Cuisine Rive-Sud — Finition »).
 function SoumRef({txt}){ return txt ? <span style={{display:'inline-block',background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:6,padding:'1px 8px',fontSize:12,fontWeight:600,marginTop:3,maxWidth:'100%',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',verticalAlign:'middle'}}>{txt}</span> : null; }
@@ -8737,6 +8784,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const [occupe,setOccupe]=useState('');
   const [prepKey,setPrepKey]=useState(0);
   const [filtreAF,setFiltreAF]=useState('');
+  const [deCourriel,setDeCourriel]=useState(false);   // v584 : ajouter une demande directement depuis Gmail
   const [ficheOuv,setFicheOuv]=useState('');   // v445 : fiche client ouverte (clé de la demande, ou 'NOUV')
   const [,setFicheTick]=useState(0);
   // v296 : soumission enregistrée (brouillon) depuis une demande « À faire » → reliée par « origine » ; la plus récente gagne
@@ -8936,7 +8984,9 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
       <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:6}}>
         <button className="btn btn-sm btn-p" onClick={()=>setNouveau(nouveau===null?'':null)}>+ Ajouter</button>
         <button className="btn btn-sm" onClick={()=>setFicheOuv(ficheOuv==='NOUV'?'':'NOUV')} title="Choisis ou crée le client dans le Répertoire, puis la soumission s'ouvre remplie">✏️ Nouvelle soumission</button>
+        <button className="btn btn-sm" onClick={()=>setDeCourriel(!deCourriel)} title="Une demande reçue par courriel qui n'est pas encore dans la liste (La mémoire passe seulement de temps en temps)">📧 Depuis mes courriels</button>
       </div>
+      {deCourriel && <SoumDeCourriel S={S} toast={toast} onFini={()=>setDeCourriel(false)}/>}
       <div style={{display:'flex',gap:6,flexWrap:petit?'nowrap':'wrap',overflowX:petit?'auto':'visible',alignItems:'center',marginBottom:4,paddingBottom:petit?4:0}}>
         {pill('','Toutes',null,filtreAF,setFiltreAF)}
         {pill('nouvelles','Nouvelles',ouvertes.filter(s=>s.statut!=='En attente').length,filtreAF,setFiltreAF)}
