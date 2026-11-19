@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v585';
+const APP_VERSION = 'v586';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8186,7 +8186,7 @@ function FacturesView({cfg, cfgRep, refreshKey, contacts, compact}){   // v312 :
 // Le script remplit A–L ; le CRM écrit seulement M–O (statut, date, note) et les lignes ajoutées à la main (clé « M-… »).
 const SOUM_ONGLET_ENTETE = ['Clé','Type','Date','No','Client','Courriel','Sujet','Extrait','Montant','PDF','Lien','Réponse','Statut','Le','Note','Photos','Infos demande','Type de projet','Accusé envoyé','Titre (CRM)'];
 // Types de projet (William peut corriger celui deviné). Q = infos lues par soumissions.gs ; R et S = écrites par le CRM.
-const TYPES_PROJET = ['Borne de recharge','Panneau / entrée électrique','Prises et circuits','Éclairage','Chauffage / climatisation','Spa / piscine','Génératrice','Rénovation','Construction neuve','Commercial','Service / réparation','Autre'];
+const TYPES_PROJET = ['Borne de recharge','Panneau / entrée électrique','Prises et circuits','Éclairage','Chauffage / climatisation','Spa / piscine','Génératrice','Rénovation','Rénovation majeure','Construction neuve','Commercial','Service / réparation','Autre'];
 function soumTypeDevine(t){
   const x = cvNorm(t||'');
   // Même ordre que soumissions.gs : le premier qui correspond gagne (une borne ou un spa parle souvent aussi du panneau).
@@ -8827,7 +8827,9 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     if(b){ DOC_OUVRIR = b; DOC_PREFILL = null; setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); return; }
     const i = infosDe(s), sujet = (s.sujet||'').replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'').replace(/^\s*soumission\s*[-:–]?\s*/i,'').replace(/^Contact depuis votre site\s*:\s*/i,'');
     DOC_PREFILL = {type:'Soumission', typeProjet:i.type, origine:s.cle, nom:i.nom, tel:i.tel, courriel:i.courriel, adresse:i.adresse,
-      titre: s.titre || (i.type ? i.type+(i.adresse ? ' — '+i.adresse.split(',')[0] : '') : sujet), travaux:i.travaux, dossier:s.pdf||s.photos||''};
+      titre: s.titre || (i.type ? i.type+(i.adresse ? ' — '+i.adresse.split(',')[0] : '') : sujet), travaux:'',
+      visite: String(i.travaux||'').trim() ? '— Demande du client ('+(s.sujet||'courriel')+') —\n'+String(i.travaux).trim() : '',   // v586 : le texte du courriel va dans les notes privées, pas dans les travaux imprimés
+      dossier:s.pdf||s.photos||''};
     setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); };
   const accuse = async s => { const i = infosDe(s); if(!i.courriel){ toast && toast('Pas de courriel pour ce client'); return; }
     const formulaire = /linkeo|contact depuis votre site/i.test(s.sujet+' '+s.courriel) || (s.infos && s.infos.formulaire);
@@ -13170,6 +13172,13 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       </Repli>
     </div>}
 
+    {d.type==='Soumission' && wiz && vue(2) && (d.dossier || String(d.visite||'').trim()) && <div className="card" style={{marginBottom:10}}>
+      {/* v586 : en page 2, on voit tout de suite les plans et photos reçus (et la demande du client) pour choisir comment enligner la soumission */}
+      <b style={{fontSize:14}}>📎 Ce que le client a envoyé</b>
+      {d.dossier && <div style={{marginTop:6}}><SoumPhotos dossier={d.dossier}/></div>}
+      {String(d.visite||'').trim() && <details style={{marginTop:6}}><summary className="muted" style={{cursor:'pointer',fontSize:12.5}}>Sa demande (notes privées)</summary>
+        <div style={{whiteSpace:'pre-wrap',fontSize:12.5,marginTop:4,maxHeight:220,overflowY:'auto'}}>{d.visite}</div></details>}
+    </div>}
     {d.type==='Soumission' && vue(2) && <div className="card" style={{marginBottom:10}}>
       {wiz && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10,paddingBottom:10,borderBottom:'1px solid var(--border2)'}}>
         <button className={'btn'+(estMaison?' btn-p':'')} onClick={()=>{ setD(o=>({...o, typeProjet:o.typeProjet || 'Construction neuve', maison:{...(o.maison||maisonVide()), on:true}})); setEtape(3); }}>🏠 Maison — plan par étage et par pièce</button>
