@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v614';
+const APP_VERSION = 'v615';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3261,7 +3261,7 @@ function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, 
           {(()=>{ const gens=[...new Set(((j.po && (courriels||{})[j.po])||[]).map(f=>f.de).filter(n=>n && !/saran|william/i.test(n)))]; return gens.length ? <div className="muted" style={{fontSize:12}}>Dans les courriels de cette job : {gens.join(', ')}</div> : null; })()}</div>}
         <PjPassages events={j.events} today={today} ajouter={<><CvBlocageRapide job={j} B={B} etape={p.prochaine ? p.prochaine.id : ''}/><CvAjouterPassage job={j} onDone={()=>setTick(t=>t+1)}/></>} ligne={(e,i)=><div key={i} style={{fontSize:12.5,padding:'2px 0'}}>
           {e.attente ? <b style={{color:'var(--warning)'}}>En attente</b> : <b style={{fontVariantNumeric:'tabular-nums'}}>{cvFmtDay(e.day)}</b>} <span style={{fontWeight:800,fontSize:11,color:'var(--accent)'}}>{e.phase}</span>
-          {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac==='**' ? <span className="muted"> · pas à facturer</span> : e.fac ? <>{' · facture '}<FacNos txt={e.fac} factures={factures}/>{e.facEnvoyee===false && <span style={{color:'var(--warning)'}}> (pas envoyée)</span>}</> : (e.day<today && !e.attente ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
+          {e.crew.length ? ' · '+e.crew.join(', ') : ''}{e.fac==='**' ? <span className="muted"> · pas à facturer</span> : e.fac && e.facEnvoyee===false ? <span style={{color:'var(--warning)'}}> · à facturer</span> : e.fac ? <>{' · facture '}<FacNos txt={e.fac} factures={factures}/></> : (e.day<today && !e.attente ? <span style={{color:'var(--danger)'}}> · rien d'inscrit</span> : '')}
           {e.day<=today && <CvInscrirePassage cfg={cfg} e={e} onDone={()=>setTick(t=>t+1)}/>}
         </div>}/>
         <div style={{marginTop:10,paddingTop:8,borderTop:'1px solid var(--border)'}}>   {/* v388 : à la fin, sous les passages — les étapes d'abord */}
@@ -15731,7 +15731,7 @@ function cvBuildClients(events, registry, factures){
     j.etatClient = j.status;
     const posJ = [j.po, ...(j.posLies||[])].filter(Boolean);
     const fromPO = posJ.length ? Object.values(factures).filter(f=>f.po && posJ.includes(f.po)).map(f=>f.num) : [];
-    j.factures = [...new Set([...j.events.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(t=>/\d/.test(t))), ...fromPO])].sort();
+    j.factures = [...new Set([...j.events.flatMap(e=>String(e.fac).split(/[\s,–-]+/).filter(t=>/\d/.test(t) && facConnue(t, factures))), ...fromPO])].sort();
     j.billed = j.factures.reduce((t,f)=>t+((factures[f]&&!factures[f].annulee&&factures[f].ht)||0),0);
     j.crew = [...new Set(j.events.flatMap(e=>e.crew))];
     j.address = (j.reg && [j.reg.adresse,j.reg.ville].filter(Boolean).join(', ')) || (j.events.find(e=>e.location)||{}).location || '';
@@ -15811,7 +15811,7 @@ function CvAppelsLiens({liste, factures}){
   if(!liste.length) return <span className="muted">aucun appel de service trouvé</span>;
   return <>{liste.map((a,k)=><span key={k} style={{marginRight:12,display:'inline-block'}}>
     {a.url ? <a href={a.url} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700}}>AP {a.as} ↗</a> : <b>AP {a.as}</b>}
-    <span className="muted" style={{fontSize:11.5}}>{a.jour ? ' · '+cvFmtDay(a.jour) : ''}{a.factures.length ? <> · facture {a.factures.map((n,i)=><React.Fragment key={n}>{i>0?', ':''}<FacNo n={n} factures={factures}/>{factures && !(factures[n] && (factures[n].envoi || factures[n].pdf)) ? ' (pas envoyée)' : ''}</React.Fragment>)}</> : ''}{!a.url ? ' · document pas trouvé' : ''}</span></span>)}</>; }
+    <span className="muted" style={{fontSize:11.5}}>{a.jour ? ' · '+cvFmtDay(a.jour) : ''}{a.factures.filter(n=>facConnue(n, factures)).length ? <> · facture {a.factures.filter(n=>facConnue(n, factures)).map((n,i)=><React.Fragment key={n}>{i>0?', ':''}<FacNo n={n} factures={factures}/></React.Fragment>)}</> : a.factures.length ? <span style={{color:'var(--warning)'}}> · à facturer</span> : ''}{!a.url ? ' · document pas trouvé' : ''}</span></span>)}</>; }
 // v393 : passages d'un projet — repliés (total des visites), flèche pour voir la liste
 function PjPassages({events, today, ajouter, ligne}){
   const [ouv,setOuv]=useState(false);
@@ -15962,11 +15962,15 @@ function CvBoutonPlans({job, dosF, dossier}){
   </span>; }
 // Jauge facturé / PO. Le repère de 75 % vient des PO de Jonathan (« 75 % rough et 25 % finition »).
 // v566 : appels de service (AP) et ordres de travail (OT) de la job, dans l'ordre des passages, avec la facture et son montant
+// v615 : un numéro de facture compte seulement s'il a été lu dans le registre (facture envoyée par courriel ou payée).
+// Un numéro écrit sur l'AP (« _F-2646 ») ou dans le bloc Suivi ne suffit pas : tant que la facture n'est pas envoyée, c'est « à facturer ».
+function facConnue(n, factures){ if(!factures || !Object.keys(factures).length) return true; const f = factures[n];
+  return !!(f && !f.annulee && (f.envoi || f.payeLog>0 || f.etatPaie==='payee')); }
 function cvJobPapiers(job, appels, factures){
   const pn = (appels && appels.parNumero) || {}, out = [], vus = new Set();
   const nums = v => String(v||'').split(/[\s,;/–-]+/).filter(n=>/^\d{3,5}$/.test(n));
   const evs = job.events.filter(e=>!e.attente).slice().sort((a,b)=>String(a.day).localeCompare(String(b.day)));
-  const facsDe = e => nums(e.fac), montDe = facs => facs.reduce((t,n)=>t+(((factures||{})[n]||{}).ht||0),0);
+  const facsDe = e => nums(e.fac).filter(n=>facConnue(n, factures)), montDe = facs => facs.reduce((t,n)=>t+(((factures||{})[n]||{}).ht||0),0);
   const jourAP = evs.filter(e=>nums(e.as).length).map(e=>e.day);
   evs.forEach(e=>{
     const facs = facsDe(e);
@@ -15996,7 +16000,7 @@ function CvGauge({job, appels, factures, dosF}){
       {x.facs.length ? x.facs.map(n=>{ const f=(factures||{})[n]||{}; return <div key={n} style={{display:'flex',gap:6,alignItems:'baseline'}}>
           <span className="muted">Facture</span><Papier type="FAC" n={n} ctx={ctx}>#{n}</Papier>
           <b style={{marginLeft:'auto'}}>{f.ht!=null ? cvMoney(f.ht) : '—'}</b></div>; })
-        : <span style={{color:'var(--warning)',fontWeight:700}}>{x.vers && !x.vers.jour ? 'à venir' : 'pas facturé'}</span>}
+        : <span style={{color:'var(--warning)',fontWeight:700}}>{x.vers && !x.vers.jour ? 'à venir' : 'à facturer'}</span>}
     </div></div>;
   if(!po) return papiers.length ? <div style={{border:'1px solid var(--border2)',borderRadius:10,padding:12,margin:'10px 0',background:'var(--bg3)'}}>
     <div style={{fontSize:13,marginBottom:6}}>Appels de service et ordres de travail <span className="muted">(pas de PO)</span></div>
@@ -16395,7 +16399,7 @@ function ClientJobDetail({job, clients, factures, appels, courriels, achats, fac
           <div className="muted" style={{fontSize:12.5,display:'flex',flexWrap:'wrap',gap:'2px 12px'}}>
             {e.as && <span>Appel {String(e.as).split(/[\s,–-]+/).filter(t=>/\d/.test(t)).map(n=><Papier key={n} type="AP" n={n} ctx={ctxP} style={{marginRight:4}}>{n} ↗</Papier>)}</span>}
             {e.ot && <span>OT {String(e.ot).split(/[\s,–-]+/).filter(t=>/\d/.test(t)).map(n=><Papier key={n} type="OT" n={n} ctx={ctxP} style={{marginRight:4}}>{n} ↗</Papier>)}</span>}
-            {e.fac==='**' ? <span>Pas à facturer</span> : e.fac ? <span>Facture {String(e.fac).split(/[\s,;–-]+/).filter(x=>/^\d{3,6}$/.test(x)).map((n,k)=><React.Fragment key={n}>{k>0?', ':''}<Papier type="FAC" n={n} ctx={ctxP}>{n} ↗</Papier></React.Fragment>)}{String(e.fac).split(/[\s,–-]+/).filter(n=>factures[n]&&factures[n].ht!=null).map(n=><span key={n}> · <b style={{color:'var(--text)'}}>{cvMoney(factures[n].ht)}</b></span>)}</span>
+            {e.fac==='**' ? <span>Pas à facturer</span> : e.fac && e.facEnvoyee===false ? <b style={{color:'var(--warning)'}}>À facturer</b> : e.fac ? <span>Facture {String(e.fac).split(/[\s,;–-]+/).filter(x=>/^\d{3,6}$/.test(x) && facConnue(x, factures)).map((n,k)=><React.Fragment key={n}>{k>0?', ':''}<Papier type="FAC" n={n} ctx={ctxP}>{n} ↗</Papier></React.Fragment>)}{String(e.fac).split(/[\s,–-]+/).filter(n=>factures[n]&&factures[n].ht!=null).map(n=><span key={n}> · <b style={{color:'var(--text)'}}>{cvMoney(factures[n].ht)}</b></span>)}</span>
               : (e.day<today ? <span style={{color:'var(--danger)',fontWeight:700}}>Pas de facture inscrite</span> : <span>Planifié</span>)}
             {e.day<=today && <CvInscrirePassage cfg={cfg} e={e} onDone={onChanged}/>}
           </div>
