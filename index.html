@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v584';
+const APP_VERSION = 'v585';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6173,7 +6173,11 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     return 3600000; }
   // v323 : un événement de The Crew (ou autre) glissé change tout de suite ; un événement En attente passe par « Céduler »
   async function appliquerOuCeduler(c){
-    if(c.ev.calendarId===EN_ATTENTE_CAL){ setCedule(c); return; }
+    if(c.ev.calendarId===EN_ATTENTE_CAL){
+      // v585 : lâchée au même endroit (même jour, même heure) = rien à céduler — on ne demande rien
+      const memeJour = c.allDay ? (c.ev.allDay && String(c.ev.start).slice(0,10)===c.date) : (!c.ev.allDay && c.debut && Math.abs(new Date(c.ev.start)-c.debut) < 60000);
+      if(memeJour){ toast('Rien de changé — pour la remettre en attente sans date, glisse-la sur le panneau ⏳ En attente.','ok'); return; }
+      setCedule(c); return; }
     try{ let res, d0, d1;
       if(c.allDay){ const span = c.ev.allDay && c.ev.end ? Math.max(1, Math.round((new Date(String(c.ev.end).slice(0,10)+'T00:00:00') - new Date(String(c.ev.start).slice(0,10)+'T00:00:00'))/864e5)) : 1;
         const fin = new Date(c.date+'T00:00:00'); fin.setDate(fin.getDate()+span); d0 = c.date; d1 = localDateStr(fin);
@@ -6629,6 +6633,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       <div className="muted" style={{fontSize:12,marginBottom:12}}>La description, l'adresse et les pièces jointes restent telles quelles.</div>
       <div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'flex-end'}}>
         <button className="btn btn-s" onClick={()=>setCedule(null)}>Annuler</button>
+        <button className="btn btn-s" onClick={()=>{ const ev = cedule.ev; setCedule(null); mettreEnAttente(ev); }} title="Retour dans la liste En attente, au samedi provisoire, sans date réelle">⏳ Remettre en attente (sans date)</button>
         <button className="btn btn-s" onClick={()=>faireCedule(false)}>Garder en attente à cette date</button>
         <button className="btn btn-p" onClick={()=>faireCedule(true)}>Confirmer dans The Crew</button>
       </div>
