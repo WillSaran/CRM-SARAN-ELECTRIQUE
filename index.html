@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v620';
+const APP_VERSION = 'v621';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5174,7 +5174,7 @@ const PAIE_FERIES = ['2026-01-01','2026-04-03','2026-04-06','2026-05-18','2026-0
   '2027-01-01','2027-03-26','2027-03-29','2027-05-24','2027-06-24','2027-07-02','2027-09-06','2027-10-11','2027-11-12','2027-12-25'];   // jours fériés chômés CCQ
 const PAIE_VAC_CCQ = [['2026-07-19','2026-08-01'],['2026-12-20','2027-01-02'],['2027-07-25','2027-08-07']];   // vacances de la construction (payées par la CCQ)
 const PREP_ONGLET = 'Préparation paie';
-const PREP_ENTETE = ['Semaine','Se terminant le','Employé','Id dossier','Régime','Métier','Secteur','Région','Simple','Temps et demi','Double','Férié','Banque utilisée','Vacances','Mis en banque','Autres revenus / retenues','Unité CNESST','Taux','Brut estimé','Note','Statut','Le'];
+const PREP_ENTETE = ['Semaine','Se terminant le','Employé','Id dossier','Régime','Métier','Secteur','Région','Simple','Temps et demi','Double','Férié','Banque utilisée','Vacances','Mis en banque','Autres revenus / retenues','Unité CNESST','Taux','Brut estimé','Note','Statut','Le','Payable le'];
 const PREP_AUTRES = [['Bonus',1],['Temps de voyagement',1],['Primes',1],['Gîte et pension',1],['Stationnement',1],['Remb. frais divers',1],['Pension alimentaire',-1],['Saisie de salaire',-1],['REER',-1]];
 const PREP_SECT = {'Résidentiel léger':'D','Résidentiel lourd':'R1','Commercial':'C','Industriel':'B','Génie civil':'A'};
 const prepNb = x => x ? String(Math.round(x*100)/100).replace('.',',') : '';
@@ -5182,6 +5182,13 @@ const prepAutresTxt = l => (l||[]).filter(a=>a.type && cvNum(a.montant)).map(a=>
 const prepAutresLire = s => String(s||'').split(';').map(x=>x.trim()).filter(Boolean).map(x=>{ const m = x.match(/^(.*?)\s+([\d.,]+)\s*\$?$/); return m ? {type:m[1], montant:m[2]} : null; }).filter(Boolean);
 const prepAutresVal = l => (l||[]).reduce((t,a)=>{ const d = PREP_AUTRES.find(x=>x[0]===a.type); return t + (d ? d[1] : 1)*Math.abs(cvNum(a.montant)||0); },0);
 const prepMaintenant = () => { const d = new Date(), z = n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+' '+z(d.getHours())+':'+z(d.getMinutes())+':'+z(d.getSeconds()); };
+// v621 : période de paie comme l'ACQ — semaine du dimanche au samedi, payable le mercredi suivant ; PP = no de semaine de la date de paiement (ex. 8 au 14 nov. 2026 → PP47, payable le 18 nov.)
+const paiePeriode = (week, payeChoisie) => { const lun = mondayOfWeek(week), dim = new Date(lun), sam = new Date(lun), mer = new Date(lun);
+  dim.setDate(dim.getDate()-1); sam.setDate(sam.getDate()+5); mer.setDate(mer.getDate()+9);
+  const paye = /^\d{4}-\d{2}-\d{2}$/.test(payeChoisie||'') ? new Date(payeChoisie+'T12:00:00') : mer;
+  const j = d => d.getDate()+(d.getDate()===1 ? 'er' : ''), jm = d => j(d)+' '+CCQ_MOIS[d.getMonth()];
+  const du = dim.getFullYear()!==sam.getFullYear() ? jm(dim)+' '+dim.getFullYear()+' au '+jm(sam)+' '+sam.getFullYear() : (dim.getMonth()===sam.getMonth() ? j(dim) : jm(dim))+' au '+jm(sam)+' '+sam.getFullYear();
+  return {du, pp:'PP'+(+getWeek(paye).slice(-2)), paye:localDateStr(paye), payeTxt:jm(paye)+' '+paye.getFullYear(), defaut:localDateStr(mer)}; };
 const PREP_CHAMPS = ['simple','demi','double','ferie','banqueUtil','vac'];
 // v619 : talons de paie (estimation) calculés à partir de la préparation de la paie — individuel et en groupe.
 // Méthode : formules de retenues à la source sur une base annualisée (52 paies) — ARC T4127 (fédéral, abattement du Québec) et Revenu Québec TP-1015.F (simplifié).
@@ -5245,7 +5252,7 @@ function paieCalcul(r, fin){
 }
 const talonEsc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const talonArg = x => (Math.round((x||0)*100)/100).toLocaleString('fr-CA',{minimumFractionDigits:2, maximumFractionDigits:2})+' $';
-function talonHtml(r, finTxt, statut){
+function talonHtml(r, P, statut){
   const c = r.calc, e = r.e||{}, E = talonEsc, A = talonArg, tdn = 'style="text-align:right;white-space:nowrap;padding:3px 6px"', td = 'style="padding:3px 6px"';
   const tab = (titre, rows, total) => '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px"><thead><tr style="background:#eef1f4"><th '+td+' align="left">'+titre+'</th><th '+tdn+'>Heures</th><th '+tdn+'>Taux</th><th '+tdn+'>Montant</th></tr></thead><tbody>'
     + rows.map(x=>'<tr style="border-top:1px solid #e3e6ea"><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+(x.h ? prepNb(x.h) : '')+'</td><td '+tdn+'>'+(x.tx ? A(x.tx) : '')+'</td><td '+tdn+'>'+A(x.m)+'</td></tr>').join('')
@@ -5255,7 +5262,7 @@ function talonHtml(r, finTxt, statut){
     + '<tr style="border-top:2px solid #333;font-weight:700"><td '+td+'>Total</td><td '+tdn+'>'+A(total)+'</td></tr></tbody></table>';
   const cu = c.cumul, cr = c.cours, cumL = [['Brut','brut'],['RRQ','rrq'],['Assurance-emploi','ae'],['RQAP','rqap'],['Impôt fédéral','fed'],['Impôt du Québec','qc']];
   return '<div style="font:12px Arial,sans-serif;color:#111;max-width:760px">'
-    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:8px;gap:10px"><div style="display:flex;gap:10px;align-items:center"><img src="'+SARAN_LOGO+'" alt="Saran Électrique" style="height:62px;width:auto"><div><div style="font-size:11px;color:#555">Saran Électrique inc.</div><div style="font-size:15px;font-weight:700">Talon de paie</div><div>Semaine se terminant le <b>'+E(finTxt)+'</b></div></div></div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:8px;gap:10px"><div style="display:flex;gap:10px;align-items:center"><img src="'+SARAN_LOGO+'" alt="Saran Électrique" style="height:62px;width:auto"><div><div style="font-size:11px;color:#555">Saran Électrique inc.</div><div style="font-size:15px;font-weight:700">Talon de paie</div><div>Semaine du : <b>'+E(P.du)+'</b> &nbsp;<b>'+E(P.pp)+'</b></div><div>Payable le : <b>'+E(P.payeTxt)+'</b></div></div></div>'
     + '<div style="text-align:right"><div style="font-size:15px;font-weight:700">'+E(r.nom)+'</div><div>'+E(r.ccq ? ['Électricien', e.classe, e.ccqSecteur].filter(Boolean).join(' · ') : ['Bureau', e.titre].filter(Boolean).join(' · '))+'</div>'
     + '<div style="font-size:11px;color:'+(statut==='Approuvée' ? '#1a7f37' : '#b26a00')+'">'+(statut==='Approuvée' ? 'Paie approuvée' : 'Brouillon')+' — estimation, à valider</div></div></div>'
     + tab('Gains', c.gains, c.brut)
@@ -5273,9 +5280,9 @@ function talonHtml(r, finTxt, statut){
     + '<div style="margin-top:8px;font-size:10.5px;color:#666">Retenues calculées par le CRM (taux '+E(String(c.conf ? '' : 'provisoires '))+'des gouvernements et de la CCQ inscrits au dossier). Estimation à valider contre les talons de l\'ACQ avant la première paie faite dans le CRM.</div>'
     + '</div>';
 }
-function talonsGroupeHtml(rangs, finTxt){
+function talonsGroupeHtml(rangs, P){
   const A = talonArg, E = talonEsc, s = k => rangs.reduce((t,r)=>t+(r.calc[k]||0),0), tdn = 'style="text-align:right;padding:3px 6px;white-space:nowrap"', td = 'style="padding:3px 6px"';
-  return '<div style="font:12px Arial,sans-serif;color:#111;max-width:760px"><div style="display:flex;gap:10px;align-items:center;margin-bottom:4px"><img src="'+SARAN_LOGO+'" alt="Saran Électrique" style="height:56px;width:auto"><div><div style="font-size:11px;color:#555">Saran Électrique inc.</div><div style="font-size:16px;font-weight:700">Paie de la semaine se terminant le '+E(finTxt)+'</div></div></div><div style="font-size:11px;color:#666;margin-bottom:6px">Estimation calculée par le CRM, à valider.</div>'
+  return '<div style="font:12px Arial,sans-serif;color:#111;max-width:760px"><div style="display:flex;gap:10px;align-items:center;margin-bottom:4px"><img src="'+SARAN_LOGO+'" alt="Saran Électrique" style="height:56px;width:auto"><div><div style="font-size:11px;color:#555">Saran Électrique inc.</div><div style="font-size:16px;font-weight:700">Paie de la semaine du '+E(P.du)+' &nbsp;'+E(P.pp)+'</div><div>Payable le : <b>'+E(P.payeTxt)+'</b></div></div></div><div style="font-size:11px;color:#666;margin-bottom:6px">Estimation calculée par le CRM, à valider.</div>'
     + '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#eef1f4"><th '+td+' align="left">Employé</th><th '+tdn+'>Heures</th><th '+tdn+'>Brut</th><th '+tdn+'>Retenues</th><th '+tdn+'>Net à verser</th><th '+tdn+'>Parts employeur</th>'+(rangs.some(r=>r.calc.vacCcq) ? '<th '+tdn+'>Vac. CCQ</th>' : '')+'</tr></thead><tbody>'
     + rangs.map(r=>'<tr style="border-top:1px solid #e3e6ea"><td '+td+'>'+E(r.nom)+'</td><td '+tdn+'>'+prepNb(r.calc.heures+r.ferie)+'</td><td '+tdn+'>'+A(r.calc.brut)+'</td><td '+tdn+'>'+A(r.calc.totRet)+'</td><td '+tdn+'><b>'+A(r.calc.net)+'</b></td><td '+tdn+'>'+A(r.calc.totPat)+'</td>'+(rangs.some(x=>x.calc.vacCcq) ? '<td '+tdn+'>'+A(r.calc.vacCcq)+'</td>' : '')+'</tr>').join('')
     + '<tr style="border-top:2px solid #333;font-weight:700"><td '+td+'>Total — '+rangs.length+'</td><td '+tdn+'>'+prepNb(rangs.reduce((t,r)=>t+r.calc.heures+r.ferie,0))+'</td><td '+tdn+'>'+A(s('brut'))+'</td><td '+tdn+'>'+A(s('totRet'))+'</td><td '+tdn+'>'+A(s('net'))+'</td><td '+tdn+'>'+A(s('totPat'))+'</td>'+(rangs.some(r=>r.calc.vacCcq) ? '<td '+tdn+'>'+A(s('vacCcq'))+'</td>' : '')+'</tr></tbody></table>'
@@ -5302,7 +5309,7 @@ function PrepPaieView({cfg, refreshKey}){
     try{ const r = await lireCache(DOSSIERS_EMP_ID, 'A1:'+DE_FIN, force);
       setL((r.result.values||[]).map(x=>{ const e = {}; DE_COLS.forEach((k,j)=>e[k]=String(x[j]==null?'':x[j])); return e; }).slice(1).filter(e=>e.id||e.nom)); }
     catch(e){ setErr(apiErrMsg(e)); setL([]); }
-    try{ const h = await lireCache(DOSSIERS_EMP_ID, qSheet(PREP_ONGLET)+'!A1:V', force); setHist((h.result.values||[]).slice(1).filter(x=>x[0])); }
+    try{ const h = await lireCache(DOSSIERS_EMP_ID, qSheet(PREP_ONGLET)+'!A1:W', force); setHist((h.result.values||[]).slice(1).filter(x=>x[0])); }
     catch(e){ setHist([]); } },[]);
   useEffect(()=>{ lire(false); },[lire, refreshKey]);
   const cle = 'prepPaie_'+week;
@@ -5319,6 +5326,7 @@ function PrepPaieView({cfg, refreshKey}){
   // Dernier lot enregistré pour la semaine : figé si « Approuvée »
   const lots = hist.filter(x=>x[0]===week), dernier = lots.reduce((m,x)=>(x[21]||'')>m ? x[21] : m, '');
   const lot = lots.filter(x=>x[21]===dernier), fige = lot.length>0 && lot[0][20]==='Approuvée';
+  const per = paiePeriode(week, fige ? (lot[0][22]||'') : (mod._paye||''));   // v621
   const dossierDe = (id, nom) => L.find(e=>id && e.id===id) || L.find(e=>cvNorm(deNom(e))===cvNorm(nom)) || {};
   const tauxDe = e => cvNum(e.taux);
   const brutDe = r => { const t = tauxDe(r.e); if(t==null){ const h = cvNum(r.e.hebdo); return h!=null && !/net/i.test(r.e.hebdoBrutNet||'') ? h + prepAutresVal(r.autres) : null; }
@@ -5342,7 +5350,7 @@ function PrepPaieView({cfg, refreshKey}){
   rangs.forEach(r=>{ r.brut = brutDe(r); r.paye = r.simple+r.banqueUtil+r.ferie; r.calc = paieCalcul(r, fin); });
   const tot = f => rangs.reduce((t,r)=>t+(r[f]||0),0);
   const alertes = fige ? [] : rangs.filter(r=>r.tot==null).map(r=>r.nom);
-  const ligne = (r, statut, le) => [week, localDateStr(fin), r.nom, r.e.id||'', r.ccq ? 'CCQ' : 'Bureau', r.metier, r.secteur, r.region, r.simple, r.demi, r.double, r.ferie, r.banqueUtil, r.vac, r.enBanque, prepAutresTxt(r.autres), r.cnesst, tauxDe(r.e)!=null ? tauxDe(r.e).toFixed(2) : '', r.brut!=null ? r.brut.toFixed(2) : '', r.note, statut, le];
+  const ligne = (r, statut, le) => [week, localDateStr(fin), r.nom, r.e.id||'', r.ccq ? 'CCQ' : 'Bureau', r.metier, r.secteur, r.region, r.simple, r.demi, r.double, r.ferie, r.banqueUtil, r.vac, r.enBanque, prepAutresTxt(r.autres), r.cnesst, tauxDe(r.e)!=null ? tauxDe(r.e).toFixed(2) : '', r.brut!=null ? r.brut.toFixed(2) : '', r.note, statut, le, per.paye];
   const approuver = async () => {
     if(alertes.length && !confirm('Semaine pas confirmée pour : '+alertes.join(', ')+'.\nLeurs heures sont à 0 sauf si tu les as inscrites. Approuver quand même ?')) return;
     if(!confirm('Approuver la préparation de la paie de la semaine se terminant le '+finTxt+' ?\n\n'+rangs.length+' employé(s), '+fmtH(tot('paye'))+' payées. La semaine sera figée dans la feuille privée.')) return;
@@ -5352,16 +5360,16 @@ function PrepPaieView({cfg, refreshKey}){
       try{ localStorage.removeItem(cle); }catch(e){} setMod({}); setEtat('Semaine approuvée et figée.'); await lire(true); }
     catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
   const rouvrir = async () => { if(!confirm('Rouvrir la semaine pour corriger ? Tu devras l\'approuver de nouveau.')) return;
-    const m = {}; rangs.forEach(r=>{ m[r.k] = {simple:r.simple, demi:r.demi, double:r.double, ferie:r.ferie, banqueUtil:r.banqueUtil, vac:r.vac, autres:r.autres, note:r.note, region:r.region, secteur:r.secteur}; });
+    const m = {_paye:per.paye}; rangs.forEach(r=>{ m[r.k] = {simple:r.simple, demi:r.demi, double:r.double, ferie:r.ferie, banqueUtil:r.banqueUtil, vac:r.vac, autres:r.autres, note:r.note, region:r.region, secteur:r.secteur}; });
     setEtat('Réouverture…');
-    try{ await sheetsAppendRow(DOSSIERS_EMP_ID, qSheet(PREP_ONGLET), [week, localDateStr(fin), '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Rouverte pour correction', 'Rouverte', prepMaintenant()]);
+    try{ await sheetsAppendRow(DOSSIERS_EMP_ID, qSheet(PREP_ONGLET), [week, localDateStr(fin), '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Rouverte pour correction', 'Rouverte', prepMaintenant(), '']);
       setMod(garder(m)); setEtat('Semaine rouverte.'); await lire(true); }
     catch(e){ setEtat(''); alert('Impossible : '+apiErrMsg(e)); } };
   const imprimer = () => { const w = window.open('', '_blank'); if(!w){ alert('Autorise les fenêtres surgissantes pour imprimer.'); return; }
     const esc = s => String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
     const lignesHtml = rangs.map(r=>'<tr><td>'+esc(r.nom)+'</td><td>'+esc(r.metier)+'</td><td>'+esc(r.secteur)+'</td><td>'+esc(r.region)+'</td>'+[r.simple+r.banqueUtil, r.demi, r.double, r.ferie, r.vac].map(x=>'<td class="n">'+prepNb(x)+'</td>').join('')+'<td>'+esc(r.cnesst)+'</td><td>'+esc(prepAutresTxt(r.autres))+(r.banqueUtil ? (r.autres.length?' ; ':'')+'dont '+prepNb(r.banqueUtil)+' h prises dans la banque' : '')+'</td><td>'+esc(r.note)+'</td></tr>').join('');
     w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Relevé des heures — '+esc(localDateStr(fin))+'</title><style>body{font:12px Arial,sans-serif;margin:18px;color:#000}h1{font-size:17px;margin:0 0 2px}table{border-collapse:collapse;width:100%;margin-top:10px}th,td{border:1px solid #000;padding:4px 5px;vertical-align:top}th{background:#e8e8e8;font-size:10.5px}td.n{text-align:right;white-space:nowrap}.pied{margin-top:14px;font-size:10.5px}@page{size:landscape;margin:12mm}</style></head><body>'
-      +'<div style="display:flex;gap:12px;align-items:center"><img src="'+SARAN_LOGO+'" alt="Saran Électrique" style="height:58px;width:auto"><div><h1>RELEVÉ DES HEURES TRAVAILLÉES</h1><div><b>Saran Électrique inc.</b> — semaine se terminant le <b>'+esc(finTxt)+'</b>'+(feries.length ? ' — jour férié : '+feries.map(cvFmtDay).join(', ') : '')+'</div></div></div>'
+      +'<div style="display:flex;gap:12px;align-items:center"><img src="'+SARAN_LOGO+'" alt="Saran Électrique" style="height:58px;width:auto"><div><h1>RELEVÉ DES HEURES TRAVAILLÉES</h1><div><b>Saran Électrique inc.</b> — semaine du <b>'+esc(per.du)+'</b> &nbsp;<b>'+esc(per.pp)+'</b> — payable le '+esc(per.payeTxt)+(feries.length ? ' — jour férié : '+feries.map(cvFmtDay).join(', ') : '')+'</div></div></div>'
       +'<table><thead><tr><th rowspan="2">Noms</th><th rowspan="2">Métier</th><th rowspan="2">Secteur</th><th rowspan="2">Région</th><th colspan="3">Heures</th><th rowspan="2">Férié</th><th rowspan="2">Vacances</th><th rowspan="2">Unité classification</th><th rowspan="2">Autres revenus ou retenues</th><th rowspan="2">Note</th></tr><tr><th>Simple</th><th>1/2</th><th>Double</th></tr></thead><tbody>'+lignesHtml
       +'<tr><td colspan="4"><b>Total — '+rangs.length+' employé(s)</b></td>'+[tot('simple')+tot('banqueUtil'), tot('demi'), tot('double'), tot('ferie'), tot('vac')].map(x=>'<td class="n"><b>'+prepNb(x)+'</b></td>').join('')+'<td colspan="3"></td></tr></tbody></table>'
       +'<div class="pied">Métier 220 = électricien. Secteur : D résidentiel léger, R1 résidentiel lourd, C commercial, B industriel, A génie civil, R bureau. '+(fige ? 'Préparation approuvée le '+esc(dernier)+'.' : 'Brouillon — pas encore approuvé.')+'<br><br>Signature : ______________________________</div>'
@@ -5378,8 +5386,9 @@ function PrepPaieView({cfg, refreshKey}){
     {err && <div className="card" style={{color:'var(--danger)',marginBottom:10}}>Impossible de lire les dossiers : {err}</div>}
     <div className="card" style={{padding:'10px 12px'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8,marginBottom:8}}>
-        <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><button className="btn btn-sm" onClick={()=>decaler(-1)}>←</button><b style={{fontSize:15}}>Semaine se terminant le {finTxt}</b><button className="btn btn-sm" onClick={()=>decaler(1)}>→</button><span className="muted" style={{fontSize:12}}>({weekRangeLabel(week)})</span></span>
+        <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><button className="btn btn-sm" onClick={()=>decaler(-1)}>←</button><b style={{fontSize:15}}>Semaine du {per.du} · {per.pp}</b><button className="btn btn-sm" onClick={()=>decaler(1)}>→</button><span className="muted" style={{fontSize:12}}>({weekRangeLabel(week)})</span></span>
         <span style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          <label style={{display:'flex',gap:4,alignItems:'center',fontSize:12.5}}>Payable le {fige ? <b>{per.payeTxt}</b> : <input type="date" value={per.paye} onChange={ev=>setMod(m=>{ const n = {...m}; if(ev.target.value && ev.target.value!==per.defaut) n._paye = ev.target.value; else delete n._paye; return garder(n); })} style={{padding:'2px 4px'}}/>}</label>
           <button className="btn btn-sm" onClick={()=>setTalon('*')} disabled={!rangs.length}>🧾 Talons de la semaine</button>
           <button className="btn btn-sm" onClick={imprimer} disabled={!rangs.length}>Imprimer / PDF</button>
           {fige ? <button className="btn btn-sm" onClick={rouvrir} disabled={etat.endsWith('…')}>Rouvrir pour corriger</button>
@@ -5412,8 +5421,8 @@ function PrepPaieView({cfg, refreshKey}){
       <div className="muted" style={{fontSize:11.5,marginTop:8}}>Simple = heures confirmées dans PunchPro, au plus {maxH} h ; ce qui dépasse va dans la banque (« Mis en banque », non payé). « Banque utilisée » = heures que l'employé a demandé de prendre dans sa banque dans PunchPro, sans dépasser le maximum. Férié : électriciens CCQ, payé par l'indemnité de 13 % (0 h ici) ; bureau, 8 h par férié. Bureau sans PunchPro : heures par période du dossier. Brut estimé = heures × taux du dossier (½ à 1,5, double à 2) + autres revenus − retenues ; le calcul des déductions viendra avec le journal de paie.</div>
     </div>
     {talon && (()=>{ const statut = fige ? 'Approuvée' : 'Brouillon', liste = talon==='*' ? rangs : rangs.filter(r=>r.k===talon); if(!liste.length) return null;
-      const idx = talon==='*' ? -1 : rangs.findIndex(r=>r.k===talon), titre = talon==='*' ? 'Talons de la semaine se terminant le '+finTxt : 'Talon — '+liste[0].nom;
-      const blocs = (talon==='*' ? [talonsGroupeHtml(rangs, finTxt)] : []).concat(liste.map(r=>talonHtml(r, finTxt, statut)));
+      const idx = talon==='*' ? -1 : rangs.findIndex(r=>r.k===talon), titre = talon==='*' ? 'Talons de la semaine du '+per.du+' '+per.pp : 'Talon — '+liste[0].nom;
+      const blocs = (talon==='*' ? [talonsGroupeHtml(rangs, per)] : []).concat(liste.map(r=>talonHtml(r, per, statut)));
       const av = liste.flatMap(r=>r.calc.avert.map(a=>(talon==='*' ? r.nom+' : ' : '')+a));
       return <Modal title={titre} onClose={()=>setTalon(null)} wide>
         <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
