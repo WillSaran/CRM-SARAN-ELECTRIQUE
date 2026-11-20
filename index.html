@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v625';
+const APP_VERSION = 'v626';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5330,7 +5330,9 @@ function talonHtml(r, P, statut){
     + c.retenues.map(x=>{ const cu = cumDe(x); return '<tr '+tr+'><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+A(x.m)+'</td><td '+tdn+'>'+(cu!=null ? A(cu) : '—')+'</td></tr>'; }).join('')
     + '<tr '+tot+'><td '+td+'>Total des retenues</td><td '+tdn+'>'+A(c.totRet)+'</td><td '+tdn+'></td></tr></tbody></table>';
   const pat = '<table '+tbl+'><thead><tr><th '+th+'>Contributions de l\'employeur</th><th '+thn+'>Montant</th></tr></thead><tbody>'
-    + c.pat.map(x=>'<tr '+tr+'><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+A(x.m)+'</td></tr>').join('')
+    + (()=>{ const ccqL = c.pat.filter(x=>/^(CCQ|AECQ)/.test(x.lib)), ccqT = ccqL.reduce((t,x)=>t+x.m,0);   // v626 : CCQ regroupée en une ligne (le détail reste dans le calcul)
+        return c.pat.filter(x=>!/^(CCQ|AECQ)/.test(x.lib)).concat(ccqL.length ? [{lib:'CCQ — contribution employeur (assurance, taxe, retraite, caisse supp., prélèvement, formation, indemnisation, AECQ)', m:Math.round(ccqT*100)/100}] : [])
+          .map(x=>'<tr '+tr+'><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+A(x.m)+'</td></tr>').join(''); })()
     + '<tr '+tot+'><td '+td+'>Total des contributions</td><td '+tdn+'>'+A(c.totPat)+'</td></tr></tbody></table>';
   return '<div style="font:10.5px Arial,sans-serif;color:#111;max-width:780px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'
     + '<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:4px;margin-bottom:6px;gap:10px"><div style="display:flex;gap:8px;align-items:center"><img src="'+SARAN_LOGO+'" alt="Saran Électrique" style="height:52px;width:auto"><div><div style="font-size:10px;color:#555">Saran Électrique inc.</div><div style="font-size:14px;font-weight:700">Talon de paie</div><div style="font-size:11px">Semaine du : <b>'+E(P.du)+'</b> &nbsp;<b>'+E(P.pp)+'</b></div><div style="font-size:11px">Payable le : <b>'+E(P.payeTxt)+'</b></div></div></div>'
