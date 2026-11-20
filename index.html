@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v624';
+const APP_VERSION = 'v625';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5292,7 +5292,7 @@ function paieCalcul(r, fin){
   const I = Math.max(0, P*(brut + avImp - retEmp - reer - rrqAmel));
   const impQc = r2(Math.max(0, paieImpot(I, G.qcPaliers, G.qcTaux) - G.qcTaux[0]/100*(n(e.provMontant)||G.qcMpb))/P + (n(e.provSupp)||0));
   const retenues = [['Impôt fédéral', impFed], ['Impôt du Québec', impQc], ['RRQ ('+nbFr(G.rrqTaux)+' %)', rrq], ['Assurance-emploi ('+nbFr(G.aeTaux)+' %)', ae], ['RQAP ('+nbFr(G.rqapTauxE,3)+' %)', rqap],
-    ].filter(x=>x[1]).map(([lib,m])=>({lib, m}))
+    ].filter(x=>x[1] || /^(RRQ|Assurance-emploi|RQAP)/.test(x[0]) && brut).map(([lib,m])=>({lib, m}))
     .concat(ccq ? [{lib:'CCQ — assurance ('+ass.txt+')', m:assEmp}, {lib:'CCQ — taxe sur l\'assurance ('+(taxe.txt||'à inscrire')+')', m:taxeEmp}, {lib:'CCQ — retraite ('+ret.txt+')', m:retEmp}, {lib:'CCQ — prélèvement ('+prel.txt+')', m:prelEmp}] : [])
     .concat(synd || ccq ? [{lib:'Cotisation syndicale ('+(syndTxt || sc || 'à inscrire au dossier')+')', m:synd}] : [])
     .concat(vacCcq ? [{lib:'Vacances et fériés versés à la CCQ', m:vacCcq}] : []).concat(retAutres);
@@ -5305,42 +5305,46 @@ function paieCalcul(r, fin){
   if(ccq){ const P2 = (lib, k, base) => { const x = L(k, base); pat.push({lib:lib+' ('+x.txt+')', m:x.m}); return x.m; };
     const assP = P2('CCQ — assurance', 'ccqAssPat', 0); P2('CCQ — taxe sur l\'assurance', 'ccqTaxePat', assP); P2('CCQ — retraite', 'ccqRetPat', salaire); P2('CCQ — caisse supplémentaire (électriciens)', 'ccqSupPrev', salaire);
     P2('CCQ — prélèvement et contribution sectorielle', 'ccqPrelPat', salVac); P2('CCQ — fonds de formation', 'ccqFormPat', 0); P2('CCQ — fonds d\'indemnisation', 'ccqIndemPat', 0); P2('AECQ', 'ccqAecqPat', 0); }
-  const patL = pat.filter(x=>x.m || /CCQ|AECQ|CNESST/.test(x.lib)), totPat = r2(patL.reduce((s,x)=>s+x.m,0));
+  const patL = pat.filter(x=>x.m || /CCQ|AECQ|CNESST|^RRQ|^Assurance-emploi/.test(x.lib)), totPat = r2(patL.reduce((s,x)=>s+x.m,0));
   const cout = r2(brut + nonImpTot + totPat), coutH = heures+r.ferie ? r2(cout/(heures+r.ferie)) : null;
   const cumul = cumOk ? {date:e.cumDate, brut:cum('cumBrut'), rrq:cum('cumRRQ'), ae:cum('cumAE'), rqap:cum('cumRQAP'), fed:cum('cumImpFed'), qc:cum('cumImpProv'), ccqAss:cum('cumCcqAss'), ccqRet:cum('cumCcqRet'), ccqPrel:cum('cumCcqPrel'), synd:cum('cumSynd')} : null;
   return {gains, nonImp, imposables, brut, nonImpTot, retenues, totRet, net, pat:patL, totPat, cout, coutH, vacCcq, heures, cumul, cours:{brut, rrq, ae, rqap, fed:impFed, qc:impQc, ccqAss:r2(assEmp+taxeEmp), ccqRet:retEmp, ccqPrel:prelEmp, synd}, ccq, avert, conf:!!G.conf};
 }
 const talonEsc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const talonArg = x => (Math.round((x||0)*100)/100).toLocaleString('fr-CA',{minimumFractionDigits:2, maximumFractionDigits:2})+' $';
+// v625 : talon sur une page 8½ × 11 — retenues avec cumul de l'année à gauche, contributions de l'employeur à droite
+const TALON_CUM = [[/^Impôt fédéral/,'cumImpFed'],[/^Impôt du Québec/,'cumImpProv'],[/^RRQ/,'cumRRQ'],[/^Assurance-emploi/,'cumAE'],[/^RQAP/,'cumRQAP'],[/^CCQ — assurance/,'cumCcqAss'],[/^CCQ — retraite/,'cumCcqRet'],[/^CCQ — prélèvement/,'cumCcqPrel'],[/^Cotisation syndicale/,'cumSynd'],[/^Vacances et fériés versés/,'cumVac']];
 function talonHtml(r, P, statut){
-  const c = r.calc, e = r.e||{}, E = talonEsc, A = talonArg, tdn = 'style="text-align:right;white-space:nowrap;padding:3px 6px"', td = 'style="padding:3px 6px"';
-  const tab = (titre, rows, total) => '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px"><thead><tr style="background:#eef1f4"><th '+td+' align="left">'+titre+'</th><th '+tdn+'>Heures</th><th '+tdn+'>Taux</th><th '+tdn+'>Montant</th></tr></thead><tbody>'
-    + rows.map(x=>'<tr style="border-top:1px solid #e3e6ea"><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+(x.h ? prepNb(x.h) : '')+'</td><td '+tdn+'>'+(x.tx ? A(x.tx) : '')+'</td><td '+tdn+'>'+A(x.m)+'</td></tr>').join('')
-    + (total!=null ? '<tr style="border-top:2px solid #333;font-weight:700"><td '+td+' colspan="3">Total</td><td '+tdn+'>'+A(total)+'</td></tr>' : '') + '</tbody></table>';
-  const liste = (titre, rows, total) => '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px"><thead><tr style="background:#eef1f4"><th '+td+' align="left">'+titre+'</th><th '+tdn+'>Montant</th></tr></thead><tbody>'
-    + rows.map(x=>'<tr style="border-top:1px solid #e3e6ea"><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+A(x.m)+'</td></tr>').join('')
-    + '<tr style="border-top:2px solid #333;font-weight:700"><td '+td+'>Total</td><td '+tdn+'>'+A(total)+'</td></tr></tbody></table>';
-  const cu = c.cumul, cr = c.cours, cumL = [['Brut','brut'],['RRQ','rrq'],['Assurance-emploi','ae'],['RQAP','rqap'],['Impôt fédéral','fed'],['Impôt du Québec','qc']].concat(c.ccq || c.cours.synd ? (c.ccq ? [['CCQ — assurance','ccqAss'],['CCQ — retraite','ccqRet'],['CCQ — prélèvement','ccqPrel']] : []).concat([['Cotisation syndicale','synd']]) : []);
-  return '<div style="font:12px Arial,sans-serif;color:#111;max-width:760px">'
-    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:8px;gap:10px"><div style="display:flex;gap:10px;align-items:center"><img src="'+SARAN_LOGO+'" alt="Saran Électrique" style="height:62px;width:auto"><div><div style="font-size:11px;color:#555">Saran Électrique inc.</div><div style="font-size:15px;font-weight:700">Talon de paie</div><div>Semaine du : <b>'+E(P.du)+'</b> &nbsp;<b>'+E(P.pp)+'</b></div><div>Payable le : <b>'+E(P.payeTxt)+'</b></div></div></div>'
-    + '<div style="text-align:right"><div style="font-size:15px;font-weight:700">'+E(r.nom)+'</div><div>'+E(r.ccq ? ['Électricien', e.classe, e.ccqSecteur].filter(Boolean).join(' · ') : ['Bureau', e.titre].filter(Boolean).join(' · '))+'</div>'
-    + '<div style="font-size:11px;color:'+(statut==='Approuvée' ? '#1a7f37' : '#b26a00')+'">'+(statut==='Approuvée' ? 'Paie approuvée' : 'Brouillon')+' — estimation, à valider</div></div></div>'
-    + tab('Gains', c.gains, c.brut)
-    + (c.nonImp.length ? liste('Remboursements (non imposables)', c.nonImp, c.nonImpTot) : '')
-    + (c.imposables.length ? liste('Avantages imposables (non versés — Québec seulement)', c.imposables, c.imposables.reduce((t,x)=>t+x.m,0)) : '')
-    + liste('Retenues', c.retenues, c.totRet)
-    + '<div style="display:flex;justify-content:space-between;align-items:center;background:#111;color:#fff;padding:8px 10px;font-size:15px;font-weight:700;margin-bottom:10px"><span>Net à verser</span><span>'+A(c.net)+'</span></div>'
-    + liste('Contributions de l\'employeur', c.pat, c.totPat)
-    + '<div style="display:flex;justify-content:space-between;align-items:center;border:2px solid #111;padding:6px 10px;font-size:13px;font-weight:700;margin-bottom:10px"><span>Coût global pour l\'employeur (brut + remboursements + contributions)</span><span>'+A(c.cout)+(c.coutH ? ' &nbsp;<span style="font-weight:400">('+A(c.coutH)+'/h)</span>' : '')+'</span></div>'
-    + '<div style="display:flex;gap:12px;flex-wrap:wrap">'
-    + '<div style="flex:1 1 300px">'+'<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="background:#eef1f4"><th '+td+' align="left">Cumulatifs '+E(String(cu ? '' : ''))+'</th><th '+tdn+'>'+(cu ? 'Au '+E(cu.date) : 'Avant')+'</th><th '+tdn+'>Cette paie</th><th '+tdn+'>Total</th></tr></thead><tbody>'
-      + cumL.map(([l,k])=>'<tr style="border-top:1px solid #e3e6ea"><td '+td+'>'+l+'</td><td '+tdn+'>'+(cu ? A(cu[k]) : '—')+'</td><td '+tdn+'>'+A(cr[k])+'</td><td '+tdn+'>'+(cu ? A(cu[k]+cr[k]) : '—')+'</td></tr>').join('') + '</tbody></table></div>'
-    + '<div style="flex:1 1 220px;font-size:11.5px"><div style="background:#eef1f4;padding:3px 6px;font-weight:700">Banque d\'heures</div>'
-      + '<div style="padding:3px 6px">Mises en banque cette semaine : <b>'+(r.enBanque ? '+'+prepNb(r.enBanque)+' h' : '0 h')+'</b></div><div style="padding:3px 6px">Prises dans la banque : <b>'+(r.banqueUtil ? '−'+prepNb(r.banqueUtil)+' h' : '0 h')+'</b></div>'
-      + (c.vacCcq ? '<div style="background:#eef1f4;padding:3px 6px;font-weight:700;margin-top:6px">Vacances et fériés (CCQ)</div><div style="padding:3px 6px">Indemnité de '+nbFr(cvNum(e.vacPct)||PAIE_CCQ_AV.vac,0)+' % : <b>'+A(c.vacCcq)+'</b> — imposable sur cette paie, versée à la CCQ qui la paie aux vacances</div>' : '')
-    + '</div></div>'
-    + (r.note ? '<div style="margin-top:8px;font-size:11.5px">Note : '+E(r.note)+'</div>' : '')
-    + '<div style="margin-top:8px;font-size:10.5px;color:#666">Retenues calculées par le CRM (taux '+E(String(c.conf ? '' : 'provisoires '))+'des gouvernements et de la CCQ inscrits au dossier). Estimation à valider contre les talons de l\'ACQ avant la première paie faite dans le CRM.</div>'
+  const c = r.calc, e = r.e||{}, E = talonEsc, A = talonArg, cumOk = !!c.cumul;
+  const pd = 'padding:2px 5px', td = 'style="'+pd+'"', tdn = 'style="text-align:right;white-space:nowrap;'+pd+'"', th = 'style="background:#eef1f4;text-align:left;'+pd+'"', thn = 'style="background:#eef1f4;text-align:right;white-space:nowrap;'+pd+'"';
+  const tr = 'style="border-top:1px solid #e3e6ea"', tot = 'style="border-top:1.5px solid #333;font-weight:700"', tbl = 'style="width:100%;border-collapse:collapse;font-size:10.5px;margin-bottom:6px"';
+  const cumDe = x => { const k = (TALON_CUM.find(([re])=>re.test(x.lib))||[])[1]; return k && cumOk ? (cvNum(e[k])||0) + x.m : null; };
+  const cumBrut = cumOk ? (cvNum(e.cumBrut)||0) + c.brut : null;
+  const gains = '<table '+tbl+'><thead><tr><th '+th+'>Gains</th><th '+thn+'>Heures</th><th '+thn+'>Taux</th><th '+thn+'>Montant</th><th '+thn+'>Cumul de l\'année</th></tr></thead><tbody>'
+    + c.gains.map(x=>'<tr '+tr+'><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+(x.h ? prepNb(x.h) : '')+'</td><td '+tdn+'>'+(x.tx ? A(x.tx) : '')+'</td><td '+tdn+'>'+A(x.m)+'</td><td '+tdn+'></td></tr>').join('')
+    + '<tr '+tot+'><td '+td+' colspan="3">Total des gains (brut)</td><td '+tdn+'>'+A(c.brut)+'</td><td '+tdn+'>'+(cumBrut!=null ? A(cumBrut) : '—')+'</td></tr>'
+    + c.imposables.map(x=>'<tr '+tr+' style="color:#555"><td '+td+' colspan="3"><i>'+E(x.lib)+' — non versé</i></td><td '+tdn+'><i>'+A(x.m)+'</i></td><td '+tdn+'></td></tr>').join('')
+    + c.nonImp.map(x=>'<tr '+tr+'><td '+td+' colspan="3">'+E(x.lib)+' (remboursement non imposable)</td><td '+tdn+'>'+A(x.m)+'</td><td '+tdn+'></td></tr>').join('')
+    + '</tbody></table>';
+  const ret = '<table '+tbl+'><thead><tr><th '+th+'>Retenues</th><th '+thn+'>Cette paie</th><th '+thn+'>Cumul</th></tr></thead><tbody>'
+    + c.retenues.map(x=>{ const cu = cumDe(x); return '<tr '+tr+'><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+A(x.m)+'</td><td '+tdn+'>'+(cu!=null ? A(cu) : '—')+'</td></tr>'; }).join('')
+    + '<tr '+tot+'><td '+td+'>Total des retenues</td><td '+tdn+'>'+A(c.totRet)+'</td><td '+tdn+'></td></tr></tbody></table>';
+  const pat = '<table '+tbl+'><thead><tr><th '+th+'>Contributions de l\'employeur</th><th '+thn+'>Montant</th></tr></thead><tbody>'
+    + c.pat.map(x=>'<tr '+tr+'><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+A(x.m)+'</td></tr>').join('')
+    + '<tr '+tot+'><td '+td+'>Total des contributions</td><td '+tdn+'>'+A(c.totPat)+'</td></tr></tbody></table>';
+  return '<div style="font:10.5px Arial,sans-serif;color:#111;max-width:780px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'
+    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:4px;margin-bottom:6px;gap:10px"><div style="display:flex;gap:8px;align-items:center"><img src="'+SARAN_LOGO+'" alt="Saran Électrique" style="height:52px;width:auto"><div><div style="font-size:10px;color:#555">Saran Électrique inc.</div><div style="font-size:14px;font-weight:700">Talon de paie</div><div style="font-size:11px">Semaine du : <b>'+E(P.du)+'</b> &nbsp;<b>'+E(P.pp)+'</b></div><div style="font-size:11px">Payable le : <b>'+E(P.payeTxt)+'</b></div></div></div>'
+    + '<div style="text-align:right"><div style="font-size:14px;font-weight:700">'+E(r.nom)+'</div><div style="font-size:11px">'+E(r.ccq ? ['Électricien', e.classe, e.ccqSecteur].filter(Boolean).join(' · ') : ['Bureau', e.titre].filter(Boolean).join(' · '))+'</div>'
+    + '<div style="font-size:10px;color:'+(statut==='Approuvée' ? '#1a7f37' : '#b26a00')+'">'+(statut==='Approuvée' ? 'Paie approuvée' : 'Brouillon')+' — estimation, à valider</div>'+(cumOk ? '<div style="font-size:9.5px;color:#666">Cumuls : dossier au '+E(c.cumul.date)+' + cette paie</div>' : '<div style="font-size:9.5px;color:#666">Cumuls du dossier non inscrits</div>')+'</div></div>'
+    + gains
+    + '<div style="display:flex;gap:10px;align-items:flex-start"><div style="flex:1 1 52%;min-width:0">'+ret
+      + '<div style="display:flex;justify-content:space-between;background:#111;color:#fff;padding:6px 8px;font-size:13px;font-weight:700"><span>Net à verser</span><span>'+A(c.net)+'</span></div></div>'
+    + '<div style="flex:1 1 48%;min-width:0">'+pat
+      + '<div style="display:flex;justify-content:space-between;border:1.5px solid #111;padding:5px 8px;font-size:11px;font-weight:700"><span>Coût global employeur</span><span>'+A(c.cout)+(c.coutH ? ' <span style="font-weight:400">('+A(c.coutH)+'/h)</span>' : '')+'</span></div></div></div>'
+    + '<div style="margin-top:6px;font-size:10px;border-top:1px solid #ccc;padding-top:4px">Banque d\'heures : mises en banque <b>'+(r.enBanque ? '+'+prepNb(r.enBanque)+' h' : '0 h')+'</b> · prises <b>'+(r.banqueUtil ? '−'+prepNb(r.banqueUtil)+' h' : '0 h')+'</b>'
+      + (c.vacCcq ? ' &nbsp;|&nbsp; Vacances et fériés ('+nbFr(cvNum(e.vacPct)||PAIE_CCQ_AV.vac,0)+' %) : '+A(c.vacCcq)+', imposables sur cette paie, versées à la CCQ qui les paie aux vacances' : '')+'</div>'
+    + (r.note ? '<div style="font-size:10px;margin-top:2px">Note : '+E(r.note)+'</div>' : '')
+    + '<div style="margin-top:4px;font-size:9px;color:#666">Calculé par le CRM avec les taux '+(c.conf ? '' : 'provisoires ')+'des gouvernements et les taux CCQ du dossier. Estimation à valider contre les talons de l\'ACQ avant la première paie faite dans le CRM.</div>'
     + '</div>';
 }
 function talonsGroupeHtml(rangs, P){
@@ -5352,7 +5356,7 @@ function talonsGroupeHtml(rangs, P){
     + '<div style="font-size:11.5px;margin-top:6px">Coût global de la semaine (brut avec vacances CCQ + remboursements + contributions de l\'employeur) : <b>'+A(s('cout'))+'</b></div></div>';
 }
 function talonsImprimer(blocs, titre){ const w = window.open('', '_blank'); if(!w){ alert('Autorise les fenêtres surgissantes pour imprimer.'); return; }
-  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+talonEsc(titre)+'</title><style>body{margin:14px}.pg{page-break-after:always;margin-bottom:24px}.pg:last-child{page-break-after:auto}@page{size:letter;margin:12mm}</style></head><body>'+blocs.map(b=>'<div class="pg">'+b+'</div>').join('')+'</body></html>');
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+talonEsc(titre)+'</title><style>body{margin:0}.pg{page-break-after:always;margin-bottom:24px}.pg:last-child{page-break-after:auto}@page{size:letter;margin:12mm}</style></head><body>'+blocs.map(b=>'<div class="pg">'+b+'</div>').join('')+'</body></html>');
   w.document.close(); w.focus(); setTimeout(()=>w.print(), 300); }
 function PrepPaieView({cfg, refreshKey}){
   const conf = useSemainesConfirmees(cfg, refreshKey);
