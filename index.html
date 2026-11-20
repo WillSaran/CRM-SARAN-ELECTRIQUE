@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v628';
+const APP_VERSION = 'v629';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5308,9 +5308,9 @@ function paieCalcul(r, fin){
   const patL = pat.filter(x=>x.m || /CCQ|AECQ|CNESST|^RRQ|^Assurance-emploi/.test(x.lib)), totPat = r2(patL.reduce((s,x)=>s+x.m,0));
   const cout = r2(brut + nonImpTot + totPat), coutH = heures+r.ferie ? r2(cout/(heures+r.ferie)) : null;
   const cumul = cumOk ? {date:e.cumDate, brut:cum('cumBrut'), rrq:cum('cumRRQ'), ae:cum('cumAE'), rqap:cum('cumRQAP'), fed:cum('cumImpFed'), qc:cum('cumImpProv'), ccqAss:cum('cumCcqAss'), ccqRet:cum('cumCcqRet'), ccqPrel:cum('cumCcqPrel'), synd:cum('cumSynd')} : null;
-  // v628 : l'indemnité CCQ (13 %) reste dans la base des retenues, mais n'est pas affichée en gain ni en retenue (elle est versée à la CCQ, qui la paie en juin et en décembre) ; le net ne change pas
-  const vacLib = /^Indemnité de vacances et fériés/, gainsAff = gains.filter(g=>!(ccq && vacLib.test(g.lib))), retAff = retenues.filter(x=>!/^Vacances et fériés versés/.test(x.lib));
-  return {gains:gainsAff, nonImp, imposables, brut:r2(brut - vacCcq), brutImposable:brut, nonImpTot, retenues:retAff, totRet:r2(totRet - vacCcq), net, pat:patL, totPat, cout, coutH, vacCcq, heures, cumul, cours:{brut, rrq, ae, rqap, fed:impFed, qc:impQc, ccqAss:r2(assEmp+taxeEmp), ccqRet:retEmp, ccqPrel:prelEmp, synd}, ccq, avert, conf:!!G.conf};
+  // v629 : comme les exemples de paie de l'ACQ et de l'APCHQ — le 13 % est dans les gains et les retenues, puis « remis à la CCQ » sur une ligne à part avant le net
+  const retAff = retenues.filter(x=>!/^Vacances et fériés versés/.test(x.lib));
+  return {gains, nonImp, imposables, brut, brutImposable:brut, nonImpTot, retenues:retAff, totRet:r2(totRet - vacCcq), net, pat:patL, totPat, cout, coutH, vacCcq, heures, cumul, cours:{brut, rrq, ae, rqap, fed:impFed, qc:impQc, ccqAss:r2(assEmp+taxeEmp), ccqRet:retEmp, ccqPrel:prelEmp, synd}, ccq, avert, conf:!!G.conf};
 }
 const talonEsc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const talonArg = x => (Math.round((x||0)*100)/100).toLocaleString('fr-CA',{minimumFractionDigits:2, maximumFractionDigits:2})+' $';
@@ -5325,13 +5325,14 @@ function talonHtml(r, P, statut){
   const gains = '<table '+tbl+'><thead><tr><th '+th+'>Gains</th><th '+thn+'>Heures</th><th '+thn+'>Taux</th><th '+thn+'>Montant</th><th '+thn+'>Cumul de l\'année</th></tr></thead><tbody>'
     + c.gains.map(x=>'<tr '+tr+'><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+(x.h ? prepNb(x.h) : '')+'</td><td '+tdn+'>'+(x.tx ? A(x.tx) : '')+'</td><td '+tdn+'>'+A(x.m)+'</td><td '+tdn+'></td></tr>').join('')
     + '<tr '+tot+'><td '+td+' colspan="3">Total des gains (brut)</td><td '+tdn+'>'+A(c.brut)+'</td><td '+tdn+'>'+(cumBrut!=null ? A(cumBrut) : '—')+'</td></tr>'
-    + (c.vacCcq ? '<tr style="border-top:1px solid #e3e6ea;color:#555"><td '+td+' colspan="3"><i>Vacances et fériés '+nbFr(cvNum(e.vacPct)||PAIE_CCQ_AV.vac,0)+' % — versés à la CCQ, qui les paie en juin et en décembre (inclus dans le calcul des retenues)</i></td><td '+tdn+'><i>'+A(c.vacCcq)+'</i></td><td '+tdn+'></td></tr>' : '')
     + c.imposables.map(x=>'<tr style="border-top:1px solid #e3e6ea;color:#555"><td '+td+' colspan="3"><i>'+E(x.lib)+' — non versé</i></td><td '+tdn+'><i>'+A(x.m)+'</i></td><td '+tdn+'></td></tr>').join('')
     + c.nonImp.map(x=>'<tr '+tr+'><td '+td+' colspan="3">'+E(x.lib)+' (remboursement non imposable)</td><td '+tdn+'>'+A(x.m)+'</td><td '+tdn+'></td></tr>').join('')
     + '</tbody></table>';
   const ret = '<table '+tbl+'><thead><tr><th '+th+'>Retenues</th><th '+thn+'>Cette paie</th><th '+thn+'>Cumul</th></tr></thead><tbody>'
     + c.retenues.map(x=>{ const cu = cumDe(x); return '<tr '+tr+'><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+A(x.m)+'</td><td '+tdn+'>'+(cu!=null ? A(cu) : '—')+'</td></tr>'; }).join('')
-    + '<tr '+tot+'><td '+td+'>Total des retenues</td><td '+tdn+'>'+A(c.totRet)+'</td><td '+tdn+'></td></tr></tbody></table>';
+    + '<tr '+tot+'><td '+td+'>Total des retenues</td><td '+tdn+'>'+A(c.totRet)+'</td><td '+tdn+'></td></tr>'
+    + (c.vacCcq ? '<tr><td colspan="3" style="background:#eef1f4;font-weight:700;'+pd+'">CCQ</td></tr><tr '+tr+'><td '+td+'>Vacances et fériés '+nbFr(cvNum(e.vacPct)||PAIE_CCQ_AV.vac,0)+' % remis à la CCQ<div style="font-size:9px;color:#666">L\'employeur remet ce montant à la CCQ, qui le paie avant les vacances d\'été et d\'hiver.</div></td><td '+tdn+'>'+A(c.vacCcq)+'</td><td '+tdn+'>'+(cumOk ? A((cvNum(e.cumVac)||0)+c.vacCcq) : '—')+'</td></tr>' : '')
+    + '</tbody></table>';
   const pat = '<table '+tbl+'><thead><tr><th '+th+'>Contributions de l\'employeur</th><th '+thn+'>Montant</th></tr></thead><tbody>'
     + (()=>{ const ccqL = c.pat.filter(x=>/^(CCQ|AECQ)/.test(x.lib)), ccqT = ccqL.reduce((t,x)=>t+x.m,0);   // v626 : CCQ regroupée en une ligne (le détail reste dans le calcul)
         return c.pat.filter(x=>!/^(CCQ|AECQ)/.test(x.lib)).concat(ccqL.length ? [{lib:'CCQ — contribution employeur', m:Math.round(ccqT*100)/100}] : [])
