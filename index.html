@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v618';
+const APP_VERSION = 'v619';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5183,6 +5183,106 @@ const prepAutresLire = s => String(s||'').split(';').map(x=>x.trim()).filter(Boo
 const prepAutresVal = l => (l||[]).reduce((t,a)=>{ const d = PREP_AUTRES.find(x=>x[0]===a.type); return t + (d ? d[1] : 1)*Math.abs(cvNum(a.montant)||0); },0);
 const prepMaintenant = () => { const d = new Date(), z = n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+' '+z(d.getHours())+':'+z(d.getMinutes())+':'+z(d.getSeconds()); };
 const PREP_CHAMPS = ['simple','demi','double','ferie','banqueUtil','vac'];
+// v619 : talons de paie (estimation) calculés à partir de la préparation de la paie — individuel et en groupe.
+// Méthode : formules de retenues à la source sur une base annualisée (52 paies) — ARC T4127 (fédéral, abattement du Québec) et Revenu Québec TP-1015.F (simplifié).
+// À valider contre les talons de l'ACQ (test en parallèle en décembre) avant la première vraie paie.
+const PAIE_NON_IMPOS = ['Stationnement','Remb. frais divers','Gîte et pension'];
+const paieImpot = (x, paliers, taux) => { let t = 0, bas = 0; for(let i=0;i<taux.length;i++){ const haut = i<paliers.length ? paliers[i] : Infinity; if(x>bas) t += (Math.min(x,haut)-bas)*taux[i]/100; bas = haut; } return t; };
+function paieCalcul(r, fin){
+  const e = r.e||{}, an = String(fin.getFullYear()), G = PAIE_GOUV[an] || PAIE_GOUV['2026'], P = 52, r2 = x => Math.round((x||0)*100)/100, n = v => cvNum(v);
+  const ccq = r.ccq, t = n(e.taux), av = ccqAvDefaut(e), avert = [];
+  const gains = [], add = (lib, h, tx, m) => { if(m) gains.push({lib, h, tx, m:r2(m)}); };
+  if(t!=null){ add('Temps simple', r.simple, t, r.simple*t); add('Banque d\'heures utilisée', r.banqueUtil, t, r.banqueUtil*t); add('Temps et demi', r.demi, t*1.5, r.demi*t*1.5);
+    add('Temps double', r.double, t*2, r.double*t*2); add('Férié', r.ferie, t, r.ferie*t); add('Vacances', r.vac, t, r.vac*t); }
+  else if(n(e.hebdo)){ add('Salaire de la semaine', null, null, n(e.hebdo)); if(/net/i.test(e.hebdoBrutNet||'')) avert.push('Salaire inscrit en net au dossier : le calcul le traite comme un brut.'); }
+  else avert.push('Pas de taux horaire ni de salaire au dossier.');
+  const salaire = gains.reduce((s,g)=>s+g.m,0);
+  if(!ccq && /vers/i.test(e.vacMode||'') && n(e.vacPct)) add('Paie de vacances ('+nbFr(n(e.vacPct),0)+' %)', null, null, salaire*n(e.vacPct)/100);
+  const nonImp = [], retAutres = []; let reer = 0;
+  (r.autres||[]).forEach(a=>{ const d = PREP_AUTRES.find(x=>x[0]===a.type), m = Math.abs(n(a.montant)||0); if(!m) return;
+    if(d && d[1]<0){ if(a.type==='REER') reer += m; retAutres.push({lib:a.type, m:r2(m)}); }
+    else if(PAIE_NON_IMPOS.includes(a.type)) nonImp.push({lib:a.type, m:r2(m)}); else add(a.type, null, null, m); });
+  const brut = r2(gains.reduce((s,g)=>s+g.m,0)), nonImpTot = r2(nonImp.reduce((s,x)=>s+x.m,0));
+  const heures = r.simple + r.banqueUtil + r.demi + r.double;
+  // Cumulatifs du dossier (ACQ), seulement s'ils sont de la même année
+  const cumOk = String(e.cumDate||'').slice(0,4)===an, cum = k => cumOk ? (n(e[k])||0) : 0;
+  const plafond = (x, maxAnn, k) => Math.max(0, Math.min(x, maxAnn - cum(k)));
+  // RRQ, AE, RQAP (employé)
+  const rrq = /^oui/i.test(e.exempRRQ||'') ? 0 : r2(plafond(Math.max(0, brut - G.rrqExemp/P)*G.rrqTaux/100, (G.rrqMga-G.rrqExemp)*G.rrqTaux/100, 'cumRRQ'));
+  const ae = /^oui/i.test(e.exempAE||'') ? 0 : r2(plafond(brut*G.aeTaux/100, G.aeMra*G.aeTaux/100, 'cumAE'));
+  const rqap = r2(plafond(brut*G.rqapTauxE/100, G.rqapMra*G.rqapTauxE/100, 'cumRQAP'));
+  // CCQ (employé) et syndicat
+  const val = (k, d) => { const v = n(e[k]); return v!=null ? v : d; };
+  const assEmp = ccq ? r2(heures*(val('ccqAssEmp', av.ccqAssEmp)||0)) : 0;
+  const retEmp = ccq ? r2(heures*(val('ccqRetEmp', av.ccqRetEmp)||0)) : 0;
+  let prelEmp = 0; if(ccq){ const s = String(e.ccqPrelEmp||'').trim(); if(!s) avert.push('Prélèvement CCQ employé à confirmer (vide au dossier).'); else if(/%/.test(s)) prelEmp = r2(salaire*(n(s.replace('%',''))||0)/100); else prelEmp = r2(heures*(n(s)||0)); }
+  const sc = String(e.syndCotis||'').trim(); let synd = 0; if(sc){ if(/%/.test(sc)) synd = r2(salaire*(n(sc.replace('%',''))||0)/100); else if(n(sc)!=null) synd = r2(n(sc)); }
+  // Impôt fédéral (T4127, résident du Québec)
+  const low = G.fedTaux[0]/100, rrqAmel = G.rrqTaux ? rrq/G.rrqTaux : 0;   // 1 point de bonification du RRQ = déduction
+  const A = Math.max(0, P*(brut - retEmp - reer - synd - rrqAmel));
+  const k2q = low*(Math.min(P*(rrq-rrqAmel), (G.rrqMga-G.rrqExemp)*(G.rrqTaux-1)/100) + Math.min(P*ae, G.aeMra*G.aeTaux/100) + Math.min(P*rqap, G.rqapMra*G.rqapTauxE/100));
+  const T3 = Math.max(0, paieImpot(A, G.fedPaliers, G.fedTaux) - low*(n(e.fedMontant)||G.fedBpaMax) - k2q - low*Math.min(A, G.fedCEA));
+  const impFed = r2(T3*(1-G.fedAbattQc/100)/P + (n(e.fedSupp)||0));
+  // Impôt du Québec (TP-1015.F simplifié)
+  const I = Math.max(0, P*(brut - retEmp - reer - rrqAmel));
+  const impQc = r2(Math.max(0, paieImpot(I, G.qcPaliers, G.qcTaux) - G.qcTaux[0]/100*(n(e.provMontant)||G.qcMpb))/P + (n(e.provSupp)||0));
+  const retenues = [['Impôt fédéral', impFed], ['Impôt du Québec', impQc], ['RRQ', rrq], ['Assurance-emploi', ae], ['RQAP', rqap],
+    ['CCQ — assurance', assEmp], ['CCQ — retraite', retEmp], ['CCQ — prélèvement', prelEmp], ['Cotisation syndicale', synd]].filter(x=>x[1]).map(([lib,m])=>({lib, m})).concat(retAutres);
+  const totRet = r2(retenues.reduce((s,x)=>s+x.m,0)), net = r2(brut + nonImpTot - totRet);
+  // Parts de l'employeur
+  const cn = val('cnesstTaux', av.cnesstTaux);
+  if(cn==null) avert.push('Taux CNESST à inscrire au dossier.');
+  const pat = [['RRQ', rrq], ['Assurance-emploi (× '+nbFr(G.aeMult,1)+')', r2(ae*G.aeMult)], ['RQAP', r2(plafond(brut*G.rqapTauxP/100, Infinity, 'x'))], ['FSS', r2(brut*G.fss/100)], ['CNT', r2(brut*G.cnt/100)], ['CNESST', r2(brut*(cn||0)/100)]];
+  let vacCcq = 0;
+  if(ccq){ const prel = String(av.ccqPrelPat||''), A2 = PAIE_CCQ_AV;
+    pat.push(['CCQ — assurance', r2(heures*(val('ccqAssPat', av.ccqAssPat)||0))], ['CCQ — retraite', r2(heures*(val('ccqRetPat', av.ccqRetPat)||0))], ['CCQ — prévoyance supp.', r2(heures*(val('ccqSupPrev', av.ccqSupPrev)||0))],
+      ['CCQ — prélèvement', r2(salaire*A2.prelPatPct/100 + heures*A2.prelPatH)], ['CCQ — formation', r2(heures*(val('ccqFormPat', A2.formH+A2.indemH)||0))], ['AECQ', r2(heures*A2.aecqH)]);
+    vacCcq = r2(salaire*(n(e.vacPct)||A2.vac)/100); }
+  const patL = pat.filter(x=>x[1]).map(([lib,m])=>({lib, m})), totPat = r2(patL.reduce((s,x)=>s+x.m,0));
+  const cumul = cumOk ? {date:e.cumDate, brut:cum('cumBrut'), rrq:cum('cumRRQ'), ae:cum('cumAE'), rqap:cum('cumRQAP'), fed:cum('cumImpFed'), qc:cum('cumImpProv')} : null;
+  return {gains, nonImp, brut, nonImpTot, retenues, totRet, net, pat:patL, totPat, vacCcq, heures, cumul, cours:{brut, rrq, ae, rqap, fed:impFed, qc:impQc}, avert, conf:!!G.conf};
+}
+const talonEsc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const talonArg = x => (Math.round((x||0)*100)/100).toLocaleString('fr-CA',{minimumFractionDigits:2, maximumFractionDigits:2})+' $';
+function talonHtml(r, finTxt, statut){
+  const c = r.calc, e = r.e||{}, E = talonEsc, A = talonArg, tdn = 'style="text-align:right;white-space:nowrap;padding:3px 6px"', td = 'style="padding:3px 6px"';
+  const tab = (titre, rows, total) => '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px"><thead><tr style="background:#eef1f4"><th '+td+' align="left">'+titre+'</th><th '+tdn+'>Heures</th><th '+tdn+'>Taux</th><th '+tdn+'>Montant</th></tr></thead><tbody>'
+    + rows.map(x=>'<tr style="border-top:1px solid #e3e6ea"><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+(x.h ? prepNb(x.h) : '')+'</td><td '+tdn+'>'+(x.tx ? A(x.tx) : '')+'</td><td '+tdn+'>'+A(x.m)+'</td></tr>').join('')
+    + (total!=null ? '<tr style="border-top:2px solid #333;font-weight:700"><td '+td+' colspan="3">Total</td><td '+tdn+'>'+A(total)+'</td></tr>' : '') + '</tbody></table>';
+  const liste = (titre, rows, total) => '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px"><thead><tr style="background:#eef1f4"><th '+td+' align="left">'+titre+'</th><th '+tdn+'>Montant</th></tr></thead><tbody>'
+    + rows.map(x=>'<tr style="border-top:1px solid #e3e6ea"><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+A(x.m)+'</td></tr>').join('')
+    + '<tr style="border-top:2px solid #333;font-weight:700"><td '+td+'>Total</td><td '+tdn+'>'+A(total)+'</td></tr></tbody></table>';
+  const cu = c.cumul, cr = c.cours, cumL = [['Brut','brut'],['RRQ','rrq'],['Assurance-emploi','ae'],['RQAP','rqap'],['Impôt fédéral','fed'],['Impôt du Québec','qc']];
+  return '<div style="font:12px Arial,sans-serif;color:#111;max-width:760px">'
+    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:8px;gap:10px"><div><div style="font-size:16px;font-weight:700">Saran Électrique inc.</div><div>Talon de paie — semaine se terminant le <b>'+E(finTxt)+'</b></div></div>'
+    + '<div style="text-align:right"><div style="font-size:15px;font-weight:700">'+E(r.nom)+'</div><div>'+E(r.ccq ? ['Électricien', e.classe, e.ccqSecteur].filter(Boolean).join(' · ') : ['Bureau', e.titre].filter(Boolean).join(' · '))+'</div>'
+    + '<div style="font-size:11px;color:'+(statut==='Approuvée' ? '#1a7f37' : '#b26a00')+'">'+(statut==='Approuvée' ? 'Paie approuvée' : 'Brouillon')+' — estimation, à valider</div></div></div>'
+    + tab('Gains', c.gains, c.brut)
+    + (c.nonImp.length ? liste('Remboursements (non imposables)', c.nonImp, c.nonImpTot) : '')
+    + liste('Retenues', c.retenues, c.totRet)
+    + '<div style="display:flex;justify-content:space-between;align-items:center;background:#111;color:#fff;padding:8px 10px;font-size:15px;font-weight:700;margin-bottom:10px"><span>Net à verser</span><span>'+A(c.net)+'</span></div>'
+    + '<div style="display:flex;gap:12px;flex-wrap:wrap">'
+    + '<div style="flex:1 1 300px">'+'<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="background:#eef1f4"><th '+td+' align="left">Cumulatifs '+E(String(cu ? '' : ''))+'</th><th '+tdn+'>'+(cu ? 'Au '+E(cu.date) : 'Avant')+'</th><th '+tdn+'>Cette paie</th><th '+tdn+'>Total</th></tr></thead><tbody>'
+      + cumL.map(([l,k])=>'<tr style="border-top:1px solid #e3e6ea"><td '+td+'>'+l+'</td><td '+tdn+'>'+(cu ? A(cu[k]) : '—')+'</td><td '+tdn+'>'+A(cr[k])+'</td><td '+tdn+'>'+(cu ? A(cu[k]+cr[k]) : '—')+'</td></tr>').join('') + '</tbody></table></div>'
+    + '<div style="flex:1 1 220px;font-size:11.5px"><div style="background:#eef1f4;padding:3px 6px;font-weight:700">Banque d\'heures</div>'
+      + '<div style="padding:3px 6px">Mises en banque cette semaine : <b>'+(r.enBanque ? '+'+prepNb(r.enBanque)+' h' : '0 h')+'</b></div><div style="padding:3px 6px">Prises dans la banque : <b>'+(r.banqueUtil ? '−'+prepNb(r.banqueUtil)+' h' : '0 h')+'</b></div>'
+      + (c.vacCcq ? '<div style="background:#eef1f4;padding:3px 6px;font-weight:700;margin-top:6px">Vacances et fériés (CCQ)</div><div style="padding:3px 6px">Indemnité de '+nbFr(cvNum(e.vacPct)||PAIE_CCQ_AV.vac,0)+' % versée à la CCQ : <b>'+A(c.vacCcq)+'</b> (payée par la CCQ)</div>' : '')
+    + '</div></div>'
+    + (r.note ? '<div style="margin-top:8px;font-size:11.5px">Note : '+E(r.note)+'</div>' : '')
+    + '<div style="margin-top:8px;font-size:10.5px;color:#666">Retenues calculées par le CRM (taux '+E(String(c.conf ? '' : 'provisoires '))+'des gouvernements et de la CCQ inscrits au dossier). Estimation à valider contre les talons de l\'ACQ avant la première paie faite dans le CRM.</div>'
+    + '</div>';
+}
+function talonsGroupeHtml(rangs, finTxt){
+  const A = talonArg, E = talonEsc, s = k => rangs.reduce((t,r)=>t+(r.calc[k]||0),0), tdn = 'style="text-align:right;padding:3px 6px;white-space:nowrap"', td = 'style="padding:3px 6px"';
+  return '<div style="font:12px Arial,sans-serif;color:#111;max-width:760px"><div style="font-size:16px;font-weight:700">Saran Électrique inc. — paie de la semaine se terminant le '+E(finTxt)+'</div><div style="font-size:11px;color:#666;margin-bottom:6px">Estimation calculée par le CRM, à valider.</div>'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#eef1f4"><th '+td+' align="left">Employé</th><th '+tdn+'>Heures</th><th '+tdn+'>Brut</th><th '+tdn+'>Retenues</th><th '+tdn+'>Net à verser</th><th '+tdn+'>Parts employeur</th>'+(rangs.some(r=>r.calc.vacCcq) ? '<th '+tdn+'>Vac. CCQ</th>' : '')+'</tr></thead><tbody>'
+    + rangs.map(r=>'<tr style="border-top:1px solid #e3e6ea"><td '+td+'>'+E(r.nom)+'</td><td '+tdn+'>'+prepNb(r.calc.heures+r.ferie)+'</td><td '+tdn+'>'+A(r.calc.brut)+'</td><td '+tdn+'>'+A(r.calc.totRet)+'</td><td '+tdn+'><b>'+A(r.calc.net)+'</b></td><td '+tdn+'>'+A(r.calc.totPat)+'</td>'+(rangs.some(x=>x.calc.vacCcq) ? '<td '+tdn+'>'+A(r.calc.vacCcq)+'</td>' : '')+'</tr>').join('')
+    + '<tr style="border-top:2px solid #333;font-weight:700"><td '+td+'>Total — '+rangs.length+'</td><td '+tdn+'>'+prepNb(rangs.reduce((t,r)=>t+r.calc.heures+r.ferie,0))+'</td><td '+tdn+'>'+A(s('brut'))+'</td><td '+tdn+'>'+A(s('totRet'))+'</td><td '+tdn+'>'+A(s('net'))+'</td><td '+tdn+'>'+A(s('totPat'))+'</td>'+(rangs.some(r=>r.calc.vacCcq) ? '<td '+tdn+'>'+A(s('vacCcq'))+'</td>' : '')+'</tr></tbody></table>'
+    + '<div style="font-size:11.5px;margin-top:6px">Coût total de la semaine (brut + remboursements + parts employeur + vacances CCQ) : <b>'+A(s('brut')+s('nonImpTot')+s('totPat')+s('vacCcq'))+'</b></div></div>';
+}
+function talonsImprimer(blocs, titre){ const w = window.open('', '_blank'); if(!w){ alert('Autorise les fenêtres surgissantes pour imprimer.'); return; }
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+talonEsc(titre)+'</title><style>body{margin:14px}.pg{page-break-after:always;margin-bottom:24px}.pg:last-child{page-break-after:auto}@page{size:letter;margin:12mm}</style></head><body>'+blocs.map(b=>'<div class="pg">'+b+'</div>').join('')+'</body></html>');
+  w.document.close(); w.focus(); setTimeout(()=>w.print(), 300); }
 function PrepPaieView({cfg, refreshKey}){
   const conf = useSemainesConfirmees(cfg, refreshKey);
   const [L,setL]=useState(null), [err,setErr]=useState('');
@@ -5192,6 +5292,7 @@ function PrepPaieView({cfg, refreshKey}){
   const [mod,setMod]=useState({});
   const [etat,setEtat]=useState('');
   const [autresDe,setAutresDe]=useState(null);
+  const [talon,setTalon]=useState(null);   // v619 : clé d'un employé, ou '*' pour le groupe
   useEffect(()=>{ if(!cfg.punchproSpreadsheetId) return; let ok = true;
     sheetsBatchGet(cfg.punchproSpreadsheetId, ['HeuresEnBanque!A2:E']).then(([rows])=>{ if(!ok) return; const m = {};
       (rows||[]).forEach(r=>{ const h = cvNum(r[2]); if(r[0] && r[1] && h<0){ const k = r[1]+'|'+cvNorm(r[0]); m[k] = (m[k]||0) - h; } }); setPris(m); }).catch(()=>{});
@@ -5237,7 +5338,7 @@ function PrepPaieView({cfg, refreshKey}){
       if(m.autres) d.autres = m.autres; if(m.note!=null) d.note = m.note; if(m.region!=null) d.region = m.region; if(m.secteur!=null) d.secteur = m.secteur;
       return d; });
   }
-  rangs.forEach(r=>{ r.brut = brutDe(r); r.paye = r.simple+r.banqueUtil+r.ferie; });
+  rangs.forEach(r=>{ r.brut = brutDe(r); r.paye = r.simple+r.banqueUtil+r.ferie; r.calc = paieCalcul(r, fin); });
   const tot = f => rangs.reduce((t,r)=>t+(r[f]||0),0);
   const alertes = fige ? [] : rangs.filter(r=>r.tot==null).map(r=>r.nom);
   const ligne = (r, statut, le) => [week, localDateStr(fin), r.nom, r.e.id||'', r.ccq ? 'CCQ' : 'Bureau', r.metier, r.secteur, r.region, r.simple, r.demi, r.double, r.ferie, r.banqueUtil, r.vac, r.enBanque, prepAutresTxt(r.autres), r.cnesst, tauxDe(r.e)!=null ? tauxDe(r.e).toFixed(2) : '', r.brut!=null ? r.brut.toFixed(2) : '', r.note, statut, le];
@@ -5278,6 +5379,7 @@ function PrepPaieView({cfg, refreshKey}){
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8,marginBottom:8}}>
         <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><button className="btn btn-sm" onClick={()=>decaler(-1)}>←</button><b style={{fontSize:15}}>Semaine se terminant le {finTxt}</b><button className="btn btn-sm" onClick={()=>decaler(1)}>→</button><span className="muted" style={{fontSize:12}}>({weekRangeLabel(week)})</span></span>
         <span style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          <button className="btn btn-sm" onClick={()=>setTalon('*')} disabled={!rangs.length}>🧾 Talons de la semaine</button>
           <button className="btn btn-sm" onClick={imprimer} disabled={!rangs.length}>Imprimer / PDF</button>
           {fige ? <button className="btn btn-sm" onClick={rouvrir} disabled={etat.endsWith('…')}>Rouvrir pour corriger</button>
             : <>{Object.keys(mod).length>0 && <button className="btn btn-sm" onClick={()=>{ if(confirm('Effacer tes corrections et revenir aux heures de PunchPro ?')){ setMod(garder({})); } }}>Effacer mes corrections</button>}
@@ -5291,9 +5393,9 @@ function PrepPaieView({cfg, refreshKey}){
       </div>
       {etat && <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{etat}</div>}
       {alertes.length>0 && <div style={{fontSize:12.5,marginBottom:8,color:'var(--warning)'}}>Semaine pas confirmée pour : {alertes.join(', ')}. Confirme-la dans l'onglet Heures ou inscris les heures à la main.</div>}
-      <div style={{overflowX:'auto'}}><table style={{fontSize:13,width:'100%'}}><thead><tr><th>Employé</th><th>Métier</th><th>Secteur</th><th>Région</th><th style={th}>Simple</th><th style={th}>½ (×1,5)</th><th style={th}>Double</th><th style={th}>Férié</th><th style={th}>Banque utilisée</th><th style={th}>Vacances</th><th style={th}>Mis en banque</th><th>Autres revenus / retenues</th><th>Unité CNESST</th><th style={th}>Brut estimé</th><th>Note</th></tr></thead>
+      <div style={{overflowX:'auto'}}><table style={{fontSize:13,width:'100%'}}><thead><tr><th>Employé</th><th>Métier</th><th>Secteur</th><th>Région</th><th style={th}>Simple</th><th style={th}>½ (×1,5)</th><th style={th}>Double</th><th style={th}>Férié</th><th style={th}>Banque utilisée</th><th style={th}>Vacances</th><th style={th}>Mis en banque</th><th>Autres revenus / retenues</th><th>Unité CNESST</th><th style={th}>Brut estimé</th><th style={th}>Net estimé</th><th>Note</th></tr></thead>
         <tbody>{rangs.map(r=><tr key={r.k}>
-          <td><b>{r.nom}</b><div className="muted" style={{fontSize:11.5}}>{r.ccq ? [r.e.classe, r.e.ccqSecteur].filter(Boolean).join(' · ') : 'Bureau'}{!fige && r.tot!=null ? ' · PunchPro '+fmtH(r.tot) : ''}{!fige && !r.conf && r.tot!=null ? ' (dossier)' : ''}</div></td>
+          <td><b>{r.nom}</b> <button className="btn btn-sm" style={{padding:'0 6px'}} title="Voir le talon de paie" onClick={()=>setTalon(r.k)}>🧾</button><div className="muted" style={{fontSize:11.5}}>{r.ccq ? [r.e.classe, r.e.ccqSecteur].filter(Boolean).join(' · ') : 'Bureau'}{!fige && r.tot!=null ? ' · PunchPro '+fmtH(r.tot) : ''}{!fige && !r.conf && r.tot!=null ? ' (dossier)' : ''}</div></td>
           <td>{r.metier||'—'}</td>
           <td>{fige ? r.secteur : <input style={{width:40}} value={r.secteur} onChange={ev=>changer(r.k,'secteur',ev.target.value)}/>}</td>
           <td>{fige ? r.region : <input style={{width:34}} value={r.region} onChange={ev=>changer(r.k,'region',ev.target.value)}/>}</td>
@@ -5302,11 +5404,25 @@ function PrepPaieView({cfg, refreshKey}){
           <td style={{fontSize:12}}>{prepAutresTxt(r.autres) || <span className="muted">—</span>} {!fige && <button className="btn btn-sm" style={{padding:'1px 7px'}} onClick={()=>setAutresDe(r.k)}>{r.autres.length ? 'Modifier' : '+'}</button>}</td>
           <td style={{fontSize:12}}>{r.cnesst||<span className="muted">—</span>}</td>
           <td style={{...th,fontVariantNumeric:'tabular-nums'}}>{r.brut!=null ? ccqArg(r.brut) : <span className="muted">—</span>}</td>
+          <td style={{...th,fontVariantNumeric:'tabular-nums'}}><a href="#" onClick={ev=>{ ev.preventDefault(); setTalon(r.k); }}>{ccqArg(r.calc.net)}</a></td>
           <td>{fige ? r.note : <input style={{width:150}} value={r.note} onChange={ev=>changer(r.k,'note',ev.target.value)}/>}</td></tr>)}
-          {rangs.length>0 && <tr style={{fontWeight:700}}><td colSpan="4">Total — {rangs.length} employé{rangs.length>1?'s':''}</td>{['simple','demi','double','ferie','banqueUtil','vac','enBanque'].map(f=><td key={f} style={th}>{tot(f) ? prepNb(tot(f)) : ''}</td>)}<td></td><td></td><td style={th}>{ccqArg(tot('brut'))}</td><td></td></tr>}
+          {rangs.length>0 && <tr style={{fontWeight:700}}><td colSpan="4">Total — {rangs.length} employé{rangs.length>1?'s':''}</td>{['simple','demi','double','ferie','banqueUtil','vac','enBanque'].map(f=><td key={f} style={th}>{tot(f) ? prepNb(tot(f)) : ''}</td>)}<td></td><td></td><td style={th}>{ccqArg(tot('brut'))}</td><td style={th}>{ccqArg(rangs.reduce((t,r)=>t+r.calc.net,0))}</td><td></td></tr>}
         </tbody></table></div>
       <div className="muted" style={{fontSize:11.5,marginTop:8}}>Simple = heures confirmées dans PunchPro, au plus {maxH} h ; ce qui dépasse va dans la banque (« Mis en banque », non payé). « Banque utilisée » = heures que l'employé a demandé de prendre dans sa banque dans PunchPro, sans dépasser le maximum. Férié : électriciens CCQ, payé par l'indemnité de 13 % (0 h ici) ; bureau, 8 h par férié. Bureau sans PunchPro : heures par période du dossier. Brut estimé = heures × taux du dossier (½ à 1,5, double à 2) + autres revenus − retenues ; le calcul des déductions viendra avec le journal de paie.</div>
     </div>
+    {talon && (()=>{ const statut = fige ? 'Approuvée' : 'Brouillon', liste = talon==='*' ? rangs : rangs.filter(r=>r.k===talon); if(!liste.length) return null;
+      const idx = talon==='*' ? -1 : rangs.findIndex(r=>r.k===talon), titre = talon==='*' ? 'Talons de la semaine se terminant le '+finTxt : 'Talon — '+liste[0].nom;
+      const blocs = (talon==='*' ? [talonsGroupeHtml(rangs, finTxt)] : []).concat(liste.map(r=>talonHtml(r, finTxt, statut)));
+      const av = liste.flatMap(r=>r.calc.avert.map(a=>(talon==='*' ? r.nom+' : ' : '')+a));
+      return <Modal title={titre} onClose={()=>setTalon(null)} wide>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+          {idx>=0 && <><button className="btn btn-sm" disabled={idx<=0} onClick={()=>setTalon(rangs[idx-1].k)}>← Précédent</button><button className="btn btn-sm" disabled={idx>=rangs.length-1} onClick={()=>setTalon(rangs[idx+1].k)}>Suivant →</button></>}
+          {idx>=0 ? <button className="btn btn-sm" onClick={()=>setTalon('*')}>Voir le groupe</button> : null}
+          <button className="btn btn-sm btn-p" onClick={()=>talonsImprimer(blocs, titre)}>Imprimer / PDF{talon==='*' ? ' (un talon par page)' : ''}</button>
+        </div>
+        {av.length>0 && <div style={{fontSize:12.5,color:'var(--warning)',marginBottom:10}}>{av.map((a,i)=><div key={i}>⚠ {a}</div>)}</div>}
+        <div style={{background:'#fff',color:'#111',padding:12,borderRadius:8,overflowX:'auto'}}>{blocs.map((b,i)=><div key={i} style={{marginBottom:i<blocs.length-1?24:0,paddingBottom:i<blocs.length-1?18:0,borderBottom:i<blocs.length-1?'1px dashed #bbb':'none'}} dangerouslySetInnerHTML={{__html:b}}/>)}</div>
+      </Modal>; })()}
     {rAutres && <Modal title={'Autres revenus / retenues — '+rAutres.nom} onClose={()=>setAutresDe(null)}>
       <div style={{display:'grid',gap:6}}>
         {rAutres.autres.map((a,i)=><div key={i} style={{display:'flex',gap:6,alignItems:'center'}}>
