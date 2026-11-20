@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v621';
+const APP_VERSION = 'v622';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4784,7 +4784,9 @@ const DE_COLS = ['id','actif','prenom','nom','regime','adresse','ville','cp','ce
   // v558
   'frequence','cumDate','cumBrut','cumVac','cumRRQ','cumAE','cumRQAP','cumImpFed','cumImpProv','syndCotis','ftqMontant','rverMontant','reerMontant','pensionMontant','pensionBenef','primeChef','primeNuit','region','vacSolde','heuresApprenti','formations','finMotif','dernierJourPaye','urgNom','urgLien','urgTel',
   // v612 : taux CNESST et avantages sociaux CCQ par employé ($/h) — vide = taux par défaut (PAIE_CCQ_AV)
-  'cnesstTaux','ccqAssEmp','ccqAssPat','ccqSupPrev','ccqRetEmp','ccqRetPat','ccqPrelEmp','ccqPrelPat','ccqFormPat'];
+  'cnesstTaux','ccqAssEmp','ccqAssPat','ccqSupPrev','ccqRetEmp','ccqRetPat','ccqPrelEmp','ccqPrelPat','ccqFormPat',
+  // v622 : cumulatifs CCQ et syndicat de l'année (repris du dernier talon de l'ACQ)
+  'cumCcqAss','cumCcqRet','cumCcqPrel','cumSynd'];
 const DE_ONGLETS = [['ident','Identification'],['coord','Coordonnées'],['paye','Paye'],['comp','Compétences & Formations'],['supp','Informations supplémentaires'],['histo','Historique des changements']];
 const DE_SOUS = [['general','Général'],['vacances','Vacances'],['fonctions','Fonctions'],['autres','Autres déd. / Av. imposables / Indemnités / Primes'],['banque','Banque d\'heures HC'],['bulletin','Bulletin de paye'],['cumul','Cumulatifs de l\'année']];
 const DE_HISTO = 'Historique';   // onglet de la feuille privée : Quand | Id | Employé | Champ | Avant | Après
@@ -4792,7 +4794,8 @@ const DE_SENSIBLES = ['nas','compte','transit','institution'];
 const DE_ENTETES = ['Id','Actif','Prénom','Nom','Régime','Adresse','Ville','Code postal','Cellulaire','Courriel','NAS','Date de naissance',"Date d'embauche",'Date de fin','Actionnaire','% actions','Fédéral statut','Fédéral — ajustement des crédits','Impôt fédéral supp. $/paie','Provincial statut','Provincial — ajustement des crédits','Impôt provincial supp. $/paie','1re période de paie','CCQ secteur','Métier','Classe','No client CCQ','Syndicat','Local','Bureau type','Titre du poste','Unité CNESST','Taux horaire','Vacances %','Vacances mode','Salaire hebdo','Hebdo brut/net','Heures par période','Institution','Transit','Compte','Spécimen chèque (lien)','Carte de compétence (lien)','Particularités','Notes','Modifié le',
   'T4-50 No régime de pension','Crédit impôt de base (féd.)','Crédit pour conjoint (féd.)',"Exemption d'AE",'Assujetti Loi sur les Indiens',"Taux réduit d'AE",'Exemption RPC','Prestation dentaire (T4 case 45)','Province','Crédit impôt de base (prov.)','Crédit pour conjoint (prov.)','Exemption RRQ','Bulletin par courriel','Bulletin complémentaire','Dépôt direct — date d\'adhésion',"Banque d'heures — résidentiel léger","Banque d'heures — résidentiel lourd",
   'Fréquence de paie','Cumulatifs en date du','Cumul brut','Cumul vacances payées','Cumul RRQ','Cumul AE','Cumul RQAP','Cumul impôt fédéral','Cumul impôt provincial','Cotisation syndicale','Fonds FTQ $/paie','RVER','REER collectif $/paie','Pension alimentaire / saisie $/paie','Bénéficiaire pension / saisie','Prime chef d\'équipe %','Prime de nuit $/h','Région CCQ','Solde vacances accumulées',"Heures d'apprentissage cumulées",'Formations','Motif de fin (RE)','Dernier jour payé',"Urgence — nom","Urgence — lien","Urgence — téléphone",
-  'Taux CNESST (par 100 $)','CCQ assurance — employé $/h','CCQ assurance — employeur $/h','CCQ prévoyance supp. électriciens — employeur $/h','CCQ retraite — employé $/h','CCQ retraite — employeur $/h','CCQ prélèvement — employé','CCQ prélèvement — employeur','CCQ formation — employeur $/h'];
+  'Taux CNESST (par 100 $)','CCQ assurance — employé $/h','CCQ assurance — employeur $/h','CCQ prévoyance supp. électriciens — employeur $/h','CCQ retraite — employé $/h','CCQ retraite — employeur $/h','CCQ prélèvement — employé','CCQ prélèvement — employeur','CCQ formation — employeur $/h',
+  'Cumul CCQ assurance','Cumul CCQ retraite','Cumul CCQ prélèvement','Cumul cotisation syndicale'];
 const DE_CRED_FED = '16452.00', DE_CRED_PROV = '18952.00';   // montants personnels de base 2026 — à mettre à jour en janvier
 // v612 : taux des gouvernements (chiffres publics, mis à jour chaque janvier). 2026 : ARC T4032-QC 2026 et Revenu Québec ; 2027 : connus au 19 nov. 2026 — AE (BSIF : 70 800 $, 1,27 %) et MGA / MSGA (ARC : 76 700 $ / 87 400 $) ; paliers d'impôt et montants de base publiés en nov.-déc., à mettre à jour.
 const PAIE_GOUV = {
@@ -5010,7 +5013,7 @@ function DossiersEmployesView({cfg, refreshKey}){
     {bloc('Cumulatifs de départ de l\'année', <>
       <div className="muted" style={{fontSize:12,flex:'1 1 100%'}}>Montants déjà payés cette année AVANT de faire les paies dans le CRM (pour les maximums RRQ / AE / RQAP et les T4 / RL-1).</div>
       {champ('cumDate','En date du',{type:'date',flex:'0 1 150px'})}{champ('cumBrut','Salaire brut $',{flex:'0 1 140px'})}{champ('cumVac','Vacances payées $',{flex:'0 1 150px'})}
-      {champ('cumRRQ','RRQ $',{flex:'0 1 110px'})}{champ('cumAE','AE $',{flex:'0 1 110px'})}{champ('cumRQAP','RQAP $',{flex:'0 1 110px'})}{champ('cumImpFed','Impôt fédéral $',{flex:'0 1 140px'})}{champ('cumImpProv','Impôt provincial $',{flex:'0 1 150px'})}
+      {champ('cumRRQ','RRQ $',{flex:'0 1 110px'})}{champ('cumAE','AE $',{flex:'0 1 110px'})}{champ('cumRQAP','RQAP $',{flex:'0 1 110px'})}{champ('cumImpFed','Impôt fédéral $',{flex:'0 1 140px'})}{champ('cumImpProv','Impôt provincial $',{flex:'0 1 150px'})}{champ('cumCcqAss','CCQ assurance $',{flex:'0 1 140px'})}{champ('cumCcqRet','CCQ retraite $',{flex:'0 1 130px'})}{champ('cumCcqPrel','CCQ prélèvement $',{flex:'0 1 150px'})}{champ('cumSynd','Cotisation syndicale $',{flex:'0 1 170px'})}
     </>)}
     </>}
     {ong==='comp' && <>
@@ -5221,10 +5224,11 @@ function paieCalcul(r, fin){
   const rqap = r2(plafond(brut*G.rqapTauxE/100, G.rqapMra*G.rqapTauxE/100, 'cumRQAP'));
   // CCQ (employé) et syndicat
   const val = (k, d) => { const v = n(e[k]); return v!=null ? v : d; };
-  const assEmp = ccq ? r2(heures*(val('ccqAssEmp', av.ccqAssEmp)||0)) : 0;
-  const retEmp = ccq ? r2(heures*(val('ccqRetEmp', av.ccqRetEmp)||0)) : 0;
-  let prelEmp = 0; if(ccq){ const s = String(e.ccqPrelEmp||'').trim(); if(!s) avert.push('Prélèvement CCQ employé à confirmer (vide au dossier).'); else if(/%/.test(s)) prelEmp = r2(salaire*(n(s.replace('%',''))||0)/100); else prelEmp = r2(heures*(n(s)||0)); }
-  const sc = String(e.syndCotis||'').trim(); let synd = 0; if(sc){ if(/%/.test(sc)) synd = r2(salaire*(n(sc.replace('%',''))||0)/100); else if(n(sc)!=null) synd = r2(n(sc)); }
+  const assTx = val('ccqAssEmp', av.ccqAssEmp)||0, retTx = val('ccqRetEmp', av.ccqRetEmp)||0;
+  const assEmp = ccq ? r2(heures*assTx) : 0;
+  const retEmp = ccq ? r2(heures*retTx) : 0;
+  let prelEmp = 0, prelTxt = 'à confirmer'; if(ccq){ const s = String(e.ccqPrelEmp||'').trim(); if(!s) avert.push('Prélèvement CCQ employé à confirmer (vide au dossier).'); else if(/%/.test(s)){ prelEmp = r2(salaire*(n(s.replace('%',''))||0)/100); prelTxt = nbFr(n(s.replace('%','')))+' % du salaire'; } else { prelEmp = r2(heures*(n(s)||0)); prelTxt = nbFr(n(s))+' $/h × '+prepNb(heures)+' h'; } }
+  const sc = String(e.syndCotis||'').trim(); let synd = 0, syndTxt = ''; if(sc){ if(/%/.test(sc)){ synd = r2(salaire*(n(sc.replace('%',''))||0)/100); syndTxt = nbFr(n(sc.replace('%','')))+' % du salaire'; } else if(n(sc)!=null) synd = r2(n(sc)); }
   // Impôt fédéral (T4127, résident du Québec)
   const low = G.fedTaux[0]/100, rrqAmel = G.rrqTaux ? rrq/G.rrqTaux : 0;   // 1 point de bonification du RRQ = déduction
   const A = Math.max(0, P*(brut - retEmp - reer - synd - rrqAmel));
@@ -5235,7 +5239,9 @@ function paieCalcul(r, fin){
   const I = Math.max(0, P*(brut - retEmp - reer - rrqAmel));
   const impQc = r2(Math.max(0, paieImpot(I, G.qcPaliers, G.qcTaux) - G.qcTaux[0]/100*(n(e.provMontant)||G.qcMpb))/P + (n(e.provSupp)||0));
   const retenues = [['Impôt fédéral', impFed], ['Impôt du Québec', impQc], ['RRQ', rrq], ['Assurance-emploi', ae], ['RQAP', rqap],
-    ['CCQ — assurance', assEmp], ['CCQ — retraite', retEmp], ['CCQ — prélèvement', prelEmp], ['Cotisation syndicale', synd]].filter(x=>x[1]).map(([lib,m])=>({lib, m})).concat(retAutres);
+    ].filter(x=>x[1]).map(([lib,m])=>({lib, m}))
+    .concat(ccq ? [{lib:'CCQ — assurance ('+nbFr(assTx)+' $/h × '+prepNb(heures)+' h)', m:assEmp}, {lib:'CCQ — retraite ('+nbFr(retTx)+' $/h × '+prepNb(heures)+' h)', m:retEmp}, {lib:'CCQ — prélèvement employé ('+prelTxt+')', m:prelEmp}] : [])
+    .concat(synd || ccq ? [{lib:'Cotisation syndicale ('+(syndTxt || sc || 'à inscrire au dossier')+')', m:synd}] : []).concat(retAutres);
   const totRet = r2(retenues.reduce((s,x)=>s+x.m,0)), net = r2(brut + nonImpTot - totRet);
   // Parts de l'employeur
   const cn = val('cnesstTaux', av.cnesstTaux);
@@ -5247,8 +5253,8 @@ function paieCalcul(r, fin){
       ['CCQ — prélèvement', r2(salaire*A2.prelPatPct/100 + heures*A2.prelPatH)], ['CCQ — formation', r2(heures*(val('ccqFormPat', A2.formH+A2.indemH)||0))], ['AECQ', r2(heures*A2.aecqH)]);
     vacCcq = r2(salaire*(n(e.vacPct)||A2.vac)/100); }
   const patL = pat.filter(x=>x[1]).map(([lib,m])=>({lib, m})), totPat = r2(patL.reduce((s,x)=>s+x.m,0));
-  const cumul = cumOk ? {date:e.cumDate, brut:cum('cumBrut'), rrq:cum('cumRRQ'), ae:cum('cumAE'), rqap:cum('cumRQAP'), fed:cum('cumImpFed'), qc:cum('cumImpProv')} : null;
-  return {gains, nonImp, brut, nonImpTot, retenues, totRet, net, pat:patL, totPat, vacCcq, heures, cumul, cours:{brut, rrq, ae, rqap, fed:impFed, qc:impQc}, avert, conf:!!G.conf};
+  const cumul = cumOk ? {date:e.cumDate, brut:cum('cumBrut'), rrq:cum('cumRRQ'), ae:cum('cumAE'), rqap:cum('cumRQAP'), fed:cum('cumImpFed'), qc:cum('cumImpProv'), ccqAss:cum('cumCcqAss'), ccqRet:cum('cumCcqRet'), ccqPrel:cum('cumCcqPrel'), synd:cum('cumSynd')} : null;
+  return {gains, nonImp, brut, nonImpTot, retenues, totRet, net, pat:patL, totPat, vacCcq, heures, cumul, cours:{brut, rrq, ae, rqap, fed:impFed, qc:impQc, ccqAss:assEmp, ccqRet:retEmp, ccqPrel:prelEmp, synd}, ccq, avert, conf:!!G.conf};
 }
 const talonEsc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const talonArg = x => (Math.round((x||0)*100)/100).toLocaleString('fr-CA',{minimumFractionDigits:2, maximumFractionDigits:2})+' $';
@@ -5260,7 +5266,7 @@ function talonHtml(r, P, statut){
   const liste = (titre, rows, total) => '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px"><thead><tr style="background:#eef1f4"><th '+td+' align="left">'+titre+'</th><th '+tdn+'>Montant</th></tr></thead><tbody>'
     + rows.map(x=>'<tr style="border-top:1px solid #e3e6ea"><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+A(x.m)+'</td></tr>').join('')
     + '<tr style="border-top:2px solid #333;font-weight:700"><td '+td+'>Total</td><td '+tdn+'>'+A(total)+'</td></tr></tbody></table>';
-  const cu = c.cumul, cr = c.cours, cumL = [['Brut','brut'],['RRQ','rrq'],['Assurance-emploi','ae'],['RQAP','rqap'],['Impôt fédéral','fed'],['Impôt du Québec','qc']];
+  const cu = c.cumul, cr = c.cours, cumL = [['Brut','brut'],['RRQ','rrq'],['Assurance-emploi','ae'],['RQAP','rqap'],['Impôt fédéral','fed'],['Impôt du Québec','qc']].concat(c.ccq || c.cours.synd ? (c.ccq ? [['CCQ — assurance','ccqAss'],['CCQ — retraite','ccqRet'],['CCQ — prélèvement','ccqPrel']] : []).concat([['Cotisation syndicale','synd']]) : []);
   return '<div style="font:12px Arial,sans-serif;color:#111;max-width:760px">'
     + '<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:8px;gap:10px"><div style="display:flex;gap:10px;align-items:center"><img src="'+SARAN_LOGO+'" alt="Saran Électrique" style="height:62px;width:auto"><div><div style="font-size:11px;color:#555">Saran Électrique inc.</div><div style="font-size:15px;font-weight:700">Talon de paie</div><div>Semaine du : <b>'+E(P.du)+'</b> &nbsp;<b>'+E(P.pp)+'</b></div><div>Payable le : <b>'+E(P.payeTxt)+'</b></div></div></div>'
     + '<div style="text-align:right"><div style="font-size:15px;font-weight:700">'+E(r.nom)+'</div><div>'+E(r.ccq ? ['Électricien', e.classe, e.ccqSecteur].filter(Boolean).join(' · ') : ['Bureau', e.titre].filter(Boolean).join(' · '))+'</div>'
