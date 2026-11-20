@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v631';
+const APP_VERSION = 'v632';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5226,6 +5226,22 @@ const JOURNAL_COLS = [['sem','Semaine'],['pp','PP'],['paye','Payable le'],['nom'
   ['fed','Impôt fédéral'],['qc','Impôt du Québec'],['rrq','RRQ'],['ae','Assurance-emploi'],['rqap','RQAP'],['ccqAss','CCQ assurance'],['ccqTaxe','CCQ taxe assurance'],['ccqRet','CCQ retraite'],['ccqPrel','CCQ prélèvement'],['synd','Cotisation syndicale'],['autresRet','Autres retenues'],['reer','REER'],['net','Net à verser'],
   ['gRrq','Gains RRQ'],['gAe','Gains assurables AE'],['gRqap','Gains RQAP'],['eRrq','Employeur RRQ'],['eAe','Employeur AE'],['eRqap','Employeur RQAP'],['eFss','Employeur FSS'],['eCnt','Employeur CNT'],['eCnesst','Employeur CNESST'],['eCcq','Employeur CCQ'],['vacAcq','Vacances bureau acquises'],['vacPris','Vacances bureau prises'],['le','Approuvée le']];
 const JOURNAL_NUM = JOURNAL_COLS.slice(6, -1).map(x=>x[0]);
+// v632 : envoi des talons par courriel (depuis info@, PDF joint) + historique des envois (onglet privé)
+const ENVOIS_ONGLET = 'Envois talons';
+const ENVOIS_ENTETE = ['Semaine','PP','Payable le','Employé','Id dossier','Courriel','Net à verser','Envoyé le'];
+const talonDocHtml = b => '<!doctype html><html><head><meta charset="utf-8"><style>body{margin:24px 18px;background:#fff}</style></head><body>'+b+'</body></html>';
+async function talonEnvoyer(r, per){
+  const to = String(r.e.courriel||'').trim(), prenom = r.e.prenom || r.nom.split(' ')[0];
+  const base64 = await docPdfBase64(talonDocHtml(talonHtml(r, per, 'Approuvée')));
+  const nomF = ('Talon '+per.pp+' '+per.paye+' '+r.nom).replace(/[\\/:*?"<>|]/g,'')+'.pdf';
+  await gmailEnvoyer({to, sujet:'Talon de paie — semaine du '+per.du+' ('+per.pp+')',
+    texte:'Bonjour '+prenom+',\n\nVoici ton talon de paie pour la semaine du '+per.du+' ('+per.pp+'), payable le '+per.payeTxt+'.\nNet à verser : '+talonArg(r.calc.net)+'.\n\nSi tu as une question, réponds à ce courriel.\n\nSaran Électrique inc.',
+    pj:{nom:nomF, type:'application/pdf', base64}});
+  await ensureSheetsExist(DOSSIERS_EMP_ID, [{name:ENVOIS_ONGLET, headers:ENVOIS_ENTETE}]);
+  const le = prepMaintenant();
+  await sheetsAppendRow(DOSSIERS_EMP_ID, qSheet(ENVOIS_ONGLET), [per.week, per.pp, per.paye, r.nom, r.e.id||'', to, r.calc.net.toFixed(2), le]);
+  return le;
+}
 const PREP_CHAMPS = ['simple','demi','double','ferie','banqueUtil','vac'];
 // v619 : talons de paie (estimation) calculés à partir de la préparation de la paie — individuel et en groupe.
 // Méthode : formules de retenues à la source sur une base annualisée (52 paies) — ARC T4127 (fédéral, abattement du Québec) et Revenu Québec TP-1015.F (simplifié).
@@ -5359,7 +5375,7 @@ function talonHtml(r, P, statut){
   return '<div style="font:10.5px Arial,sans-serif;color:#111;max-width:780px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'
     + '<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:4px;margin-bottom:6px;gap:10px"><div style="display:flex;gap:8px;align-items:center"><img src="'+SARAN_LOGO+'" alt="Saran Électrique" style="height:52px;width:auto"><div><div style="font-size:10px;color:#555">Saran Électrique inc.</div><div style="font-size:14px;font-weight:700">Talon de paie</div><div style="font-size:11px">Semaine du : <b>'+E(P.du)+'</b> &nbsp;<b>'+E(P.pp)+'</b></div><div style="font-size:11px">Payable le : <b>'+E(P.payeTxt)+'</b></div></div></div>'
     + '<div style="text-align:right"><div style="font-size:14px;font-weight:700">'+E(r.nom)+'</div><div style="font-size:11px">'+E(r.ccq ? ['Électricien', e.classe, e.ccqSecteur].filter(Boolean).join(' · ') : ['Bureau', e.titre].filter(Boolean).join(' · '))+'</div>'
-    + '<div style="font-size:10px;color:'+(statut==='Approuvée' ? '#1a7f37' : '#b26a00')+'">'+(statut==='Approuvée' ? 'Paie approuvée' : 'Brouillon')+' — estimation, à valider</div>'+'<div style="font-size:9.5px;color:#666">Cumuls '+E(c.cumul.an)+' : paies approuvées + cette paie</div>'+'</div></div>'
+    + '<div style="font-size:10px;color:'+(statut==='Approuvée' ? '#1a7f37' : '#b26a00')+'">'+(statut==='Approuvée' ? 'Paie approuvée' : 'Brouillon — estimation, à valider')+'</div>'+'<div style="font-size:9.5px;color:#666">Cumuls '+E(c.cumul.an)+' : paies approuvées + cette paie</div>'+'</div></div>'
     + gains
     + '<div style="display:flex;gap:10px;align-items:flex-start"><div style="flex:1 1 52%;min-width:0">'+ret
       + '<div style="display:flex;justify-content:space-between;background:#111;color:#fff;padding:6px 8px;font-size:13px;font-weight:700"><span>Net à verser</span><span>'+A(c.net)+'</span></div></div>'
@@ -5369,7 +5385,7 @@ function talonHtml(r, P, statut){
       + (c.vacSolde!=null ? ' &nbsp;|&nbsp; Vacances : acquises cette paie <b>'+A(c.vacAcq)+'</b>'+(c.vacPris ? ' · prises <b>'+A(c.vacPris)+'</b>' : '')+' · solde <b>'+A(c.vacSolde)+'</b>' : '')
 +'</div>'
     + (r.note ? '<div style="font-size:10px;margin-top:2px">Note : '+E(r.note)+'</div>' : '')
-    + '<div style="margin-top:4px;font-size:9px;color:#666">Calculé par le CRM avec les taux '+(c.conf ? '' : 'provisoires ')+'des gouvernements et les taux CCQ du dossier. Estimation à valider contre les talons de l\'ACQ avant la première paie faite dans le CRM.</div>'
+    + (statut==='Approuvée' ? '' : '<div style="margin-top:4px;font-size:9px;color:#666">Brouillon calculé par le CRM avec les taux '+(c.conf ? '' : 'provisoires ')+'des gouvernements et les taux CCQ du dossier.</div>')
     + '</div>';
 }
 function talonsGroupeHtml(rangs, P){
@@ -5394,6 +5410,7 @@ function PrepPaieView({cfg, refreshKey}){
   const [etat,setEtat]=useState('');
   const [autresDe,setAutresDe]=useState(null);
   const [talon,setTalon]=useState(null);   // v619 : clé d'un employé, ou '*' pour le groupe
+  const [envois,setEnvois]=useState([]), [envoiEtat,setEnvoiEtat]=useState('');   // v632
   useEffect(()=>{ if(!cfg.punchproSpreadsheetId) return; let ok = true;
     sheetsBatchGet(cfg.punchproSpreadsheetId, ['HeuresEnBanque!A2:E']).then(([rows])=>{ if(!ok) return; const m = {};
       (rows||[]).forEach(r=>{ const h = cvNum(r[2]); if(r[0] && r[1] && h<0){ const k = r[1]+'|'+cvNorm(r[0]); m[k] = (m[k]||0) - h; } }); setPris(m); }).catch(()=>{});
@@ -5402,6 +5419,7 @@ function PrepPaieView({cfg, refreshKey}){
     try{ const r = await lireCache(DOSSIERS_EMP_ID, 'A1:'+DE_FIN, force);
       setL((r.result.values||[]).map(x=>{ const e = {}; DE_COLS.forEach((k,j)=>e[k]=String(x[j]==null?'':x[j])); return e; }).slice(1).filter(e=>e.id||e.nom)); }
     catch(e){ setErr(apiErrMsg(e)); setL([]); }
+    try{ const v = await lireCache(DOSSIERS_EMP_ID, qSheet(ENVOIS_ONGLET)+'!A1:H', force); setEnvois((v.result.values||[]).slice(1).filter(x=>x[0])); } catch(e){ setEnvois([]); }
     try{ const j = await lireCache(DOSSIERS_EMP_ID, qSheet(JOURNAL_ONGLET)+'!A1:AL', force); setJournal((j.result.values||[]).slice(1).filter(x=>x[0])); } catch(e){ setJournal([]); }
     try{ const h = await lireCache(DOSSIERS_EMP_ID, qSheet(PREP_ONGLET)+'!A1:W', force); setHist((h.result.values||[]).slice(1).filter(x=>x[0])); }
     catch(e){ setHist([]); } },[]);
@@ -5446,6 +5464,17 @@ function PrepPaieView({cfg, refreshKey}){
   const jValides = journal.filter(x=>lotApprouve[x[0]] && lotApprouve[x[0]]===x[JOURNAL_COLS.length-1]), anPaie = per.paye.slice(0,4);
   const priorDe = r => { const o = {_an:anPaie}; jValides.filter(x=>x[0]!==week && String(x[2]||'').slice(0,4)===anPaie && ((r.e.id && x[4]===r.e.id) || cvNorm(x[3])===r.k)).forEach(x=>JOURNAL_COLS.forEach(([k],j)=>{ if(JOURNAL_NUM.includes(k)) o[k] = Math.round(((o[k]||0) + (cvNum(x[j])||0))*100)/100; })); return o; };
   rangs.forEach(r=>{ r.brut = brutDe(r); r.paye = r.simple+r.banqueUtil+r.ferie; r.calc = paieCalcul(r, fin, priorDe(r)); });
+  // v632 : envois de talons — seulement une semaine approuvée ; on garde le dernier envoi par employé
+  const envoiDe = r => envois.filter(x=>x[0]===week && x[7]>=(dernier||'') && ((r.e.id && x[4]===r.e.id) || cvNorm(x[3])===r.k)).map(x=>x[7]).sort().pop() || '';
+  const envoyer = async liste => { if(!fige){ alert('Approuve la préparation de la semaine avant d\'envoyer les talons.'); return; }
+    const sans = liste.filter(r=>!String(r.e.courriel||'').trim()), avec = liste.filter(r=>String(r.e.courriel||'').trim());
+    if(!avec.length){ alert('Aucun courriel au dossier pour : '+sans.map(r=>r.nom).join(', ')+'.'); return; }
+    if(!confirm('Envoyer '+(avec.length>1 ? 'les '+avec.length+' talons' : 'le talon')+' de la semaine du '+per.du+' ('+per.pp+') ?\n\n'+avec.map(r=>r.nom+' → '+r.e.courriel+(envoiDe(r) ? '  (déjà envoyé le '+envoiDe(r)+')' : '')).join('\n')+(sans.length ? '\n\nPas de courriel au dossier (non envoyé) : '+sans.map(r=>r.nom).join(', ') : '')+'\n\nEnvoyé depuis info@ avec le talon en PDF.')) return;
+    let ok = 0; const err = [];
+    for(const r of avec){ setEnvoiEtat('Envoi '+(ok+err.length+1)+' / '+avec.length+' : '+r.nom+'…');
+      try{ await talonEnvoyer(r, {...per, week}); ok++; } catch(e){ err.push(r.nom+' ('+apiErrMsg(e)+')'); } }
+    setEnvoiEtat(''); await lire(true);
+    alert(ok+' talon(s) envoyé(s).'+(err.length ? '\n\nErreur : '+err.join(', ') : '')+(sans.length ? '\n\nPas de courriel : '+sans.map(r=>r.nom).join(', ') : '')); };
   const tot = f => rangs.reduce((t,r)=>t+(r[f]||0),0);
   const alertes = fige ? [] : rangs.filter(r=>r.tot==null).map(r=>r.nom);
   const ligne = (r, statut, le) => [week, localDateStr(fin), r.nom, r.e.id||'', r.ccq ? 'CCQ' : 'Bureau', r.metier, r.secteur, r.region, r.simple, r.demi, r.double, r.ferie, r.banqueUtil, r.vac, r.enBanque, prepAutresTxt(r.autres), r.cnesst, tauxDe(r.e)!=null ? tauxDe(r.e).toFixed(2) : '', r.brut!=null ? r.brut.toFixed(2) : '', r.note, statut, le, per.paye];
@@ -5505,7 +5534,7 @@ function PrepPaieView({cfg, refreshKey}){
       {alertes.length>0 && <div style={{fontSize:12.5,marginBottom:8,color:'var(--warning)'}}>Semaine pas confirmée pour : {alertes.join(', ')}. Confirme-la dans l'onglet Heures ou inscris les heures à la main.</div>}
       <div style={{overflowX:'auto'}}><table style={{fontSize:13,width:'100%'}}><thead><tr><th>Employé</th><th>Métier</th><th>Secteur</th><th>Région</th><th style={th}>Simple</th><th style={th}>½ (×1,5)</th><th style={th}>Double</th><th style={th}>Férié</th><th style={th}>Banque utilisée</th><th style={th}>Vacances</th><th style={th}>Mis en banque</th><th>Autres revenus / retenues</th><th>Unité CNESST</th><th style={th}>Brut estimé</th><th style={th}>Net estimé</th><th>Note</th></tr></thead>
         <tbody>{rangs.map(r=><tr key={r.k}>
-          <td><b>{r.nom}</b> <button className="btn btn-sm" style={{padding:'0 6px'}} title="Voir le talon de paie" onClick={()=>setTalon(r.k)}>🧾</button><div className="muted" style={{fontSize:11.5}}>{r.ccq ? [r.e.classe, r.e.ccqSecteur].filter(Boolean).join(' · ') : 'Bureau'}{!fige && r.tot!=null ? ' · PunchPro '+fmtH(r.tot) : ''}{!fige && !r.conf && r.tot!=null ? ' (dossier)' : ''}</div></td>
+          <td><b>{r.nom}</b> <button className="btn btn-sm" style={{padding:'0 6px'}} title="Voir le talon de paie" onClick={()=>setTalon(r.k)}>🧾</button>{fige && envoiDe(r) ? <span title={'Talon envoyé le '+envoiDe(r)} style={{fontSize:11,color:'var(--success)',marginLeft:4}}>✉ envoyé</span> : null}<div className="muted" style={{fontSize:11.5}}>{r.ccq ? [r.e.classe, r.e.ccqSecteur].filter(Boolean).join(' · ') : 'Bureau'}{!fige && r.tot!=null ? ' · PunchPro '+fmtH(r.tot) : ''}{!fige && !r.conf && r.tot!=null ? ' (dossier)' : ''}</div></td>
           <td>{r.metier||'—'}</td>
           <td>{fige ? r.secteur : <input style={{width:40}} value={r.secteur} onChange={ev=>changer(r.k,'secteur',ev.target.value)}/>}</td>
           <td>{fige ? r.region : <input style={{width:34}} value={r.region} onChange={ev=>changer(r.k,'region',ev.target.value)}/>}</td>
@@ -5529,7 +5558,11 @@ function PrepPaieView({cfg, refreshKey}){
           {idx>=0 && <><button className="btn btn-sm" disabled={idx<=0} onClick={()=>setTalon(rangs[idx-1].k)}>← Précédent</button><button className="btn btn-sm" disabled={idx>=rangs.length-1} onClick={()=>setTalon(rangs[idx+1].k)}>Suivant →</button></>}
           {idx>=0 ? <button className="btn btn-sm" onClick={()=>setTalon('*')}>Voir le groupe</button> : null}
           <button className="btn btn-sm btn-p" onClick={()=>talonsImprimer(blocs, titre)}>Imprimer / PDF{talon==='*' ? ' (un talon par page)' : ''}</button>
+          {fige ? <button className="btn btn-sm" disabled={!!envoiEtat} onClick={()=>envoyer(liste)}>📧 {talon==='*' ? 'Envoyer tous les talons' : (envoiDe(liste[0]) ? 'Renvoyer' : 'Envoyer')+' à '+(liste[0].e.courriel||'(pas de courriel)')}</button>
+            : <span className="muted" style={{fontSize:12,alignSelf:'center'}}>Approuve la semaine pour pouvoir envoyer les talons.</span>}
         </div>
+        {envoiEtat && <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{envoiEtat}</div>}
+        {fige && <div style={{fontSize:12,marginBottom:8}}>{liste.map(r=>{ const d = envoiDe(r); return <div key={r.k}>{talon==='*' ? r.nom+' : ' : ''}{d ? <span style={{color:'var(--success)'}}>✉ envoyé le {d} à {r.e.courriel}</span> : (r.e.courriel ? <span className="muted">pas encore envoyé ({r.e.courriel})</span> : <span style={{color:'var(--warning)'}}>pas de courriel au dossier</span>)}</div>; })}</div>}
         {av.length>0 && <div style={{fontSize:12.5,color:'var(--warning)',marginBottom:10}}>{av.map((a,i)=><div key={i}>⚠ {a}</div>)}</div>}
         <div style={{background:'#fff',color:'#111',padding:12,borderRadius:8,overflowX:'auto'}}>{blocs.map((b,i)=><div key={i} style={{marginBottom:i<blocs.length-1?24:0,paddingBottom:i<blocs.length-1?18:0,borderBottom:i<blocs.length-1?'1px dashed #bbb':'none'}} dangerouslySetInnerHTML={{__html:b}}/>)}</div>
       </Modal>; })()}
