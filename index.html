@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v616';
+const APP_VERSION = 'v617';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -13637,8 +13637,9 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
   const qteDe = code => { const l = d.lignes.find(l=>l.code===code); return l ? (cvNum(l.qte)||0) : 0; };
   const changerQte = (p, delta, valeur)=> setD(x=>{
     const ex = x.lignes.find(l=>l.code===p.code);
-    const qte = valeur!==undefined ? valeur : Math.max(0, (ex ? (cvNum(ex.qte)||0) : 0) + delta);
-    let lignes = ex ? x.lignes.map(l=>l.code===p.code ? {...l, qte} : l) : [...x.lignes, {code:p.code, desc:p.desc, unite:p.unite, qte, prix:''}];
+    const qte = valeur!==undefined ? String(valeur).replace(',', '.') : Math.max(0, (ex ? (cvNum(ex.qte)||0) : 0) + delta);
+    // v617 : en tapant (valeur), la ligne reste même vide ou à « . » — on l'enlève seulement avec ✕ ou le −
+    let lignes = ex ? x.lignes.map(l=>l.code===p.code ? {...l, qte, saisie: valeur!==undefined ? true : l.saisie} : l) : [...x.lignes, {code:p.code, desc:p.desc, unite:p.unite, qte, prix:''}];
     if(valeur===undefined && !qte) lignes = lignes.filter(l=>l.code!==p.code);
     return {...x, lignes};
   });
@@ -13762,6 +13763,7 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
 
   const champ = (k, ph, extra) => <input value={d[k]} onChange={e=>maj({[k]:e.target.value})} placeholder={ph} style={{width:'100%',boxSizing:'border-box',...(extra||{})}}/>;
   const choisies = d.lignes.filter(l=>cvNum(l.qte));
+  const affichees = d.lignes.filter(l=>cvNum(l.qte) || l.saisie);   // v617 : une ligne en cours de saisie reste à l'écran
   const ecartAncien = d.ancien && d.stEnregistre!=null && d.lignes.some(l=>l.prix==='' || l.prix==null) && Math.abs(calc.st - d.stEnregistre) > 0.01;
   return <div>
     {envoi && <div className="card" onClick={()=>setEnvoi(null)} style={{marginBottom:10,cursor:'pointer',borderColor:envoi.envoye?'var(--success)':'var(--accent)',background:envoi.envoye?'rgba(63,185,80,0.12)':'rgba(88,166,255,0.10)'}} title="Clique pour fermer">
@@ -13895,8 +13897,8 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       <div style={{fontWeight:700,marginBottom:6,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><span>Matériel {choisies.length>0 && <span className="muted" style={{fontWeight:400}}>· {choisies.length} article{choisies.length>1?'s':''}</span>}</span>
         {choisies.length>0 && <button className={'btn btn-sm'+(aCommander?' btn-p':'')} style={{marginLeft:'auto'}} onClick={()=>setACommander(!aCommander)} title="La liste à commander chez le fournisseur : quantités seulement, sans prix">Matériel à commander</button>}</div>
       {aCommander && choisies.length>0 && <MaterielACommander d={d} lignes={choisies} toast={toast} onNavigate={onNavigate}/>}
-      {choisies.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
-        {choisies.map(l=><div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
+      {affichees.length>0 && <div style={{marginBottom:8,border:'1px solid var(--border2)',borderRadius:8}}>
+        {affichees.map(l=><div key={l.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,flexWrap:'wrap'}}>
           <b style={{minWidth:90}}>{l.code}</b><span style={{flex:'1 1 140px'}}>{l.desc}</span>
           <input value={l.qte} inputMode="decimal" onChange={e=>changerQte(l, 0, e.target.value)} style={{width:56,textAlign:'right'}}/><span className="muted" style={{fontSize:11.5}}>{l.unite}</span>
           {prix && <input value={l.prix} inputMode="decimal" placeholder={C.prixDe(l.code, l.unite)!=null ? String(C.prixDe(l.code, l.unite)) : 'prix'} onChange={e=>setD(x=>({...x, lignes:x.lignes.map(y=>y.code===l.code?{...y,prix:e.target.value}:y)}))} style={{width:70,textAlign:'right'}} title="Prix unitaire (vide = ton prix habituel)"/>}
@@ -13909,13 +13911,14 @@ function AppelServiceView({cfg, toast, mode, onEnvoye, onEnregistre, contacts, o
       </div>}
       <div style={{marginBottom:6}}><button className="btn btn-sm" onClick={()=>basculerCatalogue()}>{catCache ? '▶ Montrer le catalogue (ajouter des articles)' : '▼ Cacher le catalogue'}</button></div>
       {!catCache && <>
-      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
+      <div style={{fontWeight:700,fontSize:13,margin:'4px 0 6px'}}>📦 Catalogue <span className="muted" style={{fontWeight:400}}>— + pour ajouter au matériel</span></div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:6}}>   {/* v617 : la recherche est dans la rangée des catégories */}
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Chercher (code ou description)…" style={{flex:'1 1 200px',minWidth:160,maxWidth:300}}/>
         <button className={'btn btn-sm'+(!cat?' btn-p':'')} onClick={()=>setCat('')}>Tous</button>
         {[...C.cats.filter(c=>c===SORTIE_CAT), ...C.cats.filter(c=>c!=='DIVERS' && c!==SORTIE_CAT)].map(c=><button key={c} className={'btn btn-sm'+(cat===c?' btn-p':'')} onClick={()=>setCat(c)}
           style={c===SORTIE_CAT && cat!==c ? {background:SORTIE_TEINTE,borderColor:SORTIE_BORD,color:SORTIE_TEXTE} : null}>{c}</button>)}
       </div>
-      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher un article (code ou description)…" style={{width:'100%',boxSizing:'border-box',marginBottom:6}}/>
-      <div style={{maxHeight:360,overflowY:'auto',border:'1px solid var(--border2)',borderRadius:8}}>
+      <div style={{maxHeight:360,overflowY:'auto',border:'1px dashed var(--border2)',borderRadius:8,background:'var(--bg2)'}}>
         {produits.map(p=>{ const n=qteDe(p.code); return <div key={p.cat+'|'+p.code} style={{display:'flex',gap:6,alignItems:'center',padding:'5px 8px',borderBottom:'1px solid var(--border)',fontSize:13,background:n?'var(--bg3)':undefined}}>
           <b style={{minWidth:100,color:estSortie(p)?SORTIE_TEXTE:undefined}}>{p.code}</b><span style={{flex:1}} className={n?'':'muted'}>{p.desc}</span>
           <button className="btn btn-sm" onClick={()=>changerQte(p,-1)} disabled={!n} style={{width:32}}>−</button>
