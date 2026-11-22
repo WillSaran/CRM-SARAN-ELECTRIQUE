@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v633';
+const APP_VERSION = 'v634';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -16800,7 +16800,7 @@ function CvAVerifierClient({av, cfg, factures, marquerRegle, onPick, onChanged, 
   </div>;
 }
 
-function ClientDetailView({client, clients, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged, onBack, isDesktop, soumDe}){
+function ClientDetailView({client, clients, factures, appels, courriels, achats, facLignes, archives, cfg, registry, events, onChanged, onBack, isDesktop, soumDe, jobInit}){
   // v240 : avancement de la job (même calcul que Projets)
   const [manuelsAv] = useEtapesManuelles(cfg);
   const [commandesAv] = useCommandes(cfg);
@@ -16813,7 +16813,7 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
       typeJob: j.client==='PART' ? (TJav.map[j.id] || pjTypeAutoComplet(j)) : ''}).pct; }catch(e){ return null; } };
   const [filter,setFilter]=useState('all');
   const [q,setQ]=useState('');
-  const [sel,setSel]=useState(null);
+  const [sel,setSel]=useState(jobInit||null);
   const detailRef=useRef(null);
   const arch = j => !!(archives||{})[j.id];
   const [voirTerm,setVoirTerm]=useVoirTerminees();
@@ -16827,7 +16827,7 @@ function ClientDetailView({client, clients, factures, appels, courriels, achats,
     client.jobs.filter(j=>(filter==='arch' ? arch(j) : !arch(j)) && (filter==='all' || filter==='arch' || (filter==='flag'?av.ids.has(j.id):j.etatClient===filter)) &&
     (voirTerm || filter==='done' || filter==='arch' || filter==='flag' || !cvFinie(j)));
   const job = client.jobs.find(j=>j.id===sel) || null;
-  const [fiche,setFiche]=useState(null);   // v565 : la fiche de la job s'ouvre en grand par-dessus (zoom depuis le clic), avec des onglets
+  const [fiche,setFiche]=useState(jobInit||null);   // v634 : jobInit = job trouvée dans la recherche des Comptes clients ; v565 : la fiche de la job s'ouvre en grand par-dessus (zoom depuis le clic), avec des onglets
   function pick(id){ setSel(id); setFiche(id); }
   const tiles = [
     [client.jobs.length,'jobs'],
@@ -18998,6 +18998,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
   const d = useClientsData(cfg, refreshKey+'|r'+tick);
   const [reglees] = useVerifsReglees(cfg);
   const suiviMode = mode==='verif' || mode==='factures';   // v240 : « Factures clients » = même présentation que « À vérifier », pour tout le monde
+  const [suiviJob,setSuiviJob]=useState(null);   // v634 : job à ouvrir directement (recherche des Comptes clients)
   const [suivi,setSuivi]=useState(()=>mode==='verif' ? (navFocus('verif')||{}).suivi || null : null);       // v156 : suivi et vérifications (ancien onglet Clients) : code contracteur, 'PART' ou id d'un particulier
   const K = useContactsFournisseurs(cfg);
   // v177 : une seule vue choisie dans un menu déroulant ; la recherche reste en haut
@@ -19081,7 +19082,7 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
     const soumDe = {}; R.pers.forEach(p=>{ const S = (p.soum||[]).filter(x=>x.montant>0).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
       if(S.length) (p.srcJobs||[]).forEach(j=>{ const d0 = j.first || (j.events[0]||{}).day || '9999'; const x = S.filter(y=>String(y.date)<=d0).pop() || S[S.length-1]; soumDe[j.id] = {montant:x.montant, no:x.no}; }); });
     if(cl) return <ClientDetailView soumDe={soumDe} client={cl} clients={clients} factures={d.factures} appels={d.appels || {parNumero:{}, parFacture:{}, liste:[]}} courriels={d.courriels} achats={d.achats}
-      facLignes={d.facLignes} archives={d.archives} cfg={cfg} registry={d.registry} events={d.events} onChanged={()=>setTick(t=>t+1)} onBack={()=>setSuivi(null)} isDesktop={isDesktop}/>;
+      facLignes={d.facLignes} archives={d.archives} cfg={cfg} registry={d.registry} events={d.events} onChanged={()=>setTick(t=>t+1)} onBack={()=>{ setSuivi(null); setSuiviJob(null); }} isDesktop={isDesktop} jobInit={suiviJob} key={suivi+'|'+(suiviJob||'')}/>;
   }
   const nq = cvNorm(q);
   const trouve = txt => !nq || cvNorm(txt).includes(nq);
@@ -19177,8 +19178,28 @@ function RepertoireView({cfg, refreshKey, toast, isDesktop, contacts, mode, onAl
     const c = contrTri.filter(x=>trouve(texteClient(x))), p = R.pers.filter(x=>!x.sansNom && trouve(texteClient(x))).sort(alpha);
     const f = fourn.filter(x=>trouve(x.nom+' '+((K.map[x.nom]||{}).nom||'')));
     const s = R.pers.filter(x=>x.sansNom && trouve(texteClient(x)));
+    // v634 : en Comptes clients, la recherche montre directement les jobs (pas besoin de passer par le contracteur)
+    const jobsT = [];
+    if(suiviMode){ const persDe = {}; R.pers.forEach(x=>(x.srcJobs||[]).forEach(j=>{ persDe[j.id] = x; }));
+      const qj = cvNorm(q.replace(/\bP[O0]\s*(?=\d)/i,'P0'));
+      Object.entries(clients).forEach(([code, cl])=>(cl.jobs||[]).forEach(j=>{
+        const t = cvNorm([cvTitreJob(j), j.po, j.name, j.address, ...(j.factures||[])].join(' '));
+        if(!(t.includes(qj) || (/^\d{3,}$/.test(qj) && t.includes('p0'+qj)))) return;
+        const pr = code==='PART' ? persDe[j.id] : null;
+        jobsT.push({j, code: pr ? pr.id : code, qui: code==='PART' ? (pr ? pr.nom : 'Particulier') : ((R.contr.find(x=>x.code===code)||{}).nom || code)}); }));
+      jobsT.sort((a,b)=>(cvFinie(a.j)?1:0)-(cvFinie(b.j)?1:0) || String(b.j.last||'').localeCompare(String(a.j.last||''))); }
+    const ouvrirJob = x => { setSuiviJob(x.j.id); setSuivi(x.code); };
+    const fmtM = n => n ? (Math.round(n*100)/100).toLocaleString('fr-CA',{minimumFractionDigits:2, maximumFractionDigits:2})+' $' : '';
     return <div>{entete}{formNouveau}
-      {!c.length && !p.length && !f.length && !s.length && <div className="card muted">Rien trouvé pour « {q} ».</div>}
+      {!jobsT.length && !c.length && !p.length && !f.length && !s.length && <div className="card muted">Rien trouvé pour « {q} ».</div>}
+      {jobsT.length>0 && <>{titre('Jobs', jobsT.length)}<div className="card" style={{padding:0}}>
+        {jobsT.slice(0,40).map(x=><div key={x.code+'|'+x.j.id} onClick={()=>ouvrirJob(x)} style={{padding:'9px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',alignItems:'center'}}>
+          <div style={{minWidth:0}}><b>{cvTitreJob(x.j)}</b>{x.j.po && <span className="muted" style={{fontSize:12}}> · {x.j.po}</span>}{cvFinie(x.j) && <span className="muted" style={{fontSize:11}}> · terminée</span>}
+            <div className="muted" style={{fontSize:12}}>{x.code==='PART' || String(x.code).startsWith('P:') ? '👤 ' : '🏗️ '}{x.qui}{x.j.address ? ' · '+x.j.address : ''}</div></div>
+          <div style={{fontSize:12,textAlign:'right'}}>{fmtM(x.j.reg && x.j.reg.ht) && <div>PO {fmtM(x.j.reg.ht)}</div>}{x.j.billed>0 && <div className="muted">Facturé {fmtM(x.j.billed)}</div>}</div>
+        </div>)}
+        {jobsT.length>40 && <div className="muted" style={{padding:'8px 14px',fontSize:12}}>+ {jobsT.length-40} autres — précise la recherche.</div>}
+      </div></>}
       {c.length>0 && <>{titre('Contracteurs', c.length)}<Cubes l={c}/></>}
       {p.length>0 && <>{titre('Clients et commerces', p.length)}<Liste l={p}/></>}
       {f.length>0 && <>{titre('Fournisseurs', f.length)}<ListeFourn l={f}/></>}
