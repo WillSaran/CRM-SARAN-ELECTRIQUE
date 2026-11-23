@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v635';
+const APP_VERSION = 'v636';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6110,7 +6110,7 @@ function EditEventModal({cfg, event, job, onClose, onSaved, toast}){
     if(!files.length) return;
     try{
       setTeleverse('Dossier…');
-      const dossier = await driveDossier('Saran CRM — Pièces jointes agenda');
+      const dossier = await driveDossier('Saran CRM — Pièces jointes agenda', DRIVE_EQUIPE);
       const ajout = [];
       for(let i=0;i<files.length;i++){ setTeleverse('Fichier '+(i+1)+'/'+files.length+'…');
         const r = await driveDeposer(files[i], dossier);
@@ -8938,11 +8938,13 @@ function DriveRapideView({cfg, sansTitre, type0, num0}){
     </div>
   </div>;
 }
+// v636 : Drive partagé « Saran Electrique » (le crew y a accès) — les pièces jointes de l'agenda vont là, pas dans « Mon Drive »
+const DRIVE_EQUIPE = '0AIrzXlTb3sicUk9PVA';
 async function driveDossier(nom, parent){
   const q = encodeURIComponent("name='"+nom.replace(/'/g,"\\'")+"' and mimeType='application/vnd.google-apps.folder' and trashed=false and '"+(parent||'root')+"' in parents");
-  const l = await driveFetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id)&pageSize=1');
+  const l = await driveFetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id)&pageSize=1&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives');
   if(l.files && l.files[0]) return l.files[0].id;
-  const c = await driveFetch('https://www.googleapis.com/drive/v3/files?fields=id', {method:'POST', headers:{'Content-Type':'application/json'},
+  const c = await driveFetch('https://www.googleapis.com/drive/v3/files?fields=id&supportsAllDrives=true', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({name:nom, mimeType:'application/vnd.google-apps.folder', parents:[parent||'root']})});
   return c.id;
 }
@@ -8964,7 +8966,7 @@ async function driveDeposer(fichier, dossier){
   const limite = 'crm'+Date.now();
   const corps = new Blob(['--'+limite+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify({name:f.name||'photo.jpg', parents:[dossier]})+
     '\r\n--'+limite+'\r\nContent-Type: '+(f.type||'application/octet-stream')+'\r\n\r\n', f, '\r\n--'+limite+'--']);
-  return driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {method:'POST', headers:{'Content-Type':'multipart/related; boundary='+limite}, body:corps});
+  return driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id&supportsAllDrives=true', {method:'POST', headers:{'Content-Type':'multipart/related; boundary='+limite}, body:corps});
 }
 // Bouton « 📷 Photos » : choisit/prend des photos et les dépose dans le dossier de la soumission.
 // La 1re fois, Google demande la permission (bouton « Autoriser »), une seule fois.
