@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v634';
+const APP_VERSION = 'v635';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9366,8 +9366,155 @@ function AppelsServiceSection({cfg, data, toast, refreshKey, onNavigate}){
     {sous==='facture' && <AppelServiceView key="facture" cfg={cfg} toast={toast} mode="facture" contacts={data && data.contacts} onNavigate={onNavigate}/>}
   </div>;
 }
+// v635 : Leads achetés (Soumission Rénovation) — lus dans le Sheet « Leads Saran Électrique », rempli par le script « Leads → Agenda Soumission ».
+// Colonnes : A Date | B Source | C ID projet | D Client | E Téléphone | F Courriel | G Adresse | H Type | I Travaux | J Budget | K Date voulue | L Prix du lead | M Statut | N Notes | O ID événement | P (libre) | Q Dernier contact | R Raison
+const LEADS_SHEET_ID = '1MjqSZ-DSINUC2VrbYMguQstaadmbfht-K2OW8C7mdHQ';
+const LEADS_STATUTS = ['Nouveau','Contacté','Visite prévue','Soumission envoyée','Gagné','Perdu'];
+const LEADS_FERMES = ['Gagné','Perdu','Fermé'];
+const LEADS_COUL = {'Nouveau':'#0ea5e9','Contacté':'#7d8590','Visite prévue':'#a371f7','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149','Fermé':'#7d8590'};
+const LEADS_RAISONS = ['Trop cher','Déjà pris un autre électricien','Pas de réponse','Projet annulé','Pas pour nous'];
+function leadJour(x){   // « 22/11/2026 21:16:01 » ou ISO -> 2026-11-22
+  const s = String(x||''); let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m) return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[0] : '';
+}
+function leadJours(j){ if(!j) return null; const t = new Date(j+'T12:00:00'); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
+function leadPrix(x){ const n = parseFloat(String(x||'').replace(/[^\d,.-]/g,'').replace(',','.')); return isNaN(n) ? 0 : n; }
+function leadAujourdhui(){ const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function leadNomCourt(nom){ const n = String(nom||'').replace(/^(M\.|Mme|Mr\.?)\s*/i,'').trim(); const f = n.split(/\s+/).pop()||''; return f ? f.charAt(0).toUpperCase()+f.slice(1).toLowerCase() : ''; }
+function leadDemande(type){
+  return ({BORNE:'pour l\'installation d\'une borne de recharge', 'GÉNÉRATRICE':'pour le branchement de votre génératrice', SPA:'pour le branchement de votre spa', PISCINE:'pour le branchement de votre piscine',
+    PANNEAU:'pour votre panneau électrique', CHAUF:'pour votre projet de chauffage', ECL:'pour votre projet d\'éclairage'})[type] || 'pour vos travaux électriques';
+}
+async function leadBrouillonGmail(to, sujet, corps){
+  if(!peutLireCourriels()){ await requestToken('consent', SCOPE_GMAIL_LIRE); if(!peutLireCourriels()) throw new Error('Permission Gmail refusée'); }
+  const u8 = x => btoa(unescape(encodeURIComponent(x))), lignes = x => x.replace(/.{76}/g, '$&\r\n');
+  const mime = 'To: '+to+'\r\nSubject: =?UTF-8?B?'+u8(sujet)+'?=\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n'+lignes(u8(corps));
+  const r = await window.gapi.client.request({path:'https://gmail.googleapis.com/gmail/v1/users/me/drafts', method:'POST', body:{message:{raw:btoa(mime).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}}});
+  const m = r.result && r.result.message; return m ? (m.threadId || m.id) : '';
+}
+function useLeads(refreshKey){
+  const [etat,setEtat]=useState({lu:false, liste:[], err:''});
+  const lire = useCallback(async(force)=>{
+    try{
+      const r = await lireCache(LEADS_SHEET_ID, 'Leads!A1:R', force);
+      const liste = (r.result.values||[]).slice(1).map((x,i)=>({row:i+2, date:leadJour(x[0]), source:x[1]||'', id:String(x[2]||''), nom:x[3]||'', tel:x[4]||'', courriel:(x[5]||'').toLowerCase(),
+        adresse:x[6]||'', type:x[7]||'', travaux:x[8]||'', budget:x[9]||'', voulue:x[10]||'', prix:leadPrix(x[11]), statut:x[12]||'Nouveau', notes:x[13]||'',
+        evenement:String(x[14]||'').replace(/@google\.com$/,''), contact:leadJour(x[16]), raison:x[17]||''})).filter(l=>l.id || l.nom);
+      setEtat({lu:true, liste, err:''});
+    }catch(e){ setEtat({lu:true, liste:[], err:'Impossible de lire le Sheet « Leads Saran Électrique » : '+apiErrMsg(e)}); }
+  },[]);
+  useEffect(()=>{ lire(); },[lire, refreshKey]);
+  const ecrire = async (l, champs)=>{   // champs : {statut, notes, contact, raison}
+    const data = [];
+    if(champs.statut!=null) data.push({range:'Leads!M'+l.row, values:[[champs.statut]]});
+    if(champs.notes!=null) data.push({range:'Leads!N'+l.row, values:[[champs.notes]]});
+    if(champs.contact!=null) data.push({range:'Leads!Q'+l.row, values:[[champs.contact]]});
+    if(champs.raison!=null) data.push({range:'Leads!R'+l.row, values:[[champs.raison]]});
+    data.push({range:'Leads!Q1:R1', values:[['Dernier contact','Raison']]});
+    await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:LEADS_SHEET_ID, resource:{valueInputOption:'RAW', data}});
+    setEtat(s=>({...s, liste:s.liste.map(x=>x.row===l.row ? {...x, ...champs} : x)}));
+  };
+  return {...etat, lire, ecrire};
+}
+function LeadsView({L, q, toast}){
+  const [voirFermes,setVoirFermes]=useState(false);
+  const [ouvert,setOuvert]=useState('');
+  const [occupe,setOccupe]=useState('');
+  const [perdu,setPerdu]=useState(null);   // lead en train d'être marqué Perdu
+  const [raison,setRaison]=useState('');
+  const auj = leadAujourdhui();
+  const cherche = l => !q || cvNorm([l.nom,l.adresse,l.type,l.id,l.courriel,l.tel].join(' ')).includes(cvNorm(q));
+  const ouverts = L.liste.filter(l=>!LEADS_FERMES.includes(l.statut));
+  const fermes = L.liste.filter(l=>LEADS_FERMES.includes(l.statut));
+  const attente = l => leadJours(l.contact || l.date);   // jours sans nouvelles
+  const liste = (voirFermes ? fermes : ouverts).filter(cherche).sort((a,b)=> voirFermes ? b.date.localeCompare(a.date) : (attente(b)||0)-(attente(a)||0) || b.date.localeCompare(a.date));
+  // Bilan du mois
+  const mois = auj.slice(0,7);
+  const duMois = L.liste.filter(l=>l.date.slice(0,7)===mois);
+  const paye = duMois.reduce((t,l)=>t+l.prix,0), gagnes = duMois.filter(l=>l.statut==='Gagné').length;
+  const payeTout = L.liste.reduce((t,l)=>t+l.prix,0), gagnesTout = L.liste.filter(l=>l.statut==='Gagné').length;
+  const argent = n => n.toLocaleString('fr-CA',{minimumFractionDigits:2, maximumFractionDigits:2})+' $';
+
+  const faire = async (l, cle, fn)=>{ setOccupe(l.row+cle); try{ await fn(); }catch(e){ toast && toast('Erreur : '+(e.message || apiErrMsg(e))); L.lire(true); } setOccupe(''); };
+  const relancer = l => faire(l, 'rel', async ()=>{
+    if(!l.courriel) throw new Error('pas de courriel pour ce lead');
+    const nom = leadNomCourt(l.nom), civ = /^Mme/i.test(l.nom) ? 'Mme' : 'M.';
+    const corps = ['Bonjour '+civ+' '+nom+',','','Ici William, de Saran Électrique. Je fais un petit suivi '+leadDemande(l.type)+'.','',
+      'Avez-vous toujours besoin de nos services? Si oui, vous pouvez m\'envoyer quelques photos (panneau électrique et endroit des travaux), ou me dire quand on peut passer chez vous.','',
+      'Au plaisir,','','William Saran','Saran Électrique','438 490-3412 · info@saranelectrique.com'].join('\n');
+    const fil = await leadBrouillonGmail(l.courriel, 'Suivi de votre demande – Saran Électrique', corps);
+    await L.ecrire(l, {contact:auj, statut: l.statut==='Nouveau' ? 'Contacté' : l.statut});
+    window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com#drafts/'+fil, '_blank');
+    toast && toast('Brouillon de relance créé dans Gmail');
+  });
+  const statut = (l, s) => faire(l, s, async ()=>{
+    await L.ecrire(l, {statut:s, contact:auj});
+    if(s==='Gagné' && l.evenement){
+      const calId = await soumCalId();
+      if(calId && confirm('Lead gagné : déplacer l\'événement de l\'agenda Soumission vers En Attente ?')){
+        await window.gapi.client.calendar.events.move({calendarId:calId, eventId:l.evenement, destination:EN_ATTENTE_CAL});
+        toast && toast('Gagné — déplacé dans En Attente'); return; }
+    }
+    toast && toast('Lead : '+s.toLowerCase());
+  });
+  const confirmerPerdu = () => { const l = perdu; setPerdu(null); faire(l, 'Perdu', async ()=>{
+    await L.ecrire(l, {statut:'Perdu', raison, contact:auj});
+    if(l.evenement){ const calId = await soumCalId();
+      if(calId && confirm('Retirer aussi l\'événement de l\'agenda Soumission ?')){ try{ await window.gapi.client.calendar.events.delete({calendarId:calId, eventId:l.evenement}); }catch(e){} } }
+    toast && toast('Lead fermé : perdu'+(raison?' ('+raison.toLowerCase()+')':''));
+  }); };
+
+  return <div>
+    <div className="card" style={{display:'flex',gap:18,flexWrap:'wrap',alignItems:'baseline',fontSize:13,marginBottom:10}}>
+      <div><span className="muted">Ce mois-ci :</span> <b>{duMois.length}</b> lead{duMois.length>1?'s':''} acheté{duMois.length>1?'s':''} · <b>{argent(paye)}</b> · <b>{gagnes}</b> gagné{gagnes>1?'s':''}</div>
+      <div><span className="muted">Coût par job gagnée :</span> <b>{gagnesTout ? argent(payeTout/gagnesTout) : '—'}</b></div>
+      <div style={{marginLeft:'auto',display:'flex',gap:6}}>
+        <button className={'btn btn-sm'+(!voirFermes?' btn-p':'')} onClick={()=>setVoirFermes(false)}>Ouverts ({ouverts.length})</button>
+        <button className={'btn btn-sm'+(voirFermes?' btn-p':'')} onClick={()=>setVoirFermes(true)}>Fermés ({fermes.length})</button>
+      </div>
+    </div>
+    {!L.lu && <div className="muted">Chargement…</div>}
+    {L.err && <div className="card" style={{color:'var(--red, #c0392b)'}}>{L.err}</div>}
+    {L.lu && !L.err && !liste.length && <div className="card muted" style={{fontSize:13}}>{voirFermes ? 'Aucun lead fermé.' : 'Aucun lead ouvert. Les leads achetés sur Soumission Rénovation arrivent ici tout seuls (aux 15 minutes).'}</div>}
+    {liste.map(l=>{
+      const j = attente(l), ferme = LEADS_FERMES.includes(l.statut);
+      const alerte = ferme || j==null ? null : j>=7 ? '#f85149' : j>=2 ? '#d29922' : null;
+      const ouv = ouvert===l.id;
+      return <div key={l.row} className="card" style={{marginBottom:8, borderLeft:'4px solid '+(alerte || LEADS_COUL[l.statut] || 'var(--border)')}}>
+        <div style={{display:'flex',gap:10,alignItems:'baseline',flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setOuvert(ouv?'':l.id)}>
+          <b style={{fontSize:15}}>{l.nom.replace(/^(M\.|Mme)\s*/i,'')}</b>
+          <span className="muted" style={{fontSize:12.5}}>{l.type || 'Autre'} · {(l.adresse||'').split(',').pop().replace(/\s*[A-Za-z]\d[A-Za-z](\s*\d[A-Za-z]\d)?\s*$/,'').trim() || l.adresse}</span>
+          <span style={{fontSize:11.5,padding:'1px 7px',borderRadius:10,background:(LEADS_COUL[l.statut]||'#7d8590')+'22',color:LEADS_COUL[l.statut]||'#7d8590'}}>{l.statut}</span>
+          {alerte && <span style={{fontSize:12,color:alerte,fontWeight:600}}>{j} j sans nouvelles{j>=7?' — à relancer':''}</span>}
+          <span className="muted" style={{fontSize:12,marginLeft:'auto'}}>{l.date} · {l.prix ? argent(l.prix) : ''}</span>
+        </div>
+        <div style={{fontSize:12.5,marginTop:4,display:'flex',gap:14,flexWrap:'wrap'}}>
+          {l.tel && <span>{l.tel}</span>}{l.courriel && <span>{l.courriel}</span>}
+          {l.voulue && <span className="muted">Travaux : {l.voulue.toLowerCase()}</span>}{l.budget && <span className="muted">Budget : {l.budget.split('•')[0].trim()}</span>}
+          {l.raison && <span className="muted">Raison : {l.raison}</span>}
+        </div>
+        {ouv && <div style={{fontSize:12.5,marginTop:8,whiteSpace:'pre-wrap',lineHeight:1.45}}>{l.travaux}{l.adresse && '\n\nAdresse : '+l.adresse}{l.budget && '\nBudget : '+l.budget}{'\nSource : '+l.source+' — projet '+l.id}{l.contact && '\nDernier contact : '+l.contact}</div>}
+        {!ferme && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8}}>
+          <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={()=>relancer(l)}>{occupe===l.row+'rel' ? '…' : 'Relancer'}</button>
+          {['Contacté','Visite prévue','Soumission envoyée'].filter(s=>s!==l.statut).map(s=><button key={s} className="btn btn-sm" disabled={!!occupe} onClick={()=>statut(l, s)}>{s}</button>)}
+          <button className="btn btn-sm" disabled={!!occupe} style={{color:'#3fb950'}} onClick={()=>statut(l, 'Gagné')}>Gagné</button>
+          <button className="btn btn-sm" disabled={!!occupe} style={{color:'#f85149'}} onClick={()=>{ setPerdu(l); setRaison(''); }}>Décliné / perdu</button>
+        </div>}
+        {ferme && <div style={{marginTop:8}}><button className="btn btn-sm" disabled={!!occupe} onClick={()=>statut(l, 'Contacté')}>Rouvrir</button></div>}
+        {perdu && perdu.row===l.row && <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:12.5}}>Raison :</span>
+          {LEADS_RAISONS.map(r=><button key={r} className={'btn btn-sm'+(raison===r?' btn-p':'')} onClick={()=>setRaison(raison===r?'':r)}>{r}</button>)}
+          <button className="btn btn-sm btn-p" onClick={confirmerPerdu}>Confirmer</button>
+          <button className="btn btn-sm" onClick={()=>setPerdu(null)}>Annuler</button>
+        </div>}
+      </div>;
+    })}
+  </div>;
+}
 function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const S = useSoumissions(cfg, refreshKey);
+  const L = useLeads(refreshKey);   // v635
   const [onglet,setOnglet]=useState(()=>navFocus('soumissions') ? 'envoyees' : 'afaire');   // v202 : soumissions d'un client (bouton de sa fiche)
   const [voirFinies,setVoirFinies]=useState(false);
   const [voirFermees,setVoirFermees]=useState(false);   // v396
@@ -9553,12 +9700,14 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
       {pill('recues',petit ? '📥 Reçues' : '📥 Reçues des fournisseurs',recuesTout.length,onglet,setOnglet)}
       {pill('miennes',petit ? '🗂 Les miennes' : '🗂 Mes soumissions (CRM)',DC.docs.filter(x=>x.type==='Soumission').length,onglet,setOnglet)}
       {pill('preparer',petit ? '✏️ Préparer' : '✏️ Préparer une soumission',null,onglet,k=>{ setOnglet(k); })}
+      {pill('leads',petit ? 'Leads' : 'Leads achetés',L.liste.filter(l=>!LEADS_FERMES.includes(l.statut)).length,onglet,setOnglet)}
     </div>
     {onglet==='preparer' && <AppelServiceView key={'prep'+prepKey} cfg={cfg} toast={toast} mode="soumission" contacts={data && data.contacts} onNavigate={onNavigate} onEnregistre={()=>DC.lire(true)} onEnvoye={doc=>{
       const s = doc.origine && S.liste.find(x=>x.cle===doc.origine);
       if(s) S.marquer(s, 'Faite', 'Soumission '+doc.numero).catch(()=>{});
       setTimeout(()=>S.relire(), 1500); }}/>}
     {onglet!=='preparer' && <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (client, adresse, numéro…)" style={{width:'100%',boxSizing:'border-box',marginBottom:10}}/>}
+    {onglet==='leads' && <LeadsView L={L} q={q} toast={toast}/>}
     {!S.lu && <div className="muted">Chargement…</div>}
     {S.err && <div className="card" style={{color:'var(--red, #c0392b)'}}>{S.err}</div>}
     {S.lu && !S.existe && onglet!=='recues' && <div className="card muted" style={{fontSize:12.5,marginBottom:10}}>L'onglet « Soumissions » du registre des jobs n'existe pas encore. Il sera rempli tout seul quand le script <b>soumissions.gs</b> sera installé dans La mémoire. Tu peux quand même en ajouter à la main.</div>}
