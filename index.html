@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v643';
+const APP_VERSION = 'v644';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9599,7 +9599,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     DOC_PREFILL = {type:'Soumission', typeProjet:i.type, origine:s.cle, nom:i.nom, tel:i.tel, courriel:i.courriel, adresse:i.adresse,
       titre: s.titre || (i.type ? i.type+(i.adresse ? ' — '+i.adresse.split(',')[0] : '') : sujet), travaux:'',
       visite: [String(i.travaux||'').trim() ? '— Demande du client ('+(s.sujet||'courriel')+') —\n'+String(i.travaux).trim() : '',   // v586 : le texte du courriel va dans les notes privées, pas dans les travaux imprimés
-        ...jointesDe(s).map(x=>'— Joint : '+(x.sujet||x.titre||'note')+' ('+cvFmtDay(x.date)+') —\n'+String(x.extrait||'').trim())].filter(Boolean).join('\n\n'),   // v641
+        ...jointesDe(s).map(x=>'— '+(x.sujet||x.titre||'Note')+' ('+cvFmtDay(x.date)+') —\n'+String(x.extrait||'').trim())].filter(Boolean).join('\n\n'),   // v641 / v644 : tout additionné
       dossier:s.pdf||s.photos||jointesDe(s).map(x=>x.pdf||x.photos).find(Boolean)||''};
     setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); };
   const accuse = async s => { const i = infosDe(s); if(!i.courriel){ toast && toast('Pas de courriel pour ce client'); return; }
@@ -9668,7 +9668,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
           {i.adresse && <span>📍 {i.adresse}</span>}
         </div>}
         {s.client && s.sujet && !cvNorm(s.sujet).includes(cvNorm(s.client)) && <div><SoumRef txt={s.sujet.replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'')}/></div>}
-        <SoumNote txt={s.extrait}/>
+        <SoumNote txt={[s.extrait, ...jointesDe(s).map(x=>x.extrait)].filter(x=>String(x||'').trim()).join('\n\n— + —\n\n')}/>   {/* v644 : les notes des demandes jointes s'additionnent */}
         {s.pdf && <SoumPhotos dossier={s.pdf}/>}
         {s.photos && <SoumPhotos dossier={s.photos} tick={tick}/>}
         {!s.extrait && !s.pdf && !s.photos && !jointesDe(s).length && <div className="muted" style={{fontSize:12,marginTop:4}}>Pas de note. Ouvre le courriel ou ajoute des photos.</div>}
@@ -9676,7 +9676,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
           <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:12.5}}><b>🔗 {x.sujet || x.titre || 'Note'}</b><span className="muted">{cvFmtDay(x.date)}</span>
             {x.lien && <a href={x.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>Courriel ↗</a>}
             <button className="btn btn-sm" style={{marginLeft:'auto'}} disabled={occupe===s.cle} onClick={()=>detacher(s, x)} title="La remettre comme demande à part">Séparer</button></div>
-          <SoumNote txt={x.extrait}/>{x.pdf && <SoumPhotos dossier={x.pdf}/>}{x.photos && <SoumPhotos dossier={x.photos} tick={tick}/>}</div>)}
+          {x.pdf && <SoumPhotos dossier={x.pdf}/>}{x.photos && <SoumPhotos dossier={x.photos} tick={tick}/>}</div>)}
         {!fini && joindre===s.cle && (()=>{ const autres = ouvertes.filter(x=>x.cle!==s.cle).sort((a,b)=>b.date.localeCompare(a.date));
           return <div style={{marginTop:8,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',fontSize:12.5}}>
             <span>Mettre cette demande avec :</span>
