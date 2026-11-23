@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v647';
+const APP_VERSION = 'v648';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8827,10 +8827,10 @@ function useSoumissions(cfg, refreshKey){
     await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!'+col+s.row, valueInputOption:'RAW', resource:{values:[[val]]}});
   };
   // Soumission à faire ajoutée à la main.
-  const ajouter = async (texte, details, photos, infos)=>{   // v604 : infos du client (Répertoire) en colonne Q ; retourne la clé
+  const ajouter = async (texte, details, photos, infos, opt)=>{   // v604 : infos du client (Répertoire) en colonne Q ; retourne la clé · v648 : opt {cle, statut} (lead acheté)
     if(!etat.existe) await ensureSheetsExist(id, [{name:'Soumissions', headers:SOUM_ONGLET_ENTETE}]);
-    const cle = 'M-'+Date.now();
-    const ligne = [cle, 'À faire', cvDay(new Date().toISOString()), '', (infos && infos.nom) || texte, (infos && infos.courriel) || '', texte, details||'', '', '', '', '', '', '', '', photos||'', infos ? JSON.stringify(infos) : ''];
+    const cle = (opt && opt.cle) || 'M-'+Date.now();
+    const ligne = [cle, 'À faire', cvDay(new Date().toISOString()), '', (infos && infos.nom) || texte, (infos && infos.courriel) || '', texte, details||'', '', '', '', '', (opt && opt.statut) || '', '', '', photos||'', infos ? JSON.stringify(infos) : ''];
     await sheetsAppendRow(id, 'Soumissions', ligne);
     await lire(true);
     return cle;
@@ -9400,6 +9400,10 @@ function leadJour(x){   // « 22/11/2026 21:16:01 » ou ISO -> 2026-11-22
 function leadJours(j){ if(!j) return null; const t = new Date(j+'T12:00:00'); return isNaN(t) ? null : Math.floor((Date.now()-t)/864e5); }
 function leadPrix(x){ const n = parseFloat(String(x||'').replace(/[^\d,.-]/g,'').replace(',','.')); return isNaN(n) ? 0 : n; }
 function leadAujourdhui(){ const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+// v648 : une demande créée depuis un lead acheté a la clé « M-L<id du lead>-<horodatage> »
+function leadCle(l){ return 'M-L'+String(l.id||l.row).replace(/\s+/g,'')+'-'+Date.now(); }
+function leadDeCle(cle){ const m = String(cle||'').match(/^M-L(.+)-\d{10,}$/); return m ? m[1] : ''; }
+function leadNomComplet(nom){ return String(nom||'').replace(/^(M\.|Mme|Mr\.?)\s*/i,'').trim(); }
 function leadNomCourt(nom){ const n = String(nom||'').replace(/^(M\.|Mme|Mr\.?)\s*/i,'').trim(); const f = n.split(/\s+/).pop()||''; return f ? f.charAt(0).toUpperCase()+f.slice(1).toLowerCase() : ''; }
 function leadDemande(type){
   return ({BORNE:'pour l\'installation d\'une borne de recharge', 'GÉNÉRATRICE':'pour le branchement de votre génératrice', SPA:'pour le branchement de votre spa', PISCINE:'pour le branchement de votre piscine',
@@ -9436,7 +9440,7 @@ function useLeads(refreshKey){
   };
   return {...etat, lire, ecrire};
 }
-function LeadsView({L, q, toast}){
+function LeadsView({L, q, toast, onSoumission, soumDe}){
   const [voirFermes,setVoirFermes]=useState(false);
   const [ouvert,setOuvert]=useState('');
   const [occupe,setOccupe]=useState('');
@@ -9459,9 +9463,12 @@ function LeadsView({L, q, toast}){
   const relancer = l => faire(l, 'rel', async ()=>{
     if(!l.courriel) throw new Error('pas de courriel pour ce lead');
     const nom = leadNomCourt(l.nom), civ = /^Mme/i.test(l.nom) ? 'Mme' : 'M.';
-    const corps = ['Bonjour '+civ+' '+nom+',','','Ici William, de Saran Électrique. Je fais un petit suivi '+leadDemande(l.type)+'.','',
-      'Avez-vous toujours besoin de nos services? Si oui, vous pouvez m\'envoyer quelques photos (panneau électrique et endroit des travaux), ou me dire quand on peut passer chez vous.','',
-      'Au plaisir,','','William Saran','Saran Électrique','438 490-3412 · info@saranelectrique.com'].join('\n');
+    const corps = ['Bonjour '+civ+' '+nom+',','',   // v648 : relance plus chaleureuse
+      'Ici William, de Saran Électrique! Je voulais juste prendre de vos nouvelles au sujet de votre demande '+leadDemande(l.type)+'.','',
+      'Est-ce que vous avez encore besoin de nous pour la soumission? Si vous avez déjà trouvé quelqu\'un, pas de souci, vous n\'avez qu\'à me le dire.','',
+      'Et si vous avez des questions, gênez-vous surtout pas : ça nous fait vraiment plaisir d\'y répondre. On est toujours disponibles pour en jaser, par courriel ou au téléphone.','',
+      'Pour avancer, vous pouvez m\'envoyer quelques photos (panneau électrique et endroit des travaux), ou me dire quand on peut passer chez vous.','',
+      'Au plaisir de vous aider!','','William Saran','Saran Électrique','438 490-3412 · info@saranelectrique.com'].join('\n');
     const fil = await leadBrouillonGmail(l.courriel, 'Suivi de votre demande – Saran Électrique', corps);
     await L.ecrire(l, {contact:auj, statut: l.statut==='Nouveau' ? 'Contacté' : l.statut});
     window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com#drafts/'+fil, '_blank');
@@ -9510,7 +9517,11 @@ function LeadsView({L, q, toast}){
               {' · '}<span style={{color:LEADS_COUL[l.statut]||'#7d8590'}}>{l.statut}</span>
               {alerte && <span style={{color:alerte,fontWeight:600}}> · {j} j sans nouvelles</span>}</div>
           </div>
-          {!ferme && <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={e=>{ e.stopPropagation(); relancer(l); }}>{occupe===l.row+'rel' ? '…' : 'Relancer'}</button>}
+          {!ferme && onSoumission && (()=>{ const sd = soumDe && soumDe(l);   // v648 : du lead acheté à la soumission, en un clic
+            return <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={e=>{ e.stopPropagation(); faire(l, 'soum', ()=>onSoumission(l)); }}
+              title={sd && sd.brouillon ? 'Reprendre la soumission '+sd.brouillon.numero : 'Ouvre la soumission remplie avec les infos du lead (elle apparaît aussi dans « À faire »)'}>
+              {occupe===l.row+'soum' ? '…' : sd && sd.brouillon ? 'Continuer '+sd.brouillon.numero : sd ? 'Faire la soumission' : '📝 Faire la soumission'}</button>; })()}
+          {!ferme && <button className={'btn btn-sm'+(onSoumission ? '' : ' btn-p')} disabled={!!occupe} onClick={e=>{ e.stopPropagation(); relancer(l); }}>{occupe===l.row+'rel' ? '…' : 'Relancer'}</button>}
         </div>
         {ouv && <>
           <div style={{fontSize:12.5,marginTop:8,display:'flex',gap:14,flexWrap:'wrap'}}>
@@ -9569,6 +9580,31 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const ouvertes = aFaire.filter(s=>!SOUM_FINI.includes(s.statut));
   // v637 : un lead = une demande où il faut encore parler au client ; « À faire » = tu as décidé de la soumissionner (ou un brouillon est commencé)
   const estAFaire = s => s.statut==='À soumissionner' || !!brouillons[s.cle];
+  // v648 : lead acheté -> demande « À faire » (clé M-L…) -> soumission remplie
+  const demandeDeLead = l => S.liste.find(x=>x.type==='À faire' && leadDeCle(x.cle)===String(l.id||l.row).replace(/\s+/g,'') && !['Annulée','Ignorée','Jointe'].includes(x.statut));
+  const creerDemandeLead = async l => { const nom = leadNomComplet(l.nom);
+    const infos = {nom, tel:l.tel||'', courriel:l.courriel||'', adresse:l.adresse||'', travaux:l.travaux||'', type:soumTypeDevine([l.type, l.travaux].join(' '))||'', lieu:(l.adresse||'').split(',')[0], lead:l.id||''};
+    const details = [l.travaux, l.budget ? 'Budget : '+l.budget : '', l.voulue ? 'Travaux voulus : '+l.voulue : '', l.source+' — projet '+l.id].filter(Boolean).join('\n');
+    const cle = await S.ajouter(nom+(l.type ? ' — '+l.type : ''), details, '', infos, {cle:leadCle(l), statut:'À soumissionner'});
+    return {cle, infos, details}; };
+  const soumDeLead = async l => { const sd = demandeDeLead(l);
+    if(sd){ preparer(sd); return; }
+    const {cle, infos, details} = await creerDemandeLead(l);
+    DOC_OUVRIR = null; DOC_PREFILL = {type:'Soumission', typeProjet:infos.type, origine:cle, nom:infos.nom, tel:infos.tel, courriel:infos.courriel, adresse:infos.adresse,
+      titre: (infos.type || l.type || 'Soumission')+(infos.adresse ? ' — '+infos.adresse.split(',')[0] : ''), travaux:'',
+      visite:'— Lead acheté ('+(l.source||'lead')+', '+(l.date||'')+') —\n'+details, dossier:''};
+    setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); };
+  // v648 : brouillons commencés sans demande — montrés comme des cartes dans « À faire », avec Continuer
+  const envNoA = new Set(envoyees.map(s=>DC.docs.find(x=>'CRM-'+x.numero===s.cle || (s.no && (x.numero===s.no || x.numero==='E-'+String(s.no).replace(/^E-/,''))))).filter(Boolean).map(x=>x.numero));
+  const liesA = new Set(Object.values(brouillons).map(x=>x.numero));
+  const orphelins = DC.docs.filter(x=>x.type==='Soumission' && !x.ferme && !envNoA.has(x.numero) && !liesA.has(x.numero))
+    .sort((a,b)=>(+(String(b.numero||'').replace(/\D/g,''))||0)-(+(String(a.numero||'').replace(/\D/g,''))||0));
+  const [relierOuv,setRelierOuv]=useState('');
+  const relierALead = async (doc, l) => { setOccupe('rel'+doc.numero);
+    try{ const sd = demandeDeLead(l), cle = sd && !brouillons[sd.cle] ? sd.cle : (await creerDemandeLead(l)).cle;
+      await DC.relier(doc, cle); setRelierOuv(''); await DC.lire(true); S.relire(); toast && toast(doc.numero+' relié au lead '+leadNomComplet(l.nom)); }
+    catch(e){ toast && toast('Erreur : '+(e.message||apiErrMsg(e))); }
+    setOccupe(''); };
   const leadsDem = ouvertes.filter(s=>!estAFaire(s)), aFaireL = ouvertes.filter(estAFaire);
   // Envoyée : à classer (rien de coché) -> ⏳ en attente (on attend la réponse du client) -> acceptée ou refusée.
   const etatEnv = s => s.statut==='Acceptée' ? 'acceptee' : s.statut==='Refusée' ? 'refusee' : s.statut==='En attente' ? 'attente' : 'aclasser';
@@ -9815,7 +9851,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
       </span>
     </div>
     <div className="defile-x" style={{display:'flex',gap:6,flexWrap:petit?'nowrap':'wrap',overflowX:petit?'auto':'visible',marginBottom:6,paddingBottom:petit?4:0,WebkitOverflowScrolling:'touch',alignItems:'center'}}>
-      {[['afaire','① 📝 À faire · leads', aFaireL.length],
+      {[['afaire','① 📝 À faire · leads', aFaireL.length+orphelins.length],
         ['registre','② 📚 Registre', nEnv('aclasser')+nEnv('attente')],
         ['relancer','③ 🔔 À relancer', aRelancer.length]].map(([k,l,n],ix)=><React.Fragment key={k}>
           {ix>0 && <span className="muted" style={{fontSize:12,flexShrink:0}}>›</span>}
@@ -9828,13 +9864,15 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     {onglet==='preparer' && <AppelServiceView key={'prep'+prepKey} cfg={cfg} toast={toast} mode="soumission" contacts={data && data.contacts} onNavigate={onNavigate} onEnregistre={()=>DC.lire(true)} onEnvoye={doc=>{
       const s = doc.origine && S.liste.find(x=>x.cle===doc.origine);
       if(s) S.marquer(s, 'Faite', 'Soumission '+doc.numero).catch(()=>{});
+      const idL = leadDeCle(doc.origine), lead = idL && L.liste.find(l=>String(l.id||l.row).replace(/\s+/g,'')===idL);   // v648
+      if(lead && !LEADS_FERMES.includes(lead.statut)) L.ecrire(lead, {statut:'Soumission envoyée', contact:leadAujourdhui()}).catch(()=>{});
       setTimeout(()=>S.relire(), 1500); }}/>}
     {onglet!=='preparer' && <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (client, adresse, numéro…)" style={{width:'100%',boxSizing:'border-box',marginBottom:10}}/>}
     {!S.lu && <div className="muted">Chargement…</div>}
     {S.err && <div className="card" style={{color:'var(--red, #c0392b)'}}>{S.err}</div>}
     {S.lu && !S.existe && onglet!=='recues' && <div className="card muted" style={{fontSize:12.5,marginBottom:10}}>L'onglet « Soumissions » du registre des jobs n'existe pas encore. Il sera rempli tout seul quand le script <b>soumissions.gs</b> sera installé dans La mémoire. Tu peux quand même en ajouter à la main.</div>}
 
-    {((onglet==='registre' && voirNos) || onglet==='afaire') && (()=>{   // v395 : toutes les soumissions faites dans le CRM, par numéro (E-0001, E-0002…)
+    {(onglet==='registre' && voirNos) && (()=>{   // v395 ; v648 : dans « À faire », les brouillons sans demande sont des cartes : toutes les soumissions faites dans le CRM, par numéro (E-0001, E-0002…)
       const envNo = new Set(envoyees.map(s=>docCrmDe(s)).filter(Boolean).map(x=>x.numero));
       const lies = new Set(ouvertes.map(s=>brouillons[s.cle] && brouillons[s.cle].numero).filter(Boolean));   // déjà affichés sur leur demande
       const numN = x => +(String(x.numero||'').replace(/\D/g,''))||0;
@@ -9910,13 +9948,37 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
           <button className="btn btn-sm" onClick={()=>{ setNouveau(null); setDetails(''); setFichiers([]); setClientAF(null); setAdrAF(''); }}>Annuler</button>
         </div>
       </div>}
+      {mode==='afaire' && orphelins.filter(x=>cherche([x.numero, x.client, x.courriel, x.titre].join(' '))).map(x=>{   // v648
+        const ouvR = relierOuv===x.numero, nomN = cvNorm(x.client||''), ouvL = L.liste.filter(l=>!LEADS_FERMES.includes(l.statut));
+        const suggeres = ouvL.filter(l=>(nomN && cvNorm(leadNomComplet(l.nom))===nomN) || (x.courriel && l.courriel===String(x.courriel).toLowerCase()));
+        return <div key={x.row} style={{padding:'10px 0',borderBottom:'1px solid var(--border)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+            <div style={{minWidth:0,flex:'1 1 220px'}}>
+              <div style={{fontWeight:700,fontSize:14}}>{x.client || x.titre || x.numero}</div>
+              <div className="muted" style={{fontSize:12.5}}>{[x.titre, x.date ? cvFmtDay(String(x.date).slice(0,10)) : ''].filter(Boolean).join(' · ')}</div>
+              <div style={{marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
+                <span className="badge" style={{background:'var(--bg3)',fontSize:11}} title="Soumission commencée, pas encore envoyée">{'Brouillon '+x.numero+(x.total ? ' · '+cvMoney(x.total) : '')}</span>
+                {suggeres.length>0 && <span className="badge" style={{background:'var(--bg3)',fontSize:11}}>Lead acheté trouvé</span>}</div>
+            </div>
+            <div style={{display:'flex',gap:6,alignItems:'center'}}>
+              {ouvL.length>0 && <button className="btn btn-sm" onClick={()=>setRelierOuv(ouvR?'':x.numero)} title="Relier ce brouillon à son lead acheté">🔗 Lead</button>}
+              <button className="btn btn-sm" title="Je n'en ai plus besoin : il disparaît des listes (rien n'est effacé)" onClick={()=>DC.fermer(x, true)}>Fermer</button>
+              <button className="btn btn-sm btn-p" onClick={()=>rouvrir(x)}>Continuer</button>
+            </div>
+          </div>
+          {ouvR && <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',fontSize:12.5}}>
+            <span className="muted">Relier à :</span>
+            {[...suggeres, ...ouvL.filter(l=>!suggeres.includes(l))].slice(0,12).map(l=><button key={l.row} className={'btn btn-sm'+(suggeres.includes(l)?' btn-p':'')} disabled={occupe==='rel'+x.numero} onClick={()=>relierALead(x, l)}>{leadNomComplet(l.nom)}{l.type ? ' · '+l.type : ''}</button>)}
+            <button className="btn btn-sm" onClick={()=>setRelierOuv('')}>Annuler</button>
+          </div>}
+        </div>; })}
       {listeDe(mode).map(s=><React.Fragment key={s.cle}>{CarteAFaire({s})}</React.Fragment>)}
-      {S.lu && !listeDe(mode).length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>{q ? 'Aucune ne correspond.' : mode==='leads' ? 'Aucune demande en cours.' : 'Rien à soumissionner 👍'}</div>}
+      {S.lu && !listeDe(mode).length && !(mode==='afaire' && orphelins.length) && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>{q ? 'Aucune ne correspond.' : mode==='leads' ? 'Aucune demande en cours.' : 'Rien à soumissionner 👍'}</div>}
     </div>;
       return <>{carteDem('afaire')}
         <div style={{fontWeight:700,fontSize:15,margin:'16px 2px 6px'}}>👋 Leads <span className="muted" style={{fontWeight:400,fontSize:12.5}}>· {leadsDem.length} — le monde à qui parler avant de soumissionner</span></div>
         {carteDem('leads')}
-        <div style={{marginTop:14}}><div style={{fontWeight:700,margin:'0 0 6px 2px'}}>Leads achetés</div><LeadsView L={L} q={q} toast={toast}/></div></>; })()}
+        <div style={{marginTop:14}}><div style={{fontWeight:700,margin:'0 0 6px 2px'}}>Leads achetés</div><LeadsView L={L} q={q} toast={toast} onSoumission={soumDeLead} soumDe={l=>{ const sd = demandeDeLead(l); return sd ? {s:sd, brouillon:brouillons[sd.cle]} : null; }}/></div></>; })()}
 
     {onglet==='relancer' && <div className="card">
       {aRelancer.map(s=><React.Fragment key={s.cle}>{CarteEnvoyee({s})}</React.Fragment>)}
@@ -11268,7 +11330,13 @@ function useDocumentsCrm(cfg){
     try{ await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:"'Documents CRM'!L1:L1", valueInputOption:'RAW', resource:{values:[['Statut']]}});
       await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:"'Documents CRM'!L"+doc.row, valueInputOption:'RAW', resource:{values:[[oui ? 'Fermée '+new Date().toLocaleDateString('fr-CA') : '']]}}); }
     catch(e){ setDocs(l=>l.map(x=>x.row===doc.row ? {...x, ferme:!oui} : x)); alert('Impossible : '+apiErrMsg(e)); } };
-  return {docs, lire, fermer};
+  // v648 : relier un brouillon sans demande à une demande « À faire » (origine dans les données, colonne K)
+  const relier = async (doc, origine) => { suivreEcritures();
+    let d = {}; try{ d = JSON.parse(doc.donnees||'{}'); }catch(e){}
+    const txt = JSON.stringify({...d, origine});
+    setDocs(l=>l.map(x=>x.row===doc.row ? {...x, donnees:txt} : x));
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:"'Documents CRM'!K"+doc.row, valueInputOption:'RAW', resource:{values:[[txt]]}}); };
+  return {docs, lire, fermer, relier};
 }
 
 function docVide(){ return {prixFiges:true, numero:'', type:'Soumission', typeProjet:'', origine:'', dossier:'', nom:'', adresse:'', tel:'', courriel:'', titre:'', travaux:'', jours:[{date:cvDay(new Date().toISOString()), sa01:'', sa02:''}], depl:false, quin:false, forfait:'', lignes:[], remarques:''}; }
