@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v640';
+const APP_VERSION = 'v641';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8783,7 +8783,7 @@ function useModeles(cfg){
   const enlever = async m => { await sheetsUpdateRow(id, qSheet('Modèles soumission'), m.row, ['','','','']); await lire(true); };
   return {liste, garder, enlever};
 }
-const SOUM_FINI = ['Faite','Annulée','Ignorée'];
+const SOUM_FINI = ['Faite','Annulée','Ignorée','Jointe'];   // v641 : « Jointe » = mise avec une autre demande
 function soumJours(d){ if(!d) return null; const t=new Date(d+'T12:00:00'); return isNaN(t) ? null : Math.round((Date.now()-t)/864e5); }
 function useSoumissions(cfg, refreshKey){
   const id = cfg.memoireJobsSpreadsheetId, idA = cfg.memoireAchatsSpreadsheetId;
@@ -9536,7 +9536,8 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const [fichiers,setFichiers]=useState([]);
   const [tick,setTick]=useState(0);
   const [ouverte,setOuverte]=useState('');
-  const [edC,setEdC]=useState(null);   // v640 : titre / sous-titre d'une carte modifié sur place {cle, nom, lieu, type}
+  const [edC,setEdC]=useState(null);
+  const [joindre,setJoindre]=useState('');   // v641 : demande qu'on met avec une autre (clé)   // v640 : titre / sous-titre d'une carte modifié sur place {cle, nom, lieu, type}
   const refFichiers = useRef(null);
   const [occupe,setOccupe]=useState('');
   const [prepKey,setPrepKey]=useState(0);
@@ -9578,13 +9579,28 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
       type: s.typeProjet || soumTypeDevine(s.sujet) || i.type || soumTypeDevine([i.travaux || s.extrait].join(' '))};
     return {nom:i.nom || s.client || '', tel:i.tel || '', courriel:(i.courriel || s.courriel || '').toLowerCase(), adresse:i.adresse || '', travaux:i.travaux || s.extrait || '', demande:i.demande || '',
       type: s.typeProjet || soumTypeDevine(s.sujet) || i.type || soumTypeDevine([i.travaux || s.extrait].join(' '))}; };
+  // v641 : demandes mises ensemble — la principale garde la liste (infos.jointes), l'autre passe « Jointe »
+  const jointesDe = s => { const L = ((s.infos||{}).jointes)||[]; return L.length ? S.liste.filter(x=>L.includes(x.cle)) : []; };
+  const mettreAvec = async (a, cleB) => { const bD = S.liste.find(x=>x.cle===cleB); if(!bD) return; setOccupe(a.cle);
+    try{ const inf = {...(bD.infos||{})}; inf.jointes = [...new Set([...(inf.jointes||[]), a.cle, ...(((a.infos||{}).jointes)||[])])];
+      await S.majCol(bD, 'Q', JSON.stringify(inf), 'infosTxt');
+      await S.marquer(a, 'Jointe', 'Avec '+((bD.titre && bD.titre.split(' — ')[0]) || bD.client || bD.sujet || '').slice(0,60));
+      setJoindre(''); setOuverte(cleB); S.relire(); toast && toast('Mises ensemble — tout est sur la carte de '+(((bD.titre && bD.titre.split(' — ')[0]) || bD.client || 'la demande')));
+    }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
+    setOccupe(''); };
+  const detacher = async (bD, a) => { setOccupe(bD.cle);
+    try{ const inf = {...(bD.infos||{})}; inf.jointes = (inf.jointes||[]).filter(k=>k!==a.cle); if(!inf.jointes.length) delete inf.jointes;
+      await S.majCol(bD, 'Q', JSON.stringify(inf), 'infosTxt'); await S.marquer(a, '', ''); S.relire(); toast && toast('Séparées'); }
+    catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); }
+    setOccupe(''); };
   const preparer = s => { const b = brouillons[s.cle];
     if(b){ DOC_OUVRIR = b; DOC_PREFILL = null; setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); return; }
     const i = infosDe(s), sujet = (s.sujet||'').replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'').replace(/^\s*soumission\s*[-:–]?\s*/i,'').replace(/^Contact depuis votre site\s*:\s*/i,'');
     DOC_PREFILL = {type:'Soumission', typeProjet:i.type, origine:s.cle, nom:i.nom, tel:i.tel, courriel:i.courriel, adresse:i.adresse,
       titre: s.titre || (i.type ? i.type+(i.adresse ? ' — '+i.adresse.split(',')[0] : '') : sujet), travaux:'',
-      visite: String(i.travaux||'').trim() ? '— Demande du client ('+(s.sujet||'courriel')+') —\n'+String(i.travaux).trim() : '',   // v586 : le texte du courriel va dans les notes privées, pas dans les travaux imprimés
-      dossier:s.pdf||s.photos||''};
+      visite: [String(i.travaux||'').trim() ? '— Demande du client ('+(s.sujet||'courriel')+') —\n'+String(i.travaux).trim() : '',   // v586 : le texte du courriel va dans les notes privées, pas dans les travaux imprimés
+        ...jointesDe(s).map(x=>'— Joint : '+(x.sujet||x.titre||'note')+' ('+cvFmtDay(x.date)+') —\n'+String(x.extrait||'').trim())].filter(Boolean).join('\n\n'),   // v641
+      dossier:s.pdf||s.photos||jointesDe(s).map(x=>x.pdf||x.photos).find(Boolean)||''};
     setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); };
   const accuse = async s => { const i = infosDe(s); if(!i.courriel){ toast && toast('Pas de courriel pour ce client'); return; }
     const formulaire = /linkeo|contact depuis votre site/i.test(s.sujet+' '+s.courriel) || (s.infos && s.infos.formulaire);
@@ -9631,8 +9647,9 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
             <button className="btn btn-sm" title="Modifier le titre, le type et le lieu de cette carte" style={{padding:'0 6px',fontSize:11,fontWeight:400}}
               onClick={e=>{ e.stopPropagation(); setEdC({cle:s.cle, nom:(s.titre && s.titre.split(' — ')[0]) || i.nom || s.client || '', type:i.type||'', lieu:ville||''}); }}>✏️</button></div>
           <div className="muted" style={{fontSize:12.5}}>{[i.type, ville, cvFmtDay(s.date)+(j>0 ? ' · il y a '+j+' j' : '')].filter(Boolean).join(' · ')}</div></>}
-          {(attente || b || prop.length>0 || s.reponse) && <div style={{marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
+          {(attente || b || prop.length>0 || s.reponse || jointesDe(s).length>0) && <div style={{marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
             {attente && tag('En attente'+(s.note ? ' · '+s.note : ''))}
+            {jointesDe(s).length>0 && tag('🔗 + '+jointesDe(s).length+' jointe'+(jointesDe(s).length>1?'s':''), jointesDe(s).map(x=>x.sujet||x.titre).join(' · '))}
             {b && tag('Brouillon '+b.numero+(b.total ? ' · '+cvMoney(b.total) : ''), 'Soumission commencée, pas encore envoyée')}
             {prop.length>0 && tag('Devis trouvé — à confirmer')}
             {s.reponse && tag('Le client a répondu')}
@@ -9654,7 +9671,21 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
         <SoumNote txt={s.extrait}/>
         {s.pdf && <SoumPhotos dossier={s.pdf}/>}
         {s.photos && <SoumPhotos dossier={s.photos} tick={tick}/>}
-        {!s.extrait && !s.pdf && !s.photos && <div className="muted" style={{fontSize:12,marginTop:4}}>Pas de note. Ouvre le courriel ou ajoute des photos.</div>}
+        {!s.extrait && !s.pdf && !s.photos && !jointesDe(s).length && <div className="muted" style={{fontSize:12,marginTop:4}}>Pas de note. Ouvre le courriel ou ajoute des photos.</div>}
+        {jointesDe(s).map(x=><div key={x.cle} style={{marginTop:8,padding:'6px 8px',background:'var(--bg3)',borderRadius:8}}>
+          <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:12.5}}><b>🔗 {x.sujet || x.titre || 'Note'}</b><span className="muted">{cvFmtDay(x.date)}</span>
+            {x.lien && <a href={x.lien} target="_blank" rel="noopener" style={{color:'var(--accent)'}}>Courriel ↗</a>}
+            <button className="btn btn-sm" style={{marginLeft:'auto'}} disabled={occupe===s.cle} onClick={()=>detacher(s, x)} title="La remettre comme demande à part">Séparer</button></div>
+          <SoumNote txt={x.extrait}/>{x.pdf && <SoumPhotos dossier={x.pdf}/>}{x.photos && <SoumPhotos dossier={x.photos} tick={tick}/>}</div>)}
+        {!fini && joindre===s.cle && (()=>{ const autres = ouvertes.filter(x=>x.cle!==s.cle).sort((a,b)=>b.date.localeCompare(a.date));
+          return <div style={{marginTop:8,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',fontSize:12.5}}>
+            <span>Mettre cette demande avec :</span>
+            <select defaultValue="" onChange={e=>e.target.value && mettreAvec(s, e.target.value)} style={{fontSize:12.5,maxWidth:420}}>
+              <option value="">Choisis l'autre demande…</option>
+              {autres.map(x=>{ const ix = infosDe(x); return <option key={x.cle} value={x.cle}>{((x.titre && x.titre.split(' — ')[0]) || ix.nom || x.client || x.sujet || '').slice(0,50)} — {(x.sujet||'').slice(0,40)} ({cvFmtDay(x.date)})</option>; })}
+            </select>
+            <button className="btn btn-sm" onClick={()=>setJoindre('')}>Annuler</button>
+            <span className="muted" style={{width:'100%',fontSize:11.5}}>Sa note, son courriel et ses photos vont sur l'autre carte ; celle-ci disparaît de la liste (« Séparer » pour revenir).</span></div>; })()}
         {s.reponse && <div className="muted" style={{fontSize:12,marginTop:3}}>↪ {s.reponse}</div>}
         {s.accuse && <div className="muted" style={{fontSize:11.5,marginTop:3}}>Accusé de réception envoyé le {cvFmtDay(s.accuse)}</div>}
         {prop.map(e=><div key={e.cle} style={{marginTop:6,fontSize:12.5,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',background:'var(--bg3)',padding:'5px 8px',borderRadius:8}}>
@@ -9671,6 +9702,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
           {!estAFaire(s) && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, attente ? '' : 'En attente', s.note)}>{attente ? 'Plus en attente' : 'En attente'}</button>}
           {estAFaire(s) && !b && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, '', s.note)} title="Pas encore prêt : la remettre dans les leads">↩ Leads</button>}
           {estAFaire(s) && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Faite')} style={{color:'var(--green, #2e9e5b)'}}>✓ Faite</button>}
+          <button className="btn btn-sm" onClick={()=>setJoindre(joindre===s.cle?'':s.cle)} title="Ex. ton courriel à toi-même avec le stock : mets-le avec la demande du client">🔗 Mettre avec…</button>
           <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, s.cle.startsWith('M-')?'Annulée':'Ignorée')} title="Annulée, ou ce n'était pas une soumission à faire" style={{marginLeft:'auto'}}>✕ Retirer</button>
         </div>}
       </div>}
