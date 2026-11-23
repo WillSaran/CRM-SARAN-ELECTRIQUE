@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v648';
+const APP_VERSION = 'v649';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9463,11 +9463,11 @@ function LeadsView({L, q, toast, onSoumission, soumDe}){
   const relancer = l => faire(l, 'rel', async ()=>{
     if(!l.courriel) throw new Error('pas de courriel pour ce lead');
     const nom = leadNomCourt(l.nom), civ = /^Mme/i.test(l.nom) ? 'Mme' : 'M.';
-    const corps = ['Bonjour '+civ+' '+nom+',','',   // v648 : relance plus chaleureuse
-      'Ici William, de Saran Électrique! Je voulais juste prendre de vos nouvelles au sujet de votre demande '+leadDemande(l.type)+'.','',
-      'Est-ce que vous avez encore besoin de nous pour la soumission? Si vous avez déjà trouvé quelqu\'un, pas de souci, vous n\'avez qu\'à me le dire.','',
+    const envoyee = l.statut==='Soumission envoyée';   // v649 : relance de soumission — pas de photos ; « dites-le-moi » pour fermer le dossier
+    const corps = ['Bonjour '+civ+' '+nom+',','',
+      'Ici William, de Saran Électrique! Je voulais juste prendre de vos nouvelles au sujet de '+(envoyee ? 'la soumission que je vous ai envoyée ' : 'votre demande ')+leadDemande(l.type)+'.','',
+      'Est-ce que vous avez encore besoin de nous? Si vous avez déjà trouvé quelqu\'un, pas de souci, vous n\'avez qu\'à me le dire : ça me permet de fermer le dossier de mon côté.','',
       'Et si vous avez des questions, gênez-vous surtout pas : ça nous fait vraiment plaisir d\'y répondre. On est toujours disponibles pour en jaser, par courriel ou au téléphone.','',
-      'Pour avancer, vous pouvez m\'envoyer quelques photos (panneau électrique et endroit des travaux), ou me dire quand on peut passer chez vous.','',
       'Au plaisir de vous aider!','','William Saran','Saran Électrique','438 490-3412 · info@saranelectrique.com'].join('\n');
     const fil = await leadBrouillonGmail(l.courriel, 'Suivi de votre demande – Saran Électrique', corps);
     await L.ecrire(l, {contact:auj, statut: l.statut==='Nouveau' ? 'Contacté' : l.statut});
