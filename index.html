@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v638';
+const APP_VERSION = 'v639';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -12901,11 +12901,13 @@ async function maisonLirePlan(file, onEtat, src, sauter){
       ...tc.items.filter(t=>String(t.str).trim()).map(t=>({t:String(t.str).trim(), x:t.transform[4], y:t.transform[5]}))];
     const tout = L.map(x=>x.t).join(' | ').toUpperCase();
     const etDe = t => /SOUS[- ]SOL/.test(t) ? 'Sous-sol' : /REZ|R-D-C|RDC/.test(t) ? 'Rez-de-chaussée' : /[ÉE]TAGE|2E/.test(t) ? 'Étage' : '';
-    const ets = [...new Set((tout.match(/PLAN D.AM[ÉE]NAGEMENT[^|]{0,40}/g)||[]).map(etDe).filter(Boolean))];
+    // v639 : aussi les titres de designer « REZ-DE-CHAUSSÉE – ÉLECTRICITÉ », « ÉTAGE – EXISTANT », etc.
+    const TITRE_ET = /^(REZ-DE-CHAUSS[ÉE]E|SOUS-SOL|2E [ÉE]TAGE|[ÉE]TAGE)(\s*[-–]\s*[A-ZÉÈÀÇ /+-]+)?$/;
+    const ets = [...new Set([...(tout.match(/PLAN D.AM[ÉE]NAGEMENT[^|]{0,40}/g)||[]), ...L.map(x=>String(x.t).toUpperCase().trim()).filter(u=>TITRE_ET.test(u))].map(etDe).filter(Boolean))];
     const vp1 = pg.getViewport({scale:1});
     // v579 : plusieurs plans sur la page → une zone par titre « PLAN D'AMÉNAGEMENT … »
     let zones = [];
-    if(ets.length>1){ L.forEach((x,k)=>{ const u = String(x.t).toUpperCase(); if(!/PLAN D.AM[ÉE]NAGEMENT|^(REZ-DE-CHAUSS[ÉE]E|SOUS-SOL|2E [ÉE]TAGE|[ÉE]TAGE)$/.test(u)) return;
+    if(ets.length>1){ L.forEach((x,k)=>{ const u = String(x.t).toUpperCase(); if(!/PLAN D.AM[ÉE]NAGEMENT/.test(u) && !TITRE_ET.test(u.trim())) return;
         const et = etDe((u+' '+String((L[k+1]||{}).t||'')+' '+String((L[k+2]||{}).t||'')).toUpperCase().replace(/PLAN D.AM[ÉE]NAGEMENT/, '')) || etDe(u); if(!et || zones.some(z=>z.etage===et)) return;
         const [vx, vy] = vp1.convertToViewportPoint(x.x, x.y); zones.push({etage:et, fx:+(vx/vp1.width).toFixed(4), fy:+(vy/vp1.height).toFixed(4)}); });
       if(zones.length<2) zones = []; }
@@ -12913,12 +12915,15 @@ async function maisonLirePlan(file, onEtat, src, sauter){
     const dims = L.filter(x=>/^±?\s*\d+\s*'\s*-?\s*\d*.*[xX×]\s*\d+\s*'/.test(x.t));
     const noms = L.filter(x=>/^[A-ZÉÈÀÂÎÔÛÇ][A-ZÉÈÀÂÎÔÛÇ0-9 #.'’\-\/]{1,30}$/.test(x.t) && !/^(SCALE|PLAN|SOLIVES|COUPE|DÉTAIL|DETAIL|NOTE|LÉGENDE|MUR |POUTRE|COLONNE)/.test(x.t) && !/^([A-Z]\d*|\d+)$/.test(x.t) && maisonTypeDe(x.t)!=='autre');
     const terrain = /CERTIFICAT DE LOCALISATION|PLAN D.IMPLANTATION|IMPLANTATION|ARPENT|PLAN D.EMPLACEMENT|CADASTR/.test(tout);
-    const facade = /[ÉE]L[ÉE]VATION|FA[ÇC]ADE/.test(tout);
+    const facade = /FA[ÇC]ADE|[ÉE]L[ÉE]VATION\s+(AVANT|ARRI[ÈE]RE|LAT[ÉE]RALE?|DROITE|GAUCHE|NORD|SUD|EST|OUEST|PRINCIPALE)/.test(tout);   // v639 : pas juste « ÉLÉVATIONS » dans l'index ou la légende
     const sorte = etage ? 'etage' : terrain ? 'terrain' : facade ? 'facade' : (/^(1|01)$/.test(String(doc.numPages)) ? 'terrain' : 'autre');   // v482 : toutes les pages gardées (plans en image à identifier)
     if(sorte){ const vp = pg.getViewport({scale:Math.min(2, (sorte==='etage' ? 2800 : sorte==='autre' ? 2400 : 1600)/vp1.width)}), c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
       try{ const cx = c.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0,0,c.width,c.height); await pg.render({canvasContext:cx, viewport:vp}).promise; }catch(e){}
       const fac = sorte==='facade' ? ((tout.match(/(AVANT|ARRI[ÈE]RE|LAT[ÉE]RAL[ E]+(DROIT|GAUCHE)|DROITE|GAUCHE)/)||[])[0]||'') : '';
-      pages.push({no:i, w:c.width, h:c.height, src:src||file.name, sorte, etage, ...(zones.length ? {zones} : {}), titre:(etage || fac || (sorte==='terrain' ? 'Certificat / arpentage' : 'p. '+i)).trim(), img:c.toDataURL('image/jpeg', 0.8)}); }
+      // v639 : plan électrique déjà fait — les symboles écrits en texte (L1, M2, $ / S + D, T, DDFT) gardés avec leur position, pour les compter dans une pièce encadrée
+      const elec = !!etage && /[ÉE]LECTRICIT[ÉE]|PLAN [ÉE]LECTRIQUE|[ÉE]CLAIRAGE/.test(tout);
+      const mots = etage ? L.filter(x=>/^(S|\$+|D|T|L\d{1,2}|M\d{1,2}|\d+\s*[xX×]|DDFT|GFI)$/.test(String(x.t).trim())).map(x=>{ const [vx, vy] = vp1.convertToViewportPoint(x.x, x.y); return {t:String(x.t).trim(), x:+(vx/vp1.width).toFixed(4), y:+(vy/vp1.height).toFixed(4)}; }) : [];
+      pages.push({no:i, w:c.width, h:c.height, src:src||file.name, sorte, etage, ...(zones.length ? {zones} : {}), ...(elec ? {elec:true} : {}), ...(mots.length ? {mots} : {}), titre:(etage || fac || (sorte==='terrain' ? 'Certificat / arpentage' : 'p. '+i)).trim(), img:c.toDataURL('image/jpeg', 0.8)}); }
     if(!etage) continue;
     // chaque dimension va au nom le plus proche ; une pièce sans dimension n'est gardée que si c'est clairement une pièce
     const proche = d => noms.map(n=>({n, k:Math.hypot(d.x-n.x, d.y-n.y)})).sort((a,b)=>a.k-b.k)[0];
@@ -12928,6 +12933,12 @@ async function maisonLirePlan(file, onEtat, src, sauter){
       const [vx, vy] = vp1.convertToViewportPoint(n.x, n.y);
       const type = maisonTypeDe(n.t), et = type==='exterieur' ? 'Extérieur' : type==='garage' ? 'Garage' : zones.length ? maisonZoneEtage(zones, vx/vp1.width, vy/vp1.height) : etage;
       pieces.push({...maisonNouvellePiece(n.t.charAt(0)+n.t.slice(1).toLowerCase(), et, type, pi2), src:src||file.name, pg:i, fx:+(vx/vp1.width).toFixed(4), fy:+(vy/vp1.height).toFixed(4)}); });
+  }
+  // v639 : plans de designer (une page par discipline) — on garde les pages électriques comme plans d'étage, une seule fois chaque pièce
+  if(pages.some(p=>p.elec)){
+    const autres = new Set(pages.filter(p=>p.sorte==='etage' && !p.elec).map(p=>p.no));
+    pages.forEach(p=>{ if(autres.has(p.no)){ p.sorte = 'autre'; p.etage = ''; p.titre = 'p. '+p.no; delete p.zones; delete p.mots; } });
+    const vus = new Set(); return {pages, pieces:pieces.filter(pc=>{ if(autres.has(pc.pg)) return false; const k = pc.etage+'|'+cvNorm(pc.nom); if(vus.has(k)) return false; vus.add(k); return true; })};
   }
   return {pages, pieces};
 }
@@ -13404,6 +13415,28 @@ function MaisonContour({cs, col, epais, tirets}){ const u = maisonUnion(cs, 1);
     {u.segs.map((g,k)=><line key={k} x1={g[0]} y1={g[1]} x2={g[2]} y2={g[3]} stroke={col} strokeWidth={epais||2} strokeDasharray={tirets ? '6 4' : null} vectorEffect="non-scaling-stroke"/>)}</svg>; }
 // v485 : une pièce peut avoir plusieurs rectangles (corridor en L, etc.) — cadres[] ; cadre = boîte qui les englobe (zoom du tour)
 const maisonCadres = p => p.cadres && p.cadres.length ? p.cadres : (p.cadre ? [p.cadre] : []);
+// v639 : plan électrique déjà fait — on compte les symboles écrits sur le plan dans les cadres de la pièce :
+// L1 = encastré (SO03), autres L# et M# = luminaire / applique (SO04, « 2x M2 » = 2), $ (S) = interrupteur, $ + D = gradateur (SO02.2), T = thermostat, DDFT = prise GFI.
+// Les prises et les détecteurs sont dessinés (pas du texte) : on garde ceux du type de pièce.
+function maisonCompterSymboles(p, pg){
+  const cs = maisonCadres(p), M = (pg && pg.mots || []).filter(m=>cs.some(k=>m.x>=k[0] && m.x<=k[2] && m.y>=k[1] && m.y<=k[3]));
+  if(!M.length) return p;
+  let enc = 0, lum = 0, nS = 0, nD = 0, th = 0, gfi = 0;
+  M.forEach(m=>{ const t = m.t;
+    if(t==='L1') enc++;
+    else if(/^L\d+$/.test(t)) lum++;
+    else if(/^M\d+$/.test(t)){ const f = M.find(o=>/^\d+\s*[xX×]$/.test(o.t) && Math.abs(o.y-m.y)<0.012 && m.x-o.x>0 && m.x-o.x<0.04); lum += f ? (parseInt(f.t,10)||1) : 1; }
+    else if(t==='S' || /^\$+$/.test(t)) nS += t==='S' ? 1 : t.length;
+    else if(t==='D') nD++;
+    else if(t==='T') th++;
+    else if(t==='DDFT' || t==='GFI') gfi++; });
+  if(!(enc+lum+nS+th+gfi)) return p;
+  const dim = Math.min(nS, nD), items = {...(p.items||{})};
+  ['SO03','SO03.1','SO03.2','SO03.3','SO04','SO02','SO02.1','SO02.2'].forEach(k=>{ delete items[k]; });
+  if(enc) items.SO03 = enc; if(lum) items.SO04 = lum; if(nS-dim) items.SO02 = nS-dim; if(dim) items['SO02.2'] = dim;
+  if(gfi){ items['SO01.1'] = gfi; if(items.SO01) items.SO01 = Math.max(0, items.SO01-gfi) || undefined; if(!items.SO01) delete items.SO01; }
+  const chauf = th ? maisonChaufMaj(p, 'thermostat', th) : {};
+  return {...p, items, ...chauf, lu:'plan', luTxt:[enc && enc+' encastré'+(enc>1?'s':''), lum && lum+' luminaire'+(lum>1?'s':''), nS && nS+' interrupteur'+(nS>1?'s':'')+(dim ? ' dont '+dim+' gradateur'+(dim>1?'s':'') : ''), th && th+' thermostat'+(th>1?'s':''), gfi && gfi+' DDFT'].filter(Boolean).join(', ')}; }
 function maisonAvecCadres(p, cs, pg, ech){ if(!cs.length) return {...p, cadres:[], cadre:null};
   const bb = [Math.min(...cs.map(c=>c[0])), Math.min(...cs.map(c=>c[1])), Math.max(...cs.map(c=>c[2])), Math.max(...cs.map(c=>c[3]))].map(v=>+v.toFixed(4));
   const gros = [...cs].sort((a,b)=>(b[2]-b[0])*(b[3]-b[1]) - (a[2]-a[0])*(a[3]-a[1]))[0];
@@ -13516,7 +13549,7 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
   const garder = (suite, typeForce) => { const ch = typeForce ? {...choix, type:typeForce} : choix; if(!ch) return; let id = ch.id;
     const fin = p => { const q = maisonAvecCadres({...p, src:pg.src||'', pg:pg.no}, [...(ch.id ? maisonCadres(p) : []), ...(ch.cs || [ch.c])], pg, ech); return ch.pi2!=='' && ch.pi2!=null && !ech ? {...q, pi2:String(ch.pi2)} : q; };
     if(id) majM(x=>({pieces:x.pieces.map(p=>p.id===id ? fin(p) : p)}));
-    else { const p = fin(maisonNouvellePiece((ch.nom||'').trim() || nomAuto(ch.type), etageDe(ch.type, ch.c), ch.type, ch.pi2!=='' ? ch.pi2 : null)); id = p.id; majM(x=>({pieces:[...x.pieces, p]})); }
+    else { const p = maisonCompterSymboles(fin(maisonNouvellePiece((ch.nom||'').trim() || nomAuto(ch.type), etageDe(ch.type, ch.c), ch.type, ch.pi2!=='' ? ch.pi2 : null)), pg); id = p.id; majM(x=>({pieces:[...x.pieces, p]})); }   // v639 : comptée au plan si les symboles y sont
     setChoix(null); setDerniere(id); if(suite) setCible(id); };
   const garderMesure = () => { const pi = maisonPieds(mesure.txt); if(!pi) return; const c = mesure.c, u = Math.hypot(c[2]-c[0], (c[3]-c[1])*((pg.h||1)/(pg.w||1)));
     const e = +(pi/u).toFixed(3); majM(x=>({echelles:{...(x.echelles||{}), [cle]:e}, pieces:x.pieces.map(p=>p.pg===pg.no && (p.src||'')===(pg.src||'') && p.cadre && !cvNum(p.pi2) ? {...p, pi2:String(maisonPi2Cadre(p.cadre, pg, e))} : p)}));
@@ -13688,7 +13721,11 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli, lireTick}){   // v495 
   const plansClient = async () => { if(!pagesV.length){ toast && toast('Le plan n\'est pas chargé — ouvre ou relis le plan'); return; }
     setEtat('Plans annotés…');
     try{ if(!peutDeposer()) await requestToken('consent');
-      const L = await maisonPlansAnnotes(pagesV, m.pieces, m.app240); if(!L.length){ setEtat(''); toast && toast('Aucun emplacement placé — fais le tour pièce par pièce'); return; }
+      let L = await maisonPlansAnnotes(pagesV, m.pieces, m.app240);
+      // v639 : plan électrique déjà fait par le designer → ses pages d'étage vont telles quelles dans le PDF (pas besoin de placer les sorties)
+      if(!L.length){ const P = pagesV.filter(x=>x.sorte==='etage' && x.img);
+        for(const pg of P){ L.push({blob: await (await fetch(pg.img)).blob(), titre:'Plan annoté — '+(pg.titre || pg.etage || 'p. '+pg.no)+' (plan électrique)'}); } }
+      if(!L.length){ setEtat(''); toast && toast('Aucun plan d\'étage — trie les pages du plan'); return; }
       const items = []; for(const x of L){ const id = await planGarderImage(d, setD, x.blob, x.titre); items.push({id, titre:x.titre, notes:''}); }
       setD(o=>({...o, plan:[...(o.plan||[]).filter(y=>!/^Plan annoté — /.test(y.titre||'')), ...items]}));
       setEtat(''); toast && toast(items.length+' plan'+(items.length>1?'s':'')+' annoté'+(items.length>1?'s':'')+' ajouté'+(items.length>1?'s':'')+' au plan des travaux (PDF)'); }
@@ -13849,7 +13886,7 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli, lireTick}){   // v495 
         {C && C.lu && (()=>{ const cs = [...new Set(m.pieces.flatMap(p=>[...Object.entries(p.items||{}).filter(([,n])=>n>0).map(([c])=>c), ...(maisonChauffage(p).so220 ? ['SO220'] : []), ...((maisonChauffage(p).prod||[]).map(([c])=>c))]))].filter(c=>!(C && C.prixDe && C.prixDe(c)));
           return cs.length ? <div style={{width:'100%',color:'var(--danger)',fontSize:12.5}}>⚠ Pas de prix dans le catalogue pour : {cs.join(', ')} — ces lignes arriveront à 0 $ (mets le prix dans Inventaire › À la sortie).</div> : null; })()}
         <b>Total des sorties : {cvMoney(m.pieces.reduce((t,p)=>t+totalPiece(p),0))}</b><span className="muted" style={{fontSize:12}}>(tes prix SO, avant entrée, appareils sans code et buffer)</span>
-        <button className="btn" style={{marginLeft:'auto'}} disabled={!!etat || !m.pieces.some(p=>(p.emp||[]).length)} title="Un plan par étage avec les emplacements placés pendant le tour — va dans le plan des travaux (PDF du client)" onClick={plansClient}>📎 Plans annotés → PDF</button>
+        <button className="btn" style={{marginLeft:'auto'}} disabled={!!etat || !(m.pieces.some(p=>(p.emp||[]).length) || pagesV.some(x=>x.sorte==='etage'))} title={m.pieces.some(p=>(p.emp||[]).length) ? 'Un plan par étage avec les emplacements placés pendant le tour — va dans le plan des travaux (PDF du client)' : 'Plan électrique déjà fait : tes pages d\'étage vont telles quelles dans le PDF du client'} onClick={plansClient}>{m.pieces.some(p=>(p.emp||[]).length) ? '📎 Plans annotés → PDF' : '📎 Plan électrique → PDF'}</button>
         <button className="btn btn-p" disabled={!(C && C.lu)} title={C && C.lu ? '' : 'Les prix du catalogue chargent encore'} onClick={appliquer}>{C && C.lu ? '↳ Remplir la soumission' : '⏳ Prix en chargement…'}</button></div>
     </div>}</>}
   </div>;
