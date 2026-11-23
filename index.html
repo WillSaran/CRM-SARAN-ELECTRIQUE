@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v642';
+const APP_VERSION = 'v643';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11477,7 +11477,10 @@ function ApercuPdf({d, setD, prixDe, onImprimer, onFermer}){
         {(d.plan||[]).map((x,i)=>/^Plan par pièce — /.test(x.titre||'') ? null : <label key={x.id+i} style={{display:'inline-flex',gap:4,alignItems:'center',padding:'2px 8px',border:'1px solid var(--border2)',borderRadius:12,cursor:'pointer',opacity:x.masque?.55:1}}>
           <input type="checkbox" checked={!x.masque} onChange={e=>{ const v = !e.target.checked; setD(o=>({...o, plan:(o.plan||[]).map((y,j)=>j===i ? {...y, masque:v} : y)})); }} style={{width:'auto'}}/>
           {/^Plan par pièce/.test(x.titre||'') ? '🏠 ' : /^Plan annoté/.test(x.titre||'') ? '📍 ' : '🖼️ '}{x.titre || 'Photo '+(i+1)}</label>)}</div></div>}
-    {html ? <iframe title="Aperçu" srcDoc={html} style={{width:'100%',height:'78vh',border:'1px solid var(--border2)',borderRadius:6,background:'#fff'}}/> : <div className="muted" style={{padding:20}}>Préparation…</div>}
+    {html ? <iframe title="Aperçu" srcDoc={html} scrolling="no" onLoad={e=>{ const f = e.target;   // v643 : l'aperçu prend toute sa hauteur — on descend la page d'un seul défilement, plus de 2e barre
+        const fit = () => { try{ const dd = f.contentDocument; if(dd && dd.documentElement) f.style.height = Math.max(400, dd.documentElement.scrollHeight)+'px'; }catch(x){} };
+        fit(); try{ [...f.contentDocument.images].forEach(im=>im.addEventListener('load', fit)); }catch(x){} [300, 1200, 3000].forEach(t=>setTimeout(fit, t)); }}
+      style={{width:'100%',height:'78vh',border:'1px solid var(--border2)',borderRadius:6,background:'#fff',display:'block'}}/> : <div className="muted" style={{padding:20}}>Préparation…</div>}
   </div>;
 }
 
