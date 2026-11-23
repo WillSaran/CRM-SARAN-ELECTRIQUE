@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v644';
+const APP_VERSION = 'v645';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8839,7 +8839,7 @@ function useSoumissions(cfg, refreshKey){
   const ajouterCourriel = async (m, onEtat)=>{
     if(!etat.existe) await ensureSheetsExist(id, [{name:'Soumissions', headers:SOUM_ONGLET_ENTETE}]);
     let dossier = '';
-    const pj = m.pj.filter(x=>(x.taille||0) > 15000 || /pdf/i.test(x.type+x.nom));
+    const pj = m.pj.filter(x=>/pdf/i.test(x.type+x.nom) || !x.inline || (x.taille||0) > 150000);   // v645 : toute pièce jointe nommée (ex. une petite liste en image) ; pas les logos de signature
     if(pj.length && peutDeposer()){
       dossier = await driveDossier((m.sujet||'Demande').replace(/[\\/:*?"<>|]/g,' ').slice(0,70)+' ('+m.jour+')', await driveDossier('Saran CRM — Demandes de soumission'));
       for(let i=0;i<pj.length;i++){ const x = pj[i]; onEtat && onEtat('Pièce jointe '+(i+1)+'/'+pj.length+' : '+x.nom+'…');
@@ -8993,12 +8993,27 @@ function SoumDeposer({titre, dossier, onDossier, toast, libelle}){
   </>;
 }
 
+// v645 : les pièces jointes du courriel de la demande, lues directement dans Gmail (rien ne se perd : listes en image, PDF, photos) — logos de signature exclus
+const SOUM_PJ_CACHE = {};
+function SoumPJCourriel({fil}){
+  const [l,setL]=useState(SOUM_PJ_CACHE[fil] || null), [err,setErr]=useState('');
+  useEffect(()=>{ let ok = true; if(SOUM_PJ_CACHE[fil] || !peutLireCourriels()) return;
+    gmReq('threads/'+fil+'?format=full').then(t=>{ const out = []; (t.messages||[]).forEach(m=>gmPiecesJointes(m.payload).forEach(a=>{ if(!a.inline || (a.taille||0) > 150000) out.push({...a, msg:m.id}); }));
+      SOUM_PJ_CACHE[fil] = out; if(ok) setL(out); }).catch(e=>ok && setErr(apiErrMsg(e)));
+    return ()=>{ ok = false; }; },[fil]);
+  const ouvrir = async a => { const w = window.open('', '_blank'); try{ const r = await gmReq('messages/'+a.msg+'/attachments/'+a.att), bin = atob(String(r.data||'').replace(/-/g,'+').replace(/_/g,'/'));
+      const url = URL.createObjectURL(new Blob([Uint8Array.from(bin, c=>c.charCodeAt(0))], {type:a.type||'application/octet-stream'})); if(w) w.location = url; else window.open(url, '_blank'); }
+    catch(e){ if(w) w.close(); alert('Pièce jointe illisible : '+apiErrMsg(e)); } };
+  if(err || !l || !l.length) return null;
+  return <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',fontSize:12.5}}><span className="muted">📎 Dans le courriel :</span>
+    {l.map((a,i)=><button key={i} className="btn btn-sm" onClick={()=>ouvrir(a)} title={Math.round((a.taille||0)/1024)+' Ko'}>{/image/.test(a.type) ? '🖼 ' : /pdf/.test(a.type) ? '📄 ' : ''}{a.nom}</button>)}</div>; }
 // Photos d'une note « Soumission … » (dossier Drive gardé par soumissions.gs en colonne J).
 const SOUM_PHOTOS = {};
 // v450 : photos jointes au courriel de la demande → dossier photos de la soumission (lié à la demande et à la fiche du client)
 function gmPiecesJointes(payload, out){ out = out || [];
   if(!payload) return out;
-  if(payload.filename && payload.body && payload.body.attachmentId) out.push({nom:payload.filename, type:payload.mimeType||'', taille:payload.body.size||0, att:payload.body.attachmentId});
+  if(payload.filename && payload.body && payload.body.attachmentId){ const h = (payload.headers||[]), hv = n => ((h.find(x=>String(x.name).toLowerCase()===n)||{}).value||'');
+    out.push({nom:payload.filename, type:payload.mimeType||'', taille:payload.body.size||0, att:payload.body.attachmentId, inline: /inline/i.test(hv('content-disposition')) || (!!hv('content-id') && !/attachment/i.test(hv('content-disposition')))}); }   // v645
   (payload.parts||[]).forEach(p=>gmPiecesJointes(p, out));
   return out;
 }
@@ -9623,7 +9638,10 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } };
 
   // Devis envoyés à la même personne après la demande : proposés (jamais cochés tout seuls).
-  const proposes = s => !s.courriel ? [] : envoyees.filter(e=>e.courriel===s.courriel && e.date>=s.date && e.no && !aFaire.some(x=>x!==s && x.note==='Devis #'+e.no)).slice(0,3);
+  // v645 : même courriel ET même adresse (numéro civique) — un contracteur a plusieurs projets, chacun le sien
+  const numCivique = t => (String(t||'').match(/\b\d{2,5}\b/)||[])[0] || '';
+  const proposes = s => { if(!s.courriel) return []; const i = infosDe(s), n = numCivique(i.adresse) || numCivique(s.titre) || numCivique(s.sujet); if(!n) return [];
+    return envoyees.filter(e=>e.courriel===s.courriel && e.date>=s.date && e.no && new RegExp('\\b'+n+'\\b').test([e.extrait, e.sujet, e.client].join(' ')) && !aFaire.some(x=>x!==s && x.note==='Devis #'+e.no)).slice(0,3); };
 
   // v638 : carte allégée — à l'œil : le nom, c'est quoi / c'est où / depuis quand, et UN bouton. Tout le reste s'ouvre au clic.
   const CarteAFaire = ({s})=>{
@@ -9671,6 +9689,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
         <SoumNote txt={[s.extrait, ...jointesDe(s).map(x=>x.extrait)].filter(x=>String(x||'').trim()).join('\n\n— + —\n\n')}/>   {/* v644 : les notes des demandes jointes s'additionnent */}
         {s.pdf && <SoumPhotos dossier={s.pdf}/>}
         {s.photos && <SoumPhotos dossier={s.photos} tick={tick}/>}
+        {String(s.cle).startsWith('T-') && <SoumPJCourriel fil={String(s.cle).slice(2)}/>}
         {!s.extrait && !s.pdf && !s.photos && !jointesDe(s).length && <div className="muted" style={{fontSize:12,marginTop:4}}>Pas de note. Ouvre le courriel ou ajoute des photos.</div>}
         {jointesDe(s).map(x=><div key={x.cle} style={{marginTop:8,padding:'6px 8px',background:'var(--bg3)',borderRadius:8}}>
           <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:12.5}}><b>🔗 {x.sujet || x.titre || 'Note'}</b><span className="muted">{cvFmtDay(x.date)}</span>
@@ -12919,7 +12938,7 @@ function maisonChauffage(p){ const c = p.chauf || 'aucun', th = Math.max(1, Math
       while(pl.length && pl.length < nPl) pl.push(pl[pl.length-1]); }
     const so220 = MAISON_CHAUF_PROD.reduce((t,[k])=>t+(q[k]||0),0), plu = (n, l) => n+' '+l+(n>1 ? 's' : '');
     const txt = [q.plinthe ? plu(q.plinthe,'plinthe')+(pl.length ? ' '+pl.slice(0,q.plinthe).map(w=>w+' W').join(' + ') : '') : '', q.thermostat ? plu(q.thermostat,'thermostat') : '',
-      q.plancher ? plu(q.plancher,'plancher chauffant').replace('planchers chauffants','planchers chauffants').replace(/plancher chauffants$/,'planchers chauffants') : '', q.prep ? plu(q.prep,'préparation')+' plancher chauffant' : '',
+      q.plancher ? plu(q.plancher,'plancher chauffant').replace('planchers chauffants','planchers chauffants').replace(/plancher chauffants$/,'planchers chauffants') +(cvNum(p.pi2) ? ' (≈ '+Math.ceil(cvNum(p.pi2)*12/50)*50+' W, '+Math.round(cvNum(p.pi2))+' pi²)' : '') : '', q.prep ? plu(q.prep,'préparation')+' plancher chauffant' : '',
       q.convecteur ? plu(q.convecteur,'convecteur') : '', q.radiant ? plu(q.radiant,'radiant') : ''].filter(Boolean).join(' + ');
     return {w:pl.length ? pl.reduce((t,x)=>t+x,0) : undefined, so220, plinthes:pl, txt, libres:[], intel:p.intel ? (q.thermostat||0) : 0}; }
   if(c==='aucun') return {so220:0, plinthes:[], txt:'', libres:[], intel:0};
@@ -12961,7 +12980,11 @@ async function maisonLirePlan(file, onEtat, src, sauter){
     const etDe = t => /SOUS[- ]SOL/.test(t) ? 'Sous-sol' : /REZ|R-D-C|RDC/.test(t) ? 'Rez-de-chaussée' : /[ÉE]TAGE|2E/.test(t) ? 'Étage' : '';
     // v639 : aussi les titres de designer « REZ-DE-CHAUSSÉE – ÉLECTRICITÉ », « ÉTAGE – EXISTANT », etc.
     const TITRE_ET = /^(REZ-DE-CHAUSS[ÉE]E|SOUS-SOL|2E [ÉE]TAGE|[ÉE]TAGE)(\s*[-–]\s*[A-ZÉÈÀÇ /+-]+)?$/;
-    const ets = [...new Set([...(tout.match(/PLAN D.AM[ÉE]NAGEMENT[^|]{0,40}/g)||[]), ...L.map(x=>String(x.t).toUpperCase().trim()).filter(u=>TITRE_ET.test(u))].map(etDe).filter(Boolean))];
+    // v645 : « PLAN CONSTRUCTION – RDC », « PLAN PROPOSÉ – ÉTAGE »… (pas « EXISTANT / DÉMOLITION ») ; une page index qui liste plusieurs plans est sautée
+    const TITRE_PLAN = /^PLAN (DE |D')?(CONSTRUCTION|AM[ÉE]NAGEMENT|PROPOS[ÉE]|PROJET[ÉE]|[ÉE]LECTRIQUE)\s*[-–]\s*(REZ-DE-CHAUSS[ÉE]E|RDC|SOUS-SOL|2E [ÉE]TAGE|[ÉE]TAGE)\b/;
+    const titresPlans = L.map(x=>String(x.t).toUpperCase().trim()).filter(u=>TITRE_PLAN.test(u));
+    const index = L.filter(x=>/^PLAN\b.*[-–]/.test(String(x.t).toUpperCase().trim())).length >= 3;
+    const ets = index ? [] : [...new Set([...(tout.match(/PLAN D.AM[ÉE]NAGEMENT[^|]{0,40}/g)||[]), ...titresPlans.map(u=>u.replace(/^.*?[-–]\s*/,'')), ...L.map(x=>String(x.t).toUpperCase().trim()).filter(u=>TITRE_ET.test(u))].map(etDe).filter(Boolean))];
     const vp1 = pg.getViewport({scale:1});
     // v579 : plusieurs plans sur la page → une zone par titre « PLAN D'AMÉNAGEMENT … »
     let zones = [];
@@ -13607,7 +13630,9 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
   const garder = (suite, typeForce) => { const ch = typeForce ? {...choix, type:typeForce} : choix; if(!ch) return; let id = ch.id;
     const fin = p => { const q = maisonAvecCadres({...p, src:pg.src||'', pg:pg.no}, [...(ch.id ? maisonCadres(p) : []), ...(ch.cs || [ch.c])], pg, ech); return ch.pi2!=='' && ch.pi2!=null && !ech ? {...q, pi2:String(ch.pi2)} : q; };
     if(id) majM(x=>({pieces:x.pieces.map(p=>p.id===id ? fin(p) : p)}));
-    else { const p = maisonCompterSymboles(fin(maisonNouvellePiece((ch.nom||'').trim() || nomAuto(ch.type), etageDe(ch.type, ch.c), ch.type, ch.pi2!=='' ? ch.pi2 : null)), pg); id = p.id; majM(x=>({pieces:[...x.pieces, p]})); }   // v639 : comptée au plan si les symboles y sont
+    else { let p0 = fin(maisonNouvellePiece((ch.nom||'').trim() || nomAuto(ch.type), etageDe(ch.type, ch.c), ch.type, ch.pi2!=='' ? ch.pi2 : null));
+      if(m.encVide) p0 = {...p0, items:{}, chauf:'aucun', chaufQ:{plinthe:0, thermostat:0, plancher:0, prep:0, convecteur:0, radiant:0}};   // v645 : réno — seulement ce qui est demandé
+      const p = maisonCompterSymboles(p0, pg); id = p.id; majM(x=>({pieces:[...x.pieces, p]})); }   // v639 : comptée au plan si les symboles y sont   // v639 : comptée au plan si les symboles y sont
     setChoix(null); setDerniere(id); if(suite) setCible(id); };
   const garderMesure = () => { const pi = maisonPieds(mesure.txt); if(!pi) return; const c = mesure.c, u = Math.hypot(c[2]-c[0], (c[3]-c[1])*((pg.h||1)/(pg.w||1)));
     const e = +(pi/u).toFixed(3); majM(x=>({echelles:{...(x.echelles||{}), [cle]:e}, pieces:x.pieces.map(p=>p.pg===pg.no && (p.src||'')===(pg.src||'') && p.cadre && !cvNum(p.pi2) ? {...p, pi2:String(maisonPi2Cadre(p.cadre, pg, e))} : p)}));
@@ -13709,6 +13734,8 @@ function MaisonEncadrer({pg, m, majM, onClose, integre}){
               : !choix.id ? null : <><button className="btn btn-sm btn-p" onClick={()=>garder(false)}>＋ Encadrer cette pièce</button>
                 <button className="btn btn-sm" title="Pour une pièce en L : garde ce rectangle et trace les autres parties" onClick={()=>garder(true)}>▭+ Ajouter et continuer (forme en L)</button></>}
             <button className="btn btn-sm" onClick={()=>setChoix(null)}>Annuler</button></div></div>}
+        {!choix && !mesure && <label style={{display:'flex',gap:6,alignItems:'flex-start',fontSize:12.5,margin:'0 0 6px',cursor:'pointer'}} title="Réno : la pièce encadrée part vide — tu ajoutes seulement ce qui est demandé (sinon : les sorties de base du type de pièce)">
+          <input type="checkbox" checked={!!m.encVide} onChange={e=>majM({encVide:e.target.checked})} style={{width:'auto',marginTop:2}}/><span><b>Pièces vides</b> — seulement ce qui est demandé (réno)</span></label>}
         {!choix && !mesure && <div className="muted" style={{fontSize:12.5}}>{mode==='cadre' ? 'Trace un rectangle autour d\'une pièce (du coin au coin opposé). Clique sur un cadre pour le revoir.' : mode==='mesure' ? 'Trace un trait le long d\'une cote écrite sur le plan, puis entre sa longueur.' : 'Glisse pour te déplacer. La roulette (ou ＋ －) pour zoomer.'}</div>}
         <div style={{border:'1px solid var(--border)',borderRadius:8,padding:'6px 10px',fontSize:12.5,display:'grid',gap:2}}>
           <b>Pièces de cette page ({ici.length})</b>
