@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v637';
+const APP_VERSION = 'v638';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9371,6 +9371,8 @@ function AppelsServiceSection({cfg, data, toast, refreshKey, onNavigate}){
 // v635 : Leads achetés (Soumission Rénovation) — lus dans le Sheet « Leads Saran Électrique », rempli par le script « Leads → Agenda Soumission ».
 // Colonnes : A Date | B Source | C ID projet | D Client | E Téléphone | F Courriel | G Adresse | H Type | I Travaux | J Budget | K Date voulue | L Prix du lead | M Statut | N Notes | O ID événement | P (libre) | Q Dernier contact | R Raison
 const LEADS_SHEET_ID = '1MjqSZ-DSINUC2VrbYMguQstaadmbfht-K2OW8C7mdHQ';
+// v638 : bouton « Traiter mes leads » — app web du script « Leads → Agenda Soumission » (ne renvoie qu'un nombre, aucune info de client)
+const LEADS_WEB_URL = 'https://script.google.com/macros/s/AKfycbzdBodXrfZH6nM1-O49UgwtVuBYtzhhjVkop3aZzZ37Pl5ATdZUFBb3CrMgkdTK9Wg59w/exec?cle=se-leads-7Kq2vX9pR4';
 const LEADS_STATUTS = ['Nouveau','Contacté','Visite prévue','Soumission envoyée','Gagné','Perdu'];
 const LEADS_FERMES = ['Gagné','Perdu','Fermé'];
 const LEADS_COUL = {'Nouveau':'#0ea5e9','Contacté':'#7d8590','Visite prévue':'#a371f7','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149','Fermé':'#7d8590'};
@@ -9478,32 +9480,37 @@ function LeadsView({L, q, toast}){
     </div>
     {!L.lu && <div className="muted">Chargement…</div>}
     {L.err && <div className="card" style={{color:'var(--red, #c0392b)'}}>{L.err}</div>}
-    {L.lu && !L.err && !liste.length && <div className="card muted" style={{fontSize:13}}>{voirFermes ? 'Aucun lead fermé.' : 'Aucun lead ouvert. Les leads achetés sur Soumission Rénovation arrivent ici tout seuls (aux 15 minutes).'}</div>}
+    {L.lu && !L.err && !liste.length && <div className="card muted" style={{fontSize:13}}>{voirFermes ? 'Aucun lead fermé.' : 'Aucun lead ouvert. Les leads achetés sur Soumission Rénovation arrivent ici tout seuls (à la minute), ou tout de suite avec « Traiter mes leads ».'}</div>}
     {liste.map(l=>{
       const j = attente(l), ferme = LEADS_FERMES.includes(l.statut);
       const alerte = ferme || j==null ? null : j>=7 ? '#f85149' : j>=2 ? '#d29922' : null;
       const ouv = ouvert===l.id;
+      // v638 : carte allégée — nom, type · ville, statut + un seul bouton ; le reste au clic
+      const ville = (l.adresse||'').split(',').pop().replace(/\s*[A-Za-z]\d[A-Za-z](\s*\d[A-Za-z]\d)?\s*$/,'').trim() || l.adresse;
       return <div key={l.row} className="card" style={{marginBottom:8, borderLeft:'4px solid '+(alerte || LEADS_COUL[l.statut] || 'var(--border)')}}>
-        <div style={{display:'flex',gap:10,alignItems:'baseline',flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setOuvert(ouv?'':l.id)}>
-          <b style={{fontSize:15}}>{l.nom.replace(/^(M\.|Mme)\s*/i,'')}</b>
-          <span className="muted" style={{fontSize:12.5}}>{l.type || 'Autre'} · {(l.adresse||'').split(',').pop().replace(/\s*[A-Za-z]\d[A-Za-z](\s*\d[A-Za-z]\d)?\s*$/,'').trim() || l.adresse}</span>
-          <span style={{fontSize:11.5,padding:'1px 7px',borderRadius:10,background:(LEADS_COUL[l.statut]||'#7d8590')+'22',color:LEADS_COUL[l.statut]||'#7d8590'}}>{l.statut}</span>
-          {alerte && <span style={{fontSize:12,color:alerte,fontWeight:600}}>{j} j sans nouvelles{j>=7?' — à relancer':''}</span>}
-          <span className="muted" style={{fontSize:12,marginLeft:'auto'}}>{l.date} · {l.prix ? argent(l.prix) : ''}</span>
+        <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setOuvert(ouv?'':l.id)}>
+          <div style={{minWidth:0,flex:'1 1 200px'}}>
+            <b style={{fontSize:15}}>{ouv?'▾ ':'▸ '}{l.nom.replace(/^(M\.|Mme)\s*/i,'')}</b>
+            <div className="muted" style={{fontSize:12.5}}>{[l.type || 'Autre', ville].filter(Boolean).join(' · ')}
+              {' · '}<span style={{color:LEADS_COUL[l.statut]||'#7d8590'}}>{l.statut}</span>
+              {alerte && <span style={{color:alerte,fontWeight:600}}> · {j} j sans nouvelles</span>}</div>
+          </div>
+          {!ferme && <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={e=>{ e.stopPropagation(); relancer(l); }}>{occupe===l.row+'rel' ? '…' : 'Relancer'}</button>}
         </div>
-        <div style={{fontSize:12.5,marginTop:4,display:'flex',gap:14,flexWrap:'wrap'}}>
-          {l.tel && <span>{l.tel}</span>}{l.courriel && <span>{l.courriel}</span>}
-          {l.voulue && <span className="muted">Travaux : {l.voulue.toLowerCase()}</span>}{l.budget && <span className="muted">Budget : {l.budget.split('•')[0].trim()}</span>}
-          {l.raison && <span className="muted">Raison : {l.raison}</span>}
-        </div>
-        {ouv && <div style={{fontSize:12.5,marginTop:8,whiteSpace:'pre-wrap',lineHeight:1.45}}>{l.travaux}{l.adresse && '\n\nAdresse : '+l.adresse}{l.budget && '\nBudget : '+l.budget}{'\nSource : '+l.source+' — projet '+l.id}{l.contact && '\nDernier contact : '+l.contact}</div>}
-        {!ferme && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8}}>
-          <button className="btn btn-sm btn-p" disabled={!!occupe} onClick={()=>relancer(l)}>{occupe===l.row+'rel' ? '…' : 'Relancer'}</button>
-          {['Contacté','Visite prévue','Soumission envoyée'].filter(s=>s!==l.statut).map(s=><button key={s} className="btn btn-sm" disabled={!!occupe} onClick={()=>statut(l, s)}>{s}</button>)}
-          <button className="btn btn-sm" disabled={!!occupe} style={{color:'#3fb950'}} onClick={()=>statut(l, 'Gagné')}>Gagné</button>
-          <button className="btn btn-sm" disabled={!!occupe} style={{color:'#f85149'}} onClick={()=>{ setPerdu(l); setRaison(''); }}>Décliné / perdu</button>
-        </div>}
-        {ferme && <div style={{marginTop:8}}><button className="btn btn-sm" disabled={!!occupe} onClick={()=>statut(l, 'Contacté')}>Rouvrir</button></div>}
+        {ouv && <>
+          <div style={{fontSize:12.5,marginTop:8,display:'flex',gap:14,flexWrap:'wrap'}}>
+            {l.tel && <a href={'tel:'+l.tel.replace(/[^\d+]/g,'')} style={{color:'var(--text)'}}>{l.tel}</a>}{l.courriel && <span>{l.courriel}</span>}
+            {l.voulue && <span className="muted">Travaux : {l.voulue.toLowerCase()}</span>}
+            {l.raison && <span className="muted">Raison : {l.raison}</span>}
+          </div>
+          <div style={{fontSize:12.5,marginTop:6,whiteSpace:'pre-wrap',lineHeight:1.45}}>{l.travaux}{l.adresse && '\n\nAdresse : '+l.adresse}{l.budget && '\nBudget : '+l.budget}{'\n'+l.source+' — projet '+l.id+' · acheté le '+l.date+(l.prix ? ' · '+argent(l.prix) : '')}{l.contact && '\nDernier contact : '+l.contact}</div>
+          {!ferme && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8}}>
+            {['Contacté','Visite prévue','Soumission envoyée'].filter(s=>s!==l.statut).map(s=><button key={s} className="btn btn-sm" disabled={!!occupe} onClick={()=>statut(l, s)}>{s}</button>)}
+            <button className="btn btn-sm" disabled={!!occupe} style={{color:'#3fb950'}} onClick={()=>statut(l, 'Gagné')}>Gagné</button>
+            <button className="btn btn-sm" disabled={!!occupe} style={{color:'#f85149'}} onClick={()=>{ setPerdu(l); setRaison(''); }}>Décliné / perdu</button>
+          </div>}
+          {ferme && <div style={{marginTop:8}}><button className="btn btn-sm" disabled={!!occupe} onClick={()=>statut(l, 'Contacté')}>Rouvrir</button></div>}
+        </>}
         {perdu && perdu.row===l.row && <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:12.5}}>Raison :</span>
           {LEADS_RAISONS.map(r=><button key={r} className={'btn btn-sm'+(raison===r?' btn-p':'')} onClick={()=>setRaison(raison===r?'':r)}>{r}</button>)}
@@ -9591,72 +9598,66 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   // Devis envoyés à la même personne après la demande : proposés (jamais cochés tout seuls).
   const proposes = s => !s.courriel ? [] : envoyees.filter(e=>e.courriel===s.courriel && e.date>=s.date && e.no && !aFaire.some(x=>x!==s && x.note==='Devis #'+e.no)).slice(0,3);
 
+  // v638 : carte allégée — à l'œil : le nom, c'est quoi / c'est où / depuis quand, et UN bouton. Tout le reste s'ouvre au clic.
   const CarteAFaire = ({s})=>{
     const j = soumJours(s.date), fini = SOUM_FINI.includes(s.statut), i = infosDe(s), attente = s.statut==='En attente', b = brouillons[s.cle];
+    const ouv = ouverte===s.cle, prop = fini ? [] : proposes(s), ville = String(i.adresse||'').split(',')[0];
+    const titreD = (s.titre||s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')';
+    const stop = fn => e => { e.stopPropagation(); fn(); };
+    const tag = (txt, title) => <span className="badge" style={{background:'var(--bg3)',fontSize:11}} title={title}>{txt}</span>;
     return <div style={{padding:'10px 0',borderBottom:'1px solid var(--border)',opacity:fini?.6:1}}>
-      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+      <div onClick={()=>setOuverte(o=>o===s.cle?'':s.cle)} style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'center',flexWrap:'wrap',cursor:'pointer'}}>
         <div style={{minWidth:0,flex:'1 1 220px'}}>
-          {/* v452 : comme les courriels des contracteurs — le nom, puis en sous-titre : c'est quoi la job, c'est où */}
-          <div onClick={()=>setOuverte(o=>o===s.cle?'':s.cle)} style={{fontWeight:700,fontSize:14,cursor:'pointer'}}>{ouverte===s.cle?'▾ ':'▸ '}{(s.titre && s.titre.split(' — ')[0]) || i.nom || s.client || s.sujet}</div>
-          {(()=>{ const quoi = soumQuoi(s, i), adr = String(i.adresse||'').split(',')[0];
-            return (i.type || adr || quoi) ? <div style={{fontSize:12.5,color:'var(--accent)',fontWeight:600}}>{[i.type, adr && '📍 '+adr, quoi].filter(Boolean).join(' · ')}</div> : null; })()}
-          {s.client && s.sujet && !cvNorm(s.sujet).includes(cvNorm(s.client)) && <div><SoumRef txt={s.sujet.replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'')}/></div>}
-          <div className="muted" style={{fontSize:11.5}}>{cvFmtDay(s.date)}{j!=null && j>0 && <> · il y a {j} jour{j>1?'s':''}</>}{s.cle.startsWith('M-') && <> · ajoutée à la main</>}</div>
-          {(i.tel || i.courriel || i.adresse) && <div style={{fontSize:12,marginTop:2,display:'flex',gap:10,flexWrap:'wrap'}}>
-            {i.tel && <a href={'tel:'+i.tel.replace(/[^\d+]/g,'')} style={{color:'var(--text)'}}>📞 {i.tel}</a>}
-            {i.courriel && <span>✉ {i.courriel}</span>}
-            {i.adresse && <span>📍 {i.adresse}</span>}
-          </div>}
-          {!fini && <div style={{marginTop:4,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-            <select value={i.type} onChange={e=>choisirType(s, e.target.value)} style={{fontSize:12,padding:'2px 4px'}} title={s.typeProjet ? 'Type choisi par toi' : 'Type deviné — change-le au besoin'}>
-              <option value="">Type de projet…</option>{TYPES_PROJET.map(t=><option key={t}>{t}</option>)}</select>
-            {i.type && !s.typeProjet && <span className="muted" style={{fontSize:11}}>(deviné)</span>}
-            <SoumNbPhotos dossiers={[s.pdf, s.photos]} tick={tick} onClick={()=>setOuverte(s.cle)}/>
-            {attente && <span className="badge" style={{background:'var(--bg3)'}}>⏳ En attente{s.note ? ' · '+s.note : ''}</span>}
-            {s.accuse && <span className="muted" style={{fontSize:11.5}}>✉ accusé envoyé le {cvFmtDay(s.accuse)}</span>}
-            {b && <span className="badge" style={{background:'var(--bg3)'}} title="Soumission commencée et enregistrée, pas encore envoyée">Brouillon {b.numero} · {cvFmtDay(b.date)}{b.total ? ' · '+cvMoney(b.total) : ''}</span>}
+          <div style={{fontWeight:700,fontSize:14}}>{ouv?'▾ ':'▸ '}{(s.titre && s.titre.split(' — ')[0]) || i.nom || s.client || s.sujet}</div>
+          <div className="muted" style={{fontSize:12.5}}>{[i.type, ville, cvFmtDay(s.date)+(j>0 ? ' · il y a '+j+' j' : '')].filter(Boolean).join(' · ')}</div>
+          {(attente || b || prop.length>0 || s.reponse) && <div style={{marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
+            {attente && tag('En attente'+(s.note ? ' · '+s.note : ''))}
+            {b && tag('Brouillon '+b.numero+(b.total ? ' · '+cvMoney(b.total) : ''), 'Soumission commencée, pas encore envoyée')}
+            {prop.length>0 && tag('Devis trouvé — à confirmer')}
+            {s.reponse && tag('Le client a répondu')}
           </div>}
         </div>
-        <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
-          {lienGmail(s)}
-          {!fini ? <>
-            <SoumDeposer titre={(s.titre||s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'} dossier={s.photos} toast={toast} libelle="📷 Photos"
-              onDossier={async(d, fin)=>{ if(fin) setTick(t=>t+1); else await S.dossierPhotos(s, d); }}/>
-            <button className={'btn btn-sm'+(i.fiche ? '' : '')} onClick={()=>setFicheOuv(ficheOuv===s.cle?'':s.cle)} title="Vérifier et sauver le contact dans le Répertoire avant la soumission">{i.fiche ? '📇 Fiche ✓' : '📇 Fiche client'}</button>
-            {estAFaire(s) ? <>
-              <button className="btn btn-sm btn-p" onClick={()=>preparer(s)} title={b ? 'Rouvre le brouillon '+b.numero+' là où tu l\'as laissé' : 'Ouvre la soumission déjà remplie (client, téléphone, courriel, adresse, travaux)'}>{b ? 'Continuer la soumission' : '📝 Faire la soumission'}</button>
-              {!b && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, '', s.note)} title="Pas encore prêt : la remettre dans les leads">↩ Leads</button>}
-              <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Faite')} style={{borderColor:'var(--green, #2e9e5b)',color:'var(--green, #2e9e5b)'}}>✓ Faite</button>
-            </> : <>
-              {i.courriel && !s.accuse && <button className="btn btn-sm" onClick={()=>accuse(s)} title="« Nous avons bien reçu votre demande… » — Gmail s'ouvre, tu n'as qu'à envoyer">✉️ Accusé de réception</button>}
-              <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, attente ? '' : 'En attente', s.note)} title={attente ? 'Plus en attente' : 'J\'attends quelque chose du client (visite, photos, info)'}>{attente ? '↩ Plus en attente' : '⏳ En attente'}</button>
-              <button className="btn btn-sm btn-p" disabled={occupe===s.cle} onClick={()=>action(s,'À soumissionner', s.note)} title="J'ai ce qu'il faut : elle passe dans « À faire »">➡️ À soumissionner</button>
-            </>}
-            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, s.cle.startsWith('M-')?'Annulée':'Ignorée')} title="Annulée, ou ce n'était pas une soumission à faire">✕</button>
-          </> : <>
-            <span className="badge" style={{background:'var(--bg3)'}}>{s.statut}{s.note && ' · '+s.note}</span>
-            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'', '')}>↩</button>
-          </>}
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>
+          {fini ? <>{tag(s.statut+(s.note ? ' · '+s.note : ''))}<button className="btn btn-sm" disabled={occupe===s.cle} onClick={stop(()=>action(s,'', ''))}>↩</button></>
+          : estAFaire(s) ? <button className="btn btn-sm btn-p" onClick={stop(()=>preparer(s))}>{b ? 'Continuer' : 'Faire la soumission'}</button>
+          : <button className="btn btn-sm btn-p" disabled={occupe===s.cle} onClick={stop(()=>action(s,'À soumissionner', s.note))} title="J'ai ce qu'il faut : elle passe dans « À faire »">À soumissionner</button>}
         </div>
       </div>
-      {!fini && ficheOuv===s.cle && <SoumFiche cfg={cfg} cle={s.cle} sujet={s.sujet} infos={i} toast={toast} dossier={s.photos} typeProjet={i.type} onType={t=>choisirType(s, t)} titreDossier={(s.titre||s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'}
+      {ouv && <div style={{marginTop:8,paddingLeft:14,borderLeft:'2px solid var(--border)'}}>
+        {(i.tel || i.courriel || i.adresse) && <div style={{fontSize:12.5,display:'flex',gap:12,flexWrap:'wrap'}}>
+          {i.tel && <a href={'tel:'+i.tel.replace(/[^\d+]/g,'')} style={{color:'var(--text)'}}>📞 {i.tel}</a>}
+          {i.courriel && <span>✉ {i.courriel}</span>}
+          {i.adresse && <span>📍 {i.adresse}</span>}
+        </div>}
+        {s.client && s.sujet && !cvNorm(s.sujet).includes(cvNorm(s.client)) && <div><SoumRef txt={s.sujet.replace(/^\s*(re|tr|fwd?)\s*:\s*/i,'')}/></div>}
+        <SoumNote txt={s.extrait}/>
+        {s.pdf && <SoumPhotos dossier={s.pdf}/>}
+        {s.photos && <SoumPhotos dossier={s.photos} tick={tick}/>}
+        {!s.extrait && !s.pdf && !s.photos && <div className="muted" style={{fontSize:12,marginTop:4}}>Pas de note. Ouvre le courriel ou ajoute des photos.</div>}
+        {s.reponse && <div className="muted" style={{fontSize:12,marginTop:3}}>↪ {s.reponse}</div>}
+        {s.accuse && <div className="muted" style={{fontSize:11.5,marginTop:3}}>Accusé de réception envoyé le {cvFmtDay(s.accuse)}</div>}
+        {prop.map(e=><div key={e.cle} style={{marginTop:6,fontSize:12.5,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',background:'var(--bg3)',padding:'5px 8px',borderRadius:8}}>
+          <span>Devis <b>#{e.no}</b> envoyé à cette personne le {cvFmtDay(e.date)}{e.montant!=null && <> · {cvMoney(e.montant)}</>} — c'est celle-là ?</span>
+          <button className="btn btn-sm btn-p" disabled={occupe===s.cle} onClick={()=>action(s,'Faite','Devis #'+e.no)}>Oui, faite</button>
+        </div>)}
+        {!fini && <div style={{marginTop:8,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+          <select value={i.type} onChange={e=>choisirType(s, e.target.value)} style={{fontSize:12,padding:'2px 4px'}} title={s.typeProjet ? 'Type choisi par toi' : 'Type deviné — change-le au besoin'}>
+            <option value="">Type de projet…</option>{TYPES_PROJET.map(t=><option key={t}>{t}</option>)}</select>
+          <SoumDeposer titre={titreD} dossier={s.photos} toast={toast} libelle="Photos" onDossier={async(d, fin)=>{ if(fin) setTick(t=>t+1); else await S.dossierPhotos(s, d); }}/>
+          <button className="btn btn-sm" onClick={()=>setFicheOuv(ficheOuv===s.cle?'':s.cle)} title="Vérifier et sauver le contact dans le Répertoire">{i.fiche ? 'Fiche ✓' : 'Fiche client'}</button>
+          {s.lien && <a href={s.lien} target="_blank" rel="noopener" className="btn btn-sm" style={{textDecoration:'none'}}>Courriel ↗</a>}
+          {!estAFaire(s) && i.courriel && !s.accuse && <button className="btn btn-sm" onClick={()=>accuse(s)} title="« Nous avons bien reçu votre demande… » — Gmail s'ouvre, tu n'as qu'à envoyer">Accusé de réception</button>}
+          {!estAFaire(s) && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, attente ? '' : 'En attente', s.note)}>{attente ? 'Plus en attente' : 'En attente'}</button>}
+          {estAFaire(s) && !b && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, '', s.note)} title="Pas encore prêt : la remettre dans les leads">↩ Leads</button>}
+          {estAFaire(s) && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Faite')} style={{color:'var(--green, #2e9e5b)'}}>✓ Faite</button>}
+          <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, s.cle.startsWith('M-')?'Annulée':'Ignorée')} title="Annulée, ou ce n'était pas une soumission à faire" style={{marginLeft:'auto'}}>✕ Retirer</button>
+        </div>}
+      </div>}
+      {!fini && ficheOuv===s.cle && <SoumFiche cfg={cfg} cle={s.cle} sujet={s.sujet} infos={i} toast={toast} dossier={s.photos} typeProjet={i.type} onType={t=>choisirType(s, t)} titreDossier={titreD}
         onDossier={async(d, fin)=>{ if(fin) setTick(t=>t+1); else await S.dossierPhotos(s, d); }}
         onFermer={()=>setFicheOuv('')} onSauve={async f=>{ setFicheOuv(''); setFicheTick(t=>t+1);
           const ty = s.typeProjet || i.type || ''; const t = f.nom+(ty ? ' — '+ty : '');   // v450 : le titre de la demande devient « Nom — Catégorie »
           try{ if(t!==s.titre) await S.majCol(s, 'T', t, 'titre'); }catch(e){} }}/>}
-      {ouverte!==s.cle ? (s.extrait && <div className="muted" onClick={()=>setOuverte(s.cle)} style={{fontSize:12,marginTop:3,cursor:'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.extrait.split('\n')[0]}{(s.pdf||s.photos) ? '  · 📎 PDF / photos' : ''}</div>) : <>
-      <SoumNote txt={s.extrait}/>
-      {s.pdf && <SoumPhotos dossier={s.pdf}/>}
-      {s.photos && <SoumPhotos dossier={s.photos} tick={tick}/>}
-      {!s.extrait && !s.pdf && !s.photos && <div className="muted" style={{fontSize:12,marginTop:4}}>Pas de note. Ouvre le courriel ↗ ou ajoute des photos.</div>}
-      </>}
-      {!fini && ouverte===s.cle && <div style={{marginTop:6}}><SoumDeposer titre={(s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'} dossier={s.photos} toast={toast}
-        onDossier={async(d, fin)=>{ if(fin) setTick(t=>t+1); else await S.dossierPhotos(s, d); }}/></div>}
-      {s.reponse && <div className="muted" style={{fontSize:11.5,marginTop:3}}>↪ {s.reponse}</div>}
-      {!fini && proposes(s).map(e=><div key={e.cle} style={{marginTop:6,fontSize:12.5,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',background:'var(--bg3)',padding:'5px 8px',borderRadius:8}}>
-        <span>📤 Devis <b>#{e.no}</b> envoyé à cette personne le {cvFmtDay(e.date)}{e.montant!=null && <> · {cvMoney(e.montant)}</>} — c'est celle-là ?</span>
-        <button className="btn btn-sm btn-p" disabled={occupe===s.cle} onClick={()=>action(s,'Faite','Devis #'+e.no)}>✓ Oui, faite</button>
-      </div>)}
     </div>;
   };
 
@@ -9719,6 +9720,16 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const recues = recuesTout.filter(d=>cherche([d.fournisseur,d.num,d.ref,d.fichier].join(' '))).sort((a,b)=>b.date.localeCompare(a.date));
   const nEnv = k => envoyees.filter(s=>etatEnv(s)===k).length;
   const petit = typeof window!=='undefined' && window.innerWidth < 700;
+  // v638 : « Traiter mes leads » — lance le script tout de suite (il roule aussi tout seul à chaque minute)
+  const [traite,setTraite]=useState(false);
+  const traiterLeads = async ()=>{ setTraite(true);
+    try{ const r = await (await fetch(LEADS_WEB_URL)).json();
+      if(!r.ok) throw new Error(r.erreur==='occupé' ? 'déjà en cours, réessaie dans une minute' : (r.erreur || 'erreur du script'));
+      await L.lire(true); const n = r.nouveaux||0;
+      toast && toast(n ? n+(n>1 ? ' nouveaux leads : brouillons prêts' : ' nouveau lead : brouillon prêt')+' dans Gmail' : 'Aucun nouveau lead');
+      if(n) setOnglet('leads');
+    }catch(e){ toast && toast('Leads : '+(e.message || 'pas de réponse du script')); }
+    setTraite(false); };
   const totalAttente = envoyees.filter(s=>['attente','aclasser'].includes(etatEnv(s))).reduce((t,s)=>t+(s.montant||0),0);
 
   return <div>
@@ -9726,6 +9737,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',margin:'0 0 8px'}}>
       <h2 className="fh" style={{margin:0,fontSize:20}}>Soumissions</h2>
       <span style={{marginLeft:'auto',display:'flex',gap:6}}>
+        <button className="btn btn-sm" disabled={traite} onClick={traiterLeads} title="Va chercher tout de suite les leads achetés (Soumission Rénovation) : événement à l'agenda + brouillon Gmail">{traite ? 'Traitement…' : '↻ Traiter mes leads'}</button>
         <button className="btn btn-sm btn-p" onClick={()=>{ setFicheOuv('NOUV'); setOnglet('afaire'); }} title="Choisis ou crée le client, puis la soumission s'ouvre remplie">✏️ Nouvelle soumission</button>
         <button className={'btn btn-sm'+(onglet==='recues'?' btn-p':'')} onClick={()=>setOnglet('recues')} title="Soumissions reçues de tes fournisseurs">📥{petit ? '' : ' Fournisseurs'}</button>
       </span>
