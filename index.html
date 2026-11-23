@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v639';
+const APP_VERSION = 'v640';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -9536,6 +9536,7 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const [fichiers,setFichiers]=useState([]);
   const [tick,setTick]=useState(0);
   const [ouverte,setOuverte]=useState('');
+  const [edC,setEdC]=useState(null);   // v640 : titre / sous-titre d'une carte modifié sur place {cle, nom, lieu, type}
   const refFichiers = useRef(null);
   const [occupe,setOccupe]=useState('');
   const [prepKey,setPrepKey]=useState(0);
@@ -9591,6 +9592,16 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     const corps = 'Bonjour'+(i.nom ? ' '+i.nom.split(' ')[0] : '')+',\n\nNous avons bien reçu votre demande de soumission et nous vous revenons très bientôt.\n\nCordialement,\n\nSaran Électrique inc.\nWilliam Saran, Président\n(438) 490-3412\ninfo@saranelectrique.com';
     window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com&view=cm&fs=1&to='+encodeURIComponent(i.courriel)+'&su='+encodeURIComponent(sujet)+'&body='+encodeURIComponent(corps), '_blank');
     try{ await S.majCol(s, 'S', cvDay(new Date().toISOString()), 'accuse'); }catch(e){} };
+  // v640 : carte modifiée sur place — titre (T, « Nom — Type »), type (R), lieu (dans les infos, colonne Q)
+  const sauverCarte = async s => { const e = edC; if(!e) return; setOccupe('edC');
+    try{ const nom = e.nom.trim(), t = e.type || '';
+      if(t !== (s.typeProjet||'')) await S.majCol(s, 'R', t, 'typeProjet');
+      const nt = nom ? nom+(t ? ' — '+t : '') : ''; if(nt && nt!==s.titre) await S.majCol(s, 'T', nt, 'titre');
+      const inf = {...(s.infos||{})}; const lieu = e.lieu.trim();
+      if(lieu !== (inf.lieu||'')){ if(lieu) inf.lieu = lieu; else delete inf.lieu; await S.majCol(s, 'Q', JSON.stringify(inf), 'infosTxt'); S.relire && S.relire(true); }
+      setEdC(null); toast && toast('Carte modifiée'); }
+    catch(err){ toast && toast('Erreur : '+apiErrMsg(err)); }
+    setOccupe(''); };
   const choisirType = async (s, t) => { try{ await S.majCol(s, 'R', t, 'typeProjet');
       if(s.titre){ const nom = s.titre.split(' — ')[0]; const nt = nom+(t ? ' — '+t : ''); if(nt!==s.titre) await S.majCol(s, 'T', nt, 'titre'); }   // v451 : le titre suit la catégorie
     }catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } };
@@ -9601,15 +9612,25 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   // v638 : carte allégée — à l'œil : le nom, c'est quoi / c'est où / depuis quand, et UN bouton. Tout le reste s'ouvre au clic.
   const CarteAFaire = ({s})=>{
     const j = soumJours(s.date), fini = SOUM_FINI.includes(s.statut), i = infosDe(s), attente = s.statut==='En attente', b = brouillons[s.cle];
-    const ouv = ouverte===s.cle, prop = fini ? [] : proposes(s), ville = String(i.adresse||'').split(',')[0];
+    const ouv = ouverte===s.cle, prop = fini ? [] : proposes(s), ville = (s.infos && s.infos.lieu) || String(i.adresse||'').split(',')[0];
     const titreD = (s.titre||s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')';
     const stop = fn => e => { e.stopPropagation(); fn(); };
     const tag = (txt, title) => <span className="badge" style={{background:'var(--bg3)',fontSize:11}} title={title}>{txt}</span>;
     return <div style={{padding:'10px 0',borderBottom:'1px solid var(--border)',opacity:fini?.6:1}}>
       <div onClick={()=>setOuverte(o=>o===s.cle?'':s.cle)} style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'center',flexWrap:'wrap',cursor:'pointer'}}>
         <div style={{minWidth:0,flex:'1 1 220px'}}>
-          <div style={{fontWeight:700,fontSize:14}}>{ouv?'▾ ':'▸ '}{(s.titre && s.titre.split(' — ')[0]) || i.nom || s.client || s.sujet}</div>
-          <div className="muted" style={{fontSize:12.5}}>{[i.type, ville, cvFmtDay(s.date)+(j>0 ? ' · il y a '+j+' j' : '')].filter(Boolean).join(' · ')}</div>
+          {edC && edC.cle===s.cle ? <div onClick={e=>e.stopPropagation()} style={{display:'grid',gap:5,margin:'2px 0 4px',maxWidth:520}}>
+            <input autoFocus value={edC.nom} placeholder="Nom (titre de la carte)" onChange={e=>setEdC({...edC, nom:e.target.value})} onKeyDown={e=>{ if(e.key==='Enter') sauverCarte(s); if(e.key==='Escape') setEdC(null); }} style={{fontWeight:700}}/>
+            <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+              <select value={edC.type} onChange={e=>setEdC({...edC, type:e.target.value})} style={{fontSize:12.5}}><option value="">Type de projet…</option>{TYPES_PROJET.map(t=><option key={t}>{t}</option>)}</select>
+              <input value={edC.lieu} placeholder="Lieu / adresse (sous-titre)" onChange={e=>setEdC({...edC, lieu:e.target.value})} onKeyDown={e=>{ if(e.key==='Enter') sauverCarte(s); if(e.key==='Escape') setEdC(null); }} style={{flex:'1 1 180px',fontSize:12.5}}/>
+              <button className="btn btn-sm btn-p" disabled={occupe==='edC'} onClick={()=>sauverCarte(s)}>{occupe==='edC' ? '…' : 'OK'}</button>
+              <button className="btn btn-sm" onClick={()=>setEdC(null)}>Annuler</button></div>
+          </div> : <>
+          <div style={{fontWeight:700,fontSize:14,display:'flex',gap:6,alignItems:'baseline'}}><span>{ouv?'▾ ':'▸ '}{(s.titre && s.titre.split(' — ')[0]) || i.nom || s.client || s.sujet}</span>
+            <button className="btn btn-sm" title="Modifier le titre, le type et le lieu de cette carte" style={{padding:'0 6px',fontSize:11,fontWeight:400}}
+              onClick={e=>{ e.stopPropagation(); setEdC({cle:s.cle, nom:(s.titre && s.titre.split(' — ')[0]) || i.nom || s.client || '', type:i.type||'', lieu:ville||''}); }}>✏️</button></div>
+          <div className="muted" style={{fontSize:12.5}}>{[i.type, ville, cvFmtDay(s.date)+(j>0 ? ' · il y a '+j+' j' : '')].filter(Boolean).join(' · ')}</div></>}
           {(attente || b || prop.length>0 || s.reponse) && <div style={{marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
             {attente && tag('En attente'+(s.note ? ' · '+s.note : ''))}
             {b && tag('Brouillon '+b.numero+(b.total ? ' · '+cvMoney(b.total) : ''), 'Soumission commencée, pas encore envoyée')}
