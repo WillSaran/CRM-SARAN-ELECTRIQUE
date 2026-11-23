@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v636';
+const APP_VERSION = 'v637';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8792,10 +8792,10 @@ function useSoumissions(cfg, refreshKey){
     if(!id){ setEtat(s=>({...s, lu:true, err:'Le registre des jobs n\'est pas configuré (Réglages).'})); return; }
     let liste=[], existe=false, recues=[];
     try{
-      const r = await lireCache(id, 'Soumissions!A1:T', force);
+      const r = await lireCache(id, 'Soumissions!A1:U', force);
       existe = true;
       liste = (r.result.values||[]).slice(1).map((x,i)=>({row:i+2, cle:x[0]||'', type:x[1]||'', date:String(x[2]||'').slice(0,10), no:x[3]||'', client:x[4]||'', courriel:(x[5]||'').toLowerCase(),
-        sujet:x[6]||'', extrait:x[7]||'', montant:cvNum(x[8]), pdf:x[9]||'', lien:x[10]||'', reponse:x[11]||'', statut:x[12]||'', le:x[13]||'', note:x[14]||'', photos:x[15]||'', infos:(()=>{ try{ return x[16] ? JSON.parse(x[16]) : null; }catch(e){ return null; } })(), typeProjet:x[17]||'', accuse:x[18]||'', titre:x[19]||''})).filter(x=>x.cle);
+        sujet:x[6]||'', extrait:x[7]||'', montant:cvNum(x[8]), pdf:x[9]||'', lien:x[10]||'', reponse:x[11]||'', statut:x[12]||'', le:x[13]||'', note:x[14]||'', photos:x[15]||'', infos:(()=>{ try{ return x[16] ? JSON.parse(x[16]) : null; }catch(e){ return null; } })(), typeProjet:x[17]||'', relance:String(x[20]||''), accuse:x[18]||'', titre:x[19]||''})).filter(x=>x.cle);
     }catch(e){ existe = false; }
     try{
       if(idA){ const d = await lireCache(idA, 'Documents!A1:L', force);
@@ -8823,7 +8823,7 @@ function useSoumissions(cfg, refreshKey){
   // Type de projet choisi par William (R) et accusé de réception envoyé (S) : colonnes du CRM seulement.
   const majCol = async (s, col, val, champ)=>{
     setEtat(e=>({...e, liste:e.liste.map(x=>x.cle===s.cle ? {...x, [champ]:val} : x)}));
-    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!Q1:T1', valueInputOption:'RAW', resource:{values:[['Infos demande','Type de projet','Accusé envoyé','Titre (CRM)']]}});
+    await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!Q1:U1', valueInputOption:'RAW', resource:{values:[['Infos demande','Type de projet','Accusé envoyé','Titre (CRM)','Relancée']]}});
     await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:'Soumissions!'+col+s.row, valueInputOption:'RAW', resource:{values:[[val]]}});
   };
   // Soumission à faire ajoutée à la main.
@@ -9517,7 +9517,8 @@ function LeadsView({L, q, toast}){
 function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const S = useSoumissions(cfg, refreshKey);
   const L = useLeads(refreshKey);   // v635
-  const [onglet,setOnglet]=useState(()=>navFocus('soumissions') ? 'envoyees' : 'afaire');   // v202 : soumissions d'un client (bouton de sa fiche)
+  const [onglet,setOnglet]=useState(()=>navFocus('soumissions') ? 'registre' : 'leads');   // v637 : 4 étapes — Leads › À faire › Registre › À relancer
+  const [voirNos,setVoirNos]=useState(false);   // v202 : soumissions d'un client (bouton de sa fiche)
   const [voirFinies,setVoirFinies]=useState(false);
   const [voirFermees,setVoirFermees]=useState(false);   // v396
   const [filtre,setFiltre]=useState(()=>navFocus('soumissions') ? 'tout' : '');
@@ -9542,6 +9543,9 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const aFaire = S.liste.filter(s=>s.type==='À faire').sort((a,b)=>b.date.localeCompare(a.date));
   const envoyees = S.liste.filter(s=>s.type==='Envoyée').sort((a,b)=>b.date.localeCompare(a.date) || (+b.no||0)-(+a.no||0));
   const ouvertes = aFaire.filter(s=>!SOUM_FINI.includes(s.statut));
+  // v637 : un lead = une demande où il faut encore parler au client ; « À faire » = tu as décidé de la soumissionner (ou un brouillon est commencé)
+  const estAFaire = s => s.statut==='À soumissionner' || !!brouillons[s.cle];
+  const leadsDem = ouvertes.filter(s=>!estAFaire(s)), aFaireL = ouvertes.filter(estAFaire);
   // Envoyée : à classer (rien de coché) -> ⏳ en attente (on attend la réponse du client) -> acceptée ou refusée.
   const etatEnv = s => s.statut==='Acceptée' ? 'acceptee' : s.statut==='Refusée' ? 'refusee' : s.statut==='En attente' ? 'attente' : 'aclasser';
   const cherche = (txt)=> !q || cvNorm(txt).includes(cvNorm(q));
@@ -9619,10 +9623,15 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
             <SoumDeposer titre={(s.titre||s.client||s.sujet||'Soumission').slice(0,60)+' ('+s.date+')'} dossier={s.photos} toast={toast} libelle="📷 Photos"
               onDossier={async(d, fin)=>{ if(fin) setTick(t=>t+1); else await S.dossierPhotos(s, d); }}/>
             <button className={'btn btn-sm'+(i.fiche ? '' : '')} onClick={()=>setFicheOuv(ficheOuv===s.cle?'':s.cle)} title="Vérifier et sauver le contact dans le Répertoire avant la soumission">{i.fiche ? '📇 Fiche ✓' : '📇 Fiche client'}</button>
-            <button className="btn btn-sm btn-p" onClick={()=>preparer(s)} title={b ? 'Rouvre le brouillon '+b.numero+' là où tu l\'as laissé' : 'Ouvre la soumission déjà remplie (client, téléphone, courriel, adresse, travaux)'}>{b ? 'Continuer la soumission' : '📝 Faire la soumission'}</button>
-            {i.courriel && !s.accuse && <button className="btn btn-sm" onClick={()=>accuse(s)} title="« Nous avons bien reçu votre demande… » — Gmail s'ouvre, tu n'as qu'à envoyer">✉️ Accusé de réception</button>}
-            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, attente ? '' : 'En attente', s.note)} title={attente ? 'Remettre à faire' : 'En attente (ex. visite à faire, info du client)'}>{attente ? '↩ Reprendre' : '⏳ En attente'}</button>
-            <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Faite')} style={{borderColor:'var(--green, #2e9e5b)',color:'var(--green, #2e9e5b)'}}>✓ Faite</button>
+            {estAFaire(s) ? <>
+              <button className="btn btn-sm btn-p" onClick={()=>preparer(s)} title={b ? 'Rouvre le brouillon '+b.numero+' là où tu l\'as laissé' : 'Ouvre la soumission déjà remplie (client, téléphone, courriel, adresse, travaux)'}>{b ? 'Continuer la soumission' : '📝 Faire la soumission'}</button>
+              {!b && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, '', s.note)} title="Pas encore prêt : la remettre dans les leads">↩ Leads</button>}
+              <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Faite')} style={{borderColor:'var(--green, #2e9e5b)',color:'var(--green, #2e9e5b)'}}>✓ Faite</button>
+            </> : <>
+              {i.courriel && !s.accuse && <button className="btn btn-sm" onClick={()=>accuse(s)} title="« Nous avons bien reçu votre demande… » — Gmail s'ouvre, tu n'as qu'à envoyer">✉️ Accusé de réception</button>}
+              <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, attente ? '' : 'En attente', s.note)} title={attente ? 'Plus en attente' : 'J\'attends quelque chose du client (visite, photos, info)'}>{attente ? '↩ Plus en attente' : '⏳ En attente'}</button>
+              <button className="btn btn-sm btn-p" disabled={occupe===s.cle} onClick={()=>action(s,'À soumissionner', s.note)} title="J'ai ce qu'il faut : elle passe dans « À faire »">➡️ À soumissionner</button>
+            </>}
             <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s, s.cle.startsWith('M-')?'Annulée':'Ignorée')} title="Annulée, ou ce n'était pas une soumission à faire">✕</button>
           </> : <>
             <span className="badge" style={{background:'var(--bg3)'}}>{s.statut}{s.note && ' · '+s.note}</span>
@@ -9661,12 +9670,14 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
         <div style={{minWidth:0,flex:'1 1 220px'}}>
           <div style={{fontSize:14}}>{s.no ? <b>#{s.no} </b> : null}<b>{s.client}</b>{s.montant!=null && <> · <b>{cvMoney(s.montant)}</b> <span className="muted" style={{fontSize:11}}>avant taxes</span></>}</div>
           {s.extrait ? <div><SoumRef txt={s.extrait.slice(0,120)}/></div> : (!s.no && s.sujet && <div className="muted" style={{fontSize:12}}>{s.sujet}</div>)}
-          <div className="muted" style={{fontSize:11.5}}>Envoyée le {cvFmtDay(s.date)}{s.courriel && <> · {s.courriel}</>}{(st==='attente'||st==='aclasser') && soumJours(s.date)>0 && <> · il y a {soumJours(s.date)} jours</>}</div>
+          <div className="muted" style={{fontSize:11.5}}>Envoyée le {cvFmtDay(s.date)}{s.courriel && <> · {s.courriel}</>}{(st==='attente'||st==='aclasser') && soumJours(s.date)>0 && <> · il y a {soumJours(s.date)} jours</>}{s.relance && <> · relancée le {cvFmtDay(s.relance.slice(0,10))}</>}</div>
         </div>
         <div style={{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}}>
           {docCrm && <button className="btn btn-sm" onClick={()=>rouvrir(docCrm)} title="Rouvrir la soumission dans le CRM : PDF, courriel, modifier">Ouvrir {docCrm.numero}</button>}
           {lienPdf(s.pdf)}{lienGmail(s)}
-          {st==='aclasser' && <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'En attente')} title="Envoyée, j'attends la réponse du client">⏳ En attente</button>}
+          {onglet==='relancer' && <>
+            <button className="btn btn-sm btn-p" disabled={!(s.courriel || (docCrm && docCrm.courriel))} onClick={()=>relancer(s, s.courriel || (docCrm && docCrm.courriel))} title="Gmail s'ouvre avec un petit message de suivi — tu n'as qu'à envoyer">✉️ Relancer</button>
+            <button className="btn btn-sm" onClick={()=>relancer(s, '')} title="Déjà relancé autrement (téléphone…) ou trop tôt : on t'en reparle dans une semaine">⏭ Plus tard</button></>}
           {(st==='aclasser' || st==='attente') ? <>
             <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Acceptée')} style={{borderColor:'var(--green, #2e9e5b)',color:'var(--green, #2e9e5b)'}}>✓ Acceptée</button>
             <button className="btn btn-sm" disabled={occupe===s.cle} onClick={()=>action(s,'Refusée')}>✕ Refusée</button>
@@ -9681,48 +9692,75 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
     </div>;
   };
 
-  const listeAFaire = (voirFinies ? aFaire : ouvertes).filter(s=>cherche([s.titre,s.client,s.sujet,s.extrait,s.courriel,(s.infos||{}).adresse,(s.infos||{}).tel].join(' ')))
-    .filter(s=>!filtreAF || (filtreAF==='attente' ? s.statut==='En attente' : filtreAF==='nouvelles' ? s.statut!=='En attente' : infosDe(s).type===filtreAF));
+  const chercheD = s => cherche([s.titre,s.client,s.sujet,s.extrait,s.courriel,(s.infos||{}).adresse,(s.infos||{}).tel].join(' '));
+  const listeAFaire = onglet==='leads' ? leadsDem.filter(chercheD).sort((a,b)=>(a.statut==='En attente'?1:0)-(b.statut==='En attente'?1:0) || b.date.localeCompare(a.date))
+    : (voirFinies ? aFaire.filter(s=>SOUM_FINI.includes(s.statut) || estAFaire(s)) : aFaireL).filter(chercheD);
   const typesAF = [...new Set(ouvertes.map(s=>infosDe(s).type).filter(Boolean))];
   const filtreEnv = filtre || (envoyees.some(s=>etatEnv(s)==='aclasser') ? 'aclasser' : 'attente');
-  const listeEnv = envoyees.filter(s=>(filtreEnv==='tout' || etatEnv(s)===filtreEnv) && cherche([s.no,s.client,s.extrait,s.courriel].join(' ')));
+  const etatR = s => etatEnv(s)==='aclasser' ? 'attente' : etatEnv(s);   // v637 : « à classer » = en attente
+  const filtreR = filtre==='aclasser' || !filtre ? 'attente' : filtre;
+  const listeEnv = envoyees.filter(s=>(filtreR==='tout' || etatR(s)===filtreR) && cherche([s.no,s.client,s.extrait,s.courriel].join(' ')));
+  // v637 : à relancer = envoyée, toujours sans réponse, 7 jours ou plus depuis l'envoi (ou la dernière relance) — jusqu'à 60 jours
+  const depuis = s => { const r = String(s.relance||'').slice(0,10); return soumJours(r > s.date ? r : s.date) || 0; };
+  const sansNouvelles = envoyees.filter(s=>etatR(s)==='attente' && !s.reponse);
+  const aRelancer = sansNouvelles.filter(s=>depuis(s)>=7 && soumJours(s.date)<=60).sort((a,b)=>depuis(b)-depuis(a));
+  const tropVieilles = sansNouvelles.filter(s=>soumJours(s.date)>60).length;
+  const relancer = async (s, courriel) => {
+    const doc = docCrmDe(s); let nom = '', titre = ''; try{ const d = JSON.parse((doc && doc.donnees)||'{}'); nom = d.nom||''; titre = d.titre || (doc && doc.titre) || ''; }catch(e){}
+    nom = nom || s.client || ''; const prenom = /^(M\.|Mme)/.test(nom) ? nom : nom.split(' ')[0];
+    if(courriel){
+      const sujet = 'Suivi de votre soumission'+(s.no ? ' #'+s.no : '')+' — Saran Électrique';
+      const corps = 'Bonjour'+(prenom ? ' '+prenom : '')+',\n\nJe fais un petit suivi concernant la soumission'+(s.no ? ' #'+s.no : '')+(titre ? ' ('+titre+')' : '')+' que je vous ai envoyée le '+cvFmtDay(s.date)+'. Avez-vous eu la chance d\'en prendre connaissance ?\n\nJe reste disponible si vous avez des questions ou si vous souhaitez ajuster quelque chose.\n\nAu plaisir,\n\nWilliam Saran, Président\nSaran Électrique inc.\n(438) 490-3412\ninfo@saranelectrique.com';
+      window.open('https://mail.google.com/mail/?authuser=info@saranelectrique.com&view=cm&fs=1&to='+encodeURIComponent(courriel)+'&su='+encodeURIComponent(sujet)+'&body='+encodeURIComponent(corps), '_blank'); }
+    try{ await S.majCol(s, 'U', cvDay(new Date().toISOString()), 'relance'); toast && toast(courriel ? 'Relance notée — envoie le courriel dans Gmail' : 'On t\'en reparle dans une semaine'); }
+    catch(e){ toast && toast('Erreur : '+apiErrMsg(e)); } };
   // Reçues : documents des fournisseurs (Achats) + ce qu'Éclairage Saran envoie par courriel (lignes « Reçue »).
   const recuesTout = [...S.recues, ...S.liste.filter(s=>s.type==='Reçue').map(s=>({fournisseur:s.client||'Éclairage Saran', num:'', date:s.date, ref:s.sujet, total:s.montant, pdf:s.pdf, fichier:s.extrait, lien:s.lien}))];
   const recues = recuesTout.filter(d=>cherche([d.fournisseur,d.num,d.ref,d.fichier].join(' '))).sort((a,b)=>b.date.localeCompare(a.date));
   const nEnv = k => envoyees.filter(s=>etatEnv(s)===k).length;
   const petit = typeof window!=='undefined' && window.innerWidth < 700;
-  const totalAttente = envoyees.filter(s=>etatEnv(s)==='attente').reduce((t,s)=>t+(s.montant||0),0);
+  const totalAttente = envoyees.filter(s=>['attente','aclasser'].includes(etatEnv(s))).reduce((t,s)=>t+(s.montant||0),0);
 
   return <div>
-    {/* v456 : sur le cell — un seul bouton ⟳ (celui du haut), onglets sur une ligne qui glisse, libellés courts */}
-    <h2 className="fh" style={{margin:'0 0 8px',fontSize:20}}>Soumissions</h2>
-    <div className="defile-x" style={{display:'flex',gap:6,flexWrap:petit?'nowrap':'wrap',overflowX:petit?'auto':'visible',marginBottom:10,paddingBottom:petit?4:0,WebkitOverflowScrolling:'touch'}}>
-      {pill('afaire','📝 À faire',ouvertes.length,onglet,setOnglet)}
-      {pill('envoyees','📤 Envoyées',envoyees.filter(s=>['aclasser','attente'].includes(etatEnv(s))).length,onglet,setOnglet)}
-      {pill('recues',petit ? '📥 Reçues' : '📥 Reçues des fournisseurs',recuesTout.length,onglet,setOnglet)}
-      {pill('miennes',petit ? '🗂 Les miennes' : '🗂 Mes soumissions (CRM)',DC.docs.filter(x=>x.type==='Soumission').length,onglet,setOnglet)}
-      {pill('preparer',petit ? '✏️ Préparer' : '✏️ Préparer une soumission',null,onglet,k=>{ setOnglet(k); })}
-      {pill('leads',petit ? 'Leads' : 'Leads achetés',L.liste.filter(l=>!LEADS_FERMES.includes(l.statut)).length,onglet,setOnglet)}
+    {/* v637 : 4 étapes — Leads › À faire › Registre › À relancer ; Préparer et Fournisseurs = boutons */}
+    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',margin:'0 0 8px'}}>
+      <h2 className="fh" style={{margin:0,fontSize:20}}>Soumissions</h2>
+      <span style={{marginLeft:'auto',display:'flex',gap:6}}>
+        <button className="btn btn-sm btn-p" onClick={()=>{ setFicheOuv('NOUV'); setOnglet('afaire'); }} title="Choisis ou crée le client, puis la soumission s'ouvre remplie">✏️ Nouvelle soumission</button>
+        <button className={'btn btn-sm'+(onglet==='recues'?' btn-p':'')} onClick={()=>setOnglet('recues')} title="Soumissions reçues de tes fournisseurs">📥{petit ? '' : ' Fournisseurs'}</button>
+      </span>
     </div>
+    <div className="defile-x" style={{display:'flex',gap:6,flexWrap:petit?'nowrap':'wrap',overflowX:petit?'auto':'visible',marginBottom:6,paddingBottom:petit?4:0,WebkitOverflowScrolling:'touch',alignItems:'center'}}>
+      {[['leads','① 👋 Leads', leadsDem.length + L.liste.filter(l=>!LEADS_FERMES.includes(l.statut)).length],
+        ['afaire','② 📝 À faire', aFaireL.length],
+        ['registre','③ 📚 Registre', nEnv('aclasser')+nEnv('attente')],
+        ['relancer','④ 🔔 À relancer', aRelancer.length]].map(([k,l,n],ix)=><React.Fragment key={k}>
+          {ix>0 && <span className="muted" style={{fontSize:12,flexShrink:0}}>›</span>}
+          <button className={'btn btn-sm'+(onglet===k?' btn-p':'')} onClick={()=>setOnglet(k)} style={{whiteSpace:'nowrap',flexShrink:0,...(k==='relancer' && n>0 && onglet!==k ? {borderColor:'var(--danger)',color:'var(--danger)'} : {})}}>{l} ({n})</button>
+        </React.Fragment>)}
+    </div>
+    {(()=>{ const t = {leads:'Le monde à qui parler avant de soumissionner. Quand tu as ce qu\'il faut : ➡️ À soumissionner.', afaire:'Les soumissions à préparer et envoyer.',
+      registre:'Toutes tes soumissions envoyées — en attente, acceptées ou refusées.', relancer:'Envoyées depuis 7 jours ou plus, sans nouvelles du client.'}[onglet];
+      return t ? <div className="muted" style={{fontSize:12,marginBottom:10}}>{t}</div> : null; })()}
     {onglet==='preparer' && <AppelServiceView key={'prep'+prepKey} cfg={cfg} toast={toast} mode="soumission" contacts={data && data.contacts} onNavigate={onNavigate} onEnregistre={()=>DC.lire(true)} onEnvoye={doc=>{
       const s = doc.origine && S.liste.find(x=>x.cle===doc.origine);
       if(s) S.marquer(s, 'Faite', 'Soumission '+doc.numero).catch(()=>{});
       setTimeout(()=>S.relire(), 1500); }}/>}
     {onglet!=='preparer' && <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (client, adresse, numéro…)" style={{width:'100%',boxSizing:'border-box',marginBottom:10}}/>}
-    {onglet==='leads' && <LeadsView L={L} q={q} toast={toast}/>}
     {!S.lu && <div className="muted">Chargement…</div>}
     {S.err && <div className="card" style={{color:'var(--red, #c0392b)'}}>{S.err}</div>}
     {S.lu && !S.existe && onglet!=='recues' && <div className="card muted" style={{fontSize:12.5,marginBottom:10}}>L'onglet « Soumissions » du registre des jobs n'existe pas encore. Il sera rempli tout seul quand le script <b>soumissions.gs</b> sera installé dans La mémoire. Tu peux quand même en ajouter à la main.</div>}
 
-    {(onglet==='miennes' || (onglet==='envoyees' && q)) && (()=>{   // v395 : toutes les soumissions faites dans le CRM, par numéro (E-0001, E-0002…)
+    {((onglet==='registre' && voirNos) || onglet==='afaire') && (()=>{   // v395 : toutes les soumissions faites dans le CRM, par numéro (E-0001, E-0002…)
       const envNo = new Set(envoyees.map(s=>docCrmDe(s)).filter(Boolean).map(x=>x.numero));
+      const lies = new Set(ouvertes.map(s=>brouillons[s.cle] && brouillons[s.cle].numero).filter(Boolean));   // déjà affichés sur leur demande
       const numN = x => +(String(x.numero||'').replace(/\D/g,''))||0;
       const nbF = DC.docs.filter(x=>x.type==='Soumission' && x.ferme).length;
       const L = DC.docs.filter(x=>x.type==='Soumission' && (voirFermees || !x.ferme)).filter(x=>cherche([x.numero, x.client, x.courriel, x.titre, (()=>{ try{ return JSON.parse(x.donnees||'{}').adresse||''; }catch(e){ return ''; } })()].join(' ')))
-        .filter(x=>onglet==='miennes' || !envNo.has(x.numero)).sort((a,b)=>numN(b)-numN(a));
-      if(onglet==='envoyees' && !L.length) return null;
+        .filter(x=>onglet==='registre' || (!envNo.has(x.numero) && !lies.has(x.numero))).sort((a,b)=>numN(b)-numN(a));
+      if(onglet==='afaire' && !L.length) return null;
       return <div className="card" style={{marginBottom:10}}>
-        <div style={{fontWeight:700,marginBottom:6,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><span>{onglet==='miennes' ? 'Mes soumissions faites dans le CRM' : 'Préparées dans le CRM (pas encore dans « Envoyées »)'} <span className="muted" style={{fontWeight:400}}>· {L.length}</span></span>
+        <div style={{fontWeight:700,marginBottom:6,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><span>{onglet==='registre' ? 'Par numéro du CRM (E-…)' : 'Brouillons commencés dans le CRM'} <span className="muted" style={{fontWeight:400}}>· {L.length}</span></span>
           {nbF>0 && <label className="muted" style={{fontSize:12,fontWeight:400,display:'flex',gap:4,alignItems:'center',marginLeft:'auto'}}><input type="checkbox" checked={voirFermees} onChange={e=>setVoirFermees(e.target.checked)}/> Voir les fermées ({nbF})</label>}</div>
         {!L.length && <div className="muted" style={{fontSize:13}}>Aucune.</div>}
         {L.map(x=>{ const env = envNo.has(x.numero); return <div key={x.row} style={{display:'grid',gridTemplateColumns:'70px 70px 1fr auto',gap:8,alignItems:'baseline',padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
@@ -9732,20 +9770,15 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
             <button className="btn btn-sm" onClick={()=>rouvrir(x)}>Ouvrir</button>
             <button className="btn btn-sm" title={x.ferme ? 'La remettre dans la liste' : 'Je n\'en ai plus besoin : elle disparaît des listes (rien n\'est effacé)'} onClick={()=>DC.fermer(x, !x.ferme)}>{x.ferme ? 'Rouvrir' : 'Fermer'}</button></span></div>; })}
       </div>; })()}
-    {onglet==='afaire' && <div className="card">
-      <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:6}}>
-        <button className="btn btn-sm btn-p" onClick={()=>setNouveau(nouveau===null?'':null)}>+ Ajouter</button>
-        <button className="btn btn-sm" onClick={()=>setFicheOuv(ficheOuv==='NOUV'?'':'NOUV')} title="Choisis ou crée le client dans le Répertoire, puis la soumission s'ouvre remplie">✏️ Nouvelle soumission</button>
+    {(onglet==='leads' || onglet==='afaire') && <div className="card">
+      {onglet==='leads' && <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:6,flexWrap:'wrap'}}>
+        <button className="btn btn-sm btn-p" onClick={()=>setNouveau(nouveau===null?'':null)}>+ Ajouter un lead</button>
         <button className="btn btn-sm" onClick={()=>setDeCourriel(!deCourriel)} title="Une demande reçue par courriel qui n'est pas encore dans la liste (La mémoire passe seulement de temps en temps)">📧 Depuis mes courriels</button>
-      </div>
+      </div>}
       {deCourriel && <SoumDeCourriel S={S} toast={toast} onFini={()=>setDeCourriel(false)}/>}
-      <div style={{display:'flex',gap:6,flexWrap:petit?'nowrap':'wrap',overflowX:petit?'auto':'visible',alignItems:'center',marginBottom:4,paddingBottom:petit?4:0}}>
-        {pill('','Toutes',null,filtreAF,setFiltreAF)}
-        {pill('nouvelles','Nouvelles',ouvertes.filter(s=>s.statut!=='En attente').length,filtreAF,setFiltreAF)}
-        {pill('attente','⏳ En attente',ouvertes.filter(s=>s.statut==='En attente').length,filtreAF,setFiltreAF)}
-        {typesAF.length>1 && <select value={TYPES_PROJET.includes(filtreAF)?filtreAF:''} onChange={e=>setFiltreAF(e.target.value)} style={{fontSize:12}}><option value="">Tous les types</option>{typesAF.map(t=><option key={t}>{t}</option>)}</select>}
-        <label className="muted" style={{fontSize:12,display:'flex',gap:4,alignItems:'center',marginLeft:'auto',whiteSpace:'nowrap'}}><input type="checkbox" checked={voirFinies} onChange={e=>setVoirFinies(e.target.checked)}/> {petit ? 'Terminées' : 'Voir les terminées'} ({aFaire.length-ouvertes.length})</label>
-      </div>
+      {onglet==='afaire' && <div style={{display:'flex',marginBottom:4}}>
+        <label className="muted" style={{fontSize:12,display:'flex',gap:4,alignItems:'center',marginLeft:'auto',whiteSpace:'nowrap'}}><input type="checkbox" checked={voirFinies} onChange={e=>setVoirFinies(e.target.checked)}/> Voir les terminées ({aFaire.length-ouvertes.length})</label>
+      </div>}
       {ficheOuv==='NOUV' && <>
         <SoumFiche cfg={cfg} infos={{}} toast={toast} onFermer={()=>setFicheOuv('')}
           onSauve={f=>{ setFicheOuv(''); DOC_OUVRIR = null; DOC_PREFILL = {type:'Soumission', nom:f.nom, tel:f.tel, courriel:f.courriel, adresse:f.adresse}; setPrepKey(k=>k+1); setOnglet('preparer'); window.scrollTo(0,0); }}/>
@@ -9795,22 +9828,27 @@ function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
         </div>
       </div>}
       {listeAFaire.map(s=><React.Fragment key={s.cle}>{CarteAFaire({s})}</React.Fragment>)}
-      {S.lu && !listeAFaire.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>{ouvertes.length||q ? 'Aucune ne correspond.' : 'Rien à faire 👍'}</div>}
+      {S.lu && !listeAFaire.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>{q ? 'Aucune ne correspond.' : onglet==='leads' ? 'Aucune demande en cours.' : 'Rien à soumissionner 👍'}</div>}
     </div>}
+    {onglet==='leads' && <div style={{marginTop:14}}><div style={{fontWeight:700,margin:'0 0 6px 2px'}}>Leads achetés</div><LeadsView L={L} q={q} toast={toast}/></div>}
 
-    {onglet==='envoyees' && <div className="card">
+    {onglet==='relancer' && <div className="card">
+      {aRelancer.map(s=><React.Fragment key={s.cle}>{CarteEnvoyee({s})}</React.Fragment>)}
+      {S.lu && !aRelancer.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>Personne à relancer cette semaine 👍</div>}
+      {tropVieilles>0 && <div className="muted" style={{fontSize:11.5,marginTop:6}}>{tropVieilles} soumission{tropVieilles>1?'s':''} sans nouvelles depuis plus de 60 jours — dans le ③ Registre (en attente), classe-les ✕ refusées si c'est mort.</div>}
+    </div>}
+    {onglet==='registre' && <div className="card">
       <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:4}}>
-        {pill('aclasser','📬 À classer',nEnv('aclasser'),filtreEnv,setFiltre)}
-        {pill('attente','⏳ En attente',nEnv('attente'),filtreEnv,setFiltre)}
-        {pill('acceptee','✓ Acceptées',nEnv('acceptee'),filtreEnv,setFiltre)}
-        {pill('refusee','✕ Refusées',nEnv('refusee'),filtreEnv,setFiltre)}
-        {pill('tout','Toutes',envoyees.length,filtreEnv,setFiltre)}
-        {filtreEnv==='attente' && totalAttente>0 && <span className="muted" style={{fontSize:12,marginLeft:'auto'}}>Total en attente : <b>{cvMoney(totalAttente)}</b> avant taxes</span>}
+        {pill('attente','⏳ En attente',nEnv('aclasser')+nEnv('attente'),filtreR,setFiltre)}
+        {pill('acceptee','✓ Acceptées',nEnv('acceptee'),filtreR,setFiltre)}
+        {pill('refusee','✕ Refusées',nEnv('refusee'),filtreR,setFiltre)}
+        {pill('tout','Toutes',envoyees.length,filtreR,setFiltre)}
+        {filtreR==='attente' && totalAttente>0 && <span className="muted" style={{fontSize:12,marginLeft:'auto'}}>Total en attente : <b>{cvMoney(totalAttente)}</b> avant taxes</span>}
       </div>
       {listeEnv.map(s=><React.Fragment key={s.cle}>{CarteEnvoyee({s})}</React.Fragment>)}
       {S.lu && !listeEnv.length && <div className="muted" style={{fontSize:13,padding:'8px 0'}}>Aucune soumission ici.</div>}
-      {filtreEnv==='aclasser' && listeEnv.length>0 && <div className="muted" style={{fontSize:11.5,margin:'4px 0'}}>Tes soumissions envoyées pas encore classées : mets-les ⏳ en attente si tu attends une réponse, ou ✓ / ✕ si c'est réglé.</div>}
-      {vieux.length>0 && filtreEnv==='tout' && <div style={{marginTop:12}}>
+      <div style={{marginTop:8}}><button className="btn btn-sm" onClick={()=>setVoirNos(!voirNos)}>{voirNos ? 'Cacher' : '🗂 Voir'} la liste par numéro du CRM (E-…)</button></div>
+      {vieux.length>0 && filtreR==='tout' && <div style={{marginTop:12}}>
         <div className="muted" style={{fontSize:12,fontWeight:700}}>Anciennes soumissions du CRM</div>
         {vieux.map(s=><div key={s.id} className="muted" style={{fontSize:12.5,padding:'4px 0'}}>{s.date} · {fmtMoney(s.total)} · {s.statut}</div>)}
       </div>}
