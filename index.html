@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v646';
+const APP_VERSION = 'v647';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11318,6 +11318,12 @@ function planPlaceDe(d){ const k = d.planPlace || 'fin';
 // v114 : même présentation que les soumissions de ton logiciel (logo, en-tête, boîte client, tampon, clauses, signature).
 // Le logo est lu dans ton Drive (fichier « logo fond blanc JPEG ») — il n'est pas dans le code.
 const LOGO_ID = '1ryczUvdrXtdoKd8WNHW93n9QA-uGbTYg';
+// v647 : « INCLUS : a ; b ; c. » → titre puis un élément par ligne, avec de l'espace entre les blocs
+function docRemarquesHtml(txt, esc){
+  return String(txt||'').split('\n').map(l=>{ const m = l.match(/^(INCLUS|EXCLUS)\s*:\s*(.*)$/i);
+    if(!m) return '<div style="margin:0 0 6px">'+esc(l)+'</div>';
+    const it = m[2].replace(/\.\s*$/,'').split(/\s*;\s*/).filter(Boolean);
+    return '<div style="margin:8px 0 6px"><b>'+esc(m[1].toUpperCase())+' :</b>'+it.map(x=>'<div style="margin:3px 0 3px 14px">• '+esc(x)+'</div>').join('')+'</div>'; }).join(''); }
 function docHtml(d, calc, plan, imprimer){
   const prix = d.type!=='Ordre de travail';
   const forfait = cvNum(d.forfait)!=null && d.forfait!=='';   // prix forfaitaire = pas de prix par ligne (comme ton logiciel)
@@ -11396,7 +11402,7 @@ function docHtml(d, calc, plan, imprimer){
     '<div class="trav"><b>Travaux :</b> <span>'+esc(d.travaux||d.titre||'').replace(/\n/g,'<br>')+'</span></div>'+
     '<table class="l"><tr><th>Produit</th><th>Description</th><th class="n">Quantité</th>'+(prix && !forfait?'<th class="n">Prix</th><th class="n">Total</th>':'')+'</tr>'+
       mat+autres+(sections || sommaire)+'</table>'+taxes+
-    (d.remarques?'<div class="rq"><b>Remarques :</b><br>'+esc(d.remarques).replace(/\n/g,'<br>')+'</div>':'')+
+    (d.remarques?'<div class="rq"><b>Remarques :</b><br>'+docRemarquesHtml(d.remarques, esc)+'</div>':'')+   // v647 : inclus / exclus aérés, un élément par ligne
     '<div style="break-inside:avoid"><div class="cl">'+clauses+'</div>'+signature+'</div>'+
     (planPlaceDe(d)==='fin' ? planHtml(d, plan||[], esc) : '')+
     (imprimer ? '<scr'+'ipt>window.onload=()=>setTimeout(()=>window.print(),600)</scr'+'ipt>' : '')+'</body></html>';
