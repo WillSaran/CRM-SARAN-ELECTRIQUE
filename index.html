@@ -10057,9 +10057,55 @@ function LeadsView({L, q, toast, onSoumission, soumDe}){
     })}
   </div>;
 }
+// v677 : refus par courriel → le lead se ferme tout seul (Perdu + raison) et sa visite est retirée de l'agenda.
+// On lit les réponses des leads ouverts (45 derniers jours) ; « autre électricien », « sur la glace », « plus besoin », « trop cher »… = refus.
+function leadRefusRaison(txt){
+  const t = String(txt||'').replace(/&#39;|&rsquo;|’/g,"'").replace(/&quot;/g,'"').replace(/&amp;/g,'&').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ');
+  if(/\b(autre|un autre|une autre) (electricien|entrepreneur|compagnie|entreprise|maitre electricien)|(choisi|retenu|pris|engage|trouve|opte pour) (un autre|une autre|quelqu|quelqu'un|un electricien|une compagnie)|deja (trouve|pris|engage|choisi)|on a (trouve|pris|choisi) /.test(t)) return 'Déjà pris un autre électricien';
+  if(/trop cher|hors (de )?(notre |mon )?budget|au-dessus de (notre|mon) budget|pas dans (notre|mon) budget/.test(t)) return 'Trop cher';
+  if(/sur la glace|(pas|plus) (besoin|interesse|necessaire)|n'?(avons|ai) plus besoin|projet (est )?annule|annuler (le|notre|mon) projet|on annule (le|notre|mon) projet|abandonn|laisse(r)? tomber|on oublie (ca|le projet)|ne (donnerons|donnera|vais|va) pas (de )?suite|pas (donner|de) suite|on va (attendre|reporter)|reporte(r)? (a plus tard|le projet)|mettre (le projet )?de cote|non merci|finalement (non|pas)/.test(t)) return 'Projet annulé';
+  return '';
+}
+async function leadsRefusAuto(L, toast){
+  if(!peutLireCourriels()) return 0;
+  const ouverts = L.liste.filter(l=>!LEADS_FERMES.includes(l.statut) && /@/.test(l.courriel));
+  if(!ouverts.length) return 0;
+  const parCourriel = {}; ouverts.forEach(l=>{ (parCourriel[l.courriel] = parCourriel[l.courriel] || []).push(l); });
+  const adresses = Object.keys(parCourriel), fermes = [];
+  for(let i=0; i<adresses.length; i+=20){
+    const lot = adresses.slice(i, i+20);
+    let msgs = [];
+    try{ const r = await window.gapi.client.request({path:'https://gmail.googleapis.com/gmail/v1/users/me/messages', params:{q:'from:('+lot.join(' OR ')+') newer_than:45d', maxResults:100}}); msgs = r.result.messages || []; }catch(e){ continue; }
+    for(const m of msgs){
+      let d; try{ d = (await window.gapi.client.request({path:'https://gmail.googleapis.com/gmail/v1/users/me/messages/'+m.id, params:{format:'metadata', metadataHeaders:['From','Subject']}})).result; }catch(e){ continue; }
+      const de = ((d.payload && d.payload.headers || []).find(h=>/^from$/i.test(h.name))||{}).value || '';
+      const courriel = (de.match(/[\w.+-]+@[\w.-]+/)||[''])[0].toLowerCase(); const leads = parCourriel[courriel]; if(!leads) continue;
+      const quand = new Date(Number(d.internalDate)), jour = localDateStr(quand);
+      const raison = leadRefusRaison(d.snippet); if(!raison) continue;
+      for(const l of leads){
+        if(LEADS_FERMES.includes(l.statut) || fermes.includes(l) || (l.date && jour < l.date)) continue;
+        const extrait = String(d.snippet||'').replace(/&#39;/g,"'").replace(/&quot;/g,'"').replace(/&amp;/g,'&').slice(0,140);
+        await L.ecrire(l, {statut:'Perdu', raison, contact:jour, notes:((l.notes ? l.notes+' · ' : '')+'Fermé auto (courriel du '+jour+') : « '+extrait+' »').slice(0,1500)});
+        // la visite : agenda Soumission (événement du lead) + visites futures mises dans l'agenda des gars / En attente
+        try{ if(l.evenement){ const calId = await soumCalId(); if(calId) await window.gapi.client.calendar.events.delete({calendarId:calId, eventId:l.evenement}).catch(()=>{}); } }catch(e){}
+        try{ const a = new Date(); a.setHours(0,0,0,0); const b = new Date(a); b.setDate(b.getDate()+120);
+          const evs = await listCalendarEventsRange([CREW_CAL, EN_ATTENTE_CAL], a.toISOString(), b.toISOString(), l.courriel);
+          for(const e of evs){ const desc = String(e.description||'').toLowerCase();
+            if(desc.includes(l.courriel) && (!l.id || desc.includes(String(l.id).toLowerCase()) || /soumission r[ée]novation|visite|soumission/i.test(e.title+' '+desc)))
+              await window.gapi.client.calendar.events.delete({calendarId:e.calendarId, eventId:e.id}).catch(()=>{}); } }catch(e){}
+        fermes.push(l);
+      }
+    }
+  }
+  if(fermes.length && toast) toast('📭 Refus reçu par courriel — fermé et retiré de l\'agenda : '+fermes.map(l=>leadNomComplet(l.nom)||l.courriel).join(', '), 'ok');
+  return fermes.length;
+}
 function SoumissionsView({cfg, data, toast, refreshKey, onNavigate}){
   const S = useSoumissions(cfg, refreshKey);
   const L = useLeads(refreshKey);   // v635
+  const refusVuRef = useRef(false);   // v677 : une passe par ouverture de l'onglet (et à chaque actualisation)
+  useEffect(()=>{ refusVuRef.current = false; },[refreshKey]);
+  useEffect(()=>{ if(!L.lu || refusVuRef.current) return; refusVuRef.current = true; leadsRefusAuto(L, toast).catch(()=>{}); },[L.lu, L.liste.length, refreshKey]);
   const [onglet,setOnglet]=useState(()=>navFocus('soumissions') ? 'registre' : 'afaire');   // v642 : une page — à faire en haut, leads en dessous, leads achetés à la fin ; v637 : 4 étapes — Leads › À faire › Registre › À relancer
   const [voirNos,setVoirNos]=useState(false);   // v202 : soumissions d'un client (bouton de sa fiche)
   const [voirFinies,setVoirFinies]=useState(false);
