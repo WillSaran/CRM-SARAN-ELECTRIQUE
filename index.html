@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v658';
+const APP_VERSION = 'v659';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5298,8 +5298,14 @@ const paiePeriode = (week, payeChoisie) => { const lun = mondayOfWeek(week), dim
 const JOURNAL_ONGLET = 'Journal de paie';
 const JOURNAL_COLS = [['sem','Semaine'],['pp','PP'],['paye','Payable le'],['nom','Employé'],['id','Id dossier'],['regime','Régime'],['h','Heures payées'],['sal','Salaire brut'],['vacCcq','Vacances CCQ 13 %'],['brutImp','Brut imposable'],['avImp','Avantage imposable CCQ'],['remb','Remboursements non imposables'],
   ['fed','Impôt fédéral'],['qc','Impôt du Québec'],['rrq','RRQ'],['ae','Assurance-emploi'],['rqap','RQAP'],['ccqAss','CCQ assurance'],['ccqTaxe','CCQ taxe assurance'],['ccqRet','CCQ retraite'],['ccqPrel','CCQ prélèvement'],['synd','Cotisation syndicale'],['autresRet','Autres retenues'],['reer','REER'],['net','Net à verser'],
-  ['gRrq','Gains RRQ'],['gAe','Gains assurables AE'],['gRqap','Gains RQAP'],['eRrq','Employeur RRQ'],['eAe','Employeur AE'],['eRqap','Employeur RQAP'],['eFss','Employeur FSS'],['eCnt','Employeur CNT'],['eCnesst','Employeur CNESST'],['eCcq','Employeur CCQ'],['vacAcq','Vacances bureau acquises'],['vacPris','Vacances bureau prises'],['le','Approuvée le']];
-const JOURNAL_NUM = JOURNAL_COLS.slice(6, -1).map(x=>x[0]);
+  ['gRrq','Gains RRQ'],['gAe','Gains assurables AE'],['gRqap','Gains RQAP'],['eRrq','Employeur RRQ'],['eAe','Employeur AE'],['eRqap','Employeur RQAP'],['eFss','Employeur FSS'],['eCnt','Employeur CNT'],['eCnesst','Employeur CNESST'],['eCcq','Employeur CCQ'],['vacAcq','Vacances bureau acquises'],['vacPris','Vacances bureau prises'],['le','Approuvée le'],
+  // v659 : détail pour le rapport mensuel CCQ (ajouté après « Approuvée le » pour ne pas décaler les lignes déjà inscrites)
+  ['finSem','Semaine se terminant le'],['classe','Classe'],['secteur','Secteur CCQ'],['hSimple','Heures simple'],['hDemi','Heures ½'],['hDouble','Heures double'],
+  ['eCcqAss','Employeur CCQ assurance'],['eCcqTaxe','Employeur CCQ taxe assurance'],['eCcqRet','Employeur CCQ retraite'],['eCcqSup','Employeur CCQ caisse supp.'],['eCcqPrel','Employeur CCQ prélèvement'],['eCcqForm','Employeur CCQ formation'],['eCcqIndem','Employeur CCQ indemnisation'],['eAecq','Employeur AECQ / ACQ']];
+const JOURNAL_TEXTE = ['sem','pp','paye','nom','id','regime','le','finSem','classe','secteur'];
+const JOURNAL_NUM = JOURNAL_COLS.map(x=>x[0]).filter(k=>!JOURNAL_TEXTE.includes(k));
+const JOURNAL_ILE = JOURNAL_COLS.findIndex(x=>x[0]==='le');
+const JOURNAL_PLAGE = 'A1:'+(n=>{ let t = ''; while(n>0){ const r = (n-1)%26; t = String.fromCharCode(65+r)+t; n = Math.floor((n-1)/26); } return t; })(JOURNAL_COLS.length);
 // v632 : envoi des talons par courriel (depuis info@, PDF joint) + historique des envois (onglet privé)
 const ENVOIS_ONGLET = 'Envois talons';
 const ENVOIS_ENTETE = ['Semaine','PP','Payable le','Employé','Id dossier','Courriel','Net à verser','Envoyé le'];
@@ -5415,7 +5421,9 @@ function paieCalcul(r, fin, prior){
   // Ligne du journal de paie (une par employé et par paie approuvée) — sert aux cumuls, aux remises et aux T4 / RL-1
   const jr = {h:heures+(r.ferie||0)+(r.vac||0), sal:r2(brut - vacCcq), vacCcq, brutImp:brut, avImp, remb:nonImpTot, fed:impFed, qc:impQc, rrq, ae, rqap, ccqAss:assEmp, ccqTaxe:taxeEmp, ccqRet:retEmp, ccqPrel:prelEmp, synd,
     autresRet, reer:r2(reer), net, gRrq:r2(brut+avImp), gAe:brut, gRqap:r2(brut+avImp), eRrq:pv(/^RRQ/), eAe:pv(/^Assurance-emploi/), eRqap:pv(/^RQAP/), eFss:pv(/^FSS/), eCnt:pv(/^CNT/), eCnesst:pv(/^CNESST/),
-    eCcq:r2(patL.filter(x=>/^(CCQ|AECQ)/.test(x.lib)).reduce((t,x)=>t+x.m,0)), vacAcq, vacPris};
+    eCcq:r2(patL.filter(x=>/^(CCQ|AECQ)/.test(x.lib)).reduce((t,x)=>t+x.m,0)), vacAcq, vacPris,
+    hSimple:r2(r.simple+r.banqueUtil), hDemi:r2(r.demi), hDouble:r2(r.double),
+    eCcqAss:pv(/^CCQ — assurance/), eCcqTaxe:pv(/^CCQ — taxe/), eCcqRet:pv(/^CCQ — retraite/), eCcqSup:pv(/^CCQ — caisse/), eCcqPrel:pv(/^CCQ — prélèvement/), eCcqForm:pv(/^CCQ — fonds de formation/), eCcqIndem:pv(/^CCQ — fonds d'indemnisation/), eAecq:pv(/^AECQ/)};
   const cumul = {an, prior};
   // v630 : gains = heures travaillées (et autres revenus) seulement ; le 13 % CCQ est une ligne d'info dans la section CCQ (toujours inclus dans la base des retenues) ; net inchangé
   const gainsAff = gains.filter(g=>!(ccq && /^Indemnité de vacances et fériés/.test(g.lib))), retAff = retenues.filter(x=>!/^Vacances et fériés versés/.test(x.lib));
@@ -5495,7 +5503,7 @@ function PrepPaieView({cfg, refreshKey}){
       setL((r.result.values||[]).map(x=>{ const e = {}; DE_COLS.forEach((k,j)=>e[k]=String(x[j]==null?'':x[j])); return e; }).slice(1).filter(e=>e.id||e.nom)); }
     catch(e){ setErr(apiErrMsg(e)); setL([]); }
     try{ const v = await lireCache(DOSSIERS_EMP_ID, qSheet(ENVOIS_ONGLET)+'!A1:H', force); setEnvois((v.result.values||[]).slice(1).filter(x=>x[0])); } catch(e){ setEnvois([]); }
-    try{ const j = await lireCache(DOSSIERS_EMP_ID, qSheet(JOURNAL_ONGLET)+'!A1:AL', force); setJournal((j.result.values||[]).slice(1).filter(x=>x[0])); } catch(e){ setJournal([]); }
+    try{ const j = await lireCache(DOSSIERS_EMP_ID, qSheet(JOURNAL_ONGLET)+'!'+JOURNAL_PLAGE, force); setJournal((j.result.values||[]).slice(1).filter(x=>x[0])); } catch(e){ setJournal([]); }
     try{ const h = await lireCache(DOSSIERS_EMP_ID, qSheet(PREP_ONGLET)+'!A1:W', force); setHist((h.result.values||[]).slice(1).filter(x=>x[0])); }
     catch(e){ setHist([]); } },[]);
   useEffect(()=>{ lire(false); },[lire, refreshKey]);
@@ -5536,7 +5544,7 @@ function PrepPaieView({cfg, refreshKey}){
   }
   // v631 : cumuls de l'année (année de la date de paiement) = lignes valides du journal des autres semaines
   const lotApprouve = {}; [...new Set(hist.map(x=>x[0]))].forEach(w=>{ const ls = hist.filter(x=>x[0]===w), d = ls.reduce((m,x)=>(x[21]||'')>m ? x[21] : m, ''); if(ls.some(x=>x[21]===d && x[20]==='Approuvée')) lotApprouve[w] = d; });
-  const jValides = journal.filter(x=>lotApprouve[x[0]] && lotApprouve[x[0]]===x[JOURNAL_COLS.length-1]), anPaie = per.paye.slice(0,4);
+  const jValides = journal.filter(x=>lotApprouve[x[0]] && lotApprouve[x[0]]===x[JOURNAL_ILE]), anPaie = per.paye.slice(0,4);
   const priorDe = r => { const o = {_an:anPaie}; jValides.filter(x=>x[0]!==week && String(x[2]||'').slice(0,4)===anPaie && ((r.e.id && x[4]===r.e.id) || cvNorm(x[3])===r.k)).forEach(x=>JOURNAL_COLS.forEach(([k],j)=>{ if(JOURNAL_NUM.includes(k)) o[k] = Math.round(((o[k]||0) + (cvNum(x[j])||0))*100)/100; })); return o; };
   rangs.forEach(r=>{ r.brut = brutDe(r); r.paye = r.simple+r.banqueUtil+r.ferie; r.calc = paieCalcul(r, fin, priorDe(r)); });
   // v632 : envois de talons — seulement une semaine approuvée ; on garde le dernier envoi par employé
@@ -5559,7 +5567,8 @@ function PrepPaieView({cfg, refreshKey}){
     setEtat('Enregistrement…');
     try{ await ensureSheetsExist(DOSSIERS_EMP_ID, [{name:PREP_ONGLET, headers:PREP_ENTETE}, {name:JOURNAL_ONGLET, headers:JOURNAL_COLS.map(x=>x[1])}]); const le = prepMaintenant();
       for(const r of rangs) await sheetsAppendRow(DOSSIERS_EMP_ID, qSheet(PREP_ONGLET), ligne(r, 'Approuvée', le));
-      for(const r of rangs){ const j = {...r.calc.jr, sem:week, pp:per.pp, paye:per.paye, nom:r.nom, id:r.e.id||'', regime:r.ccq ? 'CCQ' : 'Bureau', le};
+      try{ await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:DOSSIERS_EMP_ID, range:qSheet(JOURNAL_ONGLET)+'!A1', valueInputOption:'RAW', resource:{values:[JOURNAL_COLS.map(x=>x[1])]}}); }catch(eh){}
+      for(const r of rangs){ const j = {...r.calc.jr, sem:week, pp:per.pp, paye:per.paye, nom:r.nom, id:r.e.id||'', regime:r.ccq ? 'CCQ' : 'Bureau', le, finSem:localDateStr(fin), classe:r.ccq ? (r.e.classe||'') : '', secteur:r.ccq ? (r.e.ccqSecteur||'') : ''};
         await sheetsAppendRow(DOSSIERS_EMP_ID, qSheet(JOURNAL_ONGLET), JOURNAL_COLS.map(([k])=>j[k]==null ? '' : (typeof j[k]==='number' ? j[k].toFixed(2) : String(j[k])))); }
       try{ localStorage.removeItem(cle); }catch(e){} setMod({}); setEtat('Semaine approuvée et figée.'); await lire(true); }
     catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
@@ -5660,7 +5669,7 @@ const REMISES_ONGLET = 'Remises DAS';
 const REMISES_ENTETE = ['Mois','Organisme','Montant remis','Payé le','No de confirmation','Note','Inscrit le'];
 const journalValides = (hist, journal) => { const lot = {};
   [...new Set(hist.map(x=>x[0]))].forEach(w=>{ const ls = hist.filter(x=>x[0]===w), d = ls.reduce((m,x)=>(x[21]||'')>m ? x[21] : m, ''); if(ls.some(x=>x[21]===d && x[20]==='Approuvée')) lot[w] = d; });
-  const iLe = JOURNAL_COLS.length-1;
+  const iLe = JOURNAL_ILE;
   return journal.filter(x=>lot[x[0]] && lot[x[0]]===x[iLe]).map(x=>{ const o = {}; JOURNAL_COLS.forEach(([k],j)=>{ o[k] = JOURNAL_NUM.includes(k) ? (cvNum(x[j])||0) : (x[j]||''); }); return o; }); };
 const DAS_ARC = [['fed','Impôt fédéral retenu'],['ae','AE — employés'],['eAe','AE — employeur']];
 const DAS_RQ = [['qc','Impôt du Québec retenu'],['rrq','RRQ — employés'],['eRrq','RRQ — employeur'],['rqap','RQAP — employés'],['eRqap','RQAP — employeur'],['eFss','FSS'],['eCnesst','CNESST']];
@@ -5671,7 +5680,7 @@ function RemisesDasView({cfg, refreshKey}){
   const [ouvert,setOuvert]=useState(''), [saisie,setSaisie]=useState(null), [etat,setEtat]=useState('');
   const lire = useCallback(async force=>{ setErr('');
     const lt = async (onglet, plage) => { try{ const r = await lireCache(DOSSIERS_EMP_ID, qSheet(onglet)+'!'+plage, force); return (r.result.values||[]).slice(1).filter(x=>x[0]); } catch(e){ return []; } };
-    try{ const [j,h,rm] = await Promise.all([lt(JOURNAL_ONGLET,'A1:AL'), lt(PREP_ONGLET,'A1:W'), lt(REMISES_ONGLET,'A1:G')]); setJournal(j); setHist(h); setRemises(rm); }
+    try{ const [j,h,rm] = await Promise.all([lt(JOURNAL_ONGLET, JOURNAL_PLAGE), lt(PREP_ONGLET,'A1:W'), lt(REMISES_ONGLET,'A1:G')]); setJournal(j); setHist(h); setRemises(rm); }
     catch(e){ setErr(apiErrMsg(e)); setJournal([]); } },[]);
   useEffect(()=>{ lire(false); },[lire, refreshKey]);
   if(!journal) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Remises DAS…</span></div>;
@@ -5726,12 +5735,85 @@ function RemisesDasView({cfg, refreshKey}){
       </div></Modal>}
   </div>;
 }
+// v659 : Remises CCQ (remplace le Registre CCQ) — rapport mensuel à partir du journal de paie : semaines qui se terminent dans le mois, électriciens CCQ ;
+// à remettre à la CCQ au plus tard le 15 du mois suivant : vacances 13 % + parts de l'employé (assurance + taxe, retraite, prélèvement, syndicat) + parts de l'employeur (assurance + taxe, retraite, caisse supp., prélèvement, formation, indemnisation, AECQ/ACQ).
+const RCCQ_EMP = [['ccqAss','Assurance'],['ccqTaxe','Taxe assurance'],['ccqRet','Retraite'],['ccqPrel','Prélèvement'],['synd','Syndicat']];
+const RCCQ_PAT = [['eCcqAss','Assurance'],['eCcqTaxe','Taxe assurance'],['eCcqRet','Retraite'],['eCcqSup','Caisse supp.'],['eCcqPrel','Prélèvement'],['eCcqForm','Formation'],['eCcqIndem','Indemnisation'],['eAecq','AECQ / ACQ']];
+function RemisesCcqView({cfg, refreshKey}){
+  const [journal,setJournal]=useState(null), [hist,setHist]=useState([]), [remises,setRemises]=useState([]), [dos,setDos]=useState([]), [err,setErr]=useState('');
+  const [an,setAn]=useState(String(new Date().getFullYear() < 2027 ? 2027 : new Date().getFullYear()));
+  const [ouvert,setOuvert]=useState(''), [saisie,setSaisie]=useState(null), [etat,setEtat]=useState('');
+  const lire = useCallback(async force=>{ setErr('');
+    const lt = async (onglet, plage) => { try{ const r = await lireCache(DOSSIERS_EMP_ID, (onglet ? qSheet(onglet)+'!' : '')+plage, force); return (r.result.values||[]).slice(1).filter(x=>x[0]); } catch(e){ return []; } };
+    try{ const [j,h,rm,d] = await Promise.all([lt(JOURNAL_ONGLET, JOURNAL_PLAGE), lt(PREP_ONGLET,'A1:W'), lt(REMISES_ONGLET,'A1:G'), lt('', 'A1:'+DE_FIN)]);
+      setJournal(j); setHist(h); setRemises(rm); setDos(d.map(x=>{ const e = {}; DE_COLS.forEach((k,i)=>e[k]=String(x[i]==null?'':x[i])); return e; })); }
+    catch(e){ setErr(apiErrMsg(e)); setJournal([]); } },[]);
+  useEffect(()=>{ lire(false); },[lire, refreshKey]);
+  if(!journal) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Remises CCQ…</span></div>;
+  const lignes = journalValides(hist, journal).filter(x=>x.regime==='CCQ').map(x=>({...x, moisCcq:String(x.finSem || localDateStr(ccqFinSemaine(x.sem))).slice(0,7)}));
+  const ans = [...new Set(lignes.map(x=>x.moisCcq.slice(0,4)).concat([an]))].sort(), moisL = [...Array(12)].map((_,i)=>an+'-'+String(i+1).padStart(2,'0'));
+  const s2 = (ls, cles) => Math.round(ls.reduce((t,x)=>t+cles.reduce((u,[k])=>u+(x[k]||0),0),0)*100)/100;
+  const totCcq = ls => Math.round((s2(ls,[['vacCcq']]) + s2(ls,RCCQ_EMP) + s2(ls,RCCQ_PAT))*100)/100;
+  const remiseDe = mois => remises.filter(x=>x[0]===mois && x[1]==='CCQ').sort((a,b)=>(a[6]||'')>(b[6]||'')?1:-1).pop();
+  const auj = localDateStr(new Date()), dosDe = x => dos.find(e=>(x.id && e.id===x.id) || cvNorm(deNom(e))===cvNorm(x.nom)) || {};
+  const manque = dos.filter(e=>/ccq/i.test(e.regime||'') && !/^non/i.test(e.actif||'') && !String(e.noCcq||'').trim()).map(deNom);
+  const marquer = async () => { const s = saisie; if(!s.paye){ alert('Inscris la date du paiement.'); return; } setEtat('Enregistrement…');
+    try{ await ensureSheetsExist(DOSSIERS_EMP_ID, [{name:REMISES_ONGLET, headers:REMISES_ENTETE}]);
+      await sheetsAppendRow(DOSSIERS_EMP_ID, qSheet(REMISES_ONGLET), [s.mois, 'CCQ', String(s.montant).replace(',','.'), s.paye, s.conf||'', s.note||'', prepMaintenant()]);
+      setSaisie(null); setEtat(''); await lire(true); } catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
+  const exporter = mois => { const ls = lignes.filter(x=>x.moisCcq===mois), noms = [...new Set(ls.map(x=>x.nom))];
+    const ent = ['Mois','Employé','No client CCQ','Classe','Secteur','Heures simple','Heures ½','Heures double','Salaire','Vacances 13 %'].concat(RCCQ_EMP.map(x=>'Employé — '+x[1]), RCCQ_PAT.map(x=>'Employeur — '+x[1]), ['Total CCQ']);
+    const rows = noms.map(nm=>{ const le = ls.filter(x=>x.nom===nm), d = dosDe(le[0]), f = v => v.toFixed(2).replace('.',',');
+      return [mois, nm, d.noCcq||'', le[le.length-1].classe || d.classe || '', le[le.length-1].secteur || d.ccqSecteur || '', f(s2(le,[['hSimple']])), f(s2(le,[['hDemi']])), f(s2(le,[['hDouble']])), f(s2(le,[['sal']])), f(s2(le,[['vacCcq']]))]
+        .concat(RCCQ_EMP.map(c=>f(s2(le,[c]))), RCCQ_PAT.map(c=>f(s2(le,[c]))), [f(totCcq(le))]); });
+    const csv = '﻿'+[ent].concat(rows).map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')).join('\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})); a.download = 'Rapport CCQ '+mois+'.csv'; a.click(); };
+  const th = {textAlign:'right'};
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Remises CCQ</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Rapport mensuel CCQ à partir des paies approuvées (journal de paie) : semaines qui se terminent dans le mois, électriciens CCQ. À remettre au plus tard le <b>15 du mois suivant</b>. Tu fais le rapport et le paiement sur le site de la CCQ (l'export t'aide à le remplir), puis tu marques la remise payée ici.</div>
+    {err && <div className="card" style={{color:'var(--danger)',marginBottom:10}}>Impossible de lire le journal : {err}</div>}
+    {manque.length>0 && <div className="card" style={{marginBottom:10,fontSize:12.5,color:'var(--warning)'}}>No de client CCQ manquant au dossier : {manque.join(', ')} (Dossiers employés › Identification).</div>}
+    <div className="card" style={{padding:'10px 12px'}}>
+      <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>Année : {ans.map(a=><button key={a} className={'btn btn-sm'+(a===an?' btn-p':'')} onClick={()=>setAn(a)}>{a}</button>)}<button className="btn btn-sm" onClick={()=>lire(true)}>↻ Relire</button></div>
+      <div style={{overflowX:'auto'}}><table style={{fontSize:13,width:'100%'}}><thead><tr><th>Mois</th><th style={th}>Employés</th><th style={th}>Heures</th><th style={th}>Salaires</th><th style={th}>Vacances 13 %</th><th style={th}>Parts employés</th><th style={th}>Parts employeur</th><th style={th}>Total CCQ</th><th>Remise</th><th>Date limite</th></tr></thead>
+        <tbody>{moisL.map(mois=>{ const ls = lignes.filter(x=>x.moisCcq===mois), r = remiseDe(mois);
+          if(!ls.length && !r) return <tr key={mois} className="muted"><td>{ccqMoisTxt(mois)}</td><td colSpan="9" style={{fontSize:12}}>aucune paie approuvée</td></tr>;
+          const tot = totCcq(ls), lim = localDateStr(dasLimite(mois)), noms = [...new Set(ls.map(x=>x.nom))];
+          return <React.Fragment key={mois}><tr style={{cursor:'pointer'}} onClick={()=>setOuvert(o=>o===mois?'':mois)}>
+            <td><b>{ccqMoisTxt(mois)}</b> <span className="muted" style={{fontSize:11}}>{ouvert===mois?'▾':'▸'} détail</span></td><td style={th}>{noms.length}</td><td style={th}>{prepNb(s2(ls,[['hSimple'],['hDemi'],['hDouble']]))}</td>
+            <td style={th}>{ccqArg(s2(ls,[['sal']]))}</td><td style={th}>{ccqArg(s2(ls,[['vacCcq']]))}</td><td style={th}>{ccqArg(s2(ls,RCCQ_EMP))}</td><td style={th}>{ccqArg(s2(ls,RCCQ_PAT))}</td><td style={th}><b>{ccqArg(tot)}</b></td>
+            <td onClick={ev=>ev.stopPropagation()}>{r ? <span style={{color:Math.abs((cvNum(r[2])||0)-tot)<0.01 ? 'var(--success)' : 'var(--warning)'}}>✓ {ccqArg(cvNum(r[2])||0)} le {r[3]}{Math.abs((cvNum(r[2])||0)-tot)>=0.01 ? ' (≠ dû)' : ''}</span>
+              : <button className={'btn btn-sm'+(auj>lim?'':' btn-p')} style={auj>lim?{borderColor:'var(--danger)',color:'var(--danger)'}:{}} onClick={()=>setSaisie({mois, montant:tot.toFixed(2), paye:auj, conf:'', note:''})}>{auj>lim ? '⚠ En retard — marquer payé' : 'Marquer payé'}</button>}</td>
+            <td>{dasLimite(mois).toLocaleDateString('fr-CA',{day:'numeric',month:'short',year:'numeric'})}</td></tr>
+            {ouvert===mois && <tr><td colSpan="10" style={{background:'var(--bg2, rgba(0,0,0,.03))'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6,flexWrap:'wrap',gap:6}}><span className="muted" style={{fontSize:12}}>Semaines : {[...new Set(ls.map(x=>x.pp+' (fin '+String(x.finSem||localDateStr(ccqFinSemaine(x.sem)))+')'))].join(' · ')}</span><button className="btn btn-sm" onClick={()=>exporter(mois)}>⬇ Exporter (CSV)</button></div>
+              <div style={{overflowX:'auto'}}><table style={{fontSize:12,width:'100%'}}><thead><tr><th>Employé</th><th>No client</th><th>Classe · secteur</th><th style={th}>H. simple</th><th style={th}>H. ½</th><th style={th}>H. double</th><th style={th}>Salaire</th><th style={th}>Vac. 13 %</th>{RCCQ_EMP.map(([k,l])=><th key={k} style={th}>Emp. {l}</th>)}{RCCQ_PAT.map(([k,l])=><th key={k} style={th}>Empl. {l}</th>)}<th style={th}>Total</th></tr></thead>
+                <tbody>{noms.map(nm=>{ const le = ls.filter(x=>x.nom===nm), d = dosDe(le[0]), dl = le[le.length-1]; return <tr key={nm}><td>{nm}</td><td>{d.noCcq || <span style={{color:'var(--warning)'}}>manquant</span>}</td><td>{[dl.classe||d.classe, dl.secteur||d.ccqSecteur].filter(Boolean).join(' · ')}</td>
+                  {['hSimple','hDemi','hDouble'].map(k=><td key={k} style={th}>{prepNb(s2(le,[[k]]))}</td>)}<td style={th}>{ccqArg(s2(le,[['sal']]))}</td><td style={th}>{ccqArg(s2(le,[['vacCcq']]))}</td>
+                  {RCCQ_EMP.concat(RCCQ_PAT).map(c=><td key={c[0]} style={th}>{ccqArg(s2(le,[c]))}</td>)}<td style={th}><b>{ccqArg(totCcq(le))}</b></td></tr>; })}</tbody></table></div>
+              <div className="muted" style={{fontSize:11.5,marginTop:6}}>Total CCQ = vacances 13 % + parts de l'employé + parts de l'employeur. À valider avec le premier rapport mensuel fait sur le site de la CCQ (la taxe de 9 % sur l'assurance et la cotisation ACQ pourraient se payer ailleurs).</div>
+            </td></tr>}
+          </React.Fragment>; })}
+          <tr style={{fontWeight:700}}><td>Total {an}</td><td></td><td style={th}>{prepNb(s2(lignes.filter(x=>x.moisCcq.startsWith(an)),[['hSimple'],['hDemi'],['hDouble']]))}</td><td style={th}>{ccqArg(s2(lignes.filter(x=>x.moisCcq.startsWith(an)),[['sal']]))}</td><td style={th}>{ccqArg(s2(lignes.filter(x=>x.moisCcq.startsWith(an)),[['vacCcq']]))}</td><td style={th}>{ccqArg(s2(lignes.filter(x=>x.moisCcq.startsWith(an)),RCCQ_EMP))}</td><td style={th}>{ccqArg(s2(lignes.filter(x=>x.moisCcq.startsWith(an)),RCCQ_PAT))}</td><td style={th}>{ccqArg(totCcq(lignes.filter(x=>x.moisCcq.startsWith(an))))}</td><td></td><td></td></tr>
+        </tbody></table></div>
+    </div>
+    {saisie && <Modal title={'Remise CCQ payée — '+ccqMoisTxt(saisie.mois)} onClose={()=>setSaisie(null)}>
+      <div style={{display:'grid',gap:8,fontSize:13}}>
+        <label>Montant remis $ <input value={saisie.montant} onChange={ev=>setSaisie(s=>({...s,montant:ev.target.value}))} style={{width:120,textAlign:'right'}}/></label>
+        <label>Payé le <input type="date" value={saisie.paye} onChange={ev=>setSaisie(s=>({...s,paye:ev.target.value}))}/></label>
+        <label>No de confirmation <input value={saisie.conf} onChange={ev=>setSaisie(s=>({...s,conf:ev.target.value}))} style={{width:200}}/></label>
+        <label>Note <input value={saisie.note} onChange={ev=>setSaisie(s=>({...s,note:ev.target.value}))} style={{width:'100%'}}/></label>
+        <div><button className="btn btn-sm btn-p" onClick={marquer} disabled={!!etat}>{etat || 'Enregistrer'}</button></div>
+      </div></Modal>}
+  </div>;
+}
 function EmployesSection({cfg, refreshKey}){
   const [o,setO]=useState(()=>{ try{ return localStorage.getItem('emp_onglet')||'heures'; }catch(e){ return 'heures'; } });
   const choisir = k => { setO(k); try{ localStorage.setItem('emp_onglet', k); }catch(e){} };
   return <div>
-    <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>{[['heures','Heures'],['prep','Préparation de la paie'],['das','Remises DAS'],['dossiers','Dossiers employés'],['ccq','Registre CCQ']].map(([k,l])=><button key={k} className={'btn btn-sm'+(o===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}</div>
-    {o==='heures' ? <HeuresView cfg={cfg} refreshKey={refreshKey}/> : o==='prep' ? <PrepPaieView cfg={cfg} refreshKey={refreshKey}/> : o==='das' ? <RemisesDasView cfg={cfg} refreshKey={refreshKey}/> : o==='ccq' ? <RegistreCcqView cfg={cfg} refreshKey={refreshKey}/> : <DossiersEmployesView cfg={cfg} refreshKey={refreshKey}/>}
+    <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>{[['heures','Heures'],['prep','Préparation de la paie'],['das','Remises DAS'],['ccq','Remises CCQ'],['dossiers','Dossiers employés']].map(([k,l])=><button key={k} className={'btn btn-sm'+(o===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}</div>
+    {o==='heures' ? <HeuresView cfg={cfg} refreshKey={refreshKey}/> : o==='prep' ? <PrepPaieView cfg={cfg} refreshKey={refreshKey}/> : o==='das' ? <RemisesDasView cfg={cfg} refreshKey={refreshKey}/> : o==='ccq' ? <RemisesCcqView cfg={cfg} refreshKey={refreshKey}/> : <DossiersEmployesView cfg={cfg} refreshKey={refreshKey}/>}
   </div>;
 }
 function HeuresView({cfg, refreshKey}){
