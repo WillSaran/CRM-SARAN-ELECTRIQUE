@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v653';
+const APP_VERSION = 'v654';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -10310,6 +10310,7 @@ const SOUS_SUGG = {
   'PANNEAUX':['QO (Square D)','Homeline (CHOM)','BR (Eaton)','Siemens','GE','Stab-Lok (Federal)','Autres'],
   'DISJONCTEURS':DISJ_MARQUES.flatMap(m=>DISJ_TYPES.map(t=>m+' · '+t)),   // v365 : Marque · Type (Standard, CAFI, PAF, GFI, PDF, Tandem / quad, Accessoires)
   'CONNEXIONS / MALT':['MALT','Raccordement'],
+  'SOLAIRE / STOCKAGE':['Onduleurs / contrôleurs','Batteries','Gestion de charge','Bornes bidirectionnelles','Micro-onduleurs','Panneaux solaires','Accessoires'],   // v654 : Sigenergy (SigInstallateur)
   'DÉCORA':['Prises','Interrupteurs','Gradateurs','Intelligent','Plaques','Minuteries et détecteurs','Fiches','Carillons'],
   'CHAUFFAGE':CHAUF_N1.flatMap(a=>CHAUF_N2[a].map(b=>a+' · '+b)),
   'À LA SORTIE':['Prises','Interrupteurs','Éclairage','Chauffage','240 V','Sécurité et ventilation','Télécommunication','Basse tension','Forfaits par étage','Autres']};
@@ -10442,11 +10443,11 @@ function descFil(s, couleurUtile){
 const PROD_ENTETE = ['Code','Description','Catégorie','Sous-catégorie','Unité','Photo','Code fabricant','Notes','Source','Mis à jour','Code PunchPro','Regroupé sous'];
 const OFFRE_ENTETE = ['Fournisseur','Code fournisseur','Code fabricant','Marque','Description','Catégorie','Unité','Mon prix','Prix de liste','Stock','Succursale','URL','Photo','Vendu par','Code CRM','Correspondance','Date',"Prix d'ami"];   // v201 : colonne R = ton vrai prix payé (prix d'ami), jamais écrasée par les imports
 const CAT_TOUJOURS = ['FIL','CONDUIT','CONNECTEURS','BOÎTES','QUINCAILLERIE'];   // v358 : boutons toujours visibles dans le catalogue, même à 0
-const CAT_ORDRE = ['FIL','CONDUIT','CONNECTEURS','BOÎTES','DÉCORA','ENTRÉE ÉLECTRIQUE','PANNEAUX','DISJONCTEURS','CHAUFFAGE','ÉCLAIRAGE','BORNES','CONNEXIONS / MALT','CONTRÔLE','DÉTECTION','QUINCAILLERIE','DIVERS','Stock personnalisé','SERVICES','À CLASSER','ADMINISTRATIF'];
-const FOURN_ORDRE = ['Dubo','Lumen','Gagnon','LEDCO'];
+const CAT_ORDRE = ['FIL','CONDUIT','CONNECTEURS','BOÎTES','DÉCORA','ENTRÉE ÉLECTRIQUE','PANNEAUX','DISJONCTEURS','CHAUFFAGE','ÉCLAIRAGE','BORNES','SOLAIRE / STOCKAGE','CONNEXIONS / MALT','CONTRÔLE','DÉTECTION','QUINCAILLERIE','DIVERS','Stock personnalisé','SERVICES','À CLASSER','ADMINISTRATIF'];
+const FOURN_ORDRE = ['Dubo','Lumen','Gagnon','LEDCO','SigInstallateur'];
 function catSimple(c){
   const u = String(c||'').trim().toUpperCase(); if(!u) return 'À CLASSER';
-  const m = [[/^D[ÉE]CORA/,'DÉCORA'],[/^BORNE/,'BORNES'],[/^CONTR[ÔO]LE/,'CONTRÔLE'],[/^D[ÉE]TECTION/,'DÉTECTION'],[/^SERVICE/,'SERVICES'],[/^ADMIN/,'ADMINISTRATIF'],
+  const m = [[/^D[ÉE]CORA/,'DÉCORA'],[/^BORNE/,'BORNES'],[/^SOLAIRE/,'SOLAIRE / STOCKAGE'],[/^CONTR[ÔO]LE/,'CONTRÔLE'],[/^D[ÉE]TECTION/,'DÉTECTION'],[/^SERVICE/,'SERVICES'],[/^ADMIN/,'ADMINISTRATIF'],
     [/^BO[ÎI]TE/,'BOÎTES'],[/^CONNEXION|^RACCORD|^MALT/,'CONNEXIONS / MALT'],[/^CONNECTEUR/,'CONNECTEURS'],[/^DISJONCTEUR/,'DISJONCTEURS'],[/^ENTR[ÉE]E/,'ENTRÉE ÉLECTRIQUE'],[/^[ÉE]CLAIRAGE/,'ÉCLAIRAGE'],[/^PANNEAU/,'PANNEAUX'],[/^CONDUIT|^TUYAU/,'CONDUIT'],[/^FIL|^C[ÂA]BLE/,'FIL'],[/^CHAUFFAGE/,'CHAUFFAGE'],[/^QUINCAILLERIE/,'QUINCAILLERIE'],[/^[ÀA] CLASSER/,'À CLASSER']];
   for(const [r,v] of m) if(r.test(u)) return v;
   return u;
@@ -16158,10 +16159,78 @@ function InventaireSection({initial, cfg, toast, data}){
   const choisir = k => { setSous(k); try{ localStorage.setItem('inv_sous', k); }catch(e){} };
   return <div>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,paddingBottom:10,borderBottom:'1px solid var(--border)'}}>
-      {[['catalogue','Catalogue'],['sortie','À la sortie'],['inventaire','Inventaire'],['camions','Camions']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}
+      {[['catalogue','Catalogue'],['sortie','À la sortie'],['inventaire','Inventaire'],['camions','Camions'],['specs','Spec sheets']].map(([k,l])=><button key={k} className={'btn'+(sous===k?' btn-p':'')} onClick={()=>choisir(k)}
         style={k==='sortie' && sous!==k ? {background:SORTIE_TEINTE,borderColor:SORTIE_BORD,color:SORTIE_TEXTE} : null}>{l}</button>)}
     </div>
-    {sous==='catalogue' ? <ProduitsView cfg={cfg} toast={toast}/> : sous==='sortie' ? <SortiesView cfg={cfg} toast={toast}/> : sous==='camions' ? <CamionsView cfg={cfg} toast={toast}/> : <StockView data={data}/>}
+    {sous==='catalogue' ? <ProduitsView cfg={cfg} toast={toast}/> : sous==='sortie' ? <SortiesView cfg={cfg} toast={toast}/> : sous==='camions' ? <CamionsView cfg={cfg} toast={toast}/> : sous==='specs' ? <SpecSheetsView cfg={cfg} toast={toast}/> : <StockView data={data}/>}
+  </div>;
+}
+// v654 : Inventaire › Spec sheets — fiches par marque (PDF, specs, infos à partager aux clients).
+// Données dans le Sheet « La mémoire — Jobs », onglet « Spec sheets » : Marque | Section | Titre | Contenu | Lien | Pour | Ordre
+const SPEC_ONGLET = 'Spec sheets', SPEC_ENTETE = ['Marque','Section','Titre','Contenu','Lien','Pour','Ordre'];
+function SpecSheetsView({cfg, toast}){
+  const id = cfg.memoireJobsSpreadsheetId;
+  const [rows,setRows]=useState(null); const [absent,setAbsent]=useState(false);
+  const [marque,setMarque]=useState(()=>{ try{ return localStorage.getItem('spec_marque')||''; }catch(e){ return ''; } });
+  const [filtre,setFiltre]=useState('tout'); const [q,setQ]=useState('');
+  const [aj,setAj]=useState(null); const [busy,setBusy]=useState(false);
+  const lire = useCallback(async force=>{ if(!id){ setRows([]); return; }
+    try{ const r = await lireCache(id, qSheet(SPEC_ONGLET)+'!A1:G', force); setAbsent(false);
+      setRows((r.result.values||[]).slice(1).map((x,i)=>({row:i+2, marque:String(x[0]||'').trim(), section:String(x[1]||'').trim()||'Général', titre:String(x[2]||'').trim(),
+        contenu:String(x[3]||''), lien:String(x[4]||'').trim(), pour:/client/i.test(x[5]||'') ? 'client' : 'interne', ordre:+x[6]||0})).filter(x=>x.marque && (x.titre||x.contenu)));
+    }catch(e){ setRows([]); setAbsent(true); } },[id]);
+  useEffect(()=>{ lire(); },[lire]);
+  const marques = rows ? [...new Set(rows.map(r=>r.marque))].sort((a,b)=>a.localeCompare(b)) : [];
+  const m = marques.includes(marque) ? marque : (marques[0]||'');
+  const choisir = k => { setMarque(k); try{ localStorage.setItem('spec_marque', k); }catch(e){} };
+  const qq = q.trim().toLowerCase();
+  const liste = (rows||[]).filter(r=>r.marque===m && (filtre==='tout' || r.pour===filtre) && (!qq || (r.titre+' '+r.contenu+' '+r.section).toLowerCase().includes(qq)))
+    .sort((a,b)=>a.ordre-b.ordre || a.row-b.row);
+  const sections = [...new Set(liste.map(r=>r.section))];
+  const copier = async r => { const t = (r.titre ? r.titre+'\n' : '')+r.contenu+(r.lien ? '\n'+r.lien : '');
+    try{ await navigator.clipboard.writeText(t); toast && toast('Copié — prêt à coller au client','ok'); }catch(e){ toast && toast('Copie impossible','err'); } };
+  const ajouter = async () => { const a = aj; if(!a.marque.trim() || !(a.titre.trim()||a.contenu.trim())) return; setBusy(true);
+    try{ if(absent) await ensureSheetsExist(id, [{name:SPEC_ONGLET, headers:SPEC_ENTETE}]);
+      await sheetsAppendRow(id, qSheet(SPEC_ONGLET), [a.marque.trim(), a.section.trim()||'Général', a.titre.trim(), a.contenu, a.lien.trim(), a.client?'Client':'Interne', String(((rows||[]).reduce((x,r)=>Math.max(x,r.ordre),0))+1)]);
+      choisir(a.marque.trim()); setAj(null); await lire(true); toast && toast('Fiche ajoutée','ok'); }
+    catch(e){ toast ? toast('Impossible : '+apiErrMsg(e),'err') : alert(apiErrMsg(e)); } setBusy(false); };
+  const lignes = t => String(t||'').split('\n').map((l,i)=>{ const b = /^\s*[-•·]\s*/.test(l);
+    return l.trim()==='' ? <div key={i} style={{height:6}}/> : <div key={i} style={b?{paddingLeft:14,textIndent:-10}:null}>{b ? '• '+l.replace(/^\s*[-•·]\s*/,'') : l}</div>; });
+  if(rows===null) return <div className="muted">Chargement…</div>;
+  return <div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:12}}>
+      {marques.map(k=><button key={k} className={'btn'+(m===k?' btn-p':'')} onClick={()=>choisir(k)}>{k}</button>)}
+      <span style={{flex:1}}/>
+      <select value={filtre} onChange={e=>setFiltre(e.target.value)} style={{padding:'4px 6px'}}>
+        <option value="tout">Tout</option><option value="client">À partager au client</option><option value="interne">Interne seulement</option></select>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher…" style={{width:150,padding:'4px 8px'}}/>
+      <button className="btn" onClick={()=>setAj({marque:m, section:'', titre:'', contenu:'', lien:'', client:true})}>+ Ajouter</button>
+    </div>
+    {aj && <div className="card" style={{marginBottom:12,display:'grid',gap:6}}>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        <input value={aj.marque} onChange={e=>setAj({...aj,marque:e.target.value})} placeholder="Marque (ex. Sigenergy)" style={{flex:'1 1 140px'}}/>
+        <input value={aj.section} onChange={e=>setAj({...aj,section:e.target.value})} placeholder="Section (ex. Batteries)" style={{flex:'1 1 140px'}}/>
+        <input value={aj.titre} onChange={e=>setAj({...aj,titre:e.target.value})} placeholder="Titre" style={{flex:'2 1 200px'}}/></div>
+      <textarea value={aj.contenu} onChange={e=>setAj({...aj,contenu:e.target.value})} rows={5} placeholder="Contenu (une ligne qui commence par « - » devient une puce)"/>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+        <input value={aj.lien} onChange={e=>setAj({...aj,lien:e.target.value})} placeholder="Lien vers le PDF (Drive, site…)" style={{flex:'1 1 240px'}}/>
+        <label style={{display:'flex',gap:4,alignItems:'center'}}><input type="checkbox" checked={aj.client} onChange={e=>setAj({...aj,client:e.target.checked})}/> À partager au client</label>
+        <button className="btn btn-p" disabled={busy} onClick={ajouter}>{busy?'…':'Ajouter'}</button><button className="btn" onClick={()=>setAj(null)}>Annuler</button></div>
+    </div>}
+    {!marques.length && <div className="card muted">Aucune spec sheet pour l'instant. Clique « + Ajouter » pour en créer une.</div>}
+    {sections.map(sec=><div key={sec} style={{marginBottom:16}}>
+      <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:.5,opacity:.7,margin:'4px 0 8px'}}>{sec}</div>
+      <div style={{display:'grid',gap:10,gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))'}}>
+        {liste.filter(r=>r.section===sec).map(r=><div key={r.row} className="card" style={{margin:0,display:'flex',flexDirection:'column',gap:6}}>
+          <div style={{display:'flex',gap:6,alignItems:'flex-start'}}>
+            <b style={{flex:1}}>{r.titre}</b>
+            <span className="badge" style={r.pour==='client'?{background:'#1f8a4c',color:'#fff'}:{background:'var(--border)'}}>{r.pour==='client'?'Client':'Interne'}</span></div>
+          {r.contenu && <div style={{fontSize:13,lineHeight:1.45}}>{lignes(r.contenu)}</div>}
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:'auto'}}>
+            {r.lien && <a className="btn" href={r.lien} target="_blank" rel="noopener">📄 Ouvrir</a>}
+            {r.pour==='client' && <button className="btn" onClick={()=>copier(r)}>📋 Copier</button>}</div>
+        </div>)}
+      </div></div>)}
   </div>;
 }
 function StockView({data}){
