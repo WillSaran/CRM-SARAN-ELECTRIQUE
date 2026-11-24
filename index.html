@@ -208,7 +208,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v675';
+const APP_VERSION = 'v676';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -13124,6 +13124,26 @@ function CalculRapide({C, d, setD, toast, onRempli, avant, apres}){
   const dqH = (C.prixDe('DEPL')||0) + (C.prixDe('QUIN')||0);
   const borneH = lignesPx.filter(l=>DOC_BORNE_RE.test(String(l.code||''))).reduce((a,l)=>a+(pxL(l)||0)*(cvNum(l.qte)||0),0);   // v394 : pas de buffer sur la borne
   const baseH = matH+moH+dqH, bufPct = String(buffer).trim()!=='' ? (cvNum(buffer)||0) : bufferAuto(baseH-borneH, C.bufferPol), bufH = (baseH-borneH)*(bufPct/100), totalH = arr5(baseH+bufH);
+  // v676 : « + Ajouter à la soumission » — met plusieurs assemblages ensemble dans la même soumission (chacun garde son titre dans les travaux ;
+  //  matériel additionné, heures additionnées, prix additionné sans compter le déplacement une 2e fois)
+  const ajouter = () => {
+    const enHeures = mode==='heures';
+    const ajout = cvNum(monPrix) ? cvNum(monPrix) : enHeures ? arr5((matH+moH)*(1+bufPct/100)) : (cvNum(r.forfait)||0);
+    const bloc = (titre, txt) => { const t = String(txt||'').trim(); return !t ? '' : /^■ /.test(t) ? t : '■ '+(titre||'Travaux')+'\n'+t; };
+    const nouv = enHeures ? lignesPx : r.lignes.filter(l=>!l.outil);
+    const resume = '— Ajouté le '+cvFmtDay(cvDay(new Date().toISOString()))+' : '+r.titre+' — '+(enHeures ? 'matériel '+cvMoney(matH)+' + main-d\'œuvre '+cvMoney(moH)+' ('+H+' h × '+gars+' gars), buffer '+bufPct+' %, ' : '')+cvMoney(ajout)+' de plus (déplacement déjà compté) —';
+    setD(o=>{ const L = (o.lignes||[]).filter(l=>cvNum(l.qte)).map(l=>({...l}));
+      nouv.forEach(l=>{ const ex = L.find(x=>x.code && x.code===l.code && (x.unite||'')===(l.unite||'')); if(ex) ex.qte = String((cvNum(ex.qte)||0)+(cvNum(l.qte)||0)); else L.push({...l}); });
+      const j0 = o.jours[0]||{}, hAj = enHeures ? H : (r.heures||0);
+      const rem = [String(o.remarques||'').trim(), r.remarques && !String(o.remarques||'').includes(r.remarques) ? r.remarques : ''].filter(Boolean).join('\n');
+      return {...o, titre: o.titre ? o.titre+' + '+r.titre : r.titre, travaux:[bloc(o.titre, o.travaux), bloc(r.titre, r.travaux)].filter(Boolean).join('\n\n'), remarques:rem,
+        forfait: String((cvNum(o.forfait)||0)+ajout), lignes:L, depl:true, quin:true, visite:[String(o.visite||'').trim(), resume].filter(Boolean).join('\n\n'),
+        jours:[{...j0, date:j0.date||cvDay(new Date().toISOString()), sa01:String((cvNum(j0.sa01)||0)+hAj), sa02: enHeures && gars===2 ? String((cvNum(j0.sa02)||0)+H) : (j0.sa02||'')}, ...o.jours.slice(1)]}; });
+    toast && toast('Ajouté à la soumission : '+r.titre);
+    setType('');
+    onRempli && onRempli();
+  };
+  const dejaRempli = d.lignes.some(l=>cvNum(l.qte)) || String(d.travaux||'').trim()!=='';
   const remplir = () => {
     if(d.lignes.some(l=>cvNum(l.qte)) && !confirm('Remplacer le matériel, les heures et le prix par le calcul ?')) return;
     const enHeures = mode==='heures';
@@ -13168,7 +13188,8 @@ function CalculRapide({C, d, setD, toast, onRempli, avant, apres}){
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
           <span className="muted" style={{fontSize:12}}>Le buffer ne touche pas au matériel ni aux heures ; il est noté dans tes notes privées (pas imprimé).</span>
-          <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={remplir}>Remplir la soumission</button>
+          {dejaRempli && <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={ajouter} title="Garde ce qui est déjà dans la soumission et ajoute cet assemblage (matériel, heures et prix additionnés)">+ Ajouter à la soumission</button>}
+          <button className="btn btn-sm btn-p" style={dejaRempli ? {} : {marginLeft:'auto'}} onClick={remplir}>{dejaRempli ? 'Remplacer' : 'Remplir la soumission'}</button>
         </div>
         {sansPrix.length>0 && <span style={{fontSize:12.5,color:'var(--warning)'}}>Sans prix dans le catalogue : {sansPrix.map(l=>l.code).join(', ')} — compté 0 $.</span>}
       </div>}
@@ -13176,7 +13197,8 @@ function CalculRapide({C, d, setD, toast, onRempli, avant, apres}){
         {r.manque.length ? <span style={{fontSize:12.5,color:'var(--warning)'}}>Il manque {r.manque.length} tarif{r.manque.length>1?'s':''} : ouvre ⚙ Tarifs.</span>
           : <span style={{fontSize:13.5}}>Installation <b>{cvMoney(r.installation)}</b>{r.borne ? <> + borne <b>{cvMoney(r.borne)}</b></> : null} = <b style={{fontSize:15}}>{cvMoney(r.forfait)}</b> <span className="muted">avant taxes · {r.heures} h · {r.lignes.length} articles</span></span>}
         <button className="btn btn-sm" onClick={()=>setTarifs(!tarifs)}>⚙ Tarifs</button>
-        <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={remplir}>Remplir la soumission</button>
+        {dejaRempli && <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={ajouter} title="Garde ce qui est déjà dans la soumission et ajoute cet assemblage (matériel, heures et prix additionnés)">+ Ajouter à la soumission</button>}
+          <button className="btn btn-sm btn-p" style={dejaRempli ? {} : {marginLeft:'auto'}} onClick={remplir}>{dejaRempli ? 'Remplacer' : 'Remplir la soumission'}</button>
       </div>}
       {mode==='tarifs' && tarifs && <div style={{display:'grid',gap:4,marginTop:8,fontSize:12.5}}>
         {def.tarifs.map(([k,l])=><label key={k} style={{display:'flex',gap:6,alignItems:'center',justifyContent:'space-between'}}><span>{l}</span>
