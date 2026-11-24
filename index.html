@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v661';
+const APP_VERSION = 'v662';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5482,6 +5482,25 @@ function talonsGroupeHtml(rangs, P){
 function talonsImprimer(blocs, titre){ const w = window.open('', '_blank'); if(!w){ alert('Autorise les fenêtres surgissantes pour imprimer.'); return; }
   w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+talonEsc(titre)+'</title><style>body{margin:0}.pg{page-break-after:always;margin-bottom:24px}.pg:last-child{page-break-after:auto}@page{size:letter;margin:12mm}</style></head><body>'+blocs.map(b=>'<div class="pg">'+b+'</div>').join('')+'</body></html>');
   w.document.close(); w.focus(); setTimeout(()=>w.print(), 300); }
+// v662 : rapport de paie (registre) — semaine affichée (brouillon ou approuvée), mois ou année (paies approuvées du journal)
+function rapportPaie(ls, titre, sous, semaine){ const E = talonEsc;
+  const ccqE = x => (x.ccqAss||0)+(x.ccqTaxe||0)+(x.ccqRet||0)+(x.ccqPrel||0), ret = x => (x.fed||0)+(x.qc||0)+(x.rrq||0)+(x.ae||0)+(x.rqap||0)+ccqE(x)+(x.synd||0)+(x.autresRet||0);
+  const pat = x => (x.eRrq||0)+(x.eAe||0)+(x.eRqap||0)+(x.eFss||0)+(x.eCnt||0)+(x.eCnesst||0)+(x.eCcq||0);
+  let h = rapEntete(titre, sous+' · '+new Set(ls.map(x=>x.nom)).size+' employé(s)');
+  const T = k => rapSum(ls, k), sf = f => Math.round(ls.reduce((t,x)=>t+f(x),0)*100)/100;
+  h += '<div style="display:flex;gap:12px"><div style="flex:1"><h2>Sommaire</h2><table><tbody>'
+    + [['Heures payées',T('h')],['Salaires',T('sal')],['Vacances CCQ 13 %',T('vacCcq')],['Brut imposable',T('brutImp')],['Retenues des employés',sf(ret)],['Remboursements',T('remb')],['Net à verser',T('net')],['Contributions de l\'employeur',sf(pat)],['Coût global',sf(x=>(x.brutImp||0)+(x.remb||0)+pat(x))]]
+      .map(([l,n],i)=>'<tr'+(i===6||i===8?' class="tt"':'')+'><td>'+E(l)+'</td><td class="n">'+rapN(n)+'</td></tr>').join('')+'</tbody></table></div>'
+    + '<div style="flex:1"><h2>Remises générées</h2><table><tbody>'
+    + '<tr><td>DAS — ARC (impôt fédéral + AE ×2)</td><td class="n">'+rapN(DAS_ARC.reduce((t,[k])=>t+T(k),0))+'</td></tr>'
+    + '<tr><td>DAS — Revenu Québec (impôt, RRQ ×2, RQAP ×2, FSS, CNESST)</td><td class="n">'+rapN(DAS_RQ.reduce((t,[k])=>t+T(k),0))+'</td></tr>'
+    + '<tr><td>CCQ (vacances 13 % + parts employé et employeur)</td><td class="n">'+rapN(T('vacCcq')+RCCQ_EMP.concat(RCCQ_PAT).reduce((t,[k])=>t+T(k),0))+'</td></tr>'
+    + '<tr><td>CNT (annuelle)</td><td class="n">'+rapN(T('eCnt'))+'</td></tr></tbody></table><div class="muted">Remises dues le 15 du mois suivant (DAS : mois de la date de paiement ; CCQ : mois de la fin de semaine).</div></div>';
+  if(semaine) h += '<div style="flex:1"><h2>À verser par Desjardins</h2><table><tbody>'+[...new Set(ls.map(x=>x.nom))].sort((a,b)=>a.localeCompare(b)).map(nm=>'<tr><td>'+E(nm)+'</td><td class="n">'+rapN(rapSum(ls.filter(x=>x.nom===nm),'net'))+'</td></tr>').join('')+'<tr class="tt"><td>Total des virements</td><td class="n">'+rapN(T('net'))+'</td></tr></tbody></table></div>';
+  h += '</div><h2>Registre de paie — détail par employé et par paie</h2>'+rapTableau(ls, [['pp','PP'],['paye','Payable le'],['h','Heures',1],['hDemi','H. ½',1],['hDouble','H. double',1],['sal','Salaire',1],['vacCcq','Vac. CCQ',1],['brutImp','Brut imp.',1],
+    ['fed','Impôt féd.',1],['qc','Impôt QC',1],['rrq','RRQ',1],['ae','AE',1],['rqap','RQAP',1],[ccqE,'CCQ',1],['synd','Syndicat',1],['autresRet','Autres ret.',1],[ret,'Total ret.',1],['remb','Remb.',1],['net','Net',1],[pat,'Contrib. emp.r',1],[x=>(x.brutImp||0)+(x.remb||0)+pat(x),'Coût global',1]], 'nom', true);
+  h += '<div class="muted">Net = brut imposable + remboursements − retenues − vacances CCQ (remises à la CCQ). CCQ = assurance + taxe + retraite + prélèvement (part de l\'employé). Contrib. emp.r = RRQ, AE, RQAP, FSS, CNT, CNESST et CCQ de l\'employeur.</div>';
+  rapportImprimer(h, titre); }
 function PrepPaieView({cfg, refreshKey}){
   const conf = useSemainesConfirmees(cfg, refreshKey);
   const [L,setL]=useState(null), [err,setErr]=useState('');
@@ -5603,6 +5622,11 @@ function PrepPaieView({cfg, refreshKey}){
         <span style={{display:'flex',gap:6,flexWrap:'wrap'}}>
           <label style={{display:'flex',gap:4,alignItems:'center',fontSize:12.5}}>Payable le {fige ? <b>{per.payeTxt}</b> : <input type="date" value={per.paye} onChange={ev=>setMod(m=>{ const n = {...m}; if(ev.target.value && ev.target.value!==per.defaut) n._paye = ev.target.value; else delete n._paye; return garder(n); })} style={{padding:'2px 4px'}}/>}</label>
           <button className="btn btn-sm" onClick={()=>setTalon('*')} disabled={!rangs.length}>🧾 Talons de la semaine</button>
+          <span style={{display:'inline-flex',gap:4,alignItems:'center'}}><span className="muted" style={{fontSize:12}}>📄 Rapport de paie :</span>
+            <button className="btn btn-sm" disabled={!rangs.length} onClick={()=>rapportPaie(rangs.map(r=>({...r.calc.jr, nom:r.nom, pp:per.pp, paye:per.paye})), 'Rapport de paie — semaine du '+per.du+' ('+per.pp+')', 'Payable le '+per.payeTxt+' · '+(fige ? 'paie approuvée le '+dernier : 'brouillon, pas encore approuvée'), true)}>semaine</button>
+            {(()=>{ const jv = journalValides(hist, journal), mo = per.paye.slice(0,7), an = per.paye.slice(0,4), lm = jv.filter(x=>String(x.paye).startsWith(mo)), la = jv.filter(x=>String(x.paye).startsWith(an));
+              return <><button className="btn btn-sm" disabled={!lm.length} title={lm.length ? '' : 'Aucune paie approuvée ce mois-ci'} onClick={()=>rapportPaie(lm, 'Rapport de paie — '+ccqMoisTxt(mo), 'Paies approuvées payables en '+ccqMoisTxt(mo)+' · '+new Set(lm.map(x=>x.sem)).size+' paie(s)')}>mois</button>
+                <button className="btn btn-sm" disabled={!la.length} title={la.length ? '' : 'Aucune paie approuvée cette année'} onClick={()=>rapportPaie(la, 'Rapport de paie — année '+an, 'Paies approuvées payables en '+an+' · '+new Set(la.map(x=>x.sem)).size+' paie(s)')}>année</button></>; })()}</span>
           <button className="btn btn-sm" onClick={imprimer} disabled={!rangs.length}>Imprimer / PDF</button>
           {fige ? <button className="btn btn-sm" onClick={rouvrir} disabled={etat.endsWith('…')}>Rouvrir pour corriger</button>
             : <>{Object.keys(mod).length>0 && <button className="btn btn-sm" onClick={()=>{ if(confirm('Effacer tes corrections et revenir aux heures de PunchPro ?')){ setMod(garder({})); } }}>Effacer mes corrections</button>}
