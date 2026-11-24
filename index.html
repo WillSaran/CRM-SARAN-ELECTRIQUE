@@ -208,7 +208,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v672';
+const APP_VERSION = 'v673';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7110,6 +7110,14 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   const moisRef = useRef(null), agBarreRef = useRef(null), ajoutHautRef = useRef(null), ajoutEnCoursRef = useRef(false), centrerRef = useRef(true);
   const [moisVu,setMoisVu]=useState(null); const ancreVueRef = useRef('');
   const cleMois = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+  const pucesEquipes = () => <>
+      {groupesPresents.map(k=>{ const on = !cachees.includes(k), n = events.filter(e=>agendaGroupe(e)===k || (CREW_COLORS[k] && nommeDans(e, k))).length;
+        return <button key={k} className="btn btn-sm" onClick={()=>basculerGroupe(k)} title={on?'Cacher':'Montrer'}
+          style={{display:'inline-flex',alignItems:'center',gap:5,opacity:on?1:.45,borderColor:on?agendaGroupeCouleur(k):undefined}}>
+          <span style={{width:10,height:10,borderRadius:'50%',background:on && k!=='autre' && k!=='attente'?agendaGroupeCouleur(k):'transparent',border:'2px '+(k==='autre'||k==='attente'?'dashed ':'solid ')+agendaGroupeCouleur(k),display:'inline-block',boxSizing:'border-box'}}></span>
+          {agendaGroupeNom(k)} <span className="muted">{n}</span></button>; })}
+      {cachees.length>0 && <span style={{color:'var(--accent)',fontSize:12,cursor:'pointer'}} onClick={()=>{ setCachees([]); try{ localStorage.setItem('agenda_groupes_caches','[]'); }catch(e){} }}>Tout montrer</span>}
+  </>;   // v673 : noms d'équipe aussi dans la barre de chaque mois
   const hautEntetes = () => { const tb = document.querySelector('.topbar'), b = agBarreRef.current; return (tb ? tb.offsetHeight : 0) + (b ? b.offsetHeight : 0); };
   const hautPage = el => el.getBoundingClientRect().top + window.scrollY;
   function allerMois(m, doux){
@@ -7468,8 +7476,14 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
           const selS = localDateStr(dimDe(anchor)), aujL = localDateStr(dimDe(auj));
           return <div style={{display:'flex',gap:3,width:'100%'}}>{lst.map((d,i)=>{ const ds = localDateStr(d);
             return pastille(ds, selS===ds, ds===aujL, ()=>setAnchor(new Date(d)), 'Semaine du '+d.toLocaleDateString('fr-CA',{day:'numeric',month:'long'}), 'S'+(i+1), d.getDate()+(d.getMonth()!==anchor.getMonth() ? '/'+(d.getMonth()+1) : '')); })}</div>; }
-        return <div style={{display:'flex',gap:3,width:'100%'}}>{[-1,0,1].map(k=>{ const d = new Date(anchor.getFullYear(), anchor.getMonth()+k, 1, 12);
-          return pastille('m'+k, k===0, d.getFullYear()===auj.getFullYear() && d.getMonth()===auj.getMonth(), ()=>setAnchor(d), '', d.toLocaleDateString('fr-CA',{month:'long'}).replace(/^./,c=>c.toUpperCase()), d.getFullYear()!==auj.getFullYear() ? d.getFullYear() : ''); })}</div>; })()}
+        // v673 : vue Mois → toutes les dates du mois affiché (3 lignes); clic = on défile jusqu'à ce jour
+        const mv = moisVu || anchor, nb = new Date(mv.getFullYear(), mv.getMonth()+1, 0).getDate(), parLigne = Math.ceil(nb/3);
+        const allerJour = ds => { const c = moisRef.current && moisRef.current.querySelector('[data-jour="'+ds+'"]'); if(!c) return;
+          c.scrollIntoView({block:'center', behavior:'smooth'}); try{ c.animate([{boxShadow:'0 0 0 4px var(--accent)'},{boxShadow:'0 0 0 0 transparent'}],{duration:1400}); }catch(e){} };
+        return <div style={{display:'grid',gridTemplateColumns:'repeat('+parLigne+', minmax(0,1fr))',gap:2,width:'100%'}}>{Array.from({length:nb},(_,i)=>{ const d = new Date(mv.getFullYear(), mv.getMonth(), i+1, 12), ds = localDateStr(d), fs = d.getDay()===0 || d.getDay()===6;
+          return <button key={ds} onClick={()=>allerJour(ds)} title={d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})}
+            style={{minWidth:0,padding:'2px 0',fontSize:11,fontWeight:700,borderRadius:5,cursor:'pointer',fontVariantNumeric:'tabular-nums',lineHeight:1.2,
+              border:'1px solid '+(ds===aujS?'var(--accent)':'var(--border2)'),background:ds===aujS?'var(--accent)':'var(--bg3)',color:ds===aujS?'#fff':'var(--text)',opacity:fs?.5:1}}>{i+1}</button>; })}</div>; })()}
       </div>
       <div style={{display:'flex',gap:4,marginLeft:'auto',flexWrap:'wrap'}}>
         {ongletAg==='agenda' && viewMode!=='mois' && <button className={'btn btn-sm'+(parEquipe?' btn-p':'')} onClick={basculerParEquipe} title="Diviser chaque jour en colonnes par équipe">Par équipe</button>}
@@ -7479,7 +7493,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
     </div>}
     {ongletAg==='commandes' && (cd.loading ? <div className="card muted" style={{marginBottom:16,fontSize:13}}>Lecture des jobs et des commandes…</div>
       : <CvSemaine clients={cdClients} appels={cd.appels||{parNumero:{},parFacture:{},liste:[]}} ancre={anchor} commandes={commandes} onCommande={basculerCommande} manuels={manuelsAg} isDesktop={isDesktop}/>)}
-    {ongletAg==='agenda' && groupesPresents.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+    {ongletAg==='agenda' && viewMode!=='mois' && groupesPresents.length>0 && <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
       {groupesPresents.map(k=>{ const on = !cachees.includes(k), n = events.filter(e=>agendaGroupe(e)===k || (CREW_COLORS[k] && nommeDans(e, k))).length;
         return <button key={k} className="btn btn-sm" onClick={()=>basculerGroupe(k)} title={on?'Cacher':'Montrer'}
           style={{display:'inline-flex',alignItems:'center',gap:5,opacity:on?1:.45,borderColor:on?agendaGroupeCouleur(k):undefined}}>
@@ -7513,7 +7527,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         return <div key={cleMois(m)} data-mois={cleMois(m)}>
       {/* v671 : barre de séparation du mois (reste collée en haut tant qu'on est dans ce mois) + jours de la semaine */}
       <div className="mois-barre" style={{position:'sticky',zIndex:5,background:'var(--bg2)',margin:'0 -8px 6px',padding:'8px 8px 4px',borderTop:'3px solid var(--accent)',borderBottom:'3px solid var(--accent)'}}>
-        <div style={{fontWeight:800,fontSize:isDesktop?16:13,textTransform:'uppercase',letterSpacing:.5,marginBottom:4}}>{m.toLocaleDateString('fr-CA',{month:'long',year:'numeric'})}</div>
+        <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:5}}>
+          <div style={{fontWeight:800,fontSize:isDesktop?16:13,textTransform:'uppercase',letterSpacing:.5,marginRight:10}}>{m.toLocaleDateString('fr-CA',{month:'long',year:'numeric'})}</div>
+          {groupesPresents.length>0 && pucesEquipes()}</div>
         <div style={{display:'grid',gridTemplateColumns:[0,1,2,3,4,5,6].map(i=>(i===0||i===6) && repli ? '44px' : 'minmax(0,1fr)').join(' '),gap:isDesktop?8:4}}>
           {['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'].map((j,i)=><div key={j} style={{cursor:(i===0||i===6)?'pointer':undefined}} className="muted" onClick={(i===0||i===6) ? basculerRepli : undefined} title={(i===0||i===6) ? (repli?'Afficher':'Replier')+' la fin de semaine' : undefined}><div style={{textAlign:'center',fontSize:isDesktop?13:11,fontWeight:700}}>{(i===0||i===6) && repli ? j.charAt(0) : j}</div></div>)}
         </div></div>
@@ -7524,7 +7540,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
           const rang = e => { const r = AGENDA_GROUPES_ORDRE.indexOf(agendaGroupe(e)); return r<0 ? 99 : r; };
           const dayEvents = [...allDayForDay(dStr), ...eventsForDay(dStr)].sort((a,b)=>rang(a)-rang(b) || (b.allDay?1:0)-(a.allDay?1:0) || String(a.start).localeCompare(String(b.start)));
           const replie = repli && estFS(d);
-          return <div key={dStr} onDragOver={sur} onDrop={ev=>dropMois(ev, d)} onClick={replie ? basculerRepli : undefined}
+          return <div key={dStr} data-jour={inMonth ? dStr : undefined} onDragOver={sur} onDrop={ev=>dropMois(ev, d)} onClick={replie ? basculerRepli : undefined}
             style={{gridColumn:(i%7)+1, gridRow:Math.floor(i/7)+1, minWidth:0, minHeight:isDesktop?170:90,border:dStr===todayStr?'2px solid var(--accent)':'1px solid var(--border)',boxShadow:dStr===todayStr?'0 0 0 3px rgba(var(--accent-rgb),.25)':undefined,borderRadius:6,padding:replie?3:(isDesktop?8:4),opacity:inMonth?1:.45,background:dStr===todayStr?'rgba(var(--accent-rgb),.12)':'transparent',cursor:replie?'pointer':undefined}}>
             <div onClick={ev=>{ if(replie) return; ev.stopPropagation(); setViewMode('jour'); setAnchor(new Date(d)); }} title={replie?'':'Voir la journée'} style={{fontSize:isDesktop?15:11,fontWeight:800,marginBottom:5,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,...(dStr===todayStr?{background:'var(--accent)',color:'#fff',borderRadius:999,padding:'1px 9px'}:{})}}>{d.getDate()}{dStr===todayStr && !replie && isDesktop && <span style={{fontSize:11,fontWeight:700}}>Aujourd'hui</span>}</div>
             {replie ? (dayEvents.length>0 && <div title={dayEvents.map(e=>e.title).join('\n')} style={{fontSize:11,fontWeight:800,textAlign:'center',background:'#8b1a1a',color:'#fff',borderRadius:4,padding:'3px 0'}}>{dayEvents.length}</div>)
