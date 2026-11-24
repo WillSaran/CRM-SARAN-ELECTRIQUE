@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v667';
+const APP_VERSION = 'v668';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5538,6 +5538,52 @@ function talonsImprimer(blocs, titre){ const w = window.open('', '_blank'); if(!
   w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+talonEsc(titre)+'</title><style>body{margin:0}.pg{page-break-after:always;margin-bottom:24px}.pg:last-child{page-break-after:auto}@page{size:letter;margin:12mm}</style></head><body>'+blocs.map(b=>'<div class="pg">'+b+'</div>').join('')+'</body></html>');
   w.document.close(); w.focus(); setTimeout(()=>w.print(), 300); }
 // v662 : rapport de paie (registre) — semaine affichée (brouillon ou approuvée), mois ou année (paies approuvées du journal)
+// v668 : comptes comptables de la paie (plan comptable Gestion CMEQ) — numéros modifiables, gardés dans l'onglet « Comptes paie » de la feuille privée
+const PAIE_GL_ONGLET = 'Comptes paie';
+const PAIE_GL = [['salCcq','Salaires des électriciens (CCQ) : salaire, vacances 13 %, indemnité d\'équipement','8010'],['salBureau','Salaires du bureau','8020'],['salProprio','Salaire du propriétaire (actionnaire)','8000'],
+  ['eAe','Charges salariales — AE (employeur)','8030'],['eRrq','Charges salariales — RRQ (employeur)','8033'],['eFss','Charges salariales — FSS et CNT','8034'],['eRqap','Charges salariales — RQAP (employeur)','8035'],['eCnesst','Charges salariales — CNESST','8036'],['eCcq','Remises CCQ — parts de l\'employeur (assurance, retraite, prélèvement, formation, AECQ…)','8037'],
+  ['dasFed','DAS fédérales à payer (impôt fédéral, AE ×2)','2210'],['dasProv','DAS provinciales à payer (impôt QC, RRQ ×2, RQAP ×2, FSS, CNESST, CNT)','2220'],['ccqPayer','CCQ à payer (vacances 13 %, parts employé et employeur, syndicat)','2230'],
+  ['reer','REER à payer','2250'],['autresRet','Autres retenues sur la paie','2500'],['net','Salaires à payer (net versé par Desjardins)','2200'],['banque','Banque (paiement des salaires et des remises)','1015']];
+let paieGLNos = {}, paieGLNoms = {}, paieProprios = new Set();
+const paieGLNo = k => paieGLNos[k] || (PAIE_GL.find(x=>x[0]===k)||[])[2] || '';
+const paieGLNom = no => paieGLNoms[no] || '';
+async function paieGLLire(force){
+  try{ const r = await lireCache(DOSSIERS_EMP_ID, qSheet(PAIE_GL_ONGLET)+'!A1:C', force); const o = {}; (r.result.values||[]).slice(1).forEach(x=>{ if(x[0] && String(x[2]||'').trim()) o[x[0]] = String(x[2]).trim(); }); paieGLNos = o; }catch(e){}
+  try{ const r = await lireCache(PLAN_COMPTABLE_ID, 'A1:B', force); const o = {}; (r.result.values||[]).slice(1).forEach(x=>{ if(x[0]) o[String(x[0]).trim()] = String(x[1]||''); }); paieGLNoms = o; }catch(e){}
+}
+async function paieGLEcrire(nos){
+  await ensureSheetsExist(DOSSIERS_EMP_ID, [{name:PAIE_GL_ONGLET, headers:['Clé','Montant','No de compte']}]);
+  await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:DOSSIERS_EMP_ID, range:qSheet(PAIE_GL_ONGLET)+'!A1', valueInputOption:'RAW', resource:{values:[['Clé','Montant','No de compte']].concat(PAIE_GL.map(([k,l,d])=>[k, l, String(nos[k]||d)]))}});
+  paieGLNos = {...nos};
+}
+// Écriture de paie : débits (salaires, charges de l'employeur) = crédits (DAS, CCQ, autres retenues, net)
+function paieEcriture(ls){ const D = {}, C = {}, ad = (o,k,m) => { if(m) o[k] = (o[k]||0) + m; };
+  ls.forEach(x=>{ const v = k => x[k]||0, ccq = x.regime ? x.regime==='CCQ' : !!(v('vacCcq') || v('eCcq')), pro = !ccq && (paieProprios.has(x.id) || paieProprios.has(cvNorm(x.nom||'')));
+    ad(D, ccq ? 'salCcq' : pro ? 'salProprio' : 'salBureau', v('brutImp') + v('remb'));
+    ad(D,'eAe',v('eAe')); ad(D,'eRrq',v('eRrq')); ad(D,'eFss',v('eFss')+v('eCnt')); ad(D,'eRqap',v('eRqap')); ad(D,'eCnesst',v('eCnesst')); ad(D,'eCcq',v('eCcq'));
+    ad(C,'dasFed', v('fed')+v('ae')+v('eAe')); ad(C,'dasProv', v('qc')+v('rrq')+v('eRrq')+v('rqap')+v('eRqap')+v('eFss')+v('eCnesst')+v('eCnt'));
+    ad(C,'ccqPayer', v('vacCcq')+v('ccqAss')+v('ccqTaxe')+v('ccqRet')+v('ccqPrel')+v('ccqSect')+(ccq ? v('synd') : 0)+v('eCcq'));
+    ad(C,'reer', v('reer')); ad(C,'autresRet', v('autresRet') - v('reer') + (ccq ? 0 : v('synd'))); ad(C,'net', v('net')); });
+  const r2 = x => Math.round(x*100)/100, lignes = [];
+  PAIE_GL.forEach(([k,l])=>{ if(D[k] && Math.abs(D[k])>=0.005) lignes.push({no:paieGLNo(k), lib:l, d:r2(D[k]), c:0}); });
+  PAIE_GL.forEach(([k,l])=>{ if(C[k] && Math.abs(C[k])>=0.005) lignes.push({no:paieGLNo(k), lib:l, d:0, c:r2(C[k])}); });
+  const td = r2(lignes.reduce((t,x)=>t+x.d,0)), tc = r2(lignes.reduce((t,x)=>t+x.c,0));
+  return {lignes, td, tc, ecart:r2(td-tc)}; }
+function ecritureHtml(titre, lignes, note){ const E = talonEsc, td = lignes.reduce((t,x)=>t+x.d,0), tc = lignes.reduce((t,x)=>t+x.c,0), ec = Math.round((td-tc)*100)/100;
+  return '<h2>'+E(titre)+'</h2><table><thead><tr><th>Compte</th><th>Nom du compte (plan comptable)</th><th>Description</th><th class="n">Débit</th><th class="n">Crédit</th></tr></thead><tbody>'
+    + lignes.map(x=>'<tr><td>'+E(x.no)+'</td><td>'+E(paieGLNom(x.no))+'</td><td>'+E(x.lib)+'</td><td class="n">'+(x.d ? rapN(x.d) : '')+'</td><td class="n">'+(x.c ? rapN(x.c) : '')+'</td></tr>').join('')
+    + '<tr class="tt"><td colspan="3">Total'+(Math.abs(ec)>=0.01 ? ' — <span style="color:#b00">écart '+rapN(ec)+'</span>' : ' — balancé')+'</td><td class="n">'+rapN(td)+'</td><td class="n">'+rapN(tc)+'</td></tr></tbody></table>'
+    + (note ? '<div class="muted">'+note+'</div>' : ''); }
+function PaieGLModal({onClose}){
+  const [nos,setNos]=useState(()=>Object.fromEntries(PAIE_GL.map(([k])=>[k, paieGLNo(k)]))), [etat,setEtat]=useState('');
+  const sauver = async () => { setEtat('Enregistrement…'); try{ await paieGLEcrire(nos); setEtat('Enregistré.'); setTimeout(onClose, 500); }catch(e){ setEtat('Erreur : '+apiErrMsg(e)); } };
+  return <Modal title="Comptes comptables de la paie" onClose={onClose} wide>
+    <div className="muted" style={{fontSize:12,marginBottom:8}}>Numéros du plan comptable (Gestion CMEQ) utilisés dans les écritures des rapports de paie, des remises DAS et des remises CCQ. Changez un numéro au besoin ; il doit exister dans le plan comptable.</div>
+    <table style={{fontSize:13,width:'100%'}}><thead><tr><th>Montant</th><th>No</th><th>Compte au plan comptable</th></tr></thead><tbody>
+      {PAIE_GL.map(([k,l,d])=><tr key={k}><td>{l}</td><td><input value={nos[k]} placeholder={d} onChange={e=>setNos({...nos,[k]:e.target.value.trim()})} style={{width:70}}/></td><td style={{color:paieGLNom(nos[k]||d) ? undefined : 'var(--danger)'}}>{paieGLNom(nos[k]||d) || 'compte introuvable dans le plan comptable'}</td></tr>)}
+    </tbody></table>
+    <div style={{display:'flex',gap:8,marginTop:10,alignItems:'center'}}><button className="btn btn-p" onClick={sauver} disabled={etat.endsWith('…')}>Enregistrer</button><button className="btn" onClick={onClose}>Annuler</button><span className="muted" style={{fontSize:12}}>{etat}</span></div>
+  </Modal>; }
 function rapportPaie(ls, titre, sous, semaine){ const E = talonEsc;
   const ccqE = x => (x.ccqAss||0)+(x.ccqTaxe||0)+(x.ccqRet||0)+(x.ccqPrel||0)+(x.ccqSect||0), ret = x => (x.fed||0)+(x.qc||0)+(x.rrq||0)+(x.ae||0)+(x.rqap||0)+ccqE(x)+(x.synd||0)+(x.autresRet||0);
   const pat = x => (x.eRrq||0)+(x.eAe||0)+(x.eRqap||0)+(x.eFss||0)+(x.eCnt||0)+(x.eCnesst||0)+(x.eCcq||0);
@@ -5554,6 +5600,7 @@ function rapportPaie(ls, titre, sous, semaine){ const E = talonEsc;
   if(semaine) h += '<div style="flex:1"><h2>À verser par Desjardins</h2><table><tbody>'+[...new Set(ls.map(x=>x.nom))].sort((a,b)=>a.localeCompare(b)).map(nm=>'<tr><td>'+E(nm)+'</td><td class="n">'+rapN(rapSum(ls.filter(x=>x.nom===nm),'net'))+'</td></tr>').join('')+'<tr class="tt"><td>Total des virements</td><td class="n">'+rapN(T('net'))+'</td></tr></tbody></table></div>';
   h += '</div><h2>Registre de paie — détail par employé et par paie</h2>'+rapTableau(ls, [['pp','PP'],['paye','Payable le'],['h','Heures',1],['hDemi','H. ½',1],['hDouble','H. double',1],['sal','Salaire',1],['vacCcq','Vac. CCQ',1],['brutImp','Brut imp.',1],
     ['fed','Impôt féd.',1],['qc','Impôt QC',1],['rrq','RRQ',1],['ae','AE',1],['rqap','RQAP',1],[ccqE,'CCQ',1],['synd','Syndicat',1],['autresRet','Autres ret.',1],[ret,'Total ret.',1],['remb','Remb.',1],['net','Net',1],[pat,'Contrib. emp.r',1],[x=>(x.brutImp||0)+(x.remb||0)+pat(x),'Coût global',1]], 'nom', true);
+  const ec = paieEcriture(ls); h += ecritureHtml('Écriture comptable de la paie (à saisir dans Gestion CMEQ)', ec.lignes, 'Salaires et charges de l\'employeur au débit ; DAS, CCQ, autres retenues et salaires nets à payer au crédit. Au paiement : débit 2200 / 2210 / 2220 / 2230, crédit banque. Numéros modifiables dans « Comptes comptables » (Préparation de la paie).');
   h += '<div class="muted">Net = brut imposable + remboursements − retenues − vacances CCQ (remises à la CCQ). CCQ = assurance + taxe + retraite + prélèvement (part de l\'employé). Contrib. emp.r = RRQ, AE, RQAP, FSS, CNT, CNESST et CCQ de l\'employeur.</div>';
   rapportImprimer(h, titre); }
 function PrepPaieView({cfg, refreshKey}){
@@ -5568,6 +5615,9 @@ function PrepPaieView({cfg, refreshKey}){
   const [autresDe,setAutresDe]=useState(null);
   const [talon,setTalon]=useState(null);   // v619 : clé d'un employé, ou '*' pour le groupe
   const [envois,setEnvois]=useState([]), [envoiEtat,setEnvoiEtat]=useState('');   // v632
+  const [glOuvert,setGlOuvert]=useState(false);   // v668
+  useEffect(()=>{ paieGLLire(false); }, []);
+  useEffect(()=>{ paieProprios = new Set((L||[]).filter(e=>/^oui/i.test(e.actionnaire||'')).flatMap(e=>[e.id, cvNorm([e.prenom,e.nom].filter(Boolean).join(' '))]).filter(Boolean)); }, [L]);
   useEffect(()=>{ if(!cfg.punchproSpreadsheetId) return; let ok = true;
     sheetsBatchGet(cfg.punchproSpreadsheetId, ['HeuresEnBanque!A2:E']).then(([rows])=>{ if(!ok) return; const m = {};
       (rows||[]).forEach(r=>{ const h = cvNum(r[2]); if(r[0] && r[1] && h<0){ const k = r[1]+'|'+cvNorm(r[0]); m[k] = (m[k]||0) - h; } }); setPris(m); }).catch(()=>{});
@@ -5680,10 +5730,11 @@ function PrepPaieView({cfg, refreshKey}){
           <label style={{display:'flex',gap:4,alignItems:'center',fontSize:12.5}}>Payable le {fige ? <b>{per.payeTxt}</b> : <input type="date" value={per.paye} onChange={ev=>setMod(m=>{ const n = {...m}; if(ev.target.value && ev.target.value!==per.defaut) n._paye = ev.target.value; else delete n._paye; return garder(n); })} style={{padding:'2px 4px'}}/>}</label>
           <button className="btn btn-sm" onClick={()=>setTalon('*')} disabled={!rangs.length}>🧾 Talons de la semaine</button>
           <span style={{display:'inline-flex',gap:4,alignItems:'center'}}><span className="muted" style={{fontSize:12}}>📄 Rapport de paie :</span>
-            <button className="btn btn-sm" disabled={!rangs.length} onClick={()=>rapportPaie(rangs.map(r=>({...r.calc.jr, nom:r.nom, pp:per.pp, paye:per.paye})), 'Rapport de paie — semaine du '+per.du+' ('+per.pp+')', 'Payable le '+per.payeTxt+' · '+(fige ? 'paie approuvée le '+dernier : 'brouillon, pas encore approuvée'), true)}>semaine</button>
+            <button className="btn btn-sm" disabled={!rangs.length} onClick={()=>rapportPaie(rangs.map(r=>({...r.calc.jr, nom:r.nom, id:r.e.id||'', regime:r.ccq ? 'CCQ' : 'Bureau', pp:per.pp, paye:per.paye})), 'Rapport de paie — semaine du '+per.du+' ('+per.pp+')', 'Payable le '+per.payeTxt+' · '+(fige ? 'paie approuvée le '+dernier : 'brouillon, pas encore approuvée'), true)}>semaine</button>
             {(()=>{ const jv = journalValides(hist, journal), mo = per.paye.slice(0,7), an = per.paye.slice(0,4), lm = jv.filter(x=>String(x.paye).startsWith(mo)), la = jv.filter(x=>String(x.paye).startsWith(an));
               return <><button className="btn btn-sm" disabled={!lm.length} title={lm.length ? '' : 'Aucune paie approuvée ce mois-ci'} onClick={()=>rapportPaie(lm, 'Rapport de paie — '+ccqMoisTxt(mo), 'Paies approuvées payables en '+ccqMoisTxt(mo)+' · '+new Set(lm.map(x=>x.sem)).size+' paie(s)')}>mois</button>
                 <button className="btn btn-sm" disabled={!la.length} title={la.length ? '' : 'Aucune paie approuvée cette année'} onClick={()=>rapportPaie(la, 'Rapport de paie — année '+an, 'Paies approuvées payables en '+an+' · '+new Set(la.map(x=>x.sem)).size+' paie(s)')}>année</button></>; })()}</span>
+          <button className="btn btn-sm" onClick={()=>setGlOuvert(true)} title="Numéros du plan comptable pour les écritures de paie">📒 Comptes comptables</button>
           <button className="btn btn-sm" onClick={imprimer} disabled={!rangs.length}>Imprimer / PDF</button>
           {fige ? <button className="btn btn-sm" onClick={rouvrir} disabled={etat.endsWith('…')}>Rouvrir pour corriger</button>
             : <>{Object.keys(mod).length>0 && <button className="btn btn-sm" onClick={()=>{ if(confirm('Effacer tes corrections et revenir aux heures de PunchPro ?')){ setMod(garder({})); } }}>Effacer mes corrections</button>}
@@ -5714,6 +5765,7 @@ function PrepPaieView({cfg, refreshKey}){
         </tbody></table></div>
       <div className="muted" style={{fontSize:11.5,marginTop:8}}>Simple = heures confirmées dans PunchPro, au plus {maxH} h ; ce qui dépasse va dans la banque (« Mis en banque », non payé). « Banque utilisée » = heures que l'employé a demandé de prendre dans sa banque dans PunchPro, sans dépasser le maximum. Férié : électriciens CCQ, payé par l'indemnité de 13 % (0 h ici) ; bureau, 8 h par férié. Bureau sans PunchPro : heures par période du dossier. Brut estimé = heures × taux du dossier (½ à 1,5, double à 2) + autres revenus − retenues ; le calcul des déductions viendra avec le journal de paie.</div>
     </div>
+    {glOuvert && <PaieGLModal onClose={()=>setGlOuvert(false)}/>}
     {talon && (()=>{ const statut = fige ? 'Approuvée' : 'Brouillon', liste = talon==='*' ? rangs : rangs.filter(r=>r.k===talon); if(!liste.length) return null;
       const idx = talon==='*' ? -1 : rangs.findIndex(r=>r.k===talon), titre = talon==='*' ? 'Talons de la semaine du '+per.du+' '+per.pp : 'Talon — '+liste[0].nom;
       const blocs = (talon==='*' ? [talonsGroupeHtml(rangs, per)] : []).concat(liste.map(r=>talonHtml(r, per, statut)));
@@ -5758,6 +5810,7 @@ const dasLimite = mois => { const [a,m] = mois.split('-').map(Number), d = new D
 function RemisesDasView({cfg, refreshKey}){
   const [journal,setJournal]=useState(null), [hist,setHist]=useState([]), [remises,setRemises]=useState([]), [err,setErr]=useState('');
   const [an,setAn]=useState(String(new Date().getFullYear() < 2027 ? 2027 : new Date().getFullYear()));
+  useEffect(()=>{ paieGLLire(false); }, []);   // v668 : comptes comptables des écritures
   const [ouvert,setOuvert]=useState(''), [saisie,setSaisie]=useState(null), [etat,setEtat]=useState('');
   const lire = useCallback(async force=>{ setErr('');
     const lt = async (onglet, plage) => { try{ const r = await lireCache(DOSSIERS_EMP_ID, qSheet(onglet)+'!'+plage, force); return (r.result.values||[]).slice(1).filter(x=>x[0]); } catch(e){ return []; } };
@@ -5824,6 +5877,7 @@ const RCCQ_PAT = [['eCcqAss','Assurance'],['eCcqTaxe','Taxe assurance'],['eCcqRe
 function RemisesCcqView({cfg, refreshKey}){
   const [journal,setJournal]=useState(null), [hist,setHist]=useState([]), [remises,setRemises]=useState([]), [dos,setDos]=useState([]), [err,setErr]=useState('');
   const [an,setAn]=useState(String(new Date().getFullYear() < 2027 ? 2027 : new Date().getFullYear()));
+  useEffect(()=>{ paieGLLire(false); }, []);   // v668 : comptes comptables des écritures
   const [ouvert,setOuvert]=useState(''), [saisie,setSaisie]=useState(null), [etat,setEtat]=useState('');
   const lire = useCallback(async force=>{ setErr('');
     const lt = async (onglet, plage) => { try{ const r = await lireCache(DOSSIERS_EMP_ID, (onglet ? qSheet(onglet)+'!' : '')+plage, force); return (r.result.values||[]).slice(1).filter(x=>x[0]); } catch(e){ return []; } };
@@ -5924,6 +5978,7 @@ function rapportDas(lignes, periode, remiseDe){ const mois = periode.length===7,
     {nom:'Revenu Québec', du:m=>Math.round(DAS_RQ.reduce((t,[k])=>t+rapSum(lignes.filter(x=>String(x.paye).startsWith(m)),k),0)*100)/100, remise:m=>remiseDe(m,'Revenu Québec')}]);
   h += '<h2>Détail par employé et par paie</h2>'+rapTableau(ls, [['pp','PP'],['paye','Payable le'],['brutImp','Brut',1],['gAe','Gains AE',1],['gRrq','Gains RRQ',1],['fed','Impôt féd.',1],['ae','AE empl.',1],['eAe','AE emp.r',1],['qc','Impôt QC',1],['rrq','RRQ empl.',1],['eRrq','RRQ emp.r',1],['rqap','RQAP empl.',1],['eRqap','RQAP emp.r',1],['eFss','FSS',1],['eCnesst','CNESST',1],
     [x=>DAS_ARC.reduce((t,[k])=>t+(x[k]||0),0),'Total ARC',1],[x=>DAS_RQ.reduce((t,[k])=>t+(x[k]||0),0),'Total RQ',1]]);
+  h += ecritureHtml('Écriture du paiement des remises DAS', [{no:paieGLNo('dasFed'), lib:'DAS fédérales — ARC', d:arc, c:0}, {no:paieGLNo('dasProv'), lib:'DAS provinciales — Revenu Québec', d:rq, c:0}, {no:paieGLNo('banque'), lib:'Banque', d:0, c:Math.round((arc+rq)*100)/100}], 'La CNT reste dans le compte '+paieGLNo('dasProv')+' jusqu\'au paiement annuel avec le RLZ-1.S.');
   h += '<div class="muted">empl. = part de l\'employé (retenue) · emp.r = part de l\'employeur. CNT ('+talonArg(rapSum(ls,'eCnt'))+') payée une fois par année avec le RLZ-1.S. Calculé à partir du journal de paie du CRM.</div>';
   rapportImprimer(h, titre); }
 function rapportCcq(lignes, periode, remiseDe, nasDe){ const mois = periode.length===7, ls = lignes.filter(x=>x.moisCcq.startsWith(periode)), E = talonEsc;
@@ -5938,6 +5993,7 @@ function rapportCcq(lignes, periode, remiseDe, nasDe){ const mois = periode.leng
   const cl = x => [String(x.classe||'').replace('Compagnon','Comp.').replace('Apprenti ','App. '), ({'Commercial':'C','Industriel':'B','Résidentiel léger':'D','Résidentiel lourd':'R1'})[x.secteur]||x.secteur].filter(Boolean).join(' ');
   h += '<h2>Détail par employé et par semaine</h2>'+rapTableau(ls2, [['pp','PP'],['finSem','Fin sem.'],[cl,'Cl.'],['hSimple','H. s.',1],['hDemi','H. ½',1],['hDouble','H. d.',1],['sal','Salaire',1],['vacCcq','Vac. 13 %',1]]
     .concat(RCCQ_EMP.map(([k,l])=>[k,'E '+court[l],1]), RCCQ_PAT.map(([k,l])=>[k,'P '+court[l],1]), [[x=>(x.vacCcq||0)+RCCQ_EMP.concat(RCCQ_PAT).reduce((t,[k])=>t+(x[k]||0),0),'Total CCQ',1]]), 'nomNas', true);
+  h += ecritureHtml('Écriture du paiement de la remise CCQ', [{no:paieGLNo('ccqPayer'), lib:'CCQ à payer — remise '+(mois ? ccqMoisTxt(periode) : periode), d:T, c:0}, {no:paieGLNo('banque'), lib:'Banque', d:0, c:T}], 'Le montant à payer (compte '+paieGLNo('ccqPayer')+') a été crédité par les écritures de paie : salaires électriciens '+paieGLNo('salCcq')+' (vacances 13 %), retenues CCQ des employés, et parts de l\'employeur ('+paieGLNo('eCcq')+').');
   h += '<div class="muted">E = part de l\'employé (retenue) · P = part patronale (employeur) · ass. assurance, ret. retraite, prél. prélèvement, synd. syndicat, supp. caisse supplémentaire, form. formation, indem. indemnisation. Cl. = classe et secteur (C commercial, B industriel, D résidentiel léger, R1 résidentiel lourd). NAS masqué. Calculé à partir du journal de paie du CRM.</div>';
   rapportImprimer(h, titre); }
 function EmployesSection({cfg, refreshKey}){
