@@ -208,7 +208,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v674';
+const APP_VERSION = 'v675';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -12560,6 +12560,59 @@ const CALC_SOUMISSION = {
         ...String(r2.travaux||'').split('\n').map(x=>x.replace('Remplacement du panneau électrique existant 200A','Remplacement du panneau électrique existant 100A'))];
       return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(px), installation:arr5(px), borne:0,
         titre:'Mise à niveau de l\'entrée électrique 100A → 200A', travaux:txt.join('\n'), remarques:r2.remarques, lignes:L, heures:h};
+    }
+  },
+  // v675 : Entrée électrique › Service / dépannage — les 3 appels de service les plus fréquents sur une entrée (William, 24 nov. 2026) :
+  //  vérification et tests (2 h), changement des connexions de l'entrée (2 connecteurs Hydro TTD-2610XFBTA + WR159 + 1 h),
+  //  parasurtenseur Square D HEPD80/HEPD50 installé au panneau (1 h). Chacun : non / en option (remarque, pas dans le prix) / inclus.
+  serviceEntree: {
+    nom:'Service / dépannage d\'entrée électrique', cat:'entree', sous:'Service / dépannage', typeProjet:'Panneau / entrée électrique', gars:1,
+    tarifs:[['SERV-VERIF','Vérification et tests de l\'entrée et du panneau, déplacement inclus ($)'],
+      ['SERV-JOINTS','Changement des connexions de l\'entrée (2 connecteurs Hydro + H-tap, 1 h) ($)'],
+      ['SERV-HEPD80','Parasurtenseur HEPD80 fourni et installé, déplacement inclus ($)'],['SERV-HEPD50','Parasurtenseur HEPD50 fourni et installé, déplacement inclus ($)']],
+    defaut:{verif:'inclus', joints:'option', surtension:'non', modele:'HEPD80', hVerif:'2', hJoints:'1', hSurt:'1', note:''},
+    deviner(txt){ const t=String(txt||''), v={};
+      if(/surge|surtension|parasurt|hepd/i.test(t)) v.surtension='inclus';
+      if(/hepd\s?50/i.test(t)) v.modele='HEPD50';
+      if(/connexion|connecteur|joint/i.test(t)) v.joints='inclus';
+      if(/(surge|surtension|parasurt|hepd)/i.test(t) && !/v[ée]rif|test|fluctu|baisse/i.test(t)) v.verif='non';
+      return v; },
+    champs(v, maj){
+      const n = (k) => <input value={v[k]==null?'':v[k]} inputMode="decimal" onChange={e=>maj({[k]:e.target.value})} style={{width:44}}/>;
+      const choix = k => <span style={{display:'inline-flex',gap:4}}>{[['non','Non'],['option','En option'],['inclus','Inclus']].map(([a,b])=><button key={a} className={'btn btn-sm'+(v[k]===a?' btn-p':'')} onClick={()=>maj({[k]:a})}>{b}</button>)}</span>;
+      const bloc = (k, titre, detail, h) => <div style={{display:'grid',gap:4,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><b>{titre}</b>{choix(k)}{v[k]!=='non' && <span>{n(h)} h</span>}</div>
+        <div className="muted" style={{fontSize:12}}>{detail}</div></div>;
+      return <div style={{display:'grid',gap:10,fontSize:13}}>
+        {bloc('verif','1. Vérification et tests électriques','État du panneau et des connexions, neutre principal, phases et mise à la terre, entrée et connexions au compteur, mesures de tension sur les circuits.','hVerif')}
+        {bloc('joints','2. Changement des connexions de l\'entrée (refaire les joints)','2 connecteurs Hydro (TTD-2610XFBTA) + 1 connecteur en H (WR159). « En option » = proposé si nécessaire, pas dans le prix.','hJoints')}
+        {bloc('surtension','3. Parasurtenseur au panneau','Square D, installé et raccordé au panneau, avec voyant d\'état.','hSurt')}
+        {v.surtension!=='non' && <div style={{display:'flex',gap:6,alignItems:'center',paddingLeft:8}}>Modèle {[['HEPD80','HEPD80 — 80 kA'],['HEPD50','HEPD50 — 50 kA']].map(([a,b])=><button key={a} className={'btn btn-sm'+(v.modele===a?' btn-p':'')} onClick={()=>maj({modele:a})}>{b}</button>)}</div>}
+        <span className="muted" style={{fontSize:12}}>Le déplacement est compté une seule fois, même si on fait les trois dans la même visite.</span>
+        <input value={v.note||''} onChange={e=>maj({note:e.target.value})} placeholder="Note (problème décrit par le client, accès au panneau…)"/>
+      </div>; },
+    calculer(v, t){
+      const manque = []; const T = key => { const x = t(key); if(x==null) manque.push(key); return x||0; };
+      const N = x => Math.max(0, cvNum(x)||0), L = [], txt = [], rem = [];
+      const ajout = (code, desc, qte) => { if(qte>0) L.push({code, desc, unite:'un', qte:String(qte), prix:''}); };
+      const mod = v.modele==='HEPD50' ? 'HEPD50' : 'HEPD80', kA = mod==='HEPD50' ? '50' : '80';
+      const prixOpt = k => { const x = t(k); return x!=null ? ' — '+cvMoney(x)+' plus taxes' : ''; };
+      let h = 0, px = 0;
+      const tJoints = 'Changement des connexions de l\'entrée électrique : 2 connecteurs à perforation d\'isolant CU/AL et 1 connecteur en H';
+      const tSurt = 'Fourniture et installation d\'un parasurtenseur Square D '+mod+' ('+kA+' kA par phase, voyant d\'état), raccordé au panneau électrique';
+      if(v.verif==='inclus'){ h += N(v.hVerif); px += T('SERV-VERIF');
+        txt.push('Vérification et tests électriques : état général du panneau et de ses connexions; raccordement du neutre principal, des phases et de la mise à la terre; entrée électrique et connexions au compteur; mesures de tension et de stabilité sur les circuits.'); }
+      if(v.joints==='inclus'){ h += N(v.hJoints); px += T('SERV-JOINTS');
+        ajout('TTD-2610XFBTA','Connecteur Hydro (à perforation d\'isolant CU/AL)', 2); ajout('WR159','Connecteur en H (H-tap)', 1); txt.push(tJoints+'.'); }
+      else if(v.joints==='option') rem.push('Option, si nécessaire : '+tJoints.charAt(0).toLowerCase()+tJoints.slice(1)+prixOpt('SERV-JOINTS')+'. Fait seulement avec votre accord.');
+      if(v.surtension==='inclus'){ h += N(v.hSurt); px += T('SERV-'+mod); ajout(mod,'Parasurtenseur Square D '+mod+' ('+kA+' kA)', 1); txt.push(tSurt+'.'); }
+      else if(v.surtension==='option') rem.push('Option : '+tSurt.charAt(0).toLowerCase()+tSurt.slice(1)+prixOpt('SERV-'+mod)+'.');
+      if(v.verif==='inclus' && v.surtension==='inclus'){ px -= (t('DEPL')||0); rem.push('Vérification et parasurtenseur faits dans la même visite : un seul déplacement.'); }   // les 2 tarifs comprennent le déplacement
+      if(v.verif==='inclus') rem.push('Si des corrections sont nécessaires, on vous en informe avant de procéder.');
+      if(v.note) rem.unshift('Note : '+v.note);
+      const titre = [v.verif==='inclus' ? 'Vérification et tests électriques' : '', v.joints==='inclus' ? 'connexions de l\'entrée' : '', v.surtension==='inclus' ? 'parasurtenseur '+mod : ''].filter(Boolean).join(' + ');
+      return {manque:[...new Set(manque)], forfait: manque.length ? '' : arr5(px), installation:arr5(px), borne:0,
+        titre: titre ? titre.charAt(0).toUpperCase()+titre.slice(1) : 'Service — entrée électrique', travaux:txt.join('\n'), remarques:rem.join('\n'), lignes:L, heures:Math.round(h*2)/2 || 1};
     }
   },  // v443 : catégorie Génératrice — panneau de transfert manuel (panneau secondaire Square D QO avec interlock)
   genManuel: {
