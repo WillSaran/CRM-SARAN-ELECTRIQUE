@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v663';
+const APP_VERSION = 'v664';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4964,7 +4964,10 @@ function DossiersEmployesView({cfg, refreshKey}){
   const ouvrir = e => { setVoirNas(false); setOng('ident'); setSous('general'); if(!histo) lireHisto(false); setF({frequence:'Hebdomadaire', ...e, fedMontant:e.fedMontant||DE_CRED_FED, provMontant:e.provMontant||DE_CRED_PROV, province:e.province||'Québec', ...(e.row && !e.province ? {creditBaseFed:'Oui', creditBaseProv:'Oui', bulletinCourriel:'Oui', bulletinCompl:'Oui'} : {})}); window.scrollTo(0,0); };   // dossier d'avant v557 : valeurs par défaut du logiciel
   const nouveau = p => { const e = deVide(); if(p){ const m = p.nom.trim().split(/\s+/); e.prenom = m[0]||''; e.nom = m.slice(1).join(' '); e.courriel = p.email||''; e.cell = p.telephone||''; } ouvrir(e); };
   const champ = (k, lab, o={}) => <label style={{display:'grid',gap:2,fontSize:12,flex:o.flex||'1 1 170px',minWidth:0}}><span className="muted">{lab}</span>
-    {o.choix ? <select value={f[k]} onChange={e=>setF({...f, [k]:e.target.value})}>{(o.vide?['']:[]).concat(o.choix).map(c=><option key={c} value={c}>{c||'—'}</option>)}</select>
+    {o.liste ? (()=>{ const cur = String(f[k]||''), opts = o.liste.filter(x=>x.v!==''), autre = cur && !opts.some(x=>x.v===cur);   // v664 : liste déroulante des taux possibles + « Autre valeur… »
+        return <select value={cur} style={{borderColor:cur ? undefined : 'var(--warning)'}} onChange={e=>{ let val = e.target.value; if(val==='__autre'){ const t = window.prompt(lab, cur); if(t==null) return; val = t.trim(); } setF({...f, [k]:val}); }}>
+          <option value="">{o.ph ? '— (défaut : '+o.ph+')' : '—'}</option>{opts.map(x=><option key={x.v+x.l} value={x.v}>{x.v} — {x.l}</option>)}{autre && <option value={cur}>{cur} — personnalisé</option>}<option value="__autre">Autre valeur…</option></select>; })()
+      : o.choix ? <select value={f[k]} onChange={e=>setF({...f, [k]:e.target.value})}>{(o.vide?['']:[]).concat(o.choix).map(c=><option key={c} value={c}>{c||'—'}</option>)}</select>
       : <input type={o.type||'text'} value={f[k]} placeholder={o.ph||''} onChange={e=>setF({...f, [k]:e.target.value})}/>}</label>;
   const coche = (k, lab) => <label style={{display:'flex',gap:6,alignItems:'center',fontSize:12.5,flex:'1 1 200px'}}><input type="checkbox" checked={f[k]==='Oui'} onChange={e=>setF({...f, [k]:e.target.checked?'Oui':''})}/>{lab}</label>;
   const bloc = (titre, enfants) => <div style={{marginTop:12}}><div style={{fontWeight:700,fontSize:13,marginBottom:6,color:'var(--accent)'}}>{titre}</div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{enfants}</div></div>;
@@ -5104,7 +5107,10 @@ function DossiersEmployesView({cfg, refreshKey}){
     </>)}
     {f.regime==='CCQ' && (()=>{ const d = ccqAvDefaut(f); return bloc('Taux CCQ de l\'employé ('+(ccqEstIci(f) ? 'commercial / industriel' : 'résidentiel')+', en vigueur le '+PAIE_CCQ_AV.date+')', <>
       <div style={{flex:'1 1 100%',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><button type="button" className="btn btn-sm" onClick={()=>{ const {x, nb} = ccqRemplirTaux(f); setF(x); if(!nb) alert('Tous les taux sont déjà inscrits.'); }}>Inscrire les taux par défaut</button><span className="muted" style={{fontSize:11.5}}>Remplit les cases vides avec les taux de la convention ; enregistre ensuite la fiche.</span></div>
-      {CCQ_CHAMPS_TAUX.filter(([k])=>k!=='cnesstTaux').map(([k,lab])=><React.Fragment key={k}>{champ(k, lab, {ph:d[k]!=null ? ccqValFr(d[k]) : '', flex:'1 1 200px'})}</React.Fragment>)}
+      {(()=>{ const R = ccqAvResid(f), C = ccqAvDefaut({...f, ccqSecteur:'Commercial'}), cl = f.classe || 'classe ?';   // v664 : liste déroulante seulement sur les taux qui changent selon le secteur
+        return CCQ_CHAMPS_TAUX.filter(([k])=>k!=='cnesstTaux').map(([k,lab])=>{ const r = R[k]==null ? '' : ccqValFr(R[k]), c = C[k]==null ? '' : ccqValFr(C[k]);
+          const liste = r!==c ? [{v:r, l:'Résidentiel, '+cl}, {v:c, l:'Commercial / industriel, '+cl}] : null;
+          return <React.Fragment key={k}>{champ(k, lab, {ph:d[k]!=null ? ccqValFr(d[k]) : '', flex:'1 1 200px', liste})}</React.Fragment>; }); })()}
       <div className="muted" style={{fontSize:11.5,flex:'1 1 100%'}}>Au {PAIE_CCQ_AV.suivant.date} : assurance {nbFr(PAIE_CCQ_AV.suivant.assPat)} $ employeur / {nbFr(PAIE_CCQ_AV.suivant.assEmp)} $ employé ; retraite employeur {nbFr(PAIE_CCQ_AV.suivant.retPatComp)} $ compagnon / {nbFr(PAIE_CCQ_AV.suivant.retPatApp)} $ apprenti. Vacances et fériés : {PAIE_CCQ_AV.vac} % versés à la CCQ. AECQ : {nbFr(PAIE_CCQ_AV.aecqH)} $/h.</div>
     </>); })()}
     {bloc('Particularités', <label style={{display:'grid',gap:2,fontSize:12,flex:'1 1 100%'}}><span className="muted">Avantages imposables, indemnités, primes, allocation auto, assurance collective…</span><textarea rows={3} value={f.particularites} onChange={e=>setF({...f, particularites:e.target.value})}/></label>)}
