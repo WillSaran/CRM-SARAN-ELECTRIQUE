@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v665';
+const APP_VERSION = 'v666';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4859,7 +4859,9 @@ const DE_COLS = ['id','actif','prenom','nom','regime','adresse','ville','cp','ce
   // v631 : solde de vacances de départ (bureau)
   'vacSoldeDebut','vacSoldeDate',
   // v663 : contribution sectorielle (employé) et indemnité d'équipement de sécurité
-  'ccqSectEmp','ccqEquip'];
+  'ccqSectEmp','ccqEquip',
+  // v666 : vacances bureau en banque d'heures (droit annuel en semaines, année de vacances qui commence le 1er mai par défaut)
+  'vacSemaines','vacHSem','vacDebutMois','vacSoldeH'];
 const DE_ONGLETS = [['ident','Identification'],['coord','Coordonnées'],['paye','Paye'],['comp','Compétences & Formations'],['supp','Informations supplémentaires'],['histo','Historique des changements']];
 const DE_SOUS = [['general','Général'],['vacances','Vacances'],['fonctions','Fonctions'],['autres','Autres déd. / Av. imposables / Indemnités / Primes'],['banque','Banque d\'heures HC'],['bulletin','Bulletin de paye'],['cumul','Cumulatifs de l\'année']];
 const DE_HISTO = 'Historique';   // onglet de la feuille privée : Quand | Id | Employé | Champ | Avant | Après
@@ -5080,7 +5082,9 @@ function DossiersEmployesView({cfg, refreshKey}){
     {bloc('Dépôt direct', <>{champ('ddAdhesion','Date d\'adhésion',{type:'date',flex:'0 1 150px'})}{champ('institution','Institution',{flex:'0 1 110px',ph:'815'})}{champ('transit','No de transit',{flex:'0 1 120px'})}{champ('compte','No de compte',{flex:'1 1 160px'})}{champ('specimen','Spécimen chèque (lien Drive)',{flex:'2 1 240px'})}</>)}
     </>}
     {ong==='paye' && sous==='vacances' && <>
-    {bloc('Vacances', <>{champ('vacPct','Vacances %',{ph:f.regime==='CCQ'?'13 (CCQ)':'4 ou 6',flex:'0 1 110px'})}{champ('vacMode','Vacances',{choix:['Versées','Accumulées'],flex:'0 1 130px'})}{f.vacMode==='Accumulées' && champ('vacSolde','Solde accumulé $',{flex:'0 1 150px'})}</>)}
+    {bloc('Vacances', <>{champ('vacPct','Vacances %',{ph:f.regime==='CCQ'?'13 (CCQ)':'4 ou 6',flex:'0 1 110px'})}{champ('vacMode','Vacances',{choix:['Versées','Accumulées','Banque d\'heures'],flex:'0 1 150px'})}{f.vacMode==='Accumulées' && champ('vacSolde','Solde accumulé $',{flex:'0 1 150px'})}
+      {/banque/i.test(f.vacMode||'') && <>{champ('vacSemaines','Semaines par année',{ph:'4',flex:'0 1 130px'})}{champ('vacHSem','Heures par semaine',{ph:'40',flex:'0 1 130px'})}{champ('vacDebutMois','Année de vacances commence le 1er',{choix:VAC_MOIS,vide:true,flex:'0 1 200px'})}
+        <div className="muted" style={{fontSize:11.5,flex:'1 1 100%'}}>Banque d'heures : chaque année au 1er {(f.vacDebutMois||'mai')} (vide = mai, comme la Loi sur les normes du travail), l'employé reçoit semaines × heures (ex. 4 × 40 = 160 h). Les heures inscrites dans la colonne « Vacances » de la préparation de la paie sont payées et retirées du solde. Les heures non prises sont reportées. Le « Vacances % » ne sert pas dans ce mode.</div></>}</>)}
     {f.regime==='CCQ' && <div className="muted" style={{fontSize:12,marginTop:6}}>CCQ : l'indemnité de vacances et de congés (13 %) est versée à la CCQ avec le rapport mensuel, pas sur la paie.</div>}
     </>}
     {ong==='paye' && sous==='fonctions' && <>
@@ -5125,7 +5129,7 @@ function DossiersEmployesView({cfg, refreshKey}){
     {bloc('Cumulatifs de l\'année', <>
       <div className="muted" style={{fontSize:12,flex:'1 1 100%'}}>Les cumuls (brut, impôts, RRQ, AE, RQAP, CCQ, syndicat) se calculent tout seuls à partir des paies approuvées dans le CRM (onglet « Journal de paie »), à partir de janvier 2027. Ils serviront aux T4 et relevés 1.</div>
       {f.regime==='CCQ' ? <div className="muted" style={{fontSize:12,flex:'1 1 100%'}}>Électricien CCQ : pas de solde de vacances, c'est la CCQ qui paie les vacances.</div>
-        : <>{champ('vacSoldeDebut','Solde de vacances au départ $',{flex:'0 1 200px'})}{champ('vacSoldeDate','En date du',{type:'date',flex:'0 1 150px'})}
+        : <>{/banque/i.test(f.vacMode||'') ? champ('vacSoldeH','Solde de vacances au départ (heures)',{ph:'ex. 120',flex:'0 1 220px'}) : champ('vacSoldeDebut','Solde de vacances au départ $',{flex:'0 1 200px'})}{champ('vacSoldeDate','En date du',{type:'date',flex:'0 1 150px'})}
           <div className="muted" style={{fontSize:11.5,flex:'1 1 100%'}}>Bureau : vacances accumulées non payées au début (ex. au 1er janvier 2027). Ensuite, le CRM ajoute le % de vacances de chaque paie (mode « accumulées ») et retire les vacances payées.</div></>}
     </>)}
     </>}
@@ -5313,7 +5317,9 @@ const JOURNAL_COLS = [['sem','Semaine'],['pp','PP'],['paye','Payable le'],['nom'
   ['gRrq','Gains RRQ'],['gAe','Gains assurables AE'],['gRqap','Gains RQAP'],['eRrq','Employeur RRQ'],['eAe','Employeur AE'],['eRqap','Employeur RQAP'],['eFss','Employeur FSS'],['eCnt','Employeur CNT'],['eCnesst','Employeur CNESST'],['eCcq','Employeur CCQ'],['vacAcq','Vacances bureau acquises'],['vacPris','Vacances bureau prises'],['le','Approuvée le'],
   // v659 : détail pour le rapport mensuel CCQ (ajouté après « Approuvée le » pour ne pas décaler les lignes déjà inscrites)
   ['finSem','Semaine se terminant le'],['classe','Classe'],['secteur','Secteur CCQ'],['hSimple','Heures simple'],['hDemi','Heures ½'],['hDouble','Heures double'],
-  ['eCcqAss','Employeur CCQ assurance'],['eCcqTaxe','Employeur CCQ taxe assurance'],['eCcqRet','Employeur CCQ retraite'],['eCcqSup','Employeur CCQ caisse supp.'],['eCcqPrel','Employeur CCQ prélèvement'],['eCcqForm','Employeur CCQ formation'],['eCcqIndem','Employeur CCQ indemnisation'],['eAecq','Employeur AECQ / ACQ'],['ccqSect','CCQ contribution sectorielle (employé)']];
+  ['eCcqAss','Employeur CCQ assurance'],['eCcqTaxe','Employeur CCQ taxe assurance'],['eCcqRet','Employeur CCQ retraite'],['eCcqSup','Employeur CCQ caisse supp.'],['eCcqPrel','Employeur CCQ prélèvement'],['eCcqForm','Employeur CCQ formation'],['eCcqIndem','Employeur CCQ indemnisation'],['eAecq','Employeur AECQ / ACQ'],['ccqSect','CCQ contribution sectorielle (employé)'],
+  // v666 : heures de vacances prises (banque de vacances des employés de bureau)
+  ['vacH','Heures de vacances prises']];
 const JOURNAL_TEXTE = ['sem','pp','paye','nom','id','regime','le','finSem','classe','secteur'];
 const JOURNAL_NUM = JOURNAL_COLS.map(x=>x[0]).filter(k=>!JOURNAL_TEXTE.includes(k));
 const JOURNAL_ILE = JOURNAL_COLS.findIndex(x=>x[0]==='le');
@@ -5363,6 +5369,22 @@ const paieTaux = (s, base, h) => { const t = String(s==null?'':s).replace(/\s/g,
   if(pct){ const p = cvNum(pct[1])||0; m += (base||0)*p/100; txt.push(nbFr(p, Math.abs(p-Math.round(p))<1e-9 ? 0 : dec(p))+' % × '+nbFr(base||0)+' $'); }
   if(ph){ const v = cvNum(ph[1])||0; m += (h||0)*v; txt.push(f3(v)+' $/h × '+prepNb(h||0)+' h'); }
   return {m:Math.round(m*100)/100, txt:txt.join(' + ')}; };
+// v666 : banque de vacances en heures (bureau) — droit annuel crédité au 1er du mois choisi (mai par défaut), heures non prises reportées
+const VAC_MOIS = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+function vacBanqueCalc(e, fin, hist, prisesPaie){
+  const n = v => cvNum(v), r2 = x => Math.round((x||0)*100)/100, iso = d => localDateStr(d);
+  const sem = n(e.vacSemaines)!=null ? n(e.vacSemaines) : 4, hs = n(e.vacHSem) || 40, droit = r2(sem*hs);
+  const mi = VAC_MOIS.indexOf(String(e.vacDebutMois||'mai').toLowerCase().trim()), m = mi<0 ? 4 : mi;
+  const dep = e.vacSoldeDate ? new Date(e.vacSoldeDate+'T00:00:00') : new Date(fin.getFullYear(), 0, 1);
+  // début de l'année de vacances en cours (dernier 1er du mois choisi ≤ fin de semaine)
+  let deb = new Date(fin.getFullYear(), m, 1); if(deb > fin) deb = new Date(fin.getFullYear()-1, m, 1);
+  const finAn = new Date(deb.getFullYear()+1, m, 1); finAn.setDate(0);
+  let credits = 0; for(let y = dep.getFullYear(); y <= fin.getFullYear(); y++){ const d = new Date(y, m, 1); if(d > dep && d <= fin) credits++; }
+  const avant = hist.filter(([d])=>d && d >= iso(dep) && d < iso(fin)).reduce((t,[,h])=>t+(h||0),0);
+  const anneeAvant = hist.filter(([d])=>d && d >= iso(deb) && d < iso(fin)).reduce((t,[,h])=>t+(h||0),0);
+  const solde = r2((n(e.vacSoldeH)||0) + credits*droit - avant - prisesPaie);
+  return {droit, hs, deb, finAn, prisesPaie, prisesAnnee:r2(anneeAvant + prisesPaie), soldeAvant:r2(solde + prisesPaie), solde, semaines:r2(solde/hs), depart:!!(e.vacSoldeH || e.vacSoldeDate)};
+}
 function paieCalcul(r, fin, prior){
   prior = prior || {}; const e = r.e||{}, an = String(prior._an || fin.getFullYear()), G = PAIE_GOUV[an] || PAIE_GOUV['2026'], P = 52, r2 = x => Math.round((x||0)*100)/100, n = v => cvNum(v);
   const ccq = r.ccq, t = n(e.taux), av = ccqAvDefaut(e), avert = [], A2 = PAIE_CCQ_AV;
@@ -5433,11 +5455,13 @@ function paieCalcul(r, fin, prior){
   const patL = pat.filter(x=>x.m || /CCQ|AECQ|CNESST|^RRQ|^Assurance-emploi/.test(x.lib)), totPat = r2(patL.reduce((s,x)=>s+x.m,0));
   const cout = r2(brut + nonImpTot + totPat), coutH = heures+r.ferie ? r2(cout/(heures+r.ferie)) : null;
   // Vacances des employés de bureau (accumulées) : acquises = % du salaire ; prises = heures de vacances payées
-  const vacBureauPct = !ccq && !/vers/i.test(e.vacMode||'') ? (n(e.vacPct)||0) : 0, vacAcq = r2(salaire*vacBureauPct/100), vacPris = !ccq && t!=null ? r2((r.vac||0)*t) : 0;
-  const vacSolde = !ccq && (vacBureauPct || n(e.vacSoldeDebut)!=null) ? r2((n(e.vacSoldeDebut)||0) + cum('vacAcq') - cum('vacPris') + vacAcq - vacPris) : null;
+  const vacBanque = !ccq && /banque/i.test(e.vacMode||'');
+  const vacBureauPct = !ccq && !vacBanque && !/vers/i.test(e.vacMode||'') ? (n(e.vacPct)||0) : 0, vacAcq = r2(salaire*vacBureauPct/100), vacPris = !ccq && t!=null ? r2((r.vac||0)*t) : 0;
+  const vacHB = vacBanque ? vacBanqueCalc(e, fin, prior._vacHist||[], r.vac||0) : null;
+  const vacSolde = !ccq && !vacBanque && (vacBureauPct || n(e.vacSoldeDebut)!=null) ? r2((n(e.vacSoldeDebut)||0) + cum('vacAcq') - cum('vacPris') + vacAcq - vacPris) : null;
   const pv = re => (patL.find(x=>re.test(x.lib))||{}).m || 0, autresRet = r2(retAutres.reduce((t,x)=>t+x.m,0));
   // Ligne du journal de paie (une par employé et par paie approuvée) — sert aux cumuls, aux remises et aux T4 / RL-1
-  const jr = {h:heures+(r.ferie||0)+(r.vac||0)+(r.maladie||0), sal:r2(brut - vacCcq), vacCcq, brutImp:brut, avImp, remb:nonImpTot, fed:impFed, qc:impQc, rrq, ae, rqap, ccqAss:assEmp, ccqTaxe:taxeEmp, ccqRet:retEmp, ccqPrel:prelEmp, synd,
+  const jr = {vacH: ccq ? 0 : r2(r.vac||0), h:heures+(r.ferie||0)+(r.vac||0)+(r.maladie||0), sal:r2(brut - vacCcq), vacCcq, brutImp:brut, avImp, remb:nonImpTot, fed:impFed, qc:impQc, rrq, ae, rqap, ccqAss:assEmp, ccqTaxe:taxeEmp, ccqRet:retEmp, ccqPrel:prelEmp, synd,
     autresRet, reer:r2(reer), net, gRrq:r2(brut+avImp), gAe:brut, gRqap:brut, ccqSect:sectEmp, eRrq:pv(/^RRQ/), eAe:pv(/^Assurance-emploi/), eRqap:pv(/^RQAP/), eFss:pv(/^FSS/), eCnt:pv(/^CNT/), eCnesst:pv(/^CNESST/),
     eCcq:r2(patL.filter(x=>/^(CCQ|AECQ)/.test(x.lib)).reduce((t,x)=>t+x.m,0)), vacAcq, vacPris,
     hSimple:r2(r.simple+r.banqueUtil), hDemi:r2(r.demi), hDouble:r2(r.double),
@@ -5445,7 +5469,7 @@ function paieCalcul(r, fin, prior){
   const cumul = {an, prior};
   // v630 : gains = heures travaillées (et autres revenus) seulement ; le 13 % CCQ est une ligne d'info dans la section CCQ (toujours inclus dans la base des retenues) ; net inchangé
   const gainsAff = gains.filter(g=>!(ccq && /^Indemnité de vacances et fériés/.test(g.lib))), retAff = retenues.filter(x=>!/^Vacances et fériés versés/.test(x.lib));
-  return {gains:gainsAff, nonImp, imposables, brut:r2(brut - vacCcq), brutImposable:brut, nonImpTot, retenues:retAff, totRet:r2(totRet - vacCcq), net, pat:patL, totPat, cout, coutH, vacCcq, heures, cumul, jr, vacSolde, vacAcq, vacPris, vacAcqCum: vacSolde!=null ? r2(cum('vacAcq') + vacAcq) : null, cours:{brut, rrq, ae, rqap, fed:impFed, qc:impQc, ccqAss:r2(assEmp+taxeEmp), ccqRet:retEmp, ccqPrel:prelEmp, synd}, ccq, avert, conf:!!G.conf};
+  return {gains:gainsAff, nonImp, imposables, brut:r2(brut - vacCcq), brutImposable:brut, nonImpTot, retenues:retAff, totRet:r2(totRet - vacCcq), net, pat:patL, totPat, cout, coutH, vacCcq, heures, cumul, jr, vacSolde, vacHB, vacAcq, vacPris, vacAcqCum: vacSolde!=null ? r2(cum('vacAcq') + vacAcq) : null, cours:{brut, rrq, ae, rqap, fed:impFed, qc:impQc, ccqAss:r2(assEmp+taxeEmp), ccqRet:retEmp, ccqPrel:prelEmp, synd}, ccq, avert, conf:!!G.conf};
 }
 const talonEsc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const talonArg = x => (Math.round((x||0)*100)/100).toLocaleString('fr-CA',{minimumFractionDigits:2, maximumFractionDigits:2})+' $';
@@ -5461,6 +5485,7 @@ function talonHtml(r, P, statut){
     + c.gains.map(x=>'<tr '+tr+'><td '+td+'>'+E(x.lib)+'</td><td '+tdn+'>'+(x.h ? prepNb(x.h) : '')+'</td><td '+tdn+'>'+(x.tx ? A(x.tx) : '')+'</td><td '+tdn+'>'+A(x.m)+'</td><td '+tdn+'></td></tr>').join('')
     + '<tr '+tot+'><td '+td+' colspan="3">Total des gains (brut)</td><td '+tdn+'>'+A(c.brut)+'</td><td '+tdn+'>'+(cumBrut!=null ? A(cumBrut) : '—')+'</td></tr>'
     + c.imposables.map(x=>'<tr style="border-top:1px solid #e3e6ea;color:#555"><td '+td+' colspan="3"><i>'+E(x.lib)+' — non versé</i></td><td '+tdn+'><i>'+A(x.m)+'</i></td><td '+tdn+'></td></tr>').join('')
+    + (c.vacHB ? (()=>{ const v = c.vacHB, dF = d => d.getDate()+(d.getDate()===1?'er':'')+' '+VAC_MOIS[d.getMonth()]+' '+d.getFullYear(); return '<tr '+tr+' style="color:#333"><td '+td+' colspan="5"><b>Banque de vacances</b> — année du '+dF(v.deb)+' au '+dF(v.finAn)+' (droit '+prepNb(v.droit)+' h / an) : solde avant cette paie <b>'+prepNb(v.soldeAvant)+' h</b> · prises cette paie <b>'+prepNb(v.prisesPaie)+' h</b> · prises dans l\'année '+prepNb(v.prisesAnnee)+' h · <b>solde '+prepNb(v.solde)+' h ('+nbFr(v.semaines,1)+' sem.)</b>'+(v.depart ? '' : ' <span style="color:#b26a00">— solde de départ non inscrit au dossier</span>')+'</td></tr>'; })() : '')
     + (c.vacSolde!=null ? '<tr '+tr+' style="color:#555"><td '+td+' colspan="3"><i>Vacances accumulées ('+nbFr(cvNum(e.vacPct)||0,0)+' %) — non versées, mises de côté</i></td><td '+tdn+'><i>'+A(c.vacAcq)+'</i></td><td '+tdn+'><i>'+(cumOk||c.vacAcqCum!=null ? A(c.vacAcqCum) : '')+'</i></td></tr>'
       + '<tr style="color:#555"><td '+td+' colspan="3"><i>Solde de vacances à prendre</i></td><td '+tdn+'><i>'+A(c.vacSolde)+'</i></td><td '+tdn+'></td></tr>' : '')
     + c.nonImp.map(x=>'<tr '+tr+'><td '+td+' colspan="3">'+E(x.lib)+' (remboursement non imposable)</td><td '+tdn+'>'+A(x.m)+'</td><td '+tdn+'></td></tr>').join('')
@@ -5584,7 +5609,9 @@ function PrepPaieView({cfg, refreshKey}){
   // v631 : cumuls de l'année (année de la date de paiement) = lignes valides du journal des autres semaines
   const lotApprouve = {}; [...new Set(hist.map(x=>x[0]))].forEach(w=>{ const ls = hist.filter(x=>x[0]===w), d = ls.reduce((m,x)=>(x[21]||'')>m ? x[21] : m, ''); if(ls.some(x=>x[21]===d && x[20]==='Approuvée')) lotApprouve[w] = d; });
   const jValides = journal.filter(x=>lotApprouve[x[0]] && lotApprouve[x[0]]===x[JOURNAL_ILE]), anPaie = per.paye.slice(0,4);
-  const priorDe = r => { const o = {_an:anPaie}; jValides.filter(x=>x[0]!==week && String(x[2]||'').slice(0,4)===anPaie && ((r.e.id && x[4]===r.e.id) || cvNorm(x[3])===r.k)).forEach(x=>JOURNAL_COLS.forEach(([k],j)=>{ if(JOURNAL_NUM.includes(k)) o[k] = Math.round(((o[k]||0) + (cvNum(x[j])||0))*100)/100; })); return o; };
+  const priorDe = r => { const o = {_an:anPaie}; jValides.filter(x=>x[0]!==week && String(x[2]||'').slice(0,4)===anPaie && ((r.e.id && x[4]===r.e.id) || cvNorm(x[3])===r.k)).forEach(x=>JOURNAL_COLS.forEach(([k],j)=>{ if(JOURNAL_NUM.includes(k)) o[k] = Math.round(((o[k]||0) + (cvNum(x[j])||0))*100)/100; }));
+    const iF = JOURNAL_COLS.findIndex(c=>c[0]==='finSem'), iV = JOURNAL_COLS.findIndex(c=>c[0]==='vacH');
+    o._vacHist = jValides.filter(x=>x[0]!==week && ((r.e.id && x[4]===r.e.id) || cvNorm(x[3])===r.k)).map(x=>[String(x[iF]||''), cvNum(x[iV])||0]); return o; };
   rangs.forEach(r=>{ r.brut = brutDe(r); r.paye = r.simple+r.banqueUtil+r.ferie; r.calc = paieCalcul(r, fin, priorDe(r)); });
   // v632 : envois de talons — seulement une semaine approuvée ; on garde le dernier envoi par employé
   const envoiDe = r => envois.filter(x=>x[0]===week && x[7]>=(dernier||'') && ((r.e.id && x[4]===r.e.id) || cvNorm(x[3])===r.k)).map(x=>x[7]).sort().pop() || '';
