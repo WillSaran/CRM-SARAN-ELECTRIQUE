@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v652';
+const APP_VERSION = 'v653';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -3150,6 +3150,43 @@ function PjFacturesMateriel({job, factures, achats, clients, cfg, onChanged, app
         </div>)}</div>}</div>; }); })()}</>}</div>
   </div>;
 }
+// v653 : chercher dans tous les blocages (CRM + PunchPro) : job, type, description, auteur — avec les photos en vignettes et l'ajout de pièces jointes
+function BlocagesRecherche({B, nomJob}){
+  const [q,setQ]=useState(''), [seulOuverts,setSeulOuverts]=useState(false), [pour,setPour]=useState(null), [fich,setFich]=useState([]), [occ,setOcc]=useState(false), [n,setN]=useState(30);
+  const norm = v => cvNorm(v||'');
+  const liste = (B.liste||[]).map(b=>({b, nom:nomJob(b)})).sort((x,y)=>String(y.b.cree||y.b.date).localeCompare(String(x.b.cree||x.b.date)));
+  const mots = String(q||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const vis = liste.filter(({b,nom})=>{ if(seulOuverts && b.statut==='Réglé') return false;
+    const h = String([nom, b.type, b.description, b.auteur, b.date, b.statut, b.jobTitre].join(' ')).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    return mots.every(m=>h.includes(m)); });
+  const lienPJ = p => p.k==='fichier' ? 'https://drive.google.com/file/d/'+p.id+'/view' : p.url;
+  const ajouter = async b => { setOcc(true); try{ await B.maj(b, {}, fich); setPour(null); setFich([]); }catch(e){ alert('Erreur : '+apiErrMsg(e)); } setOcc(false); };
+  return <div>
+    <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8,alignItems:'center'}}>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔎 Chercher un blocage : job, type, texte, employé (ex: Phil)…" style={{flex:'1 1 260px',padding:'6px 10px'}}/>
+      <label className="muted" style={{fontSize:13,display:'flex',gap:4,alignItems:'center'}}><input type="checkbox" checked={seulOuverts} onChange={e=>setSeulOuverts(e.target.checked)} style={{width:'auto'}}/> Ouverts seulement</label>
+      <span className="muted" style={{fontSize:12}}>{vis.length} blocage{vis.length>1?'s':''}</span></div>
+    {!B.lu && <div className="muted">Lecture des blocages…</div>}
+    {B.lu && !vis.length && <div className="muted">Aucun blocage trouvé.</div>}
+    {vis.slice(0,n).map(({b,nom})=>{ const photos = (b.pj||[]).filter(p=>p.k==='fichier' && !/^audio\//.test(p.mime||'')), autres = (b.pj||[]).filter(p=>!(p.k==='fichier' && !/^audio\//.test(p.mime||'')));
+      return <div key={b.id} className="card" style={{padding:10,marginBottom:8,fontSize:13}}>
+        <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+          <span><b>{nom||'(job inconnue)'}</b> <span className="muted">· {b.type}</span>{b.source==='punchpro' && <span className="badge" style={{marginLeft:6,fontSize:10.5,background:'rgba(88,166,255,0.15)',color:'var(--accent)'}}>PunchPro{b.auteur?' · '+b.auteur:''}</span>}</span>
+          <span style={{color:b.statut==='Réglé'?'var(--success)':'var(--warning)',fontWeight:700}}>{b.statut==='Réglé'?'✓ Réglé':'! Ouvert'} <span className="muted" style={{fontWeight:400}}>· {b.date}</span></span></div>
+        <div style={{whiteSpace:'pre-wrap',margin:'4px 0'}}>{b.description}</div>
+        {photos.length>0 ? <div style={{display:'flex',gap:6,flexWrap:'wrap',margin:'4px 0'}}>{photos.map((p,i)=><a key={i} href={lienPJ(p)} target="_blank" rel="noopener"><img src={'https://drive.google.com/thumbnail?id='+p.id+'&sz=w240'} alt={p.nom||''} style={{width:84,height:84,objectFit:'cover',borderRadius:8,background:'var(--bg3)',display:'block'}}/></a>)}</div>
+          : <div style={{fontSize:12,color:'var(--warning)'}}>📷 Aucune photo</div>}
+        {autres.map((p,i)=>p.k==='note' ? <div key={i} style={{fontSize:12.5,whiteSpace:'pre-wrap'}}>🗒 {p.texte}</div> : <div key={i}><a href={lienPJ(p)} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:12.5}}>{/^audio\//.test(p.mime||'') ? '🎤' : '🔗'} {p.nom||p.url}</a></div>)}
+        {pour===b.id ? <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginTop:6}}>
+            <label className="btn btn-sm" style={{cursor:'pointer'}}>📎 Choisir des photos / fichiers<input type="file" multiple style={{display:'none'}} onChange={e=>{ const l=[...e.target.files]; e.target.value=''; setFich(f=>[...f,...l]); }}/></label>
+            {fich.map((x,i)=><span key={i} className="muted" style={{fontSize:12}}>{x.name}</span>)}
+            <button className="btn btn-sm btn-p" disabled={occ||!fich.length} onClick={()=>ajouter(b)}>{occ?'Envoi…':'Ajouter'}</button>
+            <button className="btn btn-sm" onClick={()=>{setPour(null);setFich([]);}}>Annuler</button></div>
+          : <button className="btn btn-sm" style={{marginTop:6}} onClick={()=>{setPour(b.id);setFich([]);}}>📎 Ajouter des photos</button>}
+      </div>; })}
+    {vis.length>n && <button className="btn btn-sm" onClick={()=>setN(n+30)}>Voir plus ({vis.length-n})</button>}
+  </div>;
+}
 function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, nom} → seulement ce projet-là, sans recherche ni filtres
   const [tick,setTick]=useState(0);
   const {loading, err, events, registry, factures, appels, courriels, archives, achats, fiches} = useClientsData(cfg, refreshKey+'|p'+tick);
@@ -3300,7 +3337,7 @@ function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, 
     </div>; };
   const totalManque = jobs.reduce((t,x)=>t+x.s.manquants.length,0);
   const barreVue = !seul && <div style={{display:'flex',gap:6,margin:'0 0 10px',flexWrap:'wrap',alignItems:'center'}}>
-    {[['tous','Tous les projets'],['contracteur','🏗️ Par contracteur'],['semaine','📅 Semaine'],['topo','🗣️ Topo des gars']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vueP===k?' btn-p':'')} onClick={()=>choisirVue(k)}>{l}</button>)}</div>;
+    {[['tous','Tous les projets'],['contracteur','🏗️ Par contracteur'],['semaine','📅 Semaine'],['topo','🗣️ Topo des gars'],['blocages','⚠️ Blocages']].map(([k,l])=><button key={k} className={'btn btn-sm'+(vueP===k?' btn-p':'')} onClick={()=>choisirVue(k)}>{l}</button>)}</div>;
   if(!seul && vueP!=='tous'){
     const pad = n => String(n).padStart(2,'0'), ymd = d => d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
     const now = new Date(), N = v => cvNorm(v||'');
@@ -3312,6 +3349,11 @@ function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, 
       <CvTopoChantier job={detailP.j} cfg={cfg}/></Modal>;
     const tuile = (n, l, c) => <div className="card" style={{padding:'8px 12px',minWidth:110}}><div style={{fontSize:20,fontWeight:800,color:c||'var(--text)'}}>{n}</div><div className="muted" style={{fontSize:12}}>{l}</div></div>;
     // ── 🗣️ Topo des gars : le fil des derniers dépôts (notes sur 10, notes écrites, mémos vocaux), du plus récent au plus vieux
+    if(vueP==='blocages'){
+      const nomParId = {}; tous.forEach(x=>{ nomParId[x.j.id] = (x.c.code!=='PART'?x.c.code+' ':'')+cvTitreJob(x.j); });
+      return <div><h2 className="fh" style={{margin:'0 0 8px',fontSize:22}}>Projets</h2>{barreVue}
+        <BlocagesRecherche B={B} nomJob={b=>b.source==='punchpro' ? (nomParId[String(b.eventId).split('_')[0]] || nomParId[b.eventId] || b.jobTitre) : (nomParId[b.job] || b.job)}/>{detailModal}</div>;
+    }
     if(vueP==='topo'){
       const parEv = {}, parTitre = {};
       tous.forEach(x=>x.j.events.forEach(e=>{ if(e.id){ parEv[e.id] = {x, e}; parEv[String(e.id).split('_')[0]] = parEv[String(e.id).split('_')[0]] || {x, e}; } parTitre[e.day+'|'+N(e.title)] = {x, e}; }));
