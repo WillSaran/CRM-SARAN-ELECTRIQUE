@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v657';
+const APP_VERSION = 'v658';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5653,12 +5653,85 @@ function PrepPaieView({cfg, refreshKey}){
     </Modal>}
   </div>;
 }
+// v658 : Remises DAS — montants à remettre chaque mois (remetteur mensuel : au plus tard le 15 du mois suivant), calculés à partir du journal de paie
+// ARC (Receveur général) : impôt fédéral + AE employé + AE employeur. Revenu Québec : impôt du Québec + RRQ (employé + employeur) + RQAP (employé + employeur) + FSS + CNESST.
+// La CNT se paie une fois par année avec le RLZ-1.S ; la CCQ se paie avec le rapport mensuel CCQ.
+const REMISES_ONGLET = 'Remises DAS';
+const REMISES_ENTETE = ['Mois','Organisme','Montant remis','Payé le','No de confirmation','Note','Inscrit le'];
+const journalValides = (hist, journal) => { const lot = {};
+  [...new Set(hist.map(x=>x[0]))].forEach(w=>{ const ls = hist.filter(x=>x[0]===w), d = ls.reduce((m,x)=>(x[21]||'')>m ? x[21] : m, ''); if(ls.some(x=>x[21]===d && x[20]==='Approuvée')) lot[w] = d; });
+  const iLe = JOURNAL_COLS.length-1;
+  return journal.filter(x=>lot[x[0]] && lot[x[0]]===x[iLe]).map(x=>{ const o = {}; JOURNAL_COLS.forEach(([k],j)=>{ o[k] = JOURNAL_NUM.includes(k) ? (cvNum(x[j])||0) : (x[j]||''); }); return o; }); };
+const DAS_ARC = [['fed','Impôt fédéral retenu'],['ae','AE — employés'],['eAe','AE — employeur']];
+const DAS_RQ = [['qc','Impôt du Québec retenu'],['rrq','RRQ — employés'],['eRrq','RRQ — employeur'],['rqap','RQAP — employés'],['eRqap','RQAP — employeur'],['eFss','FSS'],['eCnesst','CNESST']];
+const dasLimite = mois => { const [a,m] = mois.split('-').map(Number), d = new Date(a, m, 15); return d; };   // le 15 du mois suivant
+function RemisesDasView({cfg, refreshKey}){
+  const [journal,setJournal]=useState(null), [hist,setHist]=useState([]), [remises,setRemises]=useState([]), [err,setErr]=useState('');
+  const [an,setAn]=useState(String(new Date().getFullYear() < 2027 ? 2027 : new Date().getFullYear()));
+  const [ouvert,setOuvert]=useState(''), [saisie,setSaisie]=useState(null), [etat,setEtat]=useState('');
+  const lire = useCallback(async force=>{ setErr('');
+    const lt = async (onglet, plage) => { try{ const r = await lireCache(DOSSIERS_EMP_ID, qSheet(onglet)+'!'+plage, force); return (r.result.values||[]).slice(1).filter(x=>x[0]); } catch(e){ return []; } };
+    try{ const [j,h,rm] = await Promise.all([lt(JOURNAL_ONGLET,'A1:AL'), lt(PREP_ONGLET,'A1:W'), lt(REMISES_ONGLET,'A1:G')]); setJournal(j); setHist(h); setRemises(rm); }
+    catch(e){ setErr(apiErrMsg(e)); setJournal([]); } },[]);
+  useEffect(()=>{ lire(false); },[lire, refreshKey]);
+  if(!journal) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Remises DAS…</span></div>;
+  const lignes = journalValides(hist, journal), ans = [...new Set(lignes.map(x=>String(x.paye).slice(0,4)).concat([an]))].sort();
+  const moisL = [...Array(12)].map((_,i)=>an+'-'+String(i+1).padStart(2,'0'));
+  const somme = (ls, cles) => Math.round(ls.reduce((t,x)=>t+cles.reduce((u,[k])=>u+(x[k]||0),0),0)*100)/100;
+  const remiseDe = (mois, org) => remises.filter(x=>x[0]===mois && x[1]===org).sort((a,b)=>(a[6]||'')>(b[6]||'')?1:-1).pop();
+  const auj = localDateStr(new Date());
+  const marquer = async () => { const s = saisie; if(!s.paye){ alert('Inscris la date du paiement.'); return; } setEtat('Enregistrement…');
+    try{ await ensureSheetsExist(DOSSIERS_EMP_ID, [{name:REMISES_ONGLET, headers:REMISES_ENTETE}]);
+      await sheetsAppendRow(DOSSIERS_EMP_ID, qSheet(REMISES_ONGLET), [s.mois, s.org, String(s.montant).replace(',','.'), s.paye, s.conf||'', s.note||'', prepMaintenant()]);
+      setSaisie(null); setEtat(''); await lire(true); }
+    catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
+  const totAn = (cles) => somme(lignes.filter(x=>String(x.paye).startsWith(an)), cles);
+  const cellOrg = (mois, org, du) => { const r = remiseDe(mois, org), lim = localDateStr(dasLimite(mois)), retard = !r && du>0 && auj>lim;
+    return <td>{r ? <span style={{color:Math.abs((cvNum(r[2])||0)-du)<0.01 ? 'var(--success)' : 'var(--warning)'}}>✓ {ccqArg(cvNum(r[2])||0)} le {r[3]}{Math.abs((cvNum(r[2])||0)-du)>=0.01 ? ' (≠ dû)' : ''}</span>
+      : du>0 ? <button className={'btn btn-sm'+(retard?'':' btn-p')} style={retard?{borderColor:'var(--danger)',color:'var(--danger)'}:{}} onClick={()=>setSaisie({mois, org, montant:du.toFixed(2), paye:auj, conf:'', note:''})}>{retard ? '⚠ En retard — marquer payé' : 'Marquer payé'}</button> : <span className="muted">—</span>}</td>; };
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Remises DAS</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Montants à remettre chaque mois, calculés à partir des paies approuvées (journal de paie), selon le mois de la <b>date de paiement</b>. Remetteur mensuel : au plus tard le <b>15 du mois suivant</b>. Tu paies dans AccèsD (Receveur général du Canada — retenues à la source ; Revenu Québec — retenues et cotisations), puis tu marques la remise payée ici.</div>
+    {err && <div className="card" style={{color:'var(--danger)',marginBottom:10}}>Impossible de lire le journal : {err}</div>}
+    <div className="card" style={{padding:'10px 12px'}}>
+      <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>Année : {ans.map(a=><button key={a} className={'btn btn-sm'+(a===an?' btn-p':'')} onClick={()=>setAn(a)}>{a}</button>)}<button className="btn btn-sm" onClick={()=>lire(true)}>↻ Relire</button></div>
+      <div style={{overflowX:'auto'}}><table style={{fontSize:13,width:'100%'}}><thead><tr><th>Mois</th><th style={{textAlign:'right'}}>Paies</th><th style={{textAlign:'right'}}>Salaires bruts</th><th style={{textAlign:'right'}}>ARC (fédéral)</th><th>Remise ARC</th><th style={{textAlign:'right'}}>Revenu Québec</th><th>Remise RQ</th><th>Date limite</th></tr></thead>
+        <tbody>{moisL.map(mois=>{ const ls = lignes.filter(x=>String(x.paye).startsWith(mois)); const arc = somme(ls, DAS_ARC), rq = somme(ls, DAS_RQ), np = new Set(ls.map(x=>x.sem)).size;
+          if(!ls.length && !remiseDe(mois,'ARC') && !remiseDe(mois,'Revenu Québec')) return <tr key={mois} className="muted"><td>{ccqMoisTxt(mois)}</td><td colSpan="7" style={{fontSize:12}}>aucune paie approuvée</td></tr>;
+          return <React.Fragment key={mois}><tr style={{cursor:'pointer'}} onClick={()=>setOuvert(o=>o===mois?'':mois)}>
+            <td><b>{ccqMoisTxt(mois)}</b> <span className="muted" style={{fontSize:11}}>{ouvert===mois?'▾':'▸'} détail</span></td><td style={{textAlign:'right'}}>{np}</td><td style={{textAlign:'right'}}>{ccqArg(somme(ls,[['sal'],['vacCcq']]))}</td>
+            <td style={{textAlign:'right'}}><b>{ccqArg(arc)}</b></td><td onClick={ev=>ev.stopPropagation()}>{cellOrg(mois,'ARC',arc)}</td>
+            <td style={{textAlign:'right'}}><b>{ccqArg(rq)}</b></td><td onClick={ev=>ev.stopPropagation()}>{cellOrg(mois,'Revenu Québec',rq)}</td>
+            <td>{dasLimite(mois).toLocaleDateString('fr-CA',{day:'numeric',month:'short',year:'numeric'})}</td></tr>
+            {ouvert===mois && <tr><td colSpan="8" style={{background:'var(--bg2, rgba(0,0,0,.03))'}}>
+              <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:12.5}}>
+                {[['ARC (Receveur général)',DAS_ARC,arc],['Revenu Québec',DAS_RQ,rq]].map(([t,cl,tt])=><table key={t} style={{fontSize:12.5,minWidth:260}}><thead><tr><th>{t}</th><th style={{textAlign:'right'}}>Montant</th></tr></thead><tbody>
+                  {cl.map(([k,l])=><tr key={k}><td>{l}</td><td style={{textAlign:'right'}}>{ccqArg(somme(ls,[[k]]))}</td></tr>)}<tr style={{fontWeight:700}}><td>Total à remettre</td><td style={{textAlign:'right'}}>{ccqArg(tt)}</td></tr></tbody></table>)}
+                <table style={{fontSize:12.5,minWidth:300}}><thead><tr><th>Par employé</th><th style={{textAlign:'right'}}>Brut</th><th style={{textAlign:'right'}}>ARC</th><th style={{textAlign:'right'}}>RQ</th></tr></thead><tbody>
+                  {[...new Set(ls.map(x=>x.nom))].map(nm=>{ const le = ls.filter(x=>x.nom===nm); return <tr key={nm}><td>{nm}</td><td style={{textAlign:'right'}}>{ccqArg(somme(le,[['sal'],['vacCcq']]))}</td><td style={{textAlign:'right'}}>{ccqArg(somme(le,DAS_ARC))}</td><td style={{textAlign:'right'}}>{ccqArg(somme(le,DAS_RQ))}</td></tr>; })}</tbody></table>
+                <div className="muted" style={{fontSize:11.5,flex:'1 1 100%'}}>Paies du mois : {[...new Set(ls.map(x=>x.pp+' (payable le '+x.paye+')'))].join(' · ')}. CNT ({ccqArg(somme(ls,[['eCnt']]))}) : payée une fois par année avec le RLZ-1.S. CCQ : payée avec le rapport mensuel CCQ.</div>
+              </div></td></tr>}
+          </React.Fragment>; })}
+          <tr style={{fontWeight:700}}><td>Total {an}</td><td></td><td style={{textAlign:'right'}}>{ccqArg(totAn([['sal'],['vacCcq']]))}</td><td style={{textAlign:'right'}}>{ccqArg(totAn(DAS_ARC))}</td><td></td><td style={{textAlign:'right'}}>{ccqArg(totAn(DAS_RQ))}</td><td></td><td></td></tr>
+        </tbody></table></div>
+      <div className="muted" style={{fontSize:11.5,marginTop:8}}>Vert = remise inscrite égale au montant dû ; orange = montant différent (paie approuvée ou corrigée après la remise). Ces totaux serviront aussi au contrôle des T4 / relevés 1 en fin d'année.</div>
+    </div>
+    {saisie && <Modal title={'Remise payée — '+saisie.org+' — '+(ccqMoisTxt(saisie.mois))} onClose={()=>setSaisie(null)}>
+      <div style={{display:'grid',gap:8,fontSize:13}}>
+        <label>Montant remis $ <input value={saisie.montant} onChange={ev=>setSaisie(s=>({...s,montant:ev.target.value}))} style={{width:120,textAlign:'right'}}/></label>
+        <label>Payé le <input type="date" value={saisie.paye} onChange={ev=>setSaisie(s=>({...s,paye:ev.target.value}))}/></label>
+        <label>No de confirmation (AccèsD) <input value={saisie.conf} onChange={ev=>setSaisie(s=>({...s,conf:ev.target.value}))} style={{width:200}}/></label>
+        <label>Note <input value={saisie.note} onChange={ev=>setSaisie(s=>({...s,note:ev.target.value}))} style={{width:'100%'}}/></label>
+        <div><button className="btn btn-sm btn-p" onClick={marquer} disabled={!!etat}>{etat || 'Enregistrer'}</button></div>
+      </div></Modal>}
+  </div>;
+}
 function EmployesSection({cfg, refreshKey}){
   const [o,setO]=useState(()=>{ try{ return localStorage.getItem('emp_onglet')||'heures'; }catch(e){ return 'heures'; } });
   const choisir = k => { setO(k); try{ localStorage.setItem('emp_onglet', k); }catch(e){} };
   return <div>
-    <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>{[['heures','Heures'],['prep','Préparation de la paie'],['dossiers','Dossiers employés'],['ccq','Registre CCQ']].map(([k,l])=><button key={k} className={'btn btn-sm'+(o===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}</div>
-    {o==='heures' ? <HeuresView cfg={cfg} refreshKey={refreshKey}/> : o==='prep' ? <PrepPaieView cfg={cfg} refreshKey={refreshKey}/> : o==='ccq' ? <RegistreCcqView cfg={cfg} refreshKey={refreshKey}/> : <DossiersEmployesView cfg={cfg} refreshKey={refreshKey}/>}
+    <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>{[['heures','Heures'],['prep','Préparation de la paie'],['das','Remises DAS'],['dossiers','Dossiers employés'],['ccq','Registre CCQ']].map(([k,l])=><button key={k} className={'btn btn-sm'+(o===k?' btn-p':'')} onClick={()=>choisir(k)}>{l}</button>)}</div>
+    {o==='heures' ? <HeuresView cfg={cfg} refreshKey={refreshKey}/> : o==='prep' ? <PrepPaieView cfg={cfg} refreshKey={refreshKey}/> : o==='das' ? <RemisesDasView cfg={cfg} refreshKey={refreshKey}/> : o==='ccq' ? <RegistreCcqView cfg={cfg} refreshKey={refreshKey}/> : <DossiersEmployesView cfg={cfg} refreshKey={refreshKey}/>}
   </div>;
 }
 function HeuresView({cfg, refreshKey}){
