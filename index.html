@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v660';
+const APP_VERSION = 'v661';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5703,7 +5703,7 @@ function RemisesDasView({cfg, refreshKey}){
     <div className="muted" style={{fontSize:13,marginBottom:10}}>Montants à remettre chaque mois, calculés à partir des paies approuvées (journal de paie), selon le mois de la <b>date de paiement</b>. Remetteur mensuel : au plus tard le <b>15 du mois suivant</b>. Tu paies dans AccèsD (Receveur général du Canada — retenues à la source ; Revenu Québec — retenues et cotisations), puis tu marques la remise payée ici.</div>
     {err && <div className="card" style={{color:'var(--danger)',marginBottom:10}}>Impossible de lire le journal : {err}</div>}
     <div className="card" style={{padding:'10px 12px'}}>
-      <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>Année : {ans.map(a=><button key={a} className={'btn btn-sm'+(a===an?' btn-p':'')} onClick={()=>setAn(a)}>{a}</button>)}<button className="btn btn-sm" onClick={()=>lire(true)}>↻ Relire</button></div>
+      <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>Année : {ans.map(a=><button key={a} className={'btn btn-sm'+(a===an?' btn-p':'')} onClick={()=>setAn(a)}>{a}</button>)}<button className="btn btn-sm" onClick={()=>lire(true)}>↻ Relire</button><button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>rapportDas(lignes, an, remiseDe)}>📄 Rapport détaillé {an}</button></div>
       <div style={{overflowX:'auto'}}><table style={{fontSize:13,width:'100%'}}><thead><tr><th>Mois</th><th style={{textAlign:'right'}}>Paies</th><th style={{textAlign:'right'}}>Salaires bruts</th><th style={{textAlign:'right'}}>ARC (fédéral)</th><th>Remise ARC</th><th style={{textAlign:'right'}}>Revenu Québec</th><th>Remise RQ</th><th>Date limite</th></tr></thead>
         <tbody>{moisL.map(mois=>{ const ls = lignes.filter(x=>String(x.paye).startsWith(mois)); const arc = somme(ls, DAS_ARC), rq = somme(ls, DAS_RQ), np = new Set(ls.map(x=>x.sem)).size;
           if(!ls.length && !remiseDe(mois,'ARC') && !remiseDe(mois,'Revenu Québec')) return <tr key={mois} className="muted"><td>{ccqMoisTxt(mois)}</td><td colSpan="7" style={{fontSize:12}}>aucune paie approuvée</td></tr>;
@@ -5718,6 +5718,7 @@ function RemisesDasView({cfg, refreshKey}){
                   {cl.map(([k,l])=><tr key={k}><td>{l}</td><td style={{textAlign:'right'}}>{ccqArg(somme(ls,[[k]]))}</td></tr>)}<tr style={{fontWeight:700}}><td>Total à remettre</td><td style={{textAlign:'right'}}>{ccqArg(tt)}</td></tr></tbody></table>)}
                 <table style={{fontSize:12.5,minWidth:300}}><thead><tr><th>Par employé</th><th style={{textAlign:'right'}}>Brut</th><th style={{textAlign:'right'}}>ARC</th><th style={{textAlign:'right'}}>RQ</th></tr></thead><tbody>
                   {[...new Set(ls.map(x=>x.nom))].map(nm=>{ const le = ls.filter(x=>x.nom===nm); return <tr key={nm}><td>{nm}</td><td style={{textAlign:'right'}}>{ccqArg(somme(le,[['sal'],['vacCcq']]))}</td><td style={{textAlign:'right'}}>{ccqArg(somme(le,DAS_ARC))}</td><td style={{textAlign:'right'}}>{ccqArg(somme(le,DAS_RQ))}</td></tr>; })}</tbody></table>
+                <div style={{flex:'1 1 100%'}}><button className="btn btn-sm" onClick={()=>rapportDas(lignes, mois, remiseDe)}>📄 Rapport détaillé du mois</button></div>
                 <div className="muted" style={{fontSize:11.5,flex:'1 1 100%'}}>Paies du mois : {[...new Set(ls.map(x=>x.pp+' (payable le '+x.paye+')'))].join(' · ')}. CNT ({ccqArg(somme(ls,[['eCnt']]))}) : payée une fois par année avec le RLZ-1.S. CCQ : payée avec le rapport mensuel CCQ.</div>
               </div></td></tr>}
           </React.Fragment>; })}
@@ -5750,7 +5751,7 @@ function RemisesCcqView({cfg, refreshKey}){
     catch(e){ setErr(apiErrMsg(e)); setJournal([]); } },[]);
   useEffect(()=>{ lire(false); },[lire, refreshKey]);
   if(!journal) return <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Remises CCQ…</span></div>;
-  const lignes = journalValides(hist, journal).filter(x=>x.regime==='CCQ').map(x=>({...x, moisCcq:String(x.finSem || localDateStr(ccqFinSemaine(x.sem))).slice(0,7)}));
+  const lignes = journalValides(hist, journal).filter(x=>x.regime==='CCQ').map(x=>{ const fs = x.finSem || localDateStr(ccqFinSemaine(x.sem)); return {...x, finSem:fs, moisCcq:String(fs).slice(0,7)}; });
   const ans = [...new Set(lignes.map(x=>x.moisCcq.slice(0,4)).concat([an]))].sort(), moisL = [...Array(12)].map((_,i)=>an+'-'+String(i+1).padStart(2,'0'));
   const s2 = (ls, cles) => Math.round(ls.reduce((t,x)=>t+cles.reduce((u,[k])=>u+(x[k]||0),0),0)*100)/100;
   const totCcq = ls => Math.round((s2(ls,[['vacCcq']]) + s2(ls,RCCQ_EMP) + s2(ls,RCCQ_PAT))*100)/100;
@@ -5775,7 +5776,7 @@ function RemisesCcqView({cfg, refreshKey}){
     {err && <div className="card" style={{color:'var(--danger)',marginBottom:10}}>Impossible de lire le journal : {err}</div>}
     {manque.length>0 && <div className="card" style={{marginBottom:10,fontSize:12.5,color:'var(--warning)'}}>NAS manquant ou incomplet au dossier : {manque.join(', ')} (Dossiers employés › Identification).</div>}
     <div className="card" style={{padding:'10px 12px'}}>
-      <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>Année : {ans.map(a=><button key={a} className={'btn btn-sm'+(a===an?' btn-p':'')} onClick={()=>setAn(a)}>{a}</button>)}<button className="btn btn-sm" onClick={()=>lire(true)}>↻ Relire</button></div>
+      <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>Année : {ans.map(a=><button key={a} className={'btn btn-sm'+(a===an?' btn-p':'')} onClick={()=>setAn(a)}>{a}</button>)}<button className="btn btn-sm" onClick={()=>lire(true)}>↻ Relire</button><button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={()=>rapportCcq(lignes, an, remiseDe, x=>deNasMasque(dosDe(x).nas))}>📄 Rapport détaillé {an}</button></div>
       <div style={{overflowX:'auto'}}><table style={{fontSize:13,width:'100%'}}><thead><tr><th>Mois</th><th style={th}>Employés</th><th style={th}>Heures</th><th style={th}>Salaires</th><th style={th}>Vacances 13 %</th><th style={th}>Parts employés</th><th style={th}>Parts employeur</th><th style={th}>Total CCQ</th><th>Remise</th><th>Date limite</th></tr></thead>
         <tbody>{moisL.map(mois=>{ const ls = lignes.filter(x=>x.moisCcq===mois), r = remiseDe(mois);
           if(!ls.length && !r) return <tr key={mois} className="muted"><td>{ccqMoisTxt(mois)}</td><td colSpan="9" style={{fontSize:12}}>aucune paie approuvée</td></tr>;
@@ -5787,7 +5788,7 @@ function RemisesCcqView({cfg, refreshKey}){
               : <button className={'btn btn-sm'+(auj>lim?'':' btn-p')} style={auj>lim?{borderColor:'var(--danger)',color:'var(--danger)'}:{}} onClick={()=>setSaisie({mois, montant:tot.toFixed(2), paye:auj, conf:'', note:''})}>{auj>lim ? '⚠ En retard — marquer payé' : 'Marquer payé'}</button>}</td>
             <td>{dasLimite(mois).toLocaleDateString('fr-CA',{day:'numeric',month:'short',year:'numeric'})}</td></tr>
             {ouvert===mois && <tr><td colSpan="10" style={{background:'var(--bg2, rgba(0,0,0,.03))'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6,flexWrap:'wrap',gap:6}}><span className="muted" style={{fontSize:12}}>Semaines : {[...new Set(ls.map(x=>x.pp+' (fin '+String(x.finSem||localDateStr(ccqFinSemaine(x.sem)))+')'))].join(' · ')}</span><button className="btn btn-sm" onClick={()=>exporter(mois)}>⬇ Exporter (CSV)</button></div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6,flexWrap:'wrap',gap:6}}><span className="muted" style={{fontSize:12}}>Semaines : {[...new Set(ls.map(x=>x.pp+' (fin '+String(x.finSem||localDateStr(ccqFinSemaine(x.sem)))+')'))].join(' · ')}</span><span style={{display:'flex',gap:6}}><button className="btn btn-sm" onClick={()=>rapportCcq(lignes, mois, remiseDe, x=>deNasMasque(dosDe(x).nas))}>📄 Rapport détaillé du mois</button><button className="btn btn-sm" onClick={()=>exporter(mois)}>⬇ Exporter (CSV)</button></span></div>
               <div style={{overflowX:'auto'}}><table style={{fontSize:12,width:'100%'}}><thead><tr><th>Employé</th><th>NAS</th><th>Classe · secteur</th><th style={th}>H. simple</th><th style={th}>H. ½</th><th style={th}>H. double</th><th style={th}>Salaire</th><th style={th}>Vac. 13 %</th>{RCCQ_EMP.map(([k,l])=><th key={k} style={th}>Emp. {l}</th>)}{RCCQ_PAT.map(([k,l])=><th key={k} style={th}>Empl. {l}</th>)}<th style={th}>Total</th></tr></thead>
                 <tbody>{noms.map(nm=>{ const le = ls.filter(x=>x.nom===nm), d = dosDe(le[0]), dl = le[le.length-1]; return <tr key={nm}><td>{nm}</td><td>{deNasMasque(d.nas) || <span style={{color:'var(--warning)'}}>manquant</span>}</td><td>{[dl.classe||d.classe, dl.secteur||d.ccqSecteur].filter(Boolean).join(' · ')}</td>
                   {['hSimple','hDemi','hDouble'].map(k=><td key={k} style={th}>{prepNb(s2(le,[[k]]))}</td>)}<td style={th}>{ccqArg(s2(le,[['sal']]))}</td><td style={th}>{ccqArg(s2(le,[['vacCcq']]))}</td>
@@ -5808,6 +5809,56 @@ function RemisesCcqView({cfg, refreshKey}){
       </div></Modal>}
   </div>;
 }
+// v661 : rapports détaillés imprimables (lettre paysage) — remises DAS et CCQ, pour un mois ou une année
+function rapportImprimer(corps, titre){ const w = window.open('', '_blank'); if(!w){ alert('Autorise les fenêtres surgissantes pour imprimer.'); return; }
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+talonEsc(titre)+'</title><style>body{font:10px Arial,sans-serif;color:#111;margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}h2{font-size:13px;margin:12px 0 4px}table{border-collapse:collapse;width:100%;margin-bottom:8px}th,td{border:1px solid #bbb;padding:2px 4px}th{background:#eef1f4;font-size:9px}td.n,th.n{text-align:right;white-space:nowrap}tr.st td{background:#f6f7f9;font-weight:700}tr.tt td{background:#e3e7ec;font-weight:700}.muted{color:#666}table.petit th,table.petit td{font-size:8px;padding:1px 2px}@page{size:letter landscape;margin:10mm}</style></head><body>'+corps+'</body></html>');
+  w.document.close(); w.focus(); setTimeout(()=>w.print(), 400); }
+const rapEntete = (titre, sous) => '<div style="display:flex;gap:10px;align-items:center;border-bottom:2px solid #111;padding-bottom:4px;margin-bottom:6px"><img src="'+SARAN_LOGO+'" style="height:46px"><div><div style="font-size:10px;color:#555">Saran Électrique inc.</div><div style="font-size:15px;font-weight:700">'+talonEsc(titre)+'</div><div style="font-size:10.5px">'+sous+'</div></div><div style="margin-left:auto;font-size:9px;color:#666">Imprimé le '+talonEsc(new Date().toLocaleDateString('fr-CA',{day:'numeric',month:'long',year:'numeric'}))+'</div></div>';
+const rapN = x => (Math.round((x||0)*100)/100).toLocaleString('fr-CA',{minimumFractionDigits:2,maximumFractionDigits:2});
+const rapSum = (ls, k) => Math.round(ls.reduce((t,x)=>t+(x[k]||0),0)*100)/100;
+// Tableau détaillé : une ligne par paie, sous-total par employé, total général. cols = [[clé ou fonction, titre, numérique?]]
+function rapTableau(ls, cols, cleNom, petit){ const E = talonEsc, noms = [...new Set(ls.map(x=>x[cleNom||'nom']))].sort((a,b)=>a.localeCompare(b));
+  const val = (c, x) => typeof c[0]==='function' ? c[0](x) : x[c[0]], som = (c, xs) => Math.round(xs.reduce((t,x)=>t+(+val(c,x)||0),0)*100)/100;
+  let h = '<table'+(petit ? ' class="petit"' : '')+'><thead><tr><th>Employé</th>'+cols.map(c=>'<th'+(c[2]?' class="n"':'')+'>'+E(c[1])+'</th>').join('')+'</tr></thead><tbody>';
+  noms.forEach(nm=>{ const le = ls.filter(x=>x[cleNom||'nom']===nm);
+    le.forEach((x,i)=>{ h += '<tr><td>'+(i ? '' : E(nm))+'</td>'+cols.map(c=>c[2] ? '<td class="n">'+rapN(val(c,x))+'</td>' : '<td>'+E(val(c,x))+'</td>').join('')+'</tr>'; });
+    h += '<tr class="st"><td>Sous-total '+E(nm)+'</td>'+cols.map(c=>c[2] ? '<td class="n">'+rapN(som(c,le))+'</td>' : '<td></td>').join('')+'</tr>'; });
+  h += '<tr class="tt"><td>Total</td>'+cols.map(c=>c[2] ? '<td class="n">'+rapN(som(c,ls))+'</td>' : '<td></td>').join('')+'</tr></tbody></table>';
+  return h; }
+// Tableau annuel : 12 mois, dû / remis / écart pour chaque organisme
+function rapAnnuel(an, orgs){ const E = talonEsc; let h = '<h2>Sommaire de l\'année '+E(an)+'</h2><table><thead><tr><th>Mois</th>'+orgs.map(o=>'<th class="n">'+E(o.nom)+' — dû</th><th class="n">Remis</th><th>Payé le</th><th class="n">Écart</th>').join('')+'</tr></thead><tbody>';
+  const tot = orgs.map(()=>({du:0, re:0}));
+  [...Array(12)].forEach((_,i)=>{ const mois = an+'-'+String(i+1).padStart(2,'0');
+    h += '<tr><td>'+E(ccqMoisTxt(mois))+'</td>'+orgs.map((o,j)=>{ const du = o.du(mois), r = o.remise(mois), re = r ? (cvNum(r[2])||0) : 0; tot[j].du += du; tot[j].re += re;
+      return '<td class="n">'+(du ? rapN(du) : '')+'</td><td class="n">'+(r ? rapN(re) : '')+'</td><td>'+(r ? E(r[3])+(r[4] ? ' · '+E(r[4]) : '') : (du ? '<b style="color:#b00">non payé</b>' : ''))+'</td><td class="n">'+(du||re ? rapN(re-du) : '')+'</td>'; }).join('')+'</tr>'; });
+  h += '<tr class="tt"><td>Total</td>'+tot.map(t=>'<td class="n">'+rapN(t.du)+'</td><td class="n">'+rapN(t.re)+'</td><td></td><td class="n">'+rapN(t.re-t.du)+'</td>').join('')+'</tr></tbody></table>';
+  return h; }
+const rapStatut = (r, du) => r ? 'Remise payée le '+talonEsc(r[3])+' : '+talonArg(cvNum(r[2])||0)+(r[4] ? ' (confirmation '+talonEsc(r[4])+')' : '')+(Math.abs((cvNum(r[2])||0)-du)>=0.01 ? ' — <b style="color:#b26a00">écart '+talonArg((cvNum(r[2])||0)-du)+'</b>' : '') : '<b style="color:#b00">Remise non inscrite</b>';
+function rapportDas(lignes, periode, remiseDe){ const mois = periode.length===7, ls = lignes.filter(x=>String(x.paye).startsWith(periode)), E = talonEsc;
+  const arc = Math.round(DAS_ARC.reduce((t,[k])=>t+rapSum(ls,k),0)*100)/100, rq = Math.round(DAS_RQ.reduce((t,[k])=>t+rapSum(ls,k),0)*100)/100;
+  const titre = 'Remises DAS — '+(mois ? ccqMoisTxt(periode) : 'année '+periode);
+  let h = rapEntete(titre, (mois ? 'Paies dont la date de paiement est en '+E(ccqMoisTxt(periode))+' · date limite : '+E(dasLimite(periode).toLocaleDateString('fr-CA',{day:'numeric',month:'long',year:'numeric'})) : 'Paies dont la date de paiement est en '+E(periode))+' · '+new Set(ls.map(x=>x.sem)).size+' paie(s), '+new Set(ls.map(x=>x.nom)).size+' employé(s)');
+  h += '<div style="display:flex;gap:12px">'+[['ARC — Receveur général',DAS_ARC,arc,'ARC'],['Revenu Québec',DAS_RQ,rq,'Revenu Québec']].map(([t,cl,tt,org])=>'<div style="flex:1"><h2>'+E(t)+'</h2><table><tbody>'+cl.map(([k,l])=>'<tr><td>'+E(l)+'</td><td class="n">'+rapN(rapSum(ls,k))+'</td></tr>').join('')+'<tr class="tt"><td>Total à remettre</td><td class="n">'+rapN(tt)+'</td></tr></tbody></table>'+(mois ? '<div>'+rapStatut(remiseDe(periode, org), tt)+'</div>' : '')+'</div>').join('')+'</div>';
+  if(!mois) h += rapAnnuel(periode, [{nom:'ARC', du:m=>Math.round(DAS_ARC.reduce((t,[k])=>t+rapSum(lignes.filter(x=>String(x.paye).startsWith(m)),k),0)*100)/100, remise:m=>remiseDe(m,'ARC')},
+    {nom:'Revenu Québec', du:m=>Math.round(DAS_RQ.reduce((t,[k])=>t+rapSum(lignes.filter(x=>String(x.paye).startsWith(m)),k),0)*100)/100, remise:m=>remiseDe(m,'Revenu Québec')}]);
+  h += '<h2>Détail par employé et par paie</h2>'+rapTableau(ls, [['pp','PP'],['paye','Payable le'],['brutImp','Brut',1],['gAe','Gains AE',1],['gRrq','Gains RRQ',1],['fed','Impôt féd.',1],['ae','AE empl.',1],['eAe','AE emp.r',1],['qc','Impôt QC',1],['rrq','RRQ empl.',1],['eRrq','RRQ emp.r',1],['rqap','RQAP empl.',1],['eRqap','RQAP emp.r',1],['eFss','FSS',1],['eCnesst','CNESST',1],
+    [x=>DAS_ARC.reduce((t,[k])=>t+(x[k]||0),0),'Total ARC',1],[x=>DAS_RQ.reduce((t,[k])=>t+(x[k]||0),0),'Total RQ',1]]);
+  h += '<div class="muted">empl. = part de l\'employé (retenue) · emp.r = part de l\'employeur. CNT ('+talonArg(rapSum(ls,'eCnt'))+') payée une fois par année avec le RLZ-1.S. Calculé à partir du journal de paie du CRM.</div>';
+  rapportImprimer(h, titre); }
+function rapportCcq(lignes, periode, remiseDe, nasDe){ const mois = periode.length===7, ls = lignes.filter(x=>x.moisCcq.startsWith(periode)), E = talonEsc;
+  const tot = ls => Math.round((rapSum(ls,'vacCcq') + RCCQ_EMP.concat(RCCQ_PAT).reduce((t,[k])=>t+rapSum(ls,k),0))*100)/100, T = tot(ls);
+  const titre = 'Remises CCQ — '+(mois ? ccqMoisTxt(periode) : 'année '+periode);
+  let h = rapEntete(titre, (mois ? 'Semaines qui se terminent en '+E(ccqMoisTxt(periode))+' · date limite : '+E(dasLimite(periode).toLocaleDateString('fr-CA',{day:'numeric',month:'long',year:'numeric'})) : 'Année '+E(periode))+' · '+new Set(ls.map(x=>x.nom)).size+' électricien(s)');
+  h += '<div style="display:flex;gap:12px"><div style="flex:1"><h2>Parts des employés</h2><table><tbody>'+RCCQ_EMP.map(([k,l])=>'<tr><td>'+E(l)+'</td><td class="n">'+rapN(rapSum(ls,k))+'</td></tr>').join('')+'</tbody></table></div>'
+    + '<div style="flex:1"><h2>Parts de l\'employeur</h2><table><tbody>'+RCCQ_PAT.map(([k,l])=>'<tr><td>'+E(l)+'</td><td class="n">'+rapN(rapSum(ls,k))+'</td></tr>').join('')+'</tbody></table></div>'
+    + '<div style="flex:1"><h2>Total à remettre à la CCQ</h2><table><tbody><tr><td>Heures payées</td><td class="n">'+rapN(rapSum(ls,'hSimple')+rapSum(ls,'hDemi')+rapSum(ls,'hDouble'))+'</td></tr><tr><td>Salaires</td><td class="n">'+rapN(rapSum(ls,'sal'))+'</td></tr><tr><td>Vacances et fériés 13 %</td><td class="n">'+rapN(rapSum(ls,'vacCcq'))+'</td></tr><tr><td>Parts des employés</td><td class="n">'+rapN(RCCQ_EMP.reduce((t,[k])=>t+rapSum(ls,k),0))+'</td></tr><tr><td>Parts de l\'employeur</td><td class="n">'+rapN(RCCQ_PAT.reduce((t,[k])=>t+rapSum(ls,k),0))+'</td></tr><tr class="tt"><td>Total CCQ</td><td class="n">'+rapN(T)+'</td></tr></tbody></table>'+(mois ? '<div>'+rapStatut(remiseDe(periode), T)+'</div>' : '')+'</div></div>';
+  if(!mois) h += rapAnnuel(periode, [{nom:'CCQ', du:m=>tot(lignes.filter(x=>x.moisCcq===m)), remise:m=>remiseDe(m)}]);
+  const ls2 = ls.map(x=>({...x, nomNas:x.nom+' '+(nasDe(x)||'NAS ?')})), court = {'Assurance':'ass.','Taxe assurance':'taxe','Retraite':'ret.','Prélèvement':'prél.','Syndicat':'synd.','Caisse supp.':'supp.','Formation':'form.','Indemnisation':'indem.','AECQ / ACQ':'AECQ'};
+  const cl = x => [String(x.classe||'').replace('Compagnon','Comp.').replace('Apprenti ','App. '), ({'Commercial':'C','Industriel':'B','Résidentiel léger':'D','Résidentiel lourd':'R1'})[x.secteur]||x.secteur].filter(Boolean).join(' ');
+  h += '<h2>Détail par employé et par semaine</h2>'+rapTableau(ls2, [['pp','PP'],['finSem','Fin sem.'],[cl,'Cl.'],['hSimple','H. s.',1],['hDemi','H. ½',1],['hDouble','H. d.',1],['sal','Salaire',1],['vacCcq','Vac. 13 %',1]]
+    .concat(RCCQ_EMP.map(([k,l])=>[k,'E '+court[l],1]), RCCQ_PAT.map(([k,l])=>[k,'P '+court[l],1]), [[x=>(x.vacCcq||0)+RCCQ_EMP.concat(RCCQ_PAT).reduce((t,[k])=>t+(x[k]||0),0),'Total CCQ',1]]), 'nomNas', true);
+  h += '<div class="muted">E = part de l\'employé (retenue) · P = part patronale (employeur) · ass. assurance, ret. retraite, prél. prélèvement, synd. syndicat, supp. caisse supplémentaire, form. formation, indem. indemnisation. Cl. = classe et secteur (C commercial, B industriel, D résidentiel léger, R1 résidentiel lourd). NAS masqué. Calculé à partir du journal de paie du CRM.</div>';
+  rapportImprimer(h, titre); }
 function EmployesSection({cfg, refreshKey}){
   const [o,setO]=useState(()=>{ try{ return localStorage.getItem('emp_onglet')||'heures'; }catch(e){ return 'heures'; } });
   const choisir = k => { setO(k); try{ localStorage.setItem('emp_onglet', k); }catch(e){} };
