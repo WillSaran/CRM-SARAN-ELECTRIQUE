@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v651';
+const APP_VERSION = 'v652';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2987,7 +2987,30 @@ function CvBlocageRapide({job, B, etape}){
     <textarea rows={2} value={f.description} onChange={e=>setF({...f, description:e.target.value})} placeholder="Ce qui bloque, ce qu'il faut faire…" style={{padding:'5px 8px'}}/>
     <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={!!occ || !f.description.trim()} onClick={sauver}>{occ || 'Enregistrer le blocage'}</button><button className="btn btn-sm" onClick={()=>setF(null)}>Annuler</button></div>
   </div>; }
-function PjEtapeDetail({job, x, blocages, B, basculerEtape, toast, poSlot}){
+// Contact du contracteur (Jonathan pour CRS…) : nom + courriel de sa fiche client. Rien pour un particulier.
+function contactBlocage(code, fiches){
+  if(!code || code==='PART') return null;
+  const f = ((fiches && fiches.clients) || []).find(x=>x.code===code) || null;
+  const nom = CLIENT_CONTACT[code] || (f && f.nom) || '';
+  if(!nom && !(f && f.courriel)) return null;
+  return {code, nom, prenom:String(nom).trim().split(/\s+/)[0] || '', to:String((f && f.courriel) || '').split(/[\s,;]+/)[0] || '', tutoie: code==='CRS'};
+}
+// Courriel « on a un blocage sur ta job » prêt à envoyer (ouvert dans la fenêtre courriel du CRM : on peut le modifier avant d'envoyer)
+function courrielBlocageContracteur(b, job, contact){
+  const tu = contact.tutoie, nomJob = (job.client && job.client!=='PART' ? job.client+' ' : '')+(job.name||''), adr = job.address ? ' ('+job.address+')' : '';
+  const lien = p => p.k==='fichier' ? 'https://drive.google.com/file/d/'+p.id+'/view' : p.k==='lien' ? p.url : '';
+  const pj = (b.pj||[]).map(p=>lien(p) ? '- '+(p.nom||'Fichier')+' : '+lien(p) : '').filter(Boolean);
+  const quand = b.date && /^\d{4}-\d{2}-\d{2}/.test(b.date) ? cvFmtDay(cvDay(b.date)) : (b.date||'');
+  const corps = ['Bonjour'+(contact.prenom ? ' '+contact.prenom : '')+',','',
+    (tu ? 'Je t\'écris' : 'Je vous écris')+' au sujet de la job « '+nomJob.trim()+' »'+adr+'. Nos gars ont rencontré un blocage'+(quand ? ' le '+quand : '')+' :','',
+    'Type : '+(b.type||'Blocage'),
+    ...(b.description ? ['',String(b.description).trim()] : []),
+    ...(pj.length ? ['','Photos / mémos :',...pj] : []),'',
+    (tu ? 'Peux-tu me revenir à ce sujet pour qu\'on règle ça?' : 'Pouvez-vous me revenir à ce sujet pour que l\'on règle ça?'),'',
+    'Merci beaucoup,','','William Saran, Président','Saran Électrique inc.','(438) 490-3412','info@saranelectrique.com'].join('\n');
+  return courrielCrm({titre:'✉️ Blocage — '+(contact.nom||'contracteur'), to:contact.to, sujet:'Blocage — '+nomJob.trim(), corps});
+}
+function PjEtapeDetail({job, x, blocages, B, basculerEtape, toast, poSlot, contact}){
   const [form,setForm]=useState(null);   // {type, autre, date, description, lien, note, fichiers:[]}
   const [voir,setVoir]=useState(null);   // id du blocage ouvert
   const [occupe,setOccupe]=useState('');
@@ -3060,6 +3083,8 @@ function PjEtapeDetail({job, x, blocages, B, basculerEtape, toast, poSlot}){
             <div style={{display:'flex',gap:6}}><button className="btn btn-sm btn-p" disabled={!!occupe} onClick={()=>ajouterPJ(b, form)}>{occupe || 'Ajouter'}</button><button className="btn btn-sm" onClick={()=>setForm(null)}>Annuler</button></div></div>
           : <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
               <button className="btn btn-sm" onClick={()=>setForm({pour:b.id, fichiers:[]})}>📎 Ajouter une pièce jointe</button>
+              {contact && <button className="btn btn-sm" style={{color:'var(--accent)',borderColor:'var(--accent)'}} title={contact.to ? 'Écrire à '+contact.nom+' ('+contact.to+') — tu peux modifier le message avant d\'envoyer' : 'Écrire à '+contact.nom+' — aucun courriel dans sa fiche, tu peux l\'entrer'}
+                onClick={()=>courrielBlocageContracteur(b, job, contact)}>✉️ Courriel à {contact.prenom || contact.nom}</button>}
               {b.statut==='Réglé' ? <button className="btn btn-sm" disabled={!!occupe} onClick={()=>regler(b, false)}>Rouvrir</button>
                 : <button className="btn btn-sm" style={{color:'var(--success)',borderColor:'var(--success)'}} disabled={!!occupe} onClick={()=>regler(b, true)}>✓ Réglé</button>}
             </div>}
@@ -3127,7 +3152,7 @@ function PjFacturesMateriel({job, factures, achats, clients, cfg, onChanged, app
 }
 function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, nom} → seulement ce projet-là, sans recherche ni filtres
   const [tick,setTick]=useState(0);
-  const {loading, err, events, registry, factures, appels, courriels, archives, achats} = useClientsData(cfg, refreshKey+'|p'+tick);
+  const {loading, err, events, registry, factures, appels, courriels, archives, achats, fiches} = useClientsData(cfg, refreshKey+'|p'+tick);
   const [voirArch,setVoirArch]=useState(false);
   const [voirTerm,setVoirTerm]=useVoirTerminees();
   const [commandes, enregistrerCommande] = useCommandes(cfg);
@@ -3201,7 +3226,7 @@ function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, 
           <div className="a">Prochaine étape : <b>{s.etape}</b>{p.prochaine ? <span className="muted"> · à faire : {pjNomPhase(p.prochaine.phase)} › {p.prochaine.texte || p.prochaine.titre}</span> : ''} {p.attente ? <span className="muted">· en attente</span> : <span style={{fontWeight:800,color:p.pct===100?'var(--success)':'var(--text)'}}>· {p.pct} %</span>}</div>
           <PjBarre p={p} blocages={blocsJ} sel={selEt && selEt.k===k ? selEt.id : null} onEtape={id=>setSelEt(id ? {k, id} : null)}/>
           {o && <PjPhasesReglage job={j} info={p.phasesInfo||{}} basculer={basculerEtape}/>}
-          {selEt && selEt.k===k && (()=>{ const x = p.steps.find(y=>y.id===selEt.id); return x ? <PjEtapeDetail job={j} x={x} blocages={blocsJ} B={B} basculerEtape={basculerEtape} toast={m=>{ if(/^Erreur|^Micro/.test(m)) alert(m); }}
+          {selEt && selEt.k===k && (()=>{ const x = p.steps.find(y=>y.id===selEt.id); return x ? <PjEtapeDetail job={j} x={x} blocages={blocsJ} B={B} basculerEtape={basculerEtape} contact={contactBlocage(c.code, fiches)} toast={m=>{ if(/^Erreur|^Micro/.test(m)) alert(m); }}
             poSlot={c.code!=='PART' ? <CvInscrirePO key={'po'+j.id} cfg={cfg} job={j} registry={registry} onChanged={()=>setTick(t=>t+1)}/> : null}/> : null; })()}
           <div style={{display:'none'}}>{s.G.map(g=><span key={g.k} title={g.label+' — '+(g.segments && g.segments.length ? g.segments.map(x=>(x.etat==='na'?'⏳ ':x.etat==='manque'?'✗ ':'✓ ')+x.label).join(' · ') : g.L.length ? g.L.map(x=>(x.ok?'✓ ':'✗ ')+x.titre).join(' · ') : 'pas encore rendu là')} style={{display:'inline-flex',flexDirection:'column',alignItems:'center',gap:2}}>
             {(g.segments && g.segments.length>1)
