@@ -208,7 +208,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v676';
+const APP_VERSION = 'v677';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -11959,6 +11959,7 @@ function docHtml(d, calc, plan, imprimer){
   const info = (l,v) => '<tr><td class="lb">'+l+'</td><td class="v">'+esc(v||'')+'</td></tr>';
   const clauses = d.type==='Ordre de travail' ? '' :
     (d.type==='Soumission'?'<p>Cette soumission est valide pour une durée de 30 jours.</p><p>Les travaux peuvent demander de déplacer des meubles ou des objets, de percer ou d\'ouvrir des murs, des plafonds ou d\'autres surfaces. Les retouches qui en découlent (joints, plâtre, peinture, béton, asphalte, aménagement paysager) ne sont pas comprises dans cette soumission.</p>':'')+
+    (d.type==='Soumission' && plan && plan.length ? '<p>PROPRIÉTÉ DES PLANS<br>Les plans, annotations et estimations joints à cette soumission demeurent la propriété de Saran Électrique inc. Ils sont fournis pour l\'évaluation de cette soumission seulement et ne peuvent être reproduits ni remis à un tiers sans autorisation écrite.</p>' : '')+   // v677
     '<p>INTÉRÊT SUR ARRÉRAGES<br>Sous réserve de tout autre droit ou recours de l\'Entrepreneur, tout retard dans un versement ou paiement dû à l\'Entrepreneur portera intérêt à un taux annuel de 12%.</p>'+
     '<p>ÉLECTION DE DOMICILE<br>Relativement à tout litige ou procédure judiciaire pouvant résulter de l\'application du présent contrat, les parties élisent domicile dans le district judiciaire d\'Iberville.</p>';
   const signature = d.type==='Soumission' ?
@@ -14694,8 +14695,25 @@ async function planPourImpression(doc){
   for(const p of (doc.plan||[])){ if(p.masque || /^Plan par pièce — /.test(p.titre||'')) continue; try{ out.push({...p, src: await planImage(p.id)}); }catch(e){} }   // v597 : décoché = pas dans le PDF
   // v599 : à la fin, tes plans d'étage tels que tu les as bâtis (pièces encadrées + étiquette de symboles et quantités), une page chacun
   try{ const fin = await maisonPlansFin(doc); fin.filter(x=>!(doc.plansMasques||[]).includes(x.titre)).forEach(x=>out.push(x)); }catch(e){}
+  // v677 : soumission → filigrane « Saran Électrique inc. » imprimé DANS chaque image (les originaux ne changent pas)
+  if(doc.type==='Soumission'){ const txt = 'Saran Électrique inc. — Plan préparé pour '+(doc.nom||'le client')+(doc.numero ? ' — Soumission '+doc.numero : '');
+    for(const x of out){ try{ x.src = await planFiligrane(x.src, txt); }catch(e){} } }
   return out;
 }
+// v677 : filigrane en diagonale, répété sur toute l'image, gris transparent — on ne peut pas le couper ni l'enlever du PDF
+const FILIGRANE_CACHE = {};
+async function planFiligrane(src, txt){
+  if(!src) return src; const k = txt+'|'+src.length+'|'+src.slice(-64); if(FILIGRANE_CACHE[k]) return FILIGRANE_CACHE[k];
+  const img = await new Promise((ok,ko)=>{ const i = new Image(); i.onload = ()=>ok(i); i.onerror = ko; i.src = src; });
+  const w = img.naturalWidth, h = img.naturalHeight; if(!w || !h) return src;
+  const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0,0,w,h); g.drawImage(img,0,0);
+  const fs = Math.max(14, Math.round(Math.min(w,h)/26)); g.font = 'bold '+fs+'px Arial'; g.fillStyle = 'rgba(110,110,110,0.17)'; g.textBaseline = 'middle';
+  const tw = g.measureText(txt).width, pasX = tw + fs*3, pasY = fs*5;
+  g.save(); g.translate(w/2, h/2); g.rotate(-Math.PI/7); const R = Math.hypot(w,h);
+  for(let y=-R, r=0; y<R; y+=pasY, r++) for(let x=-R-((r%2)*pasX/2); x<R; x+=pasX) g.fillText(txt, x, y);
+  g.restore();
+  return (FILIGRANE_CACHE[k] = c.toDataURL('image/jpeg', 0.9)); }
 // v599 : plans d'étage de la soumission maison, dessinés comme dans le CRM — cadres bleus + étiquette (nom, symboles × quantité) + appareils 240 V
 let MAISON_FIN_CACHE = {sig:'', out:[]}, MAISON_PAGES_CACHE = {};
 let MAISON_FIN_EN_COURS = {sig:'', p:null};
