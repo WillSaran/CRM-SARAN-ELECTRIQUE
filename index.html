@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v668';
+const APP_VERSION = 'v669';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6594,6 +6594,23 @@ function EditEventModal({cfg, event, job, onClose, onSaved, toast}){
     }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
     setBusy(false);
   }
+  // v669 : une job « toute la journée » sur plusieurs jours → une job par jour ouvrable (fins de semaine sautées), pour les attitrer séparément
+  const joursOuvrables = (()=>{ if(!event.allDay || !event.end) return []; const L = []; const d = new Date(String(event.start).slice(0,10)+'T00:00:00'), f = new Date(String(event.end).slice(0,10)+'T00:00:00');
+    while(d < f){ if(d.getDay()!==0 && d.getDay()!==6) L.push(localDateStr(d)); d.setDate(d.getDate()+1); } return L; })();
+  async function handleSeparer(){
+    const L = joursOuvrables; if(L.length<2) return;
+    if(!window.confirm('Séparer cette job en '+L.length+' journées (du '+cvFmtDay(L[0])+' au '+cvFmtDay(L[L.length-1])+', sans les fins de semaine) ?\nLa job longue sera remplacée.')) return;
+    setBusy(true);
+    try{ const cal = deplacable ? agenda : event.calendarId;
+      for(let i=0;i<L.length;i++){ const fin = new Date(L[i]+'T00:00:00'); fin.setDate(fin.getDate()+1);
+        await insertCalendarEvent(cal, { summary: titre+' (jour '+(i+1)+'/'+L.length+')', location: lieu, description: desc, attachments: attachments.map(pj),
+          start:{date:L[i]}, end:{date:localDateStr(fin)}, ...(couleur ? {colorId:couleur} : {}) }); }
+      await deleteCalendarEvent(event.calendarId, event.id);
+      toast('Séparée en '+L.length+' journées — attitre chaque journée à qui tu veux.','ok');
+      onSaved(); onClose();
+    }catch(e){ toast('Erreur: '+apiErrMsg(e),'err'); }
+    setBusy(false);
+  }
   async function handleDelete(){
     setBusy(true);
     try{
@@ -6687,6 +6704,7 @@ function EditEventModal({cfg, event, job, onClose, onSaved, toast}){
       <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
         <button className="btn btn-s" onClick={()=>MODAL_FERMER ? MODAL_FERMER() : onClose()}>Fermer</button>
         <button className="btn btn-s" onClick={handleDuplicate} disabled={busy} title="Crée une copie de cet événement avec les mêmes infos">{busy?'...':'Dupliquer'}</button>
+        {joursOuvrables.length>1 && <button className="btn btn-s" onClick={handleSeparer} disabled={busy} title="Une job par jour ouvrable (fins de semaine sautées), pour les attitrer à des gars différents">✂️ Séparer par jour ({joursOuvrables.length})</button>}
         <button className="btn btn-p" onClick={handleSave} disabled={busy}>{busy?'Sauvegarde...':'Enregistrer'}</button>
       </div>
     </div>
@@ -7025,8 +7043,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   useEffect(()=>{ let ok = true; const a = new Date(); a.setDate(a.getDate()-60); const b = new Date(); b.setDate(b.getDate()+365);
     listCalendarEventsRange([EN_ATTENTE_CAL], a.toISOString(), b.toISOString()).then(l=>{ if(ok) setAttListe(l); }).catch(()=>{ if(ok) setAttListe([]); });
     return ()=>{ ok = false; }; },[reloadKey, refreshKey]);
-  function goPrev(){ const d=new Date(anchor); if(viewMode==='jour') d.setDate(d.getDate()-1); else if(viewMode==='mois'){ d.setDate(1); d.setMonth(d.getMonth()-1); } else d.setDate(d.getDate()-7); setAnchor(d); }
-  function goNext(){ const d=new Date(anchor); if(viewMode==='jour') d.setDate(d.getDate()+1); else if(viewMode==='mois'){ d.setDate(1); d.setMonth(d.getMonth()+1); } else d.setDate(d.getDate()+7); setAnchor(d); }
+  function goPrev(){ const d=new Date(anchor); if(viewMode==='jour'){ d.setDate(d.getDate()-1); if(repli) while(d.getDay()===0 || d.getDay()===6) d.setDate(d.getDate()-1); }   // v669 : fins de semaine repliées → on les saute else if(viewMode==='mois'){ d.setDate(1); d.setMonth(d.getMonth()-1); } else d.setDate(d.getDate()-7); setAnchor(d); }
+  function goNext(){ const d=new Date(anchor); if(viewMode==='jour'){ d.setDate(d.getDate()+1); if(repli) while(d.getDay()===0 || d.getDay()===6) d.setDate(d.getDate()+1); } else if(viewMode==='mois'){ d.setDate(1); d.setMonth(d.getMonth()+1); } else d.setDate(d.getDate()+7); setAnchor(d); }
   function goToday(){ setAnchor(new Date()); }
   // v343 : recherche dans tous les événements (The Crew, En attente, mon agenda) — 1 an en arrière, 1 an en avant
   const [rech,setRech]=useState(''), [rechRes,setRechRes]=useState(null);
