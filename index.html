@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v659';
+const APP_VERSION = 'v660';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -5756,15 +5756,15 @@ function RemisesCcqView({cfg, refreshKey}){
   const totCcq = ls => Math.round((s2(ls,[['vacCcq']]) + s2(ls,RCCQ_EMP) + s2(ls,RCCQ_PAT))*100)/100;
   const remiseDe = mois => remises.filter(x=>x[0]===mois && x[1]==='CCQ').sort((a,b)=>(a[6]||'')>(b[6]||'')?1:-1).pop();
   const auj = localDateStr(new Date()), dosDe = x => dos.find(e=>(x.id && e.id===x.id) || cvNorm(deNom(e))===cvNorm(x.nom)) || {};
-  const manque = dos.filter(e=>/ccq/i.test(e.regime||'') && !/^non/i.test(e.actif||'') && !String(e.noCcq||'').trim()).map(deNom);
+  const manque = dos.filter(e=>/ccq/i.test(e.regime||'') && !/^non/i.test(e.actif||'') && String(e.nas||'').replace(/\D/g,'').length!==9).map(deNom);   // v660 : la CCQ identifie le salarié par son NAS
   const marquer = async () => { const s = saisie; if(!s.paye){ alert('Inscris la date du paiement.'); return; } setEtat('Enregistrement…');
     try{ await ensureSheetsExist(DOSSIERS_EMP_ID, [{name:REMISES_ONGLET, headers:REMISES_ENTETE}]);
       await sheetsAppendRow(DOSSIERS_EMP_ID, qSheet(REMISES_ONGLET), [s.mois, 'CCQ', String(s.montant).replace(',','.'), s.paye, s.conf||'', s.note||'', prepMaintenant()]);
       setSaisie(null); setEtat(''); await lire(true); } catch(e){ setEtat(''); alert('Impossible d\'enregistrer : '+apiErrMsg(e)); } };
   const exporter = mois => { const ls = lignes.filter(x=>x.moisCcq===mois), noms = [...new Set(ls.map(x=>x.nom))];
-    const ent = ['Mois','Employé','No client CCQ','Classe','Secteur','Heures simple','Heures ½','Heures double','Salaire','Vacances 13 %'].concat(RCCQ_EMP.map(x=>'Employé — '+x[1]), RCCQ_PAT.map(x=>'Employeur — '+x[1]), ['Total CCQ']);
+    const ent = ['Mois','Employé','NAS','Classe','Secteur','Heures simple','Heures ½','Heures double','Salaire','Vacances 13 %'].concat(RCCQ_EMP.map(x=>'Employé — '+x[1]), RCCQ_PAT.map(x=>'Employeur — '+x[1]), ['Total CCQ']);
     const rows = noms.map(nm=>{ const le = ls.filter(x=>x.nom===nm), d = dosDe(le[0]), f = v => v.toFixed(2).replace('.',',');
-      return [mois, nm, d.noCcq||'', le[le.length-1].classe || d.classe || '', le[le.length-1].secteur || d.ccqSecteur || '', f(s2(le,[['hSimple']])), f(s2(le,[['hDemi']])), f(s2(le,[['hDouble']])), f(s2(le,[['sal']])), f(s2(le,[['vacCcq']]))]
+      return [mois, nm, deNasFmt(d.nas), le[le.length-1].classe || d.classe || '', le[le.length-1].secteur || d.ccqSecteur || '', f(s2(le,[['hSimple']])), f(s2(le,[['hDemi']])), f(s2(le,[['hDouble']])), f(s2(le,[['sal']])), f(s2(le,[['vacCcq']]))]
         .concat(RCCQ_EMP.map(c=>f(s2(le,[c]))), RCCQ_PAT.map(c=>f(s2(le,[c]))), [f(totCcq(le))]); });
     const csv = '﻿'+[ent].concat(rows).map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')).join('\n');
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})); a.download = 'Rapport CCQ '+mois+'.csv'; a.click(); };
@@ -5773,7 +5773,7 @@ function RemisesCcqView({cfg, refreshKey}){
     <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Remises CCQ</h2>
     <div className="muted" style={{fontSize:13,marginBottom:10}}>Rapport mensuel CCQ à partir des paies approuvées (journal de paie) : semaines qui se terminent dans le mois, électriciens CCQ. À remettre au plus tard le <b>15 du mois suivant</b>. Tu fais le rapport et le paiement sur le site de la CCQ (l'export t'aide à le remplir), puis tu marques la remise payée ici.</div>
     {err && <div className="card" style={{color:'var(--danger)',marginBottom:10}}>Impossible de lire le journal : {err}</div>}
-    {manque.length>0 && <div className="card" style={{marginBottom:10,fontSize:12.5,color:'var(--warning)'}}>No de client CCQ manquant au dossier : {manque.join(', ')} (Dossiers employés › Identification).</div>}
+    {manque.length>0 && <div className="card" style={{marginBottom:10,fontSize:12.5,color:'var(--warning)'}}>NAS manquant ou incomplet au dossier : {manque.join(', ')} (Dossiers employés › Identification).</div>}
     <div className="card" style={{padding:'10px 12px'}}>
       <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>Année : {ans.map(a=><button key={a} className={'btn btn-sm'+(a===an?' btn-p':'')} onClick={()=>setAn(a)}>{a}</button>)}<button className="btn btn-sm" onClick={()=>lire(true)}>↻ Relire</button></div>
       <div style={{overflowX:'auto'}}><table style={{fontSize:13,width:'100%'}}><thead><tr><th>Mois</th><th style={th}>Employés</th><th style={th}>Heures</th><th style={th}>Salaires</th><th style={th}>Vacances 13 %</th><th style={th}>Parts employés</th><th style={th}>Parts employeur</th><th style={th}>Total CCQ</th><th>Remise</th><th>Date limite</th></tr></thead>
@@ -5788,8 +5788,8 @@ function RemisesCcqView({cfg, refreshKey}){
             <td>{dasLimite(mois).toLocaleDateString('fr-CA',{day:'numeric',month:'short',year:'numeric'})}</td></tr>
             {ouvert===mois && <tr><td colSpan="10" style={{background:'var(--bg2, rgba(0,0,0,.03))'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6,flexWrap:'wrap',gap:6}}><span className="muted" style={{fontSize:12}}>Semaines : {[...new Set(ls.map(x=>x.pp+' (fin '+String(x.finSem||localDateStr(ccqFinSemaine(x.sem)))+')'))].join(' · ')}</span><button className="btn btn-sm" onClick={()=>exporter(mois)}>⬇ Exporter (CSV)</button></div>
-              <div style={{overflowX:'auto'}}><table style={{fontSize:12,width:'100%'}}><thead><tr><th>Employé</th><th>No client</th><th>Classe · secteur</th><th style={th}>H. simple</th><th style={th}>H. ½</th><th style={th}>H. double</th><th style={th}>Salaire</th><th style={th}>Vac. 13 %</th>{RCCQ_EMP.map(([k,l])=><th key={k} style={th}>Emp. {l}</th>)}{RCCQ_PAT.map(([k,l])=><th key={k} style={th}>Empl. {l}</th>)}<th style={th}>Total</th></tr></thead>
-                <tbody>{noms.map(nm=>{ const le = ls.filter(x=>x.nom===nm), d = dosDe(le[0]), dl = le[le.length-1]; return <tr key={nm}><td>{nm}</td><td>{d.noCcq || <span style={{color:'var(--warning)'}}>manquant</span>}</td><td>{[dl.classe||d.classe, dl.secteur||d.ccqSecteur].filter(Boolean).join(' · ')}</td>
+              <div style={{overflowX:'auto'}}><table style={{fontSize:12,width:'100%'}}><thead><tr><th>Employé</th><th>NAS</th><th>Classe · secteur</th><th style={th}>H. simple</th><th style={th}>H. ½</th><th style={th}>H. double</th><th style={th}>Salaire</th><th style={th}>Vac. 13 %</th>{RCCQ_EMP.map(([k,l])=><th key={k} style={th}>Emp. {l}</th>)}{RCCQ_PAT.map(([k,l])=><th key={k} style={th}>Empl. {l}</th>)}<th style={th}>Total</th></tr></thead>
+                <tbody>{noms.map(nm=>{ const le = ls.filter(x=>x.nom===nm), d = dosDe(le[0]), dl = le[le.length-1]; return <tr key={nm}><td>{nm}</td><td>{deNasMasque(d.nas) || <span style={{color:'var(--warning)'}}>manquant</span>}</td><td>{[dl.classe||d.classe, dl.secteur||d.ccqSecteur].filter(Boolean).join(' · ')}</td>
                   {['hSimple','hDemi','hDouble'].map(k=><td key={k} style={th}>{prepNb(s2(le,[[k]]))}</td>)}<td style={th}>{ccqArg(s2(le,[['sal']]))}</td><td style={th}>{ccqArg(s2(le,[['vacCcq']]))}</td>
                   {RCCQ_EMP.concat(RCCQ_PAT).map(c=><td key={c[0]} style={th}>{ccqArg(s2(le,[c]))}</td>)}<td style={th}><b>{ccqArg(totCcq(le))}</b></td></tr>; })}</tbody></table></div>
               <div className="muted" style={{fontSize:11.5,marginTop:6}}>Total CCQ = vacances 13 % + parts de l'employé + parts de l'employeur. À valider avec le premier rapport mensuel fait sur le site de la CCQ (la taxe de 9 % sur l'assurance et la cotisation ACQ pourraient se payer ailleurs).</div>
