@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v662';
+const APP_VERSION = 'v663';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -4857,7 +4857,9 @@ const DE_COLS = ['id','actif','prenom','nom','regime','adresse','ville','cp','ce
   // v624 : autres taux CCQ par employé
   'ccqTaxeEmp','ccqTaxePat','ccqIndemPat','ccqAecqPat','ccqAvImp',
   // v631 : solde de vacances de départ (bureau)
-  'vacSoldeDebut','vacSoldeDate'];
+  'vacSoldeDebut','vacSoldeDate',
+  // v663 : contribution sectorielle (employé) et indemnité d'équipement de sécurité
+  'ccqSectEmp','ccqEquip'];
 const DE_ONGLETS = [['ident','Identification'],['coord','Coordonnées'],['paye','Paye'],['comp','Compétences & Formations'],['supp','Informations supplémentaires'],['histo','Historique des changements']];
 const DE_SOUS = [['general','Général'],['vacances','Vacances'],['fonctions','Fonctions'],['autres','Autres déd. / Av. imposables / Indemnités / Primes'],['banque','Banque d\'heures HC'],['bulletin','Bulletin de paye'],['cumul','Cumulatifs de l\'année']];
 const DE_HISTO = 'Historique';   // onglet de la feuille privée : Quand | Id | Employé | Champ | Avant | Après
@@ -4868,7 +4870,8 @@ const DE_ENTETES = ['Id','Actif','Prénom','Nom','Régime','Adresse','Ville','Co
   'Taux CNESST (par 100 $)','CCQ assurance — employé $/h','CCQ assurance — employeur $/h','CCQ prévoyance supp. électriciens — employeur $/h','CCQ retraite — employé $/h','CCQ retraite — employeur $/h','CCQ prélèvement — employé','CCQ prélèvement — employeur','CCQ formation — employeur $/h',
   'Cumul CCQ assurance','Cumul CCQ retraite','Cumul CCQ prélèvement','Cumul cotisation syndicale',
   'CCQ taxe assurance — employé','CCQ taxe assurance — employeur $/h','CCQ fonds d\'indemnisation — employeur $/h','AECQ — employeur $/h','CCQ avantage imposable $/h',
-  'Solde de vacances au départ $','Solde de vacances en date du'];
+  'Solde de vacances au départ $','Solde de vacances en date du',
+  'CCQ contribution sectorielle — employé $/h','Indemnité équipement de sécurité $/h'];
 const DE_CRED_FED = '16452.00', DE_CRED_PROV = '18952.00';   // montants personnels de base 2026 — à mettre à jour en janvier
 // v612 : taux des gouvernements (chiffres publics, mis à jour chaque janvier). 2026 : ARC T4032-QC 2026 et Revenu Québec ; 2027 : connus au 19 nov. 2026 — AE (BSIF : 70 800 $, 1,27 %) et MGA / MSGA (ARC : 76 700 $ / 87 400 $) ; paliers d'impôt et montants de base publiés en nov.-déc., à mettre à jour.
 const PAIE_GOUV = {
@@ -4882,25 +4885,28 @@ const PAIE_GOUV = {
 const PAIE_CCQ_AV = {date:'2026-04-26', assPat:3.11, assEmp:0.86, supPrevPct:1.5, supPrevMoins:0.25, retPatComp:5.21, retPatApp:4.29, retEmpCompPct:9, retEmpAppPct:4.5, retEmpMin:0.80,
   prelPatPct:0.75, prelPatH:0.04, aecqH:0.03, formH:0.20, indemH:0.02, vac:13, cnesstElec:3.17,
   // v624 : APCHQ (exemple de paie résidentiel léger) et ACQ (grille résidentiel léger, électricien, 26 avril 2026)
-  prelEmpPct:0.75, taxeAss:9, taxePatH:0.306, supPrevH:0.288, avImpH:3.146, suivant:{date:'2027-04-25', assPat:3.31, assEmp:1.06, retPatComp:5.47, retPatApp:4.50}};
+  prelEmpPct:0.75, taxeAss:9, taxePatH:0.306, supPrevH:0.288, avImpH:3.146, equipH:0.65, suivant:{date:'2027-04-25', assPat:3.31, assEmp:1.06, retPatComp:5.47, retPatApp:4.50}};
 // v633 : secteur institutionnel-commercial et industriel (ICI) — électriciens, au 26 avril 2026 (ACQ « avantages sociaux métiers ICI », CMEQ, APCHQ exemple commercial)
-const PAIE_CCQ_ICI = {assEmp:0.68, assPat:3.665, taxePatH:0.33, retPatComp:5.21, retPatApp:4.29, retEmp:{'Compagnon':5.17,'Apprenti 1':0.947,'Apprenti 2':1.55,'Apprenti 3':1.81,'Apprenti 4':2.20},
-  supPrevH:0, prelPat:'0,75 %', aecqH:0.09 /* AECQ 0,03 + ACQ 0,06 */, avImpH:3.46 /* ESTIMÉ — à confirmer avec le tableau CCQ institutionnel-commercial 2026-2027 */, avImpEstime:true};
+const PAIE_CCQ_ICI = {assEmp:0.68, assPat:3.665, taxePatH:0.33, retPatComp:5.21, retPatApp:4.29, retEmp:{'Compagnon':5.17,'Apprenti 1':0.947,'Apprenti 2':1.55,'Apprenti 3':1.808,'Apprenti 4':2.20},
+  supPrevH:0, prelPat:'0,75 %', aecqH:0.09 /* AECQ 0,03 + ACQ 0,06 */,
+  // v663 : confirmés par un talon de l'ACQ (apprenti 3 commercial, PP47 2026) : avantage imposable 3,377 $/h, contribution sectorielle employé 0,02 $/h, équipement de sécurité 0,80 $/h
+  avImpH:3.377, avImpEstime:false, sectEmpH:0.02, equipH:0.80};
 const ccqEstIci = e => /commercial|industriel|institutionnel/i.test(e.ccqSecteur||'');
 const ccqAvResid = e => { const t = cvNum(String(e.taux||'').replace(',','.')) || 0, comp = /compagnon/i.test(e.classe||''), A = PAIE_CCQ_AV, r2 = x => Math.round(x*100)/100;
   return {ccqAssEmp:A.assEmp, ccqTaxeEmp:A.taxeAss+' %', ccqRetEmp:t ? r2(comp ? t*A.retEmpCompPct/100 : Math.max(A.retEmpMin, t*A.retEmpAppPct/100)) : null, ccqPrelEmp:A.prelEmpPct+' %',
     ccqAssPat:A.assPat, ccqTaxePat:A.taxePatH, ccqRetPat:comp ? A.retPatComp : A.retPatApp, ccqSupPrev:A.supPrevH, ccqPrelPat:A.prelPatPct+' % + '+A.prelPatH+' $/h',
-    ccqFormPat:A.formH, ccqIndemPat:A.indemH, ccqAecqPat:A.aecqH, ccqAvImp:A.avImpH, cnesstTaux:/ccq/i.test(e.regime||'') ? A.cnesstElec : null}; };
+    ccqFormPat:A.formH, ccqIndemPat:A.indemH, ccqAecqPat:A.aecqH, ccqAvImp:A.avImpH, ccqEquip:A.equipH, ccqSectEmp:null, cnesstTaux:/ccq/i.test(e.regime||'') ? A.cnesstElec : null}; };
 const ccqAvDefaut = e => { const R = ccqAvResid(e); if(!ccqEstIci(e)) return R; const I = PAIE_CCQ_ICI, comp = /compagnon/i.test(e.classe||'');
   return {...R, ccqAssEmp:I.assEmp, ccqAssPat:I.assPat, ccqTaxePat:I.taxePatH, ccqRetEmp:I.retEmp[e.classe] ?? (comp ? I.retEmp['Compagnon'] : R.ccqRetEmp), ccqRetPat:comp ? I.retPatComp : I.retPatApp,
-    ccqSupPrev:I.supPrevH, ccqPrelPat:I.prelPat, ccqAecqPat:I.aecqH, ccqAvImp:I.avImpH}; };
+    ccqSupPrev:I.supPrevH, ccqPrelPat:I.prelPat, ccqAecqPat:I.aecqH, ccqAvImp:I.avImpH, ccqSectEmp:I.sectEmpH, ccqEquip:I.equipH}; };
 // v624 : champs CCQ d'un dossier (clé, libellé) — utilisés par la fiche et par « Inscrire les taux CCQ »
-const CCQ_CHAMPS_TAUX = [['ccqAssEmp','Assurance — employé $/h'],['ccqTaxeEmp','Taxe sur l\'assurance — employé (%)'],['ccqRetEmp','Retraite — employé $/h'],['ccqPrelEmp','Prélèvement CCQ — employé'],
+const CCQ_CHAMPS_TAUX = [['ccqAssEmp','Assurance — employé $/h'],['ccqTaxeEmp','Taxe sur l\'assurance — employé (%)'],['ccqRetEmp','Retraite — employé $/h'],['ccqPrelEmp','Prélèvement CCQ — employé'],['ccqSectEmp','Contribution sectorielle — employé $/h'],['ccqEquip','Indemnité équipement de sécurité $/h (non imposable)'],
   ['ccqAssPat','Assurance — employeur $/h'],['ccqTaxePat','Taxe sur l\'assurance — employeur $/h'],['ccqRetPat','Retraite — employeur $/h'],['ccqSupPrev','Caisse supplémentaire électriciens — employeur $/h'],
   ['ccqPrelPat','Prélèvement + contribution sectorielle — employeur'],['ccqFormPat','Fonds de formation — employeur $/h'],['ccqIndemPat','Fonds d\'indemnisation — employeur $/h'],['ccqAecqPat','AECQ — employeur $/h'],
   ['ccqAvImp','Avantage imposable (Québec) $/h'],['cnesstTaux','Taux CNESST %']];
 const ccqValFr = v => v==null ? '' : String(v).replace(/(\d)\.(\d)/g,'$1,$2');
-const ccqRemplirTaux = e => { const d = ccqAvDefaut(e), res = ccqEstIci(e) ? ccqAvResid(e) : {}, x = {...e}; let nb = 0; CCQ_CHAMPS_TAUX.forEach(([k])=>{ const v = String(x[k]||'').trim(); if(d[k]!=null && (!v || (res[k]!=null && v===ccqValFr(res[k]) && ccqValFr(d[k])!==v))){ x[k] = ccqValFr(d[k]); nb++; } }); return {x, nb}; };
+const CCQ_TAUX_PERIMES = {ccqAvImp:['3,46'], ccqRetEmp:['1,81']};   // v663 : anciens estimés remplacés par les taux confirmés
+const ccqRemplirTaux = e => { const d = ccqAvDefaut(e), res = ccqEstIci(e) ? ccqAvResid(e) : {}, x = {...e}; let nb = 0; CCQ_CHAMPS_TAUX.forEach(([k])=>{ const v = String(x[k]||'').trim(); if(d[k]!=null && (!v || (res[k]!=null && v===ccqValFr(res[k]) && ccqValFr(d[k])!==v) || (ccqEstIci(e) && (CCQ_TAUX_PERIMES[k]||[]).includes(v) && ccqValFr(d[k])!==v))){ x[k] = ccqValFr(d[k]); nb++; } }); return {x, nb}; };
 const nbFr = (x, d=2) => x==null ? '' : (+x).toLocaleString('fr-CA', {minimumFractionDigits:d, maximumFractionDigits:d});
 const DE_LETTRE = i => { let s = '', n = i+1; while(n){ const r = (n-1)%26; s = String.fromCharCode(65+r)+s; n = Math.floor((n-1)/26); } return s; };
 const DE_FIN = DE_LETTRE(DE_COLS.length-1);
@@ -5301,7 +5307,7 @@ const JOURNAL_COLS = [['sem','Semaine'],['pp','PP'],['paye','Payable le'],['nom'
   ['gRrq','Gains RRQ'],['gAe','Gains assurables AE'],['gRqap','Gains RQAP'],['eRrq','Employeur RRQ'],['eAe','Employeur AE'],['eRqap','Employeur RQAP'],['eFss','Employeur FSS'],['eCnt','Employeur CNT'],['eCnesst','Employeur CNESST'],['eCcq','Employeur CCQ'],['vacAcq','Vacances bureau acquises'],['vacPris','Vacances bureau prises'],['le','Approuvée le'],
   // v659 : détail pour le rapport mensuel CCQ (ajouté après « Approuvée le » pour ne pas décaler les lignes déjà inscrites)
   ['finSem','Semaine se terminant le'],['classe','Classe'],['secteur','Secteur CCQ'],['hSimple','Heures simple'],['hDemi','Heures ½'],['hDouble','Heures double'],
-  ['eCcqAss','Employeur CCQ assurance'],['eCcqTaxe','Employeur CCQ taxe assurance'],['eCcqRet','Employeur CCQ retraite'],['eCcqSup','Employeur CCQ caisse supp.'],['eCcqPrel','Employeur CCQ prélèvement'],['eCcqForm','Employeur CCQ formation'],['eCcqIndem','Employeur CCQ indemnisation'],['eAecq','Employeur AECQ / ACQ']];
+  ['eCcqAss','Employeur CCQ assurance'],['eCcqTaxe','Employeur CCQ taxe assurance'],['eCcqRet','Employeur CCQ retraite'],['eCcqSup','Employeur CCQ caisse supp.'],['eCcqPrel','Employeur CCQ prélèvement'],['eCcqForm','Employeur CCQ formation'],['eCcqIndem','Employeur CCQ indemnisation'],['eAecq','Employeur AECQ / ACQ'],['ccqSect','CCQ contribution sectorielle (employé)']];
 const JOURNAL_TEXTE = ['sem','pp','paye','nom','id','regime','le','finSem','classe','secteur'];
 const JOURNAL_NUM = JOURNAL_COLS.map(x=>x[0]).filter(k=>!JOURNAL_TEXTE.includes(k));
 const JOURNAL_ILE = JOURNAL_COLS.findIndex(x=>x[0]==='le');
@@ -5369,45 +5375,49 @@ function paieCalcul(r, fin, prior){
   (r.autres||[]).forEach(a=>{ const d = PREP_AUTRES.find(x=>x[0]===a.type), m = Math.abs(n(a.montant)||0); if(!m) return;
     if(d && d[1]<0){ if(a.type==='REER') reer += m; retAutres.push({lib:a.type, m:r2(m)}); }
     else if(PAIE_NON_IMPOS.includes(a.type)) nonImp.push({lib:a.type, m:r2(m)}); else add(a.type, null, null, m); });
+  // v663 : indemnité d'équipement de sécurité (CCQ) — versée à l'employé, non imposable, par heure travaillée
+  const equipL = ccq ? paieTaux(fv('ccqEquip'), 0, r.simple + r.demi + r.double) : null;
+  if(equipL && equipL.m) nonImp.push({lib:'Indemnité d\'équipement de sécurité ('+equipL.txt+')', m:equipL.m});
   const brut = r2(gains.reduce((s,g)=>s+g.m,0)), nonImpTot = r2(nonImp.reduce((s,x)=>s+x.m,0));
   const heures = r.simple + r.banqueUtil + r.demi + r.double, salVac = r2(salaire + vacCcq);
   // Avantage imposable CCQ (assurance payée par l'employeur) : Québec seulement (impôt, RRQ, RQAP, FSS) ; pas versé
   const avImpL = ccq ? paieTaux(fv('ccqAvImp'), 0, heures) : null, avImp = avImpL ? avImpL.m : 0;
   const imposables = avImp ? [{lib:'Avantage imposable CCQ — assurance ('+avImpL.txt+')', m:avImp}] : [];
-  if(ccq && ccqEstIci(e) && cvNum(fv('ccqAvImp'))===PAIE_CCQ_ICI.avImpH) avert.push('Avantage imposable commercial (3,46 $/h) estimé : à confirmer avec le tableau CCQ « institutionnel-commercial 2026-2027 ».');
+  if(PAIE_CCQ_ICI.avImpEstime && ccq && ccqEstIci(e) && cvNum(fv('ccqAvImp'))===PAIE_CCQ_ICI.avImpH) avert.push('Avantage imposable commercial (3,46 $/h) estimé : à confirmer avec le tableau CCQ « institutionnel-commercial 2026-2027 ».');
   // v631 : cumuls de l'année = paies approuvées dans le CRM (journal de paie), plus de cumulatifs ACQ
   const cum = k => prior[k] || 0;
   const plafond = (x, maxAnn, k) => Math.max(0, Math.min(x, maxAnn - cum(k)));
   // RRQ, AE, RQAP (employé)
   const rrq = /^oui/i.test(e.exempRRQ||'') ? 0 : r2(plafond(Math.max(0, brut + avImp - G.rrqExemp/P)*G.rrqTaux/100, (G.rrqMga-G.rrqExemp)*G.rrqTaux/100, 'rrq'));
   const ae = /^oui/i.test(e.exempAE||'') ? 0 : r2(plafond(brut*G.aeTaux/100, G.aeMra*G.aeTaux/100, 'ae'));
-  const rqap = r2(plafond((brut + avImp)*G.rqapTauxE/100, G.rqapMra*G.rqapTauxE/100, 'rqap'));
+  const rqap = r2(plafond(brut*G.rqapTauxE/100, G.rqapMra*G.rqapTauxE/100, 'rqap'));   // v663 : sans l'avantage imposable (comme l'ACQ)
   // CCQ (employé)
   const L = (k, base) => paieTaux(fv(k), base, heures) || {m:0, txt:'à inscrire au dossier'};
   const ass = ccq ? L('ccqAssEmp', 0) : null, taxe = ccq ? paieTaux(fv('ccqTaxeEmp'), ass.m, 0) || {m:0, txt:''} : null;
   const ret = ccq ? L('ccqRetEmp', salaire) : null, prel = ccq ? L('ccqPrelEmp', salVac) : null;
   const assEmp = ass ? ass.m : 0, taxeEmp = taxe ? taxe.m : 0, retEmp = ret ? ret.m : 0, prelEmp = prel ? prel.m : 0;
+  const sectL = ccq ? paieTaux(fv('ccqSectEmp'), 0, heures) : null, sectEmp = sectL ? sectL.m : 0;
   const sc = String(e.syndCotis||'').trim(); let synd = 0, syndTxt = ''; if(sc){ if(/%/.test(sc)){ synd = r2(salaire*(n(sc.replace('%',''))||0)/100); syndTxt = nbFr(n(sc.replace('%','')))+' % du salaire'; } else if(n(sc)!=null) synd = r2(n(sc)); }
   else if(ccq){ const cs = ccqSyndicale(e, heures); if(cs){ synd = cs.m; syndTxt = cs.txt; } else avert.push('Syndicat non reconnu au dossier (« '+(e.syndicat||'vide')+' ») : cotisation syndicale non calculée.'); }
   // Impôt fédéral (T4127, résident du Québec) — l'avantage imposable CCQ n'est pas imposable au fédéral à la source
   const low = G.fedTaux[0]/100, rrqAmel = G.rrqTaux ? rrq/G.rrqTaux : 0;   // 1 point de bonification du RRQ = déduction
-  const A = Math.max(0, P*(brut - retEmp - reer - synd - rrqAmel));
+  const A = Math.max(0, P*(brut - retEmp - assEmp - prelEmp - sectEmp - reer - synd - rrqAmel));   // v663 : mêmes déductions que l'ACQ
   const k2q = low*(Math.min(P*(rrq-rrqAmel), (G.rrqMga-G.rrqExemp)*(G.rrqTaux-1)/100) + Math.min(P*ae, G.aeMra*G.aeTaux/100) + Math.min(P*rqap, G.rqapMra*G.rqapTauxE/100));
   const T3 = Math.max(0, paieImpot(A, G.fedPaliers, G.fedTaux) - low*(n(e.fedMontant)||G.fedBpaMax) - k2q - low*Math.min(A, G.fedCEA));
   const impFed = r2(T3*(1-G.fedAbattQc/100)/P + (n(e.fedSupp)||0));
   // Impôt du Québec (TP-1015.F simplifié) — avantage imposable inclus
-  const I = Math.max(0, P*(brut + avImp - retEmp - reer - rrqAmel));
+  const I = Math.max(0, P*(brut + avImp - retEmp - assEmp - prelEmp - sectEmp - reer - synd - rrqAmel));
   const impQc = r2(Math.max(0, paieImpot(I, G.qcPaliers, G.qcTaux) - G.qcTaux[0]/100*(n(e.provMontant)||G.qcMpb))/P + (n(e.provSupp)||0));
   const retenues = [['Impôt fédéral', impFed], ['Impôt du Québec', impQc], ['RRQ ('+nbFr(G.rrqTaux)+' %)', rrq], ['Assurance-emploi ('+nbFr(G.aeTaux)+' %)', ae], ['RQAP ('+nbFr(G.rqapTauxE,3)+' %)', rqap],
     ].filter(x=>x[1] || /^(RRQ|Assurance-emploi|RQAP)/.test(x[0]) && brut).map(([lib,m])=>({lib, m}))
-    .concat(ccq ? [{lib:'CCQ — assurance ('+ass.txt+')', m:assEmp}, {lib:'CCQ — taxe sur l\'assurance ('+(taxe.txt||'à inscrire')+')', m:taxeEmp}, {lib:'CCQ — retraite ('+ret.txt+')', m:retEmp}, {lib:'CCQ — prélèvement ('+prel.txt+')', m:prelEmp}] : [])
+    .concat(ccq ? [{lib:'CCQ — assurance ('+ass.txt+')', m:assEmp}, {lib:'CCQ — taxe sur l\'assurance ('+(taxe.txt||'à inscrire')+')', m:taxeEmp}, {lib:'CCQ — retraite ('+ret.txt+')', m:retEmp}, {lib:'CCQ — prélèvement ('+prel.txt+')', m:prelEmp}].concat(sectL ? [{lib:'CCQ — contribution sectorielle ('+sectL.txt+')', m:sectEmp}] : []) : [])
     .concat(synd || ccq ? [{lib:'Cotisation syndicale ('+(syndTxt || sc || 'à inscrire au dossier')+')', m:synd}] : [])
     .concat(vacCcq ? [{lib:'Vacances et fériés versés à la CCQ', m:vacCcq}] : []).concat(retAutres);
   const totRet = r2(retenues.reduce((s,x)=>s+x.m,0)), net = r2(brut + nonImpTot - totRet);
   // Parts de l'employeur
   const cnL = paieTaux(fv('cnesstTaux') ? fv('cnesstTaux').replace(/%/g,'')+' %' : '', brut, 0);
   if(!cnL) avert.push('Taux CNESST à inscrire au dossier.');
-  const pat = [{lib:'RRQ ('+nbFr(G.rrqTaux)+' %)', m:rrq}, {lib:'Assurance-emploi ('+nbFr(G.aeTaux)+' % × '+nbFr(G.aeMult,1)+')', m:r2(ae*G.aeMult)}, {lib:'RQAP ('+nbFr(G.rqapTauxP,3)+' %)', m:r2((brut+avImp)*G.rqapTauxP/100)},
+  const pat = [{lib:'RRQ ('+nbFr(G.rrqTaux)+' %)', m:rrq}, {lib:'Assurance-emploi ('+nbFr(G.aeTaux)+' % × '+nbFr(G.aeMult,1)+')', m:r2(ae*G.aeMult)}, {lib:'RQAP ('+nbFr(G.rqapTauxP,3)+' %)', m:r2(brut*G.rqapTauxP/100)},
     {lib:'FSS ('+nbFr(G.fss)+' %)', m:r2((brut+avImp)*G.fss/100)}, {lib:'CNT ('+nbFr(G.cnt)+' %)', m:r2((brut+avImp)*G.cnt/100)}, {lib:'CNESST ('+(cnL ? cnL.txt : 'taux à inscrire')+')', m:cnL ? cnL.m : 0}];
   if(ccq){ const P2 = (lib, k, base) => { const x = L(k, base); pat.push({lib:lib+' ('+x.txt+')', m:x.m}); return x.m; };
     const assP = P2('CCQ — assurance', 'ccqAssPat', 0); P2('CCQ — taxe sur l\'assurance', 'ccqTaxePat', assP); P2('CCQ — retraite', 'ccqRetPat', salaire); P2('CCQ — caisse supplémentaire (électriciens)', 'ccqSupPrev', salaire);
@@ -5420,7 +5430,7 @@ function paieCalcul(r, fin, prior){
   const pv = re => (patL.find(x=>re.test(x.lib))||{}).m || 0, autresRet = r2(retAutres.reduce((t,x)=>t+x.m,0));
   // Ligne du journal de paie (une par employé et par paie approuvée) — sert aux cumuls, aux remises et aux T4 / RL-1
   const jr = {h:heures+(r.ferie||0)+(r.vac||0), sal:r2(brut - vacCcq), vacCcq, brutImp:brut, avImp, remb:nonImpTot, fed:impFed, qc:impQc, rrq, ae, rqap, ccqAss:assEmp, ccqTaxe:taxeEmp, ccqRet:retEmp, ccqPrel:prelEmp, synd,
-    autresRet, reer:r2(reer), net, gRrq:r2(brut+avImp), gAe:brut, gRqap:r2(brut+avImp), eRrq:pv(/^RRQ/), eAe:pv(/^Assurance-emploi/), eRqap:pv(/^RQAP/), eFss:pv(/^FSS/), eCnt:pv(/^CNT/), eCnesst:pv(/^CNESST/),
+    autresRet, reer:r2(reer), net, gRrq:r2(brut+avImp), gAe:brut, gRqap:brut, ccqSect:sectEmp, eRrq:pv(/^RRQ/), eAe:pv(/^Assurance-emploi/), eRqap:pv(/^RQAP/), eFss:pv(/^FSS/), eCnt:pv(/^CNT/), eCnesst:pv(/^CNESST/),
     eCcq:r2(patL.filter(x=>/^(CCQ|AECQ)/.test(x.lib)).reduce((t,x)=>t+x.m,0)), vacAcq, vacPris,
     hSimple:r2(r.simple+r.banqueUtil), hDemi:r2(r.demi), hDouble:r2(r.double),
     eCcqAss:pv(/^CCQ — assurance/), eCcqTaxe:pv(/^CCQ — taxe/), eCcqRet:pv(/^CCQ — retraite/), eCcqSup:pv(/^CCQ — caisse/), eCcqPrel:pv(/^CCQ — prélèvement/), eCcqForm:pv(/^CCQ — fonds de formation/), eCcqIndem:pv(/^CCQ — fonds d'indemnisation/), eAecq:pv(/^AECQ/)};
@@ -5432,7 +5442,7 @@ function paieCalcul(r, fin, prior){
 const talonEsc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const talonArg = x => (Math.round((x||0)*100)/100).toLocaleString('fr-CA',{minimumFractionDigits:2, maximumFractionDigits:2})+' $';
 // v625 : talon sur une page 8½ × 11 — retenues avec cumul de l'année à gauche, contributions de l'employeur à droite
-const TALON_CUM = [[/^Impôt fédéral/,'fed'],[/^Impôt du Québec/,'qc'],[/^RRQ/,'rrq'],[/^Assurance-emploi/,'ae'],[/^RQAP/,'rqap'],[/^CCQ — assurance/,'ccqAss'],[/^CCQ — taxe/,'ccqTaxe'],[/^CCQ — retraite/,'ccqRet'],[/^CCQ — prélèvement/,'ccqPrel'],[/^Cotisation syndicale/,'synd']];
+const TALON_CUM = [[/^Impôt fédéral/,'fed'],[/^Impôt du Québec/,'qc'],[/^RRQ/,'rrq'],[/^Assurance-emploi/,'ae'],[/^RQAP/,'rqap'],[/^CCQ — assurance/,'ccqAss'],[/^CCQ — taxe/,'ccqTaxe'],[/^CCQ — retraite/,'ccqRet'],[/^CCQ — prélèvement/,'ccqPrel'],[/^CCQ — contribution sectorielle/,'ccqSect'],[/^Cotisation syndicale/,'synd']];
 function talonHtml(r, P, statut){
   const c = r.calc, e = r.e||{}, E = talonEsc, A = talonArg, cumOk = !!c.cumul, pr = (c.cumul||{}).prior || {};
   const pd = 'padding:2px 5px', td = 'style="'+pd+'"', tdn = 'style="text-align:right;white-space:nowrap;'+pd+'"', th = 'style="background:#eef1f4;text-align:left;'+pd+'"', thn = 'style="background:#eef1f4;text-align:right;white-space:nowrap;'+pd+'"';
@@ -5484,7 +5494,7 @@ function talonsImprimer(blocs, titre){ const w = window.open('', '_blank'); if(!
   w.document.close(); w.focus(); setTimeout(()=>w.print(), 300); }
 // v662 : rapport de paie (registre) — semaine affichée (brouillon ou approuvée), mois ou année (paies approuvées du journal)
 function rapportPaie(ls, titre, sous, semaine){ const E = talonEsc;
-  const ccqE = x => (x.ccqAss||0)+(x.ccqTaxe||0)+(x.ccqRet||0)+(x.ccqPrel||0), ret = x => (x.fed||0)+(x.qc||0)+(x.rrq||0)+(x.ae||0)+(x.rqap||0)+ccqE(x)+(x.synd||0)+(x.autresRet||0);
+  const ccqE = x => (x.ccqAss||0)+(x.ccqTaxe||0)+(x.ccqRet||0)+(x.ccqPrel||0)+(x.ccqSect||0), ret = x => (x.fed||0)+(x.qc||0)+(x.rrq||0)+(x.ae||0)+(x.rqap||0)+ccqE(x)+(x.synd||0)+(x.autresRet||0);
   const pat = x => (x.eRrq||0)+(x.eAe||0)+(x.eRqap||0)+(x.eFss||0)+(x.eCnt||0)+(x.eCnesst||0)+(x.eCcq||0);
   let h = rapEntete(titre, sous+' · '+new Set(ls.map(x=>x.nom)).size+' employé(s)');
   const T = k => rapSum(ls, k), sf = f => Math.round(ls.reduce((t,x)=>t+f(x),0)*100)/100;
@@ -5762,7 +5772,7 @@ function RemisesDasView({cfg, refreshKey}){
 }
 // v659 : Remises CCQ (remplace le Registre CCQ) — rapport mensuel à partir du journal de paie : semaines qui se terminent dans le mois, électriciens CCQ ;
 // à remettre à la CCQ au plus tard le 15 du mois suivant : vacances 13 % + parts de l'employé (assurance + taxe, retraite, prélèvement, syndicat) + parts de l'employeur (assurance + taxe, retraite, caisse supp., prélèvement, formation, indemnisation, AECQ/ACQ).
-const RCCQ_EMP = [['ccqAss','Assurance'],['ccqTaxe','Taxe assurance'],['ccqRet','Retraite'],['ccqPrel','Prélèvement'],['synd','Syndicat']];
+const RCCQ_EMP = [['ccqAss','Assurance'],['ccqTaxe','Taxe assurance'],['ccqRet','Retraite'],['ccqPrel','Prélèvement'],['ccqSect','Contr. sectorielle'],['synd','Syndicat']];
 const RCCQ_PAT = [['eCcqAss','Assurance'],['eCcqTaxe','Taxe assurance'],['eCcqRet','Retraite'],['eCcqSup','Caisse supp.'],['eCcqPrel','Prélèvement'],['eCcqForm','Formation'],['eCcqIndem','Indemnisation'],['eAecq','AECQ / ACQ']];
 function RemisesCcqView({cfg, refreshKey}){
   const [journal,setJournal]=useState(null), [hist,setHist]=useState([]), [remises,setRemises]=useState([]), [dos,setDos]=useState([]), [err,setErr]=useState('');
@@ -5877,7 +5887,7 @@ function rapportCcq(lignes, periode, remiseDe, nasDe){ const mois = periode.leng
     + '<div style="flex:1"><h2>Parts de l\'employeur</h2><table><tbody>'+RCCQ_PAT.map(([k,l])=>'<tr><td>'+E(l)+'</td><td class="n">'+rapN(rapSum(ls,k))+'</td></tr>').join('')+'</tbody></table></div>'
     + '<div style="flex:1"><h2>Total à remettre à la CCQ</h2><table><tbody><tr><td>Heures payées</td><td class="n">'+rapN(rapSum(ls,'hSimple')+rapSum(ls,'hDemi')+rapSum(ls,'hDouble'))+'</td></tr><tr><td>Salaires</td><td class="n">'+rapN(rapSum(ls,'sal'))+'</td></tr><tr><td>Vacances et fériés 13 %</td><td class="n">'+rapN(rapSum(ls,'vacCcq'))+'</td></tr><tr><td>Parts des employés</td><td class="n">'+rapN(RCCQ_EMP.reduce((t,[k])=>t+rapSum(ls,k),0))+'</td></tr><tr><td>Parts de l\'employeur</td><td class="n">'+rapN(RCCQ_PAT.reduce((t,[k])=>t+rapSum(ls,k),0))+'</td></tr><tr class="tt"><td>Total CCQ</td><td class="n">'+rapN(T)+'</td></tr></tbody></table>'+(mois ? '<div>'+rapStatut(remiseDe(periode), T)+'</div>' : '')+'</div></div>';
   if(!mois) h += rapAnnuel(periode, [{nom:'CCQ', du:m=>tot(lignes.filter(x=>x.moisCcq===m)), remise:m=>remiseDe(m)}]);
-  const ls2 = ls.map(x=>({...x, nomNas:x.nom+' '+(nasDe(x)||'NAS ?')})), court = {'Assurance':'ass.','Taxe assurance':'taxe','Retraite':'ret.','Prélèvement':'prél.','Syndicat':'synd.','Caisse supp.':'supp.','Formation':'form.','Indemnisation':'indem.','AECQ / ACQ':'AECQ'};
+  const ls2 = ls.map(x=>({...x, nomNas:x.nom+' '+(nasDe(x)||'NAS ?')})), court = {'Assurance':'ass.','Taxe assurance':'taxe','Retraite':'ret.','Prélèvement':'prél.','Contr. sectorielle':'sect.','Syndicat':'synd.','Caisse supp.':'supp.','Formation':'form.','Indemnisation':'indem.','AECQ / ACQ':'AECQ'};
   const cl = x => [String(x.classe||'').replace('Compagnon','Comp.').replace('Apprenti ','App. '), ({'Commercial':'C','Industriel':'B','Résidentiel léger':'D','Résidentiel lourd':'R1'})[x.secteur]||x.secteur].filter(Boolean).join(' ');
   h += '<h2>Détail par employé et par semaine</h2>'+rapTableau(ls2, [['pp','PP'],['finSem','Fin sem.'],[cl,'Cl.'],['hSimple','H. s.',1],['hDemi','H. ½',1],['hDouble','H. d.',1],['sal','Salaire',1],['vacCcq','Vac. 13 %',1]]
     .concat(RCCQ_EMP.map(([k,l])=>[k,'E '+court[l],1]), RCCQ_PAT.map(([k,l])=>[k,'P '+court[l],1]), [[x=>(x.vacCcq||0)+RCCQ_EMP.concat(RCCQ_PAT).reduce((t,[k])=>t+(x[k]||0),0),'Total CCQ',1]]), 'nomNas', true);
