@@ -201,7 +201,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v655';
+const APP_VERSION = 'v656';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -6157,8 +6157,10 @@ function EditEventModal({cfg, event, job, onClose, onSaved, toast}){
   const Bk = useBlocages(cfg || {});
   const blocOuverts = useMemo(()=>{ if(!job) return []; const ids = new Set((job.j.events||[]).flatMap(e=>[e.id, String(e.id||'').split('_')[0]]));
     return (Bk.liste||[]).filter(b=>b.statut!=='Réglé' && (b.source==='punchpro' ? (ids.has(b.eventId) || ids.has(String(b.eventId||'').split('_')[0])) : b.job===job.j.id)); },[Bk.liste, job]);
-  const startDt = new Date(event.start);
-  const endDt = event.end ? new Date(event.end) : new Date(startDt.getTime()+3600000);
+  // v656 : un événement « toute la journée » a une date seule (« 2026-12-01 ») — new Date() la lit en UTC (= la veille au soir à Montréal) ; on la lit en heure locale
+  const dLoc = v => event.allDay && /^\d{4}-\d{2}-\d{2}$/.test(String(v||'')) ? new Date(v+'T00:00:00') : new Date(v);
+  const startDt = dLoc(event.start);
+  const endDt = event.end ? dLoc(event.end) : new Date(startDt.getTime()+3600000);
   const [titre,setTitre]=useState(event.title||'');
   const [lieu,setLieu]=useState(event.location||'');
   const [desc,setDesc]=useState(event.description||'');
