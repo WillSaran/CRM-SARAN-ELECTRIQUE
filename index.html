@@ -11373,6 +11373,21 @@ function ChoixProduit({produits, onChoix, defaut}){
   </div>;
 }
 
+// v654 : publie le catalogue SANS PRIX vers STOCK PUNCH PRO › « Catalogue CRM » (PunchPro le lit : AP, commandes de stock, camions)
+async function publierCatalogueVersPunch(cfg, produits){
+  const id = cfg.stockSpreadsheetId; if(!id) throw new Error('STOCK PUNCH PRO n\'est pas configuré (Réglages).');
+  const NOM = 'Catalogue CRM';
+  const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:id, fields:'sheets.properties.title'});
+  if(!(meta.result.sheets||[]).some(x=>x.properties.title===NOM))
+    await window.gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId:id, resource:{requests:[{addSheet:{properties:{title:NOM}}}]}});
+  const lignes = produits.filter(p=>p.code && p.cat && p.cat!=='À CLASSER' && p.cat!=='ADMINISTRATIF' && p.cat!=='SERVICES' && p.cat!=='Stock personnalisé')
+    .map(p=>[String(p.code).trim(), String(p.desc||'').trim(), p.cat, p.sous||'', p.unitePunch || p.unite || 'un', (p.notes||'').slice(0,120)]);
+  const maj = new Date().toLocaleString('fr-CA');
+  await window.gapi.client.sheets.spreadsheets.values.clear({spreadsheetId:id, range:qSheet(NOM)+'!A:H'});
+  await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:qSheet(NOM)+'!A1', valueInputOption:'RAW',
+    resource:{values:[['Code','Description','Catégorie','Sous-catégorie','Unité','Notes','','Publié par le CRM : '+maj+' (aucun prix)'], ...lignes]}});
+  return lignes.length;
+}
 function ProduitsView({cfg, toast}){
   const C = useCatalogue(cfg);
   const [vue,setVue]=useState('catalogue');
@@ -11387,6 +11402,7 @@ function ProduitsView({cfg, toast}){
   const [lien,setLien]=useState('');
   const [lim,setLim]=useState(150);
   const [importer,setImporter]=useState(false);
+  const [publie,setPublie]=useState('');
   const [classer,setClasser]=useState(false);
   const err = e => toast && toast('Erreur : '+apiErrMsg(e));
   const fourn = C.fournisseurs;
@@ -11451,6 +11467,7 @@ function ProduitsView({cfg, toast}){
         <button className={'btn btn-sm'+(importer?' btn-p':'')} onClick={()=>setImporter(!importer)}>⬆ Importer</button>
         {C.aClasser.length>0 && <button className={'btn btn-sm'+(classer?' btn-p':'')} onClick={()=>setClasser(!classer)}>🏷 Classer ({C.aClasser.length})</button>}
         <button className="btn btn-sm" onClick={()=>setNouveau(nouveau?null:{code:'',desc:'',unite:'un',cat:cat||'À CLASSER'})}>+ Ajouter</button>
+        <button className="btn btn-sm" title="Envoie les codes, descriptions et catégories (SANS prix) à PunchPro : AP, commandes de stock, camions" disabled={!C.lu||publie==='en cours'} onClick={async()=>{ setPublie('en cours'); try{ const n = await publierCatalogueVersPunch(cfg, C.produits); toast&&toast('✓ '+n+' produits publiés vers PunchPro (sans prix)'); }catch(e){ err(e); } setPublie(''); }}>{publie==='en cours'?'Publication…':'📤 Publier vers PunchPro'}</button>
         <button className="btn btn-sm" onClick={()=>C.lire(true)}>⟳</button>
       </div>
     </div>
