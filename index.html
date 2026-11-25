@@ -3199,6 +3199,33 @@ function BlocagesRecherche({B, nomJob}){
     {vis.length>n && <button className="btn btn-sm" onClick={()=>setN(n+30)}>Voir plus ({vis.length-n})</button>}
   </div>;
 }
+// v655 : envoie la fiche des projets (sans téléphone, sans factures, sans prix) à PunchPro — onglet « Projets CRM » de la feuille PunchPro
+function PublierProjetsPunch({cfg}){
+  const [msg,setMsg]=useState(''), [busy,setBusy]=useState(false);
+  async function publier(){
+    setBusy(true); setMsg('');
+    try{
+      const id = cfg.punchproSpreadsheetId, NOM='Projets CRM';
+      if(!id) throw new Error('Feuille PunchPro non configurée.');
+      if(!cfg.projetsSpreadsheetId) throw new Error('Feuille des projets non configurée.');
+      const p = rowsToObjects(await sheetsGetAll(cfg.projetsSpreadsheetId,'Projets'), PROJETS_HEADERS);
+      const lignes = p.filter(x=>(x.adresse||x.titre) && !/archiv/i.test(x.statut||''))
+        .map(x=>[x.id||'', x.adresse||'', x.titre||'', x.client||'', x.contracteur||'', (JOB_PHASE_LABELS[x.phase]||x.phase||''), x.statut||'', x.po||'', String(x.notes||'').slice(0,1500), new Date().toLocaleDateString('fr-CA')]);
+      const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:id, fields:'sheets.properties.title'});
+      if(!(meta.result.sheets||[]).some(x=>x.properties.title===NOM))
+        await window.gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId:id, resource:{requests:[{addSheet:{properties:{title:NOM}}}]}});
+      await window.gapi.client.sheets.spreadsheets.values.clear({spreadsheetId:id, range:"'"+NOM+"'!A:L"});
+      await window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:"'"+NOM+"'!A1", valueInputOption:'RAW',
+        resource:{values:[['Id','Adresse','Titre','Client','Contracteur','Phase','Statut','PO','Notes','Publié le'], ...lignes]}});
+      setMsg('✓ '+lignes.length+' projets envoyés à PunchPro');
+    }catch(e){ setMsg('Erreur : '+apiErrMsg(e)); }
+    setBusy(false);
+  }
+  return <span style={{display:'inline-flex',alignItems:'center',gap:8}}>
+    <button className="btn btn-sm" disabled={busy} title="Les gars voient la fiche du projet (statut, contracteur, PO, notes) dans PunchPro. Pas de factures, pas de prix, pas de téléphone." onClick={publier}>{busy?'Envoi…':'📤 Envoyer les projets à PunchPro'}</button>
+    {msg && <span className="muted" style={{fontSize:12}}>{msg}</span>}
+  </span>;
+}
 function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, nom} → seulement ce projet-là, sans recherche ni filtres
   const [tick,setTick]=useState(0);
   const {loading, err, events, registry, factures, appels, courriels, archives, achats, fiches} = useClientsData(cfg, refreshKey+'|p'+tick);
@@ -3482,6 +3509,7 @@ function ProjetsSuivi({cfg, refreshKey, seul}){   // v567 : seul = {id, ouvrir, 
         <button className="btn btn-sm" style={{padding:'1px 7px'}} onClick={()=>{ setFocus(null); setFiltre(''); }}>✕</button></span>}
       <button className="btn btn-sm" style={!filtre && !focus?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>{ setFiltre(''); setFocus(null); }}>Tous</button>
       {codes.map(cd=><button key={cd} className="btn btn-sm" style={filtre===cd?{background:'var(--accent)',color:'#fff',border:'none'}:null} onClick={()=>{ setFiltre(cd); setFocus(null); }}>{cd==='PART'?'Particuliers':cd}</button>)}
+      {!seul && <PublierProjetsPunch cfg={cfg}/>}
       <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,marginLeft:'auto'}}><input type="checkbox" checked={seulManque} onChange={e=>setSeulManque(e.target.checked)}/> Seulement ce qui manque</label>
       <CaseTerminees v={voirTerm} set={setVoirTerm} n={nbTerm}/>
       <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13}}><input type="checkbox" checked={voirArch} onChange={e=>setVoirArch(e.target.checked)}/> Archivées{nbArch?' ('+nbArch+')':''}</label>
