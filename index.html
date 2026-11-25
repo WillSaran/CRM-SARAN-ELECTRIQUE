@@ -208,7 +208,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v678';
+const APP_VERSION = 'v679';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -17166,11 +17166,11 @@ function useClientsData(cfg, refreshKey){
         if(lent.length && alive) setState(s=>({...s, lent}));
         // Appels de service / OT papier : numéro -> photo, et facture -> appels
         const ah=(apRows[0]||[]).map(h=>cvNorm(h)), ac=re=>ah.findIndex(h=>re.test(h));
-        const ax={as:ac(/^appel/),fac:ac(/^factures?$/),ot:ac(/^ordre/),po:ac(/^po$/),nom:ac(/^fichier$/),id:ac(/^fichierid/),st:ac(/^statut/)};
+        const ax={as:ac(/^appel/),fac:ac(/^factures?$/),ot:ac(/^ordre/),po:ac(/^po$/),nom:ac(/^fichier$/),id:ac(/^fichierid/),st:ac(/^statut/),cli:ac(/^client/)};   // v679 : client (pour le Registre)
         const ag=(r,k)=> ax[k]>=0 ? (r[ax[k]]||'').trim() : '';
         const appels={parNumero:{}, parFacture:{}, liste:[]};
         apRows.slice(1).forEach(r=>{
-          const a={as:ag(r,'as'), ot:ag(r,'ot'), po:ag(r,'po'), nom:ag(r,'nom'), id:ag(r,'id'), statut:ag(r,'st'), factures:ag(r,'fac').split(/[\s,]+/).filter(Boolean)};
+          const a={as:ag(r,'as'), ot:ag(r,'ot'), po:ag(r,'po'), nom:ag(r,'nom'), id:ag(r,'id'), statut:ag(r,'st'), client:ag(r,'cli'), factures:ag(r,'fac').split(/[\s,]+/).filter(Boolean)};
           if(!a.id) return;
           appels.liste.push(a);
           if(a.as) appels.parNumero[a.as]=a; else if(a.ot) appels.parNumero[a.ot]=appels.parNumero[a.ot]||a;
@@ -19245,7 +19245,7 @@ function repIgnorer(id){ try{ const s = repIgnores(); s.add(id); localStorage.se
 const CPT_NAV = {compta:'bord', suivi:'clients', drive:'archive', factures:'factures', fournisseurs:'fourn', appel:'fourn', verif:'clients', paiements:'paiements'};   // v272 : « À vérifier » est dans Comptes clients   // v251 : Paiements = onglet à part   // anciens menus → onglet de Comptabilité
 const CPT_ONGLETS = [['bord','Tableau de bord'],['grand','Grand livre'],['plan','Plan comptable']];   // v552 : Plan comptable   // v507 : Comptabilité ouvre sur un tableau de bord ; Comptes fournisseurs passent dans le Grand livre
 //   // v506 : Comptes clients et Bons de vente sortis dans « Suivi des factures »
-const SUIVI_ONGLETS = [['clients','Comptes clients'],['factures','Bons de vente']];   // v506 : menu « Suivi des factures »
+const SUIVI_ONGLETS = [['clients','Comptes clients'],['factures','Bons de vente'],['registre','Registre']];   // v679 : Registre AP / OT / factures   // v506 : menu « Suivi des factures »
 const cptGroupe = nav => ['clients','factures','verif'].includes(CPT_NAV[nav]) ? 'suivi' : 'compta';   // v416 : Grand livre = Paiements, TPS/TVQ, Archive des factures
 const GL_ONGLETS = [['fourn','Comptes fournisseurs'],['recevoir','Comptes à recevoir'],['payer','Comptes à payer'],['paiements','Paiements'],['taxes','TPS/TVQ'],['archive','Archive des factures'],['etats','États de compte']];   // v417   // v420 : États de compte   // v374 : TPS/TVQ   // v272   // v240
 // v251 : Paiements (reçus et en attente) — onglet à part dans Comptabilité, avec sa propre recherche
@@ -20252,6 +20252,124 @@ function ComptaTableauBord({cfgRep, refreshKey, onAller}){
     {T.err && <div className="card" style={{color:'var(--danger)'}}>Erreur : {T.err}</div>}
   </div>;
 }
+// v679 : Suivi des factures › Registre — tous les appels de service (AP), ordres de travail (OT) et factures au même endroit, avec recherche.
+// Sources : registre des appels (La mémoire), registre des factures (La mémoire), bloc « Suivi » et fichiers AP_/OT_ des événements de l'agenda.
+function regNums(s){ return String(s||'').split(/[\s,;/–-]+/).filter(t=>/^\d{3,6}$/.test(t)); }
+function regNomFichier(nom){ return String(nom||'').replace(/\.[a-z0-9]{2,5}$/i,'').replace(/\.\.\.$/,'').replace(/^(AP|OT)_+[A-Z]*\d*_+/i,'').replace(/_+f-?\s?\d{3,5}-?$/i,'').replace(/_+(OT-?)?\d{3}$/i,'').replace(/_/g,' ').replace(/\s+/g,' ').trim(); }
+// numéro d'OT écrit à la fin du nom du fichier (« …_OT-625.jpg », « …_623.jpg »)
+function regOtFichier(nom){ const m = String(nom||'').replace(/\.[a-z0-9]{2,5}$/i,'').match(/_(?:OT-?)?(\d{3,4})$/i); return m ? m[1] : ''; }
+function regPlages(L){ const out = []; let i = 0; while(i<L.length){ let j = i; while(j+1<L.length && L[j+1]===L[j]+1) j++; out.push(j>i ? L[i]+'–'+L[j] : String(L[i])); i = j+1; } return out.join(', '); }
+// trous dans une séquence : seulement entre deux numéros proches (plusieurs carnets peuvent rouler en même temps)
+function regTrous(nums){ const L = [...new Set(nums.map(n=>+n).filter(n=>n>=100))].sort((a,b)=>a-b), m = [];
+  for(let i=1;i<L.length;i++){ const d = L[i]-L[i-1]; if(d>1 && d<=20) for(let k=L[i-1]+1;k<L[i];k++) m.push(k); }
+  return m; }
+function regConstruire(d){
+  const E = {}, today = localDateStr(new Date());
+  const get = (type, num) => { const k = type+'|'+num; return E[k] = E[k] || {k, type, num:String(num), date:'', client:'', po:'', factures:new Set(), aps:new Set(), ots:new Set(), crew:new Set(), lien:'', statutReg:'', papier:'', pasAFacturer:false, montant:null, ttc:null, statut:'', etat:''}; };
+  const date = (x, j) => { if(j && (!x.date || j < x.date)) x.date = j; };
+  const client = (x, c) => { if(c && !x.client) x.client = c; };
+  // 1) registre des appels (La mémoire — Appels de service)
+  ((d.appels||{}).liste||[]).forEach(a=>{
+    const lien = a.id ? 'https://drive.google.com/file/d/'+a.id+'/view' : '';
+    const otNo = regOtFichier(a.nom) || (a.as ? a.ot : '');
+    if(a.as){ const x = get('AP', a.as); client(x, a.client || regNomFichier(a.nom)); if(a.po && !x.po) x.po = a.po; if(lien && !x.lien) x.lien = lien; x.statutReg = x.statutReg || a.statut;
+      a.factures.filter(f=>/^\d{3,6}$/.test(f)).forEach(f=>x.factures.add(f));
+      if(otNo){ x.ots.add(otNo); const o = get('OT', otNo); o.aps.add(a.as); client(o, a.client || regNomFichier(a.nom)); } }
+    else if(a.ot){ const o = get('OT', otNo || a.ot); client(o, a.client || regNomFichier(a.nom)); if(a.po && !o.po) o.po = a.po; if(lien && !o.lien) o.lien = lien;
+      if(otNo && otNo!==a.ot) o.papier = a.ot; }
+  });
+  // 2) agenda : bloc « Suivi » (Appel de service / Ordre de travail / Facture) et fichiers AP_… / OT_… joints aux événements
+  (d.events||[]).forEach(raw=>{ const p = cvParseEvent(raw); if(p.day > today) return;
+    const crew = p.crew||[], as = regNums(p.as), ots = regNums(p.ot), facs = regNums(p.fac);
+    (p.attachments||[]).forEach(f=>{ const t = String(f.title||''), m = t.match(/^AP_+(\d{3,6})/i), o = t.match(/^OT_+(\d{3,6})/i);
+      if(m){ if(!as.includes(m[1])) as.push(m[1]); const x = get('AP', m[1]); if(f.fileUrl && !x.lien) x.lien = f.fileUrl; }
+      if(o){ const n = regOtFichier(t) || o[1]; if(!ots.includes(n)) ots.push(n); const x = get('OT', n); if(f.fileUrl && !x.lien) x.lien = f.fileUrl; } });
+    as.forEach(n=>{ const x = get('AP', n); date(x, p.day); client(x, p.title); if(p.po && !x.po) x.po = p.po; crew.forEach(c=>x.crew.add(c)); facs.forEach(f=>x.factures.add(f)); ots.forEach(o=>x.ots.add(o));
+      if(p.fac==='**' || p.as==='**') x.pasAFacturer = true; });
+    ots.forEach(n=>{ const x = get('OT', n); date(x, p.day); client(x, p.title); crew.forEach(c=>x.crew.add(c)); as.forEach(a=>x.aps.add(a)); facs.forEach(f=>x.factures.add(f)); });
+    facs.forEach(n=>{ const x = get('FAC', n); client(x, p.title); crew.forEach(c=>x.crew.add(c)); as.forEach(a=>x.aps.add(a)); ots.forEach(o=>x.ots.add(o)); if(!x.jourTravaux || p.day < x.jourTravaux) x.jourTravaux = p.day; });
+  });
+  // 3) registre des factures (La mémoire — Factures)
+  Object.values(d.factures||{}).forEach(f=>{ const x = get('FAC', f.num); x.date = String(f.date||'').slice(0,10) || x.date; x.client = f.client || f.nom || x.client; x.po = f.po || x.po;
+    x.montant = f.ht; x.ttc = f.ttc; x.lien = facLien(f.num, d.factures); x.desc = f.desc || '';
+    x.etat = f.annulee ? 'annulee' : f.remplaceePar ? 'remplacee' : f.etatPaie === 'payee' ? 'payee' : f.etatPaie === 'partielle' ? 'partielle' : (!f.envoi && !f.pdf) ? 'nonenvoyee' : 'arecevoir'; x.auRegistre = true; });
+  // liens dans les deux sens
+  Object.values(E).forEach(x=>{
+    if(x.type==='AP'){ x.factures.forEach(f=>get('FAC', f).aps.add(x.num)); x.ots.forEach(o=>get('OT', o).aps.add(x.num)); }
+    if(x.type==='FAC'){ x.aps.forEach(a=>get('AP', a).factures.add(x.num)); }
+    if(x.type==='OT'){ x.aps.forEach(a=>get('AP', a).ots.add(x.num)); } });
+  Object.values(E).forEach(x=>{
+    if(x.type==='FAC'){ if(!x.date) x.date = x.jourTravaux || ''; if(!x.lien) x.lien = facLien(x.num, d.factures); if(!x.etat) x.etat = 'horsregistre'; }
+    if(x.type==='AP' && !x.date){ const j = [...x.factures].map(f=>(E['FAC|'+f]||{}).jourTravaux || (E['FAC|'+f]||{}).date).filter(Boolean).sort()[0]; if(j) x.date = j; }
+    if(x.type==='OT' && !x.date){ const j = [...x.aps].map(a=>(E['AP|'+a]||{}).date).filter(Boolean).sort()[0]; if(j) x.date = j; }
+    if(x.type==='AP') x.etat = x.factures.size ? 'facture' : x.pasAFacturer ? 'pasafacturer' : 'sansfacture';
+    x.crew = [...x.crew]; x.factures = [...x.factures].sort(); x.aps = [...x.aps].sort(); x.ots = [...x.ots].sort();
+    x.cherche = cvNorm([x.type==='FAC'?'facture f':x.type, x.num, x.client, x.po, x.desc, x.crew.join(' '), x.factures.join(' '), x.aps.join(' '), x.ots.join(' '), x.papier].join(' ')); });
+  return Object.values(E);
+}
+const REG_ETATS = {facture:['Facturé','var(--success)'], pasafacturer:['Pas à facturer','var(--muted)'], sansfacture:['⚠️ Sans facture','var(--warning)'],
+  payee:['Payée','var(--success)'], partielle:['Payée en partie','var(--warning)'], arecevoir:['À recevoir','var(--accent)'], nonenvoyee:['Pas envoyée','var(--warning)'], annulee:['Annulée','var(--muted)'], remplacee:['Remplacée','var(--muted)'], horsregistre:['Pas au registre','var(--muted)']};
+const REG_TYPES = {AP:['AP','var(--accent)'], OT:['OT','#b06000'], FAC:['Facture','var(--success)']};
+function RegistreView({cfgRep, refreshKey}){
+  const d = useClientsData(cfgRep, refreshKey+'|reg');
+  const [q,setQ]=useState(''), [type,setType]=useState('tous'), [per,setPer]=useState('tout'), [sansFac,setSansFac]=useState(false), [nb,setNb]=useState(150), [trousOuv,setTrousOuv]=useState(false);
+  const tous = useMemo(()=>regConstruire(d),[d.events, d.factures, d.appels]);
+  const auj = localDateStr(new Date());
+  const depuis = per==='30' ? localDateStr(new Date(Date.now()-30*864e5)) : per==='90' ? localDateStr(new Date(Date.now()-90*864e5)) : per==='annee' ? PAI_DEBUT : '';
+  const dansPer = x => !depuis || (x.date && x.date >= depuis);
+  const mots = cvNorm(q) ? q.split(/\s+/).map(cvNorm).filter(Boolean) : [];
+  const trouve = x => mots.every(m=>x.cherche.includes(m));
+  const base = tous.filter(x=>dansPer(x) && trouve(x));
+  const compte = t => base.filter(x=>t==='tous' || x.type===t).length;
+  const sansFacL = base.filter(x=>x.type==='AP' && x.etat==='sansfacture');
+  const L = (sansFac ? sansFacL : base.filter(x=>type==='tous' || x.type===type))
+    .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')) || (+b.num||0)-(+a.num||0));
+  const tP = tous.filter(dansPer), trousAP = regTrous(tP.filter(x=>x.type==='AP').map(x=>x.num)), trousF = regTrous(tP.filter(x=>x.type==='FAC').map(x=>x.num));
+  const chercher = v => { setQ(v); setType('tous'); setSansFac(false); window.scrollTo(0,0); };
+  const Lien = ({t, n}) => <a onClick={e=>{ e.preventDefault(); chercher(n); }} href="#" style={{color:'var(--accent)',fontWeight:600,whiteSpace:'nowrap'}}>{t==='FAC'?'F-':t+' '}{n}</a>;
+  const relies = x => { const r = [...x.factures.map(n=>['FAC',n]), ...x.aps.map(n=>['AP',n]), ...x.ots.map(n=>['OT',n])].filter(([t,n])=>!(t===x.type && n===x.num));
+    return r.length ? r.map(([t,n],i)=><React.Fragment key={t+n}>{i>0?' · ':''}<Lien t={t} n={n}/></React.Fragment>) : <span className="muted">—</span>; };
+  const btn = (k, l, n) => <button key={k} className={'btn btn-sm'+(!sansFac && type===k?' btn-p':'')} onClick={()=>{ setType(k); setSansFac(false); }}>{l} <span style={{opacity:.7}}>({n})</span></button>;
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>Registre</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:10}}>Tous les appels de service (AP), ordres de travail (OT) et numéros de facture. Cherche un numéro, un nom, une adresse, un PO ou un employé. Clique un numéro relié pour le retrouver.</div>
+    <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 1724, Dunn, Bell, P03488, Maude…" autoFocus style={{flex:'1 1 260px',padding:'8px 10px',fontSize:15}}/>
+      {q && <button className="btn btn-sm" onClick={()=>setQ('')}>Effacer</button>}
+      <select value={per} onChange={e=>setPer(e.target.value)} style={{padding:'7px 8px'}}>
+        <option value="tout">Toutes les dates</option><option value="30">30 derniers jours</option><option value="90">90 derniers jours</option><option value="annee">Depuis le 1er juillet</option></select>
+    </div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+      {btn('tous','Tous',compte('tous'))}{btn('AP','AP',compte('AP'))}{btn('OT','OT',compte('OT'))}{btn('FAC','Factures',compte('FAC'))}
+      <button className={'btn btn-sm'+(sansFac?' btn-p':'')} onClick={()=>setSansFac(s=>!s)} style={sansFac?{}:{color:sansFacL.length?'var(--warning)':undefined}}>⚠️ AP sans facture ({sansFacL.length})</button>
+    </div>
+    {(trousAP.length>0 || trousF.length>0) && <div className="card" style={{padding:'8px 12px',marginBottom:10,borderLeft:'3px solid var(--warning)'}}>
+      <div style={{cursor:'pointer',fontSize:13.5}} onClick={()=>setTrousOuv(o=>!o)}>{trousOuv?'▾':'▸'} <b>⚠️ Trous dans la séquence</b> <span className="muted">— {trousAP.length} AP et {trousF.length} facture{trousF.length>1?'s':''} jamais vus{per!=='tout'?' (période choisie)':''}</span></div>
+      {trousOuv && <div style={{fontSize:13,marginTop:6,lineHeight:1.6}}>
+        {trousAP.length>0 && <div><b>AP :</b> {regPlages(trousAP)}</div>}
+        {trousF.length>0 && <div><b>Factures :</b> {regPlages(trousF)}</div>}
+        <div className="muted" style={{fontSize:12}}>Numéros entre deux numéros connus (écart de 20 ou moins) qu'on ne trouve ni dans les registres ni dans l'agenda : papier perdu, annulé ou pas encore entré.</div></div>}
+    </div>}
+    {d.loading && !tous.length ? <div className="card" style={{display:'flex',gap:10,alignItems:'center'}}><div className="spin"></div><span className="muted">Lecture des registres et de l'agenda…</span></div>
+    : d.err ? <div className="card" style={{color:'var(--danger)'}}>Erreur : {d.err}</div>
+    : !L.length ? <div className="card muted">Rien trouvé{q ? ' pour « '+q+' »' : ''}.</div>
+    : <div className="card" style={{padding:'4px 12px'}}>
+      {L.slice(0,nb).map(x=>{ const [tl,tc] = REG_TYPES[x.type], [el,ec] = REG_ETATS[x.etat] || ['',''];
+        return <div key={x.k} style={{display:'flex',gap:'4px 12px',flexWrap:'wrap',alignItems:'baseline',padding:'8px 0',borderTop:'1px solid var(--border)',fontSize:13.5}}>
+          <span style={{display:'flex',gap:8,alignItems:'baseline',flex:'0 0 150px'}}>
+            <span className="badge" style={{background:tc,color:'#fff',minWidth:52,justifyContent:'center'}}>{tl}</span>
+            {x.lien ? <a href={x.lien} target="_blank" rel="noopener" style={{fontWeight:800,fontSize:15,color:'var(--text)'}} title="Ouvrir le papier / la facture">{x.num} 📄</a> : <b style={{fontSize:15}}>{x.num}</b>}</span>
+          <span style={{flex:'0 0 64px'}} className="muted">{x.date ? cvFmtDay(x.date) : '—'}</span>
+          <span style={{flex:'1 1 220px',minWidth:0}}>{x.client || <span className="muted">—</span>}{x.po ? <span className="muted"> · {x.po}</span> : ''}{x.papier ? <span className="muted"> · papier {x.papier}</span> : ''}
+            {x.crew.length>0 && <div className="muted" style={{fontSize:12}}>{x.crew.join(', ')}</div>}</span>
+          <span style={{flex:'1 1 150px'}}>{relies(x)}</span>
+          <span style={{flex:'0 0 130px',textAlign:'right'}}>{x.montant!=null && <div style={{fontVariantNumeric:'tabular-nums',fontWeight:600}}>{cvMoney(x.montant)}</div>}<span style={{color:ec,fontWeight:600,fontSize:12.5}}>{el}</span></span>
+        </div>; })}
+      {L.length>nb && <div style={{textAlign:'center',padding:10}}><button className="btn btn-sm" onClick={()=>setNb(n=>n+300)}>Afficher plus ({L.length-nb} autres)</button></div>}
+    </div>}
+    {d.lent && d.lent.length>0 && <div className="muted" style={{fontSize:12,marginTop:6}}>Lent à répondre : {d.lent.join(', ')}.</div>}
+  </div>;
+}
 function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, onglet0}){
   const estGL = k => GL_ONGLETS.some(x=>x[0]===k);
   const [onglet,setOnglet]=useState(onglet0==='verif' ? 'clients' : estGL(onglet0) ? 'grand' : (onglet0 || 'clients'));
@@ -20259,7 +20377,7 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
   const [cles,setCles]=useState({});
   const choisir = k => { if(k===onglet) setCles(c=>({...c, [k]:(c[k]||0)+1})); setOnglet(k); NAV_FOCUS = null; window.scrollTo(0,0); };
   const choisirSous = k => { if(k===sous) setCles(c=>({...c, [k]:(c[k]||0)+1})); setSous(k); NAV_FOCUS = null; window.scrollTo(0,0); };
-  const estSuivi = ['clients','factures','verif'].includes(onglet);
+  const estSuivi = ['clients','factures','verif','registre'].includes(onglet);
   return <div>
     <h2 className="fh" style={{margin:'0 0 8px',fontSize:22}}>{estSuivi ? 'Suivi des factures' : 'Comptabilité'}</h2>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14,borderBottom:'1px solid var(--border)',paddingBottom:10}}>
@@ -20279,6 +20397,7 @@ function ComptabiliteView({cfg, cfgRep, refreshKey, contacts, toast, isDesktop, 
     {onglet==='grand' && sous==='payer' && <ComptesPayerView key={'cp'+(cles.payer||0)} cfg={cfgRep}/>}   {/* v508 */}
     {onglet==='grand' && sous==='etats' && <EtatsCompteView key={'e'+(cles.etats||0)} cfg={cfgRep} refreshKey={refreshKey}/>}
     {onglet==='grand' && sous==='archive' && <ArchiveFacturesView key={'a'+(cles.archive||0)} cfg={cfgRep}/>}
+    {onglet==='registre' && <RegistreView key={'r'+(cles.registre||0)} cfgRep={cfgRep} refreshKey={refreshKey}/>}
     {onglet==='factures' && <FacturesView key={'x'+(cles.factures||0)} cfg={cfg} cfgRep={cfgRep} refreshKey={refreshKey} contacts={contacts}/>}
     {onglet==='verif' && <>
       <h2 className="fh" style={{margin:'0 0 4px',fontSize:20}}>À vérifier</h2>
