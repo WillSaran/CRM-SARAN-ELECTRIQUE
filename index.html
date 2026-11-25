@@ -208,7 +208,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v677';
+const APP_VERSION = 'v678';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -13878,7 +13878,8 @@ const MAISON_OUTILS = [
   ['SO07','PE','prise extérieure','#0369a1','','SO07'],['SO08','LE','éclairage ext.','#92400e','','SO08'],['X240','240','240 V (cuisinière, sécheuse…)','#111827','','X240']];
 const MAISON_NUMEROS = ['SO01','SO02','SO02.1','SO04','MUR','PL','TH'];   // touches 1 à 7
 const MAISON_INTER = ['SO02','SO02.1','SO02.2'];
-const maisonOutil = c => MAISON_OUTILS.find(o=>o[0]===c) || [c, c, MAISON_LIB[c]||c, '#555', '', c];
+const MAISON_LIB_EXTRA = {};   // v678 : libellés des autres sorties SO du catalogue (remplis par le tour)
+const maisonOutil = c => MAISON_OUTILS.find(o=>o[0]===c) || [c, String(c).replace(/^SO/,''), MAISON_LIB[c]||MAISON_LIB_EXTRA[c]||c, '#555', '', c];
 const maisonCompte = c => maisonOutil(c)[5];
 // v473 : V (ventilateur) seulement en salle de bain, H (hotte) seulement dans la cuisine
 // v474 : outils montrés selon la sorte de pièce ; tout le reste est dans le « Catalogue de sorties »
@@ -13946,7 +13947,7 @@ function MaisonMarque({c, actif, petit, texte}){ const s = maisonSymSvg(c, texte
 const MAISON_SYM_IMG = {};
 function maisonSymImage(c, txt){ const k = c+'|'+(txt||''); if(MAISON_SYM_IMG[k]) return MAISON_SYM_IMG[k];
   return MAISON_SYM_IMG[k] = new Promise((ok,ko)=>{ const im = new Image(); im.onload = ()=>ok(im); im.onerror = ko; im.src = maisonSymUrl(c, txt); }); }
-function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}){
+function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer, sel, onChoisir, onEnleverDe, onDeplacerDe}){
   const boite = useRef(null), geste = useRef(null);
   const [taille,setTaille]=useState({w:600, h:420});
   const [tire,setTire]=useState(null);   // marque qu'on glisse {k, x, y}
@@ -13961,17 +13962,21 @@ function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}
   const W = taille.w*vue.z, H = W*((pg.h||1000)/(pg.w||1400)), left = taille.w/2 - vue.cx*W, top = taille.h/2 - vue.cy*H;
   const pos = e => { const r = boite.current.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; };
   const versPage = p => ({x:vue.cx + (p.x - taille.w/2)/W, y:vue.cy + (p.y - taille.h/2)/H});
+  // v678 : le symbole le plus près du clic, dans TOUTES les pièces de la page (zone de 22 px)
+  const trouver = q => { let best = null;
+    pieces.forEach(pp=>{ const em = (pp.emp||[]).map((m,i)=>({m,i})).filter(o=>o.m.pg===pg.no && (o.m.src||'')===(pg.src||'')), dec = maisonDecalages(em.map(o=>o.m));
+      em.forEach((o,j)=>{ const d = Math.hypot((o.m.x-q.x)*W + dec[j]*27, (o.m.y-q.y)*H); if(d < 22 && (!best || d < best.d)) best = {pid:pp.id, k:o.i, d}; }); });
+    return best; };
   const bas = e => { boite.current.setPointerCapture && boite.current.setPointerCapture(e.pointerId); const p = pos(e), q = versPage(p);
-    let k = null; if(piece && outil!=='gomme'){ const em = piece.emp||[], dec = maisonDecalages(em.filter(m=>m.pg===pg.no)); let j = 0;
-      const c = em.map((m,i)=>{ if(m.pg!==pg.no) return null; const d = dec[j++]; return {i, d:Math.hypot((m.x-q.x)*W + d*21*0, (m.y-q.y)*H)}; }).filter(Boolean).sort((a,b)=>a.d-b.d)[0];
-      if(c && c.d < 14) k = c.i; }
-    geste.current = {x:p.x, y:p.y, cx:vue.cx, cy:vue.cy, bouge:false, k}; };
+    geste.current = {x:p.x, y:p.y, cx:vue.cx, cy:vue.cy, bouge:false, hit:onChoisir ? trouver(q) : null}; };
   const bouge = e => { const g = geste.current; if(!g) return; const p = pos(e); const dx = p.x-g.x, dy = p.y-g.y;
     if(!g.bouge && Math.hypot(dx,dy) < 7) return; g.bouge = true;
-    if(g.k!=null){ const q = versPage(p); setTire({k:g.k, x:q.x, y:q.y}); return; }
+    if(g.hit){ const q = versPage(p); setTire({pid:g.hit.pid, k:g.hit.k, x:q.x, y:q.y}); return; }
     setVue(v=>({...v, cx:g.cx - dx/W, cy:g.cy - dy/H})); };
   const haut = e => { const g = geste.current; geste.current = null;
-    if(g && g.bouge && g.k!=null){ const q = versPage(pos(e)); setTire(null); onDeplacer && onDeplacer(g.k, +Math.min(1,Math.max(0,q.x)).toFixed(4), +Math.min(1,Math.max(0,q.y)).toFixed(4)); return; }
+    if(g && g.hit){ if(g.bouge){ const q = versPage(pos(e)); setTire(null); onDeplacerDe(g.hit.pid, g.hit.k, +Math.min(1,Math.max(0,q.x)).toFixed(4), +Math.min(1,Math.max(0,q.y)).toFixed(4)); }
+      else if(outil==='gomme') onEnleverDe(g.hit.pid, g.hit.k); else onChoisir(g.hit.pid, g.hit.k); return; }
+    if(g && !g.bouge && onChoisir && sel){ onChoisir(null); }
     if(!g || g.bouge || !piece) return; const p = pos(e);
     const x = vue.cx + (p.x - taille.w/2)/W, y = vue.cy + (p.y - taille.h/2)/H; if(x<0 || x>1 || y<0 || y>1) return;
     if(outil==='gomme'){ const prs = (piece.emp||[]).map((m,i)=>({i, k:Math.hypot((m.x-x)*W, (m.y-y)*H)})).filter(m=>piece.emp[m.i].pg===pg.no).sort((a,b)=>a.k-b.k)[0]; if(prs && prs.k<28) onEnlever(prs.i); return; }
@@ -13984,12 +13989,14 @@ function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}
       <div style={{position:'absolute',left,top,width:W,height:H}}>
         <img src={pg.img} alt="" draggable={false} style={{width:'100%',height:'100%',display:'block',background:'#fff'}}/>
         {piece && piece.pg===pg.no && maisonCadres(piece).length>0 && <MaisonContour cs={maisonCadres(piece)} col="#ca8a04" tirets/>}
-        {autres.map(p=>{ const em0 = (p.emp||[]).map((m,i)=>piece && p.id===piece.id && tire && tire.k===i ? {...m, x:tire.x, y:tire.y} : m), em = em0.filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')), dec = maisonDecalages(em);
+        {autres.map(p=>{ const em0 = (p.emp||[]).map((m,i)=>({...(tire && tire.pid===p.id && tire.k===i ? {...m, x:tire.x, y:tire.y} : m), _i:i})), em = em0.filter(m=>m.pg===pg.no && (m.src||'')===(pg.src||'')), dec = maisonDecalages(em);
           return <React.Fragment key={p.id}>
           {p.fx!=null && p.pg===pg.no && (p.src||'')===(pg.src||'') && <div style={{position:'absolute',left:(p.fx*100)+'%',top:(p.fy*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none',
             fontSize:11,fontWeight:700,padding:'1px 5px',borderRadius:4,whiteSpace:'nowrap',background:piece && p.id===piece.id ? '#fde047' : 'rgba(255,255,255,.75)',color:'#111',border:piece && p.id===piece.id ? '1.5px solid #ca8a04' : '1px solid #bbb'}}>{p.nom}</div>}
-          {em.map((m,i)=><div key={i} style={{position:'absolute',left:'calc('+(m.x*100)+'% + '+(dec[i]*27)+'px)',top:(m.y*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none'}}>
-            <MaisonMarque c={m.c} actif={!piece || p.id===piece.id} texte={m.c==='PL' && m.w ? m.w+' W' : ''}/></div>)}
+          {em.map((m,i)=>{ const choisi = sel && sel.pid===p.id && sel.k===m._i;
+            return <div key={i} style={{position:'absolute',left:'calc('+(m.x*100)+'% + '+(dec[i]*27)+'px)',top:(m.y*100)+'%',transform:'translate(-50%,-50%)',pointerEvents:'none',
+              ...(choisi ? {outline:'3px solid #2563eb',outlineOffset:3,borderRadius:8,background:'rgba(37,99,235,.12)',zIndex:4} : {})}}>
+            <MaisonMarque c={m.c} actif={!piece || p.id===piece.id || choisi} texte={m.c==='PL' && m.w ? m.w+' W' : ''}/></div>; })}
         </React.Fragment>; })}
       </div>
     </div>
@@ -13998,8 +14005,14 @@ function MaisonCarte({pg, pieces, piece, outil, onPlacer, onEnlever, onDeplacer}
       <button className="btn btn-sm" title="Recentrer sur la pièce" onClick={()=>setVue(vueDe())}>◎</button></div>
   </div>;
 }
-function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
+function MaisonTour({m, majP, majM, pages, onClose, onPlansClient, C, onMontrer}){
   const ordre = maisonOrdre(m.pieces);
+  const [sel,setSel]=useState(null);   // v678 : {pid, k} — symbole choisi sur le plan
+  const [cherche,setCherche]=useState(null);   // v678 : recherche « ＋ Sortie » (null = fermée)
+  const sortiesCat = useMemo(()=>{ const L = ((C && C.produits) || []).filter(x=>/^SO\d/.test(x.code||'') && !/^SO220/.test(x.code)).map(x=>({c:x.code, lib:String(x.desc||'').replace(/\s*\n.*$/s,'').trim() || MAISON_LIB[x.code] || x.code}));
+    L.forEach(x=>{ if(!MAISON_LIB[x.c]) MAISON_LIB_EXTRA[x.c] = x.lib; });
+    const vus = new Set(L.map(x=>x.c)); MAISON_OUTILS.forEach(o=>{ if(!vus.has(o[0]) && o[0]!=='PORTE'){ L.push({c:o[0], lib:o[2]}); vus.add(o[0]); } });
+    return L.sort((a,b)=>a.c.localeCompare(b.c, 'fr', {numeric:true})); },[C && C.produits]);
   const [i,setI]=useState(Math.max(0, ordre.findIndex(p=>!p.ok)));
   const [outil,setOutil]=useState('SO01');
   const [extras,setExtras]=useState(false);
@@ -14030,9 +14043,20 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
     emp.push(e);
     // v478 : plus de grille symétrique automatique pour les encastrés (posés où on touche)
     const so = maisonCompte(e.c);
-    if(MAISON_LIB[so] && !/^SO220/.test(so)){ const n = emp.filter(x=>maisonCompte(x.c)===so).length; if(n > (it[so]||0)) it[so] = n; }   // jamais sous le minimum ; plus d'emplacements → le récap monte
+    if((MAISON_LIB[so] || /^SO\d/.test(so)) && !/^SO220/.test(so)){ const n = emp.filter(x=>maisonCompte(x.c)===so).length; if(n > (it[so]||0)) it[so] = n; }   // v678 : toute sortie SO du catalogue compte   // jamais sous le minimum ; plus d'emplacements → le récap monte
     majP(p.id, {emp, items:it, ...(p.fx==null && pg ? {pg:pg.no, src:pg.src||''} : {})}); };
   const enlever = k => { memo(); majP(p.id, {emp:(p.emp||[]).filter((x,j)=>j!==k)}); };
+  // v678 : actions sur un symbole de n'importe quelle pièce (le compte de la pièce suit)
+  const pieceDe = pid => m.pieces.find(x=>x.id===pid);
+  const memoDe = q => { hist.current.push({id:q.id, emp:q.emp||[], items:q.items||{}}); if(hist.current.length>200) hist.current.shift(); };
+  const compteApres = (q, emp, it, so) => { if(!so || /^SO220/.test(so) || !(MAISON_LIB[so] || /^SO\d/.test(so))) return it; const avant = (q.emp||[]).filter(x=>maisonCompte(x.c)===so).length, apres = emp.filter(x=>maisonCompte(x.c)===so).length;
+    const n = {...it}; if(apres > (n[so]||0)) n[so] = apres; else if(apres < avant && (n[so]||0) === avant) n[so] = apres; return n; };
+  const enleverDe = (pid, k) => { const q = pieceDe(pid); if(!q) return; memoDe(q); const so = maisonCompte((q.emp||[])[k].c), emp = (q.emp||[]).filter((x,j)=>j!==k);
+    majP(pid, {emp, items:compteApres(q, emp, q.items||{}, so)}); setSel(null); };
+  const deplacerDe = (pid, k, x, y) => { const q = pieceDe(pid); if(!q) return; memoDe(q); majP(pid, {emp:(q.emp||[]).map((e,j)=>j===k ? {...e, x, y} : e)}); choisir(pid, k); };
+  const changerDe = (pid, k, c) => { const q = pieceDe(pid); if(!q) return; memoDe(q); const vieux = maisonCompte((q.emp||[])[k].c), emp = (q.emp||[]).map((e,j)=>j===k ? {...e, c} : e);
+    let it = compteApres(q, emp, q.items||{}, vieux); it = compteApres({...q, items:it}, emp, it, maisonCompte(c)); majP(pid, {emp, items:it}); };
+  const choisir = (pid, k) => { if(pid==null){ setSel(null); return; } setSel({pid, k}); const j = ordre.findIndex(x=>x.id===pid); if(j>=0 && j!==i) setI(j); };
   const deplacer = (k, x, y) => { memo(); let emp = (p.emp||[]).map((e,j)=>j===k ? {...e, x, y} : e);
 
     majP(p.id, {emp}); };
@@ -14052,7 +14076,9 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
       const k = e.key;
       if((e.ctrlKey || e.metaKey) && k.toLowerCase()==='z'){ e.preventDefault(); retour(); return; }
       if(e.ctrlKey || e.metaKey || e.altKey) return;
-      if(k==='Backspace'){ e.preventDefault(); retour(); return; }
+      if(k==='Delete' && sel){ e.preventDefault(); enleverDe(sel.pid, sel.k); return; }   // v678
+      if(k==='Escape' && sel){ setSel(null); return; }
+      if(k==='Backspace'){ e.preventDefault(); if(sel){ enleverDe(sel.pid, sel.k); return; } retour(); return; }
       if(k==='ArrowRight'){ aller(i+1); return; } if(k==='ArrowLeft'){ aller(i-1); return; }
       // v476 : P ou L deux fois de suite (ou double-clic sur le bouton) = circuit dédié (SO00, extra)
       const kl = k.toLowerCase(), maint = Date.now(), dbl = (kl==='p' || kl==='l') && derTouche.current.k===kl && maint - derTouche.current.t < 450;
@@ -14087,6 +14113,7 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
       <span style={{display:'flex',gap:3,flexWrap:'wrap',flex:1,minWidth:120}}>{ordre.map((x,k)=><button key={x.id} onClick={()=>aller(k)} title={x.etage+' › '+x.nom} style={{width:k===i?22:12,height:9,borderRadius:5,border:'none',cursor:'pointer',padding:0,
         background:k===i ? 'var(--accent)' : x.ok ? 'var(--success)' : (x.emp||[]).length ? 'var(--warning)' : 'var(--border2)'}}/>)}</span>
       <button className="btn btn-sm" disabled={!hist.current.length} onClick={retour} title="Défaire la dernière action (Ctrl+Z ou ⌫)">↶ Retour</button>
+      {onMontrer && <button className="btn btn-sm" onClick={onMontrer} title="Le plan propre, en plein écran, pour le client">🖥 Montrer au client</button>}
       <button className="btn btn-sm" onClick={onClose}>✕ Fermer</button></div>
     {demande && <div style={{border:'2px solid var(--accent)',borderRadius:8,padding:'8px 12px',display:'grid',gap:4,fontSize:13.5}}>
       <b>Avant de partir le tour : qu'est-ce que je place automatiquement ?</b>
@@ -14101,7 +14128,16 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
           <button className="btn btn-sm" style={{marginLeft:6,color:'var(--danger)',borderColor:'var(--danger)'}} onClick={()=>{ majP(p.id, {chauf:'aucun', chaufQ:{plinthe:0, thermostat:0, plancher:0, prep:0, convecteur:0, radiant:0}, emp:(p.emp||[]).filter(x=>x.c!=='PL' && x.c!=='TH')}); setOutil('SO01'); }}>✕ Pas de chauffage ici</button></>}</div>}
     <div style={{flex:1,minHeight:0,display:'flex',flexDirection:large ? 'row' : 'column',gap:8}}>
       <div style={{flex:1,minHeight:large ? 0 : '42vh',minWidth:0}}>
-        {pg ? <MaisonCarte pg={pg} pieces={m.pieces} piece={p} outil={outil} onPlacer={placer} onEnlever={enlever} onDeplacer={deplacer}/>
+        {pg ? <div style={{position:'relative',height:'100%'}}><MaisonCarte pg={pg} pieces={m.pieces} piece={p} outil={outil} onPlacer={placer} onEnlever={enlever} onDeplacer={deplacer}
+            sel={sel} onChoisir={choisir} onEnleverDe={enleverDe} onDeplacerDe={deplacerDe}/>
+          {sel && (()=>{ const q = pieceDe(sel.pid), e = q && (q.emp||[])[sel.k]; if(!e) return null; const o = maisonOutil(e.c);   // v678 : bulle du symbole choisi
+            return <div style={{position:'absolute',left:8,bottom:8,zIndex:5,background:'var(--bg)',border:'2px solid #2563eb',borderRadius:10,padding:'8px 10px',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',maxWidth:'calc(100% - 16px)',boxShadow:'0 4px 14px rgba(0,0,0,.35)',fontSize:13.5}}>
+              <MaisonMarque c={e.c} petit/><b>{o[2]}</b><span className="muted" style={{fontSize:12}}>{q.nom}</span>
+              <select value="" onChange={x=>{ if(x.target.value) changerDe(sel.pid, sel.k, x.target.value); }} style={{width:'auto',fontSize:12.5}}>
+                <option value="">↔ Changer pour…</option>{sortiesCat.filter(y=>y.c!==e.c).map(y=><option key={y.c} value={y.c}>{y.lib} ({y.c})</option>)}</select>
+              <button className="btn btn-sm" style={{color:'var(--danger)',borderColor:'var(--danger)'}} onClick={()=>enleverDe(sel.pid, sel.k)}>🗑 Supprimer</button>
+              <span className="muted" style={{fontSize:11.5}}>glisse-le pour le déplacer · Suppr · Échap</span>
+              <button className="btn btn-sm" onClick={()=>setSel(null)}>✕</button></div>; })()}</div>
           : <div className="muted" style={{padding:20,textAlign:'center',border:'1px dashed var(--border2)',borderRadius:8,height:'100%',boxSizing:'border-box'}}>Le plan se charge (ou aucun plan lu) — lis le plan PDF pour placer les sorties dessus.</div>}
       </div>
       <div style={{width:large ? 410 : 'auto',flexShrink:0,overflow:'auto',display:'flex',flexDirection:'column',gap:10,maxHeight:large ? 'none' : '40vh',fontSize:14}}>
@@ -14124,6 +14160,14 @@ function MaisonTour({m, majP, majM, pages, onClose, onPlansClient}){
                 {[...new Set([...PLINTHES, +x.w||0])].filter(Boolean).sort((a,b)=>a-b).map(w=><option key={w} value={w}>{w} W</option>)}</select></span>)}
               <span className="muted">= {pls.reduce((t,[x])=>t+(+x.w||0),0)} W</span></div>}
           </div>; })()}
+        <div>{cherche==null ? <button className="btn btn-sm btn-p" onClick={()=>setCherche('')} title="Toutes tes sorties SO du catalogue (sécheuse, carillon, câble…)">＋ Sortie du catalogue</button>
+          : <div style={{border:'1px solid var(--accent)',borderRadius:10,padding:'6px 8px',display:'grid',gap:4}}>
+            <div style={{display:'flex',gap:6}}><input autoFocus value={cherche} onChange={e=>setCherche(e.target.value)} placeholder="Chercher : sécheuse, carillon, SO222…" style={{flex:1,fontSize:13}}/><button className="btn btn-sm" onClick={()=>setCherche(null)}>✕</button></div>
+            <div style={{maxHeight:220,overflow:'auto',display:'grid',gap:2}}>{sortiesCat.filter(y=>!cherche || cvNorm(y.lib+' '+y.c).includes(cvNorm(cherche))).slice(0,40).map(y=>
+              <button key={y.c} className="btn btn-sm" style={{display:'flex',gap:6,alignItems:'center',justifyContent:'flex-start',textAlign:'left',...(outil===y.c ? {borderColor:'var(--accent)',background:'rgba(88,166,255,.15)'} : {})}} onClick={()=>{ setOutil(y.c); setCherche(null); }}>
+                <MaisonMarque c={y.c} petit/><span style={{flex:1}}>{y.lib}</span><span className="muted" style={{fontSize:10.5,fontFamily:'monospace'}}>{y.c}</span></button>)}</div>
+            <div className="muted" style={{fontSize:11.5}}>Choisis, puis touche le plan pour la poser. Le compte de la pièce et le prix suivent.</div></div>}
+          {cherche==null && !MAISON_OUTILS.some(o=>o[0]===outil) && /^SO/.test(outil) && <span style={{marginLeft:8,fontSize:12.5}}>Outil : <b>{maisonOutil(outil)[2]}</b> — touche le plan</span>}</div>
         {reste.length>0 && <div><button className="btn btn-sm" onClick={()=>setExtras(!extras)}>{extras ? '▾' : '▸'} Catalogue de sorties ({reste.length})</button>
           {extras && <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:4}}>{reste.map(bouton)}</div>}</div>}
         <div style={{fontSize:12,fontWeight:800,textTransform:'uppercase',letterSpacing:.5,color:'var(--muted)',marginTop:4}}>② Chauffage de la pièce</div>
@@ -14508,6 +14552,16 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli, lireTick}){   // v495 
   const [tour,setTour]=useState(false);
   const [pages,setPages]=useState([]);   // vignettes du plan : en mémoire seulement (pas dans la soumission sauvée)
   const [cadrer,setCadrer]=useState('');   // v482 : clé de la page qu'on encadre
+  const [montre,setMontre]=useState(null);   // v678 : {L:[{titre,url}], i} — plans propres en plein écran pour le client
+  const montrer = async () => { if(!pagesV.length){ toast && toast('Le plan n\'est pas chargé — ouvre ou relis le plan'); return; }
+    setMontre({L:[], i:0, charge:true});
+    try{ const L = await maisonPlansAnnotes(pagesV, m.pieces, m.app240), txt = 'Saran Électrique inc. — Plan préparé pour '+(d.nom||'le client')+(d.numero ? ' — Soumission '+d.numero : '');
+      const out = []; for(const x of L){ const u = await new Promise(ok=>{ const fr = new FileReader(); fr.onload = ()=>ok(fr.result); fr.readAsDataURL(x.blob); }); out.push({titre:x.titre.replace(/^Plan annoté — /,''), url:await planFiligrane(u, txt)}); }
+      if(!out.length){ setMontre(null); toast && toast('Aucune sortie placée sur les plans — fais le tour pièce par pièce'); return; }
+      setMontre({L:out, i:0}); }
+    catch(e){ setMontre(null); toast && toast('Erreur : '+(e && e.message || e)); } };
+  useEffect(()=>{ if(!montre) return; const f = e => { if(e.key==='Escape') setMontre(null); if(e.key==='ArrowRight') setMontre(x=>x && ({...x, i:Math.min(x.L.length-1, x.i+1)})); if(e.key==='ArrowLeft') setMontre(x=>x && ({...x, i:Math.max(0, x.i-1)})); };
+    window.addEventListener('keydown', f); return ()=>window.removeEventListener('keydown', f); },[!!montre]);
   const pagesV = maisonPagesVues(pages, m);
   const triees = pagesV.filter(p=>['etage','facade','terrain'].includes(p.sorte));
   const pagesAff = m.archive && triees.length ? triees : pagesV;   // v490 : « Archiver » = on ne garde que les pages triées (plans, façades, certificat)
@@ -14615,7 +14669,8 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli, lireTick}){   // v495 
     {!vP && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
       {pagesAff.length>0 && <button className="btn btn-sm" onClick={()=>setGrand(pagesAff[0])}>📑 Voir les plans ({pagesAff.length})</button>}
       {!m.pieces.length && <span className="muted" style={{fontSize:12.5}}>Aucune pièce encore — encadre-les sur le plan (étape 3) ou ajoute-les en bas.</span>}
-      {m.pieces.length>0 && <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={()=>setTour(true)}>🧭 Tour pièce par pièce{(()=>{ const n = m.pieces.filter(p=>p.ok).length; return n ? ' ('+n+'/'+m.pieces.length+')' : ''; })()}</button>}
+      {m.pieces.length>0 && <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={montrer} title="Le plan propre, en plein écran, pour le client">🖥 Montrer au client</button>}
+      {m.pieces.length>0 && <button className="btn btn-sm btn-p" onClick={()=>setTour(true)}>🧭 Tour pièce par pièce{(()=>{ const n = m.pieces.filter(p=>p.ok).length; return n ? ' ('+n+'/'+m.pieces.length+')' : ''; })()}</button>}
     </div>}
     {vP && <><div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
       <input ref={ref} type="file" accept="application/pdf" style={{display:'none'}} onChange={e=>{ const f = e.target.files[0]; e.target.value=''; lire(f); }}/>
@@ -14624,7 +14679,8 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli, lireTick}){   // v495 
         🏠 {m.planId===x.id ? 'Plan de maison : ' : 'Lire '}{x.name.length>34 ? x.name.slice(0,32)+'…' : x.name}</button>)}
       {etat && <span className="muted" style={{fontSize:12.5}}>{etat}</span>}
       {!m.pieces.length && <span className="muted" style={{fontSize:12}}>ou ajoute les pièces à la main (en bas)</span>}
-      {m.pieces.length>0 && <button className="btn btn-sm btn-p" style={{marginLeft:'auto'}} onClick={()=>setTour(true)}>🧭 Tour pièce par pièce{(()=>{ const n = m.pieces.filter(p=>p.ok).length; return n ? ' ('+n+'/'+m.pieces.length+')' : ''; })()}</button>}
+      {m.pieces.length>0 && <button className="btn btn-sm" style={{marginLeft:'auto'}} onClick={montrer} title="Le plan propre, en plein écran, pour le client">🖥 Montrer au client</button>}
+      {m.pieces.length>0 && <button className="btn btn-sm btn-p" onClick={()=>setTour(true)}>🧭 Tour pièce par pièce{(()=>{ const n = m.pieces.filter(p=>p.ok).length; return n ? ' ('+n+'/'+m.pieces.length+')' : ''; })()}</button>}
     </div>
     {MAISON_SORTES.map(([k,l])=>{ const pp = pagesAff.filter(p=>p.sorte===k); if(!pp.length) return null;
       return <div key={k}><div className="muted" style={{fontSize:11.5,fontWeight:700,marginBottom:3}}>{l}{k==='etage' ? ' — clique pour voir les sorties prévues dans chaque pièce' : ''}</div>
@@ -14646,7 +14702,15 @@ function MaisonPlan({d, setD, C, toast, partie, onRempli, lireTick}){   // v495 
       return <MaisonVue pg={g} pieces={m.pieces} m={m} majM={majM} onClose={()=>setGrand(null)} liste={pagesAff} onAller={setGrand} tag={(m.pagesTag||{})[maisonCleP(g)]}
         onTag={(pg, v)=>majM(o=>({pagesTag:{...(o.pagesTag||{}), [maisonCleP(pg)]:v}}))}/>; })()}
     {cadrer && pagesV.find(x=>maisonCleP(x)===cadrer) && <MaisonEncadrer pg={pagesV.find(x=>maisonCleP(x)===cadrer)} m={m} majM={majM} onClose={()=>setCadrer('')}/>}
-    {tour && <MaisonTour m={m} majP={majP} majM={majM} pages={pagesV} onClose={()=>setTour(false)} onPlansClient={()=>{ setTour(false); plansClient(); }}/>}
+    {tour && <MaisonTour m={m} majP={majP} majM={majM} pages={pagesV} C={C} onMontrer={montrer} onClose={()=>setTour(false)} onPlansClient={()=>{ setTour(false); plansClient(); }}/>}
+    {montre && <div style={{position:'fixed',inset:0,zIndex:1200,background:'#fff',display:'flex',flexDirection:'column'}} onClick={e=>{ if(e.target===e.currentTarget) setMontre(null); }}>   {/* v678 */}
+      <div style={{display:'flex',gap:10,alignItems:'center',padding:'8px 14px',background:'#111827',color:'#fff'}}>
+        <b style={{fontSize:16}}>{d.nom || 'Plan électrique'}</b><span style={{opacity:.75}}>{montre.L.length ? montre.L[montre.i].titre : 'Préparation des plans…'}</span>
+        <span style={{marginLeft:'auto',display:'flex',gap:6}}>{montre.L.map((x,k)=><button key={k} className={'btn btn-sm'+(k===montre.i?' btn-p':'')} onClick={()=>setMontre({...montre, i:k})}>{x.titre}</button>)}
+          <button className="btn btn-sm" onClick={()=>setMontre(null)}>✕ Fermer</button></span></div>
+      <div style={{flex:1,minHeight:0,display:'flex',alignItems:'center',justifyContent:'center',overflow:'auto',padding:10}}>
+        {montre.L.length ? <img src={montre.L[montre.i].url} alt="" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain'}}/> : <div className="spin"></div>}</div>
+      {montre.L.length>1 && <div style={{textAlign:'center',padding:6,color:'#555',fontSize:12.5}}>← → pour changer d'étage · Échap pour fermer</div>}</div>}
     {vR && <>{etages.map(e=>{ const ps = m.pieces.filter(p=>p.etage===e), st = ps.reduce((t,p)=>t+totalPiece(p),0);
       return <div key={e} style={{border:'1px solid var(--border)',borderRadius:8}}>
         <div style={{display:'flex',padding:'6px 10px',background:'var(--bg3)',borderRadius:'8px 8px 0 0',fontWeight:700}}>{e} <span className="muted" style={{fontWeight:400,marginLeft:6}}>· {ps.length} pièce{ps.length>1?'s':''}</span><span style={{marginLeft:'auto'}}>{cvMoney(st)}</span></div>
