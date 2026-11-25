@@ -208,7 +208,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v680';
+const APP_VERSION = 'v681';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8121,6 +8121,16 @@ function paiLirePaiements(rows){
     .map(p=>String(p.date).slice(0,10) < PAI_DEBUT ? {...p, avantDebut:true} : p);   // v375 : …sauf ceux déjà confirmés : ils paient encore des factures envoyées après le 1er juillet (ex. Payne #2258 payée le 12 juin, envoyée le 8 juillet)
 }
 // Nom affiché du client d'une facture : contracteur (code) ou nom écrit sur la facture, sinon le courriel.
+// v681 : nom écrit sur la facture (colonne Nom du registre), pas un courriel
+function facNomEcrit(f){ const n = String((f && f.nom)||'').trim(); return n && !n.includes('@') ? n : ''; }
+// v681 : nom du client lu dans le bloc d'adresse du PDF (sous « Page 1 de 1 », au-dessus de « Tél : »), première ligne
+function facPdfNomClient(pages){ const pg = (pages||[])[0]||[], t = x => String(x.str||'').trim();
+  const page = pg.find(x=>/^Page\b/i.test(t(x))), tel = pg.find(x=>/^T[ée]l\b/i.test(t(x)) && (!page || x.y < page.y));
+  if(!page || !tel) return '';
+  const L = pg.filter(x=>t(x) && x.x>30 && x.x<300 && x.y < page.y-3 && x.y > tel.y+3); if(!L.length) return '';
+  const haut = Math.max(...L.map(x=>x.y));
+  const nom = L.filter(x=>Math.abs(x.y-haut)<3).sort((a,b)=>a.x-b.x).map(t).join(' ').replace(/\s+/g,' ').trim();
+  return /@|\d{3}/.test(nom) ? '' : nom; }
 function paiClientNom(f){ const c = String(f.client||'').trim(); const code = c.toUpperCase();
   if(CLIENT_CODES[code]) return CLIENT_CODES[code]; return f.nom || c || '—'; }
 function paiClientCle(f){ return cvNorm(f.client) || cvNorm(f.nom) || 'f'+f.num; }
@@ -8132,6 +8142,7 @@ function paiSousSuite(a, b){ let i = 0; for(const ch of b){ if(ch===a[i]) i++; i
 function paiGroupesCompagnies(factures, FR){
   const base = f => { const c = String(f.client||'').trim(), code = c.toUpperCase();
     if(CLIENT_CODES[code]) return {k:'C:'+code, nom:CLIENT_CODES[code], fort:true};
+    if(c.includes('@') && facNomEcrit(f)) return {k:'N:'+(paiNomCie(facNomEcrit(f)) || paiClientCle(f)), nom:facNomEcrit(f)};   // v681 : nom écrit sur la facture = ce client-là, pas la compagnie de son courriel
     if(c.includes('@')){ const rc = repCodeCourriel(c, FR); if(rc && CLIENT_CODES[rc]) return {k:'C:'+rc, nom:CLIENT_CODES[rc], fort:true};
       const d = c.toLowerCase().split('@')[1] || '';
       if(d && !(typeof REP_COURRIEL_PERSO!=='undefined' && (REP_COURRIEL_PERSO.test('@'+d+'.') || REP_COURRIEL_PERSO.test(c)))) return {k:'D:'+cvNorm(d.split('.')[0]), nom:f.nomAffiche, dom:cvNorm(d.split('.')[0])}; }
@@ -8222,7 +8233,7 @@ function paiementsAnalyser(factures, paiements, nomDe, separes, adr){
     if(pf && !pg && g.paye<0.05) g.remplaceePar = f.num;            // l'ancienne est payée : la nouvelle est le doublon
     else if(!pf && f.paye<0.05) f.remplaceePar = g.num; }));        // sinon : la plus récente remplace l'ancienne
   Object.values(F).forEach(f=>{ f.solde = f.creditee || f.remplaceePar ? 0 : Math.round((f.ttc - (f.escompte||0) - (f.payeAvant||0) - f.paye)*100)/100;   // v287 : moins le payé avant l'auxiliaire · v230 : montant dû = total − escompte
-    const nn = f.nomRep || paiClientNom(f); f.nomAffiche = nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
+    const nn = (!CLIENT_CODES[String(f.client||'').trim().toUpperCase()] && facNomEcrit(f)) || f.nomRep || paiClientNom(f); f.nomAffiche =   /* v681 : le nom écrit sur la facture d'abord */ nn.includes('@') && nomsAppris[paiClientCle(f)] ? nomsAppris[paiClientCle(f)] : nn;
     f.payeLogiciel = !f.creditee && !f.remplaceePar && f.solde>0.05 && (f.payeLog||0) >= f.solde - 0.05;   // v233 : « Payé » inscrit sur le PDF (logiciel comptable)
     f.etat = f.annulee || f.creditee ? 'annulee' : f.remplaceePar ? 'remplacee' : (f.aDeposer && f.paye<0.05 && !f.payeLogiciel) ? 'adeposer' : f.ouverte ? 'ouverte' : (f.ttc < -0.05 && !f.applique && f.solde < -0.05) ? 'credit' : f.ttc<=0.05 ? 'zero' : f.solde<=0.05 || f.payeLogiciel ? 'payee' : f.paye>0.05 ? 'partielle' : 'impayee';
     f.age = paiJours(f.envoi || f.date); f.ageFac = paiJours(f.date); if(f.ageFac==null) f.ageFac = f.age; });   // v285 : âge depuis la date de la facture (comme l'état de compte)
@@ -8490,6 +8501,17 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees,
         fait.push({num:f.num, nom:f.nomAffiche || f.nom || f.client, avant:f.ttc, apres:r.total, esc:r.escompte, pct:r.escomptePct}); }
       if(maj.length){ try{ await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:maj}}); }catch(e){ setErr('Vérification des PDF : '+apiErrMsg(e)); } }
       setVerif(v=>({fait:[...v.fait, ...fait], cours:false})); if(maj.length) setTick(t=>t+1); })(); },[id, data]);
+  // v681 : colonne Nom vide (facture adressée à un courriel) → le nom écrit sur le PDF est inscrit au registre
+  const nomEssais = useRef(new Set());
+  useEffect(()=>{ if(!id || !data) return;
+    const F = data.factures, cols = F.__cols || {};
+    if(!(cols.nom>=0)) return;
+    const cand = Object.values(F).filter(f=>f.pdf && !String(f.nom||'').trim() && String(f.client||'').includes('@') && !nomEssais.current.has(f.num)).slice(0, 15);
+    if(!cand.length) return; cand.forEach(f=>nomEssais.current.add(f.num));
+    const L = i => String.fromCharCode(65+i);
+    (async()=>{ const maj = [];
+      for(const f of cand){ try{ const nom = facPdfNomClient(await relevePdfPages(await factPdfTelecharger(f.pdf))); if(nom) maj.push({range:L(cols.nom)+f.row, values:[[nom]]}); }catch(e){} }
+      if(maj.length){ try{ await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:maj}}); setTick(t=>t+1); }catch(e){} } })(); },[id, data]);
   useEffect(()=>{ if(!data || !data.onglet || !id) return;
     const A0 = paiementsAnalyser(facturesX, data.paiements, nomDe, separes, adr), pris = new Set(), lot = [];
     A0.attente.forEach(p=>{ if(essayes.current.has(p.row)) return; const o = A0.propositions[p.row]||[]; const surs = o.filter(x=>x.niveau==='sur');
@@ -20318,7 +20340,7 @@ function regConstruire(d){
     facs.forEach(n=>{ const x = get('FAC', n); client(x, p.title); crew.forEach(c=>x.crew.add(c)); as.forEach(a=>x.aps.add(a)); ots.forEach(o=>x.ots.add(o)); if(!x.jourTravaux || p.day < x.jourTravaux) x.jourTravaux = p.day; });
   });
   // 3) registre des factures (La mémoire — Factures)
-  Object.values(d.factures||{}).forEach(f=>{ const x = get('FAC', f.num); x.date = String(f.date||'').slice(0,10) || x.date; x.client = f.client || f.nom || x.client; x.po = f.po || x.po;
+  Object.values(d.factures||{}).forEach(f=>{ const x = get('FAC', f.num); x.date = String(f.date||'').slice(0,10) || x.date; x.client = facNomEcrit(f) || f.client || x.client; x.po = f.po || x.po;
     x.montant = f.ht; x.ttc = f.ttc; x.lien = facLien(f.num, d.factures); x.desc = f.desc || '';
     x.etat = f.annulee ? 'annulee' : f.remplaceePar ? 'remplacee' : f.etatPaie === 'payee' ? 'payee' : f.etatPaie === 'partielle' ? 'partielle' : (!f.envoi && !f.pdf) ? 'nonenvoyee' : 'arecevoir'; x.auRegistre = true; });
   // liens dans les deux sens
