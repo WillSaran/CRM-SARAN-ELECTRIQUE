@@ -210,7 +210,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v703';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
+const APP_VERSION = 'v704';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -19025,13 +19025,14 @@ function ficheAppliquerJobs(jobs, F, regByPO){
     if(!membres.length) membres = Object.values(jobs).filter(j=>j.client===code && ([j.name, ...(j.anciensNoms||[])].some(n=>aliasOk(j, n)) || (f.po && j.po===f.po)));
     if(!membres.length) return;
     const p = membres.find(j=>f.po && j.po===f.po) || membres.find(j=>j.po) || membres[0];
+    const lieux = membres.filter(j=>j.srcAdr==='lieu').map(j=>j.name);   // v704 : noms d'adresse lus AVANT que la fiche renomme
     membres.forEach(j=>{ if(j===p) return; p.events.push(...j.events); if(!p.reg && j.reg) p.reg = j.reg;
       p.idsAnciens = [...new Set([...(p.idsAnciens||[]), j.id, ...(j.idsAnciens||[])])]; p.anciensNoms = [...new Set([...(p.anciensNoms||[]), j.name, ...(j.anciensNoms||[])])]; delete jobs[j.id]; });
     const pos = [...new Set(membres.map(j=>j.po).filter(Boolean))];
     p.name = ficheNomJob(f); p.po = f.po;
     // v703 : contracteur (sauf CRS) — si tous les passages sont à la même adresse, le nom reste l'adresse (« 373Hickson » → « 373 Hickson »)
-    if(code!=='PART' && !CV_NOM_PAR_NOM.has(code)){ const lieux = membres.filter(j=>j.srcAdr==='lieu'); const cles = new Set(lieux.map(j=>cvCleAdresseJob(j.name)));
-      if(lieux.length && cles.size===1){ if(cvNorm(p.name)!==cvNorm(lieux[0].name)) p.anciensNoms = [...new Set([...(p.anciensNoms||[]), p.name])]; p.name = lieux[0].name; } } p.reg = (f.po && regByPO[f.po]) || p.reg; p.ficheJob = f.row;
+    if(code!=='PART' && !CV_NOM_PAR_NOM.has(code)){ const cles = new Set(lieux.map(cvCleAdresseJob));
+      if(lieux.length && cles.size===1){ if(cvNorm(p.name)!==cvNorm(lieux[0])) p.anciensNoms = [...new Set([...(p.anciensNoms||[]), p.name])]; p.name = lieux[0]; } } p.reg = (f.po && regByPO[f.po]) || p.reg; p.ficheJob = f.row;
     p.posLies = pos.filter(x=>x!==p.po);   // v244 : autres PO du même projet (ex. PO d'ajustement) — leurs factures comptent aussi
   });
 }
