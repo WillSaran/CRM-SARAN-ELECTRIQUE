@@ -208,7 +208,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v692';
+const APP_VERSION = 'v693';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7607,24 +7607,24 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         <div style={{fontWeight:700,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',wordBreak:'break-word'}}>{pastilles(e)}{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>
         <div style={{opacity:.85,fontSize:11,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{heure(e)}{e.location ? ' · '+e.location.split(',')[0] : ''}</div></div>;
       const trier = L => [...L].sort((a,b)=>(b.allDay?1:0)-(a.allDay?1:0) || String(a.start).localeCompare(String(b.start)));   // v688 : « Journée » en premier
+      // v693 : les jours en haut (colonnes), les employés couchés (une ligne par employé)
+      const coulCol = k => k==='autres' ? agendaGroupeCouleur('suivi') : GCAL_COLOR_MAP[k], nomCol = k => k==='autres' ? 'William' : equipeNom(k);
       return <div className="card" style={{padding:0,overflowX:'auto'}}>
-        <div style={{display:'grid',gridTemplateColumns:'96px repeat('+Math.max(1,cols.length)+', minmax(160px,1fr))',minWidth:96+Math.max(1,cols.length)*160}}>
+        <div style={{display:'grid',gridTemplateColumns:'110px repeat('+jours.length+', minmax(150px,1fr))',minWidth:110+jours.length*150}}>
           <div style={{position:'sticky',left:0,background:'var(--bg2)',zIndex:2,borderBottom:'2px solid var(--border2)'}}></div>
-          {cols.map(k=><div key={'h'+k} style={{padding:'7px 6px',fontWeight:800,fontSize:13,textAlign:'center',borderBottom:'2px solid var(--border2)',borderLeft:'1px solid var(--border)',
-            background:k==='autres'?agendaGroupeCouleur('suivi'):GCAL_COLOR_MAP[k],color:texteSur(k==='autres'?agendaGroupeCouleur('suivi'):GCAL_COLOR_MAP[k])}}>{k==='autres'?'William':equipeNom(k)}</div>)}   {/* v691 : ma couleur */}
-          {jours.map(d=>{ const dStr = localDateStr(d), auj = dStr===todayStr, jrTous = allDayForDay(dStr), tous = [...jrTous, ...eventsForDay(dStr)], dansCol = e => cols.some(k=>propre(e, k) || estAvec(e, k)), jr = jrTous.filter(e=>!dansCol(e));   // v688 : une job « toute la journée » d'un employé va dans sa colonne
-            return <React.Fragment key={dStr}>
-              <div onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }} title="Voir la journée" onDragOver={sur} onDrop={ev=>dropMois(ev, d)}
-                style={{position:'sticky',left:0,zIndex:1,cursor:'pointer',padding:'8px 8px',borderTop:'1px solid var(--border)',background:auj?'var(--accent)':'var(--bg2)',color:auj?'#fff':'var(--text)'}}>
-                <div style={{fontWeight:800,textTransform:'capitalize',fontSize:14}}>{d.toLocaleDateString('fr-CA',{weekday:'long'})}</div>
-                <div style={{fontSize:12,opacity:.85}}>{d.toLocaleDateString('fr-CA',{day:'numeric',month:'short'})}</div>
-                {jr.map(e=><div key={'j'+e.id} onClick={ev=>{ ev.stopPropagation(); setEditEvent(e); }} title={e.title} style={{...agendaStyle(e),fontSize:10.5,padding:'1px 5px',borderRadius:4,marginTop:3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.title}</div>)}
-              </div>
-              {cols.map(k=>{ const L = trier(tous.filter(e=>propre(e, k) || estAvec(e, k)));
-                return <div key={dStr+k} onDragOver={sur} onDrop={ev=>dropMois(ev, d)} onClick={()=>{ if(data) openNewJob(dStr, '07:00'); }} title={data ? 'Cliquer dans le vide pour créer une job' : ''}
-                  style={{padding:5,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',minHeight:58,background:auj?'rgba(var(--accent-rgb),.06)':undefined,cursor:data?'copy':'default'}}>
-                  {L.map(e=>carte(e, estAvec(e, k), k))}</div>; })}
-            </React.Fragment>; })}
+          {jours.map(d=>{ const dStr = localDateStr(d), auj = dStr===todayStr, jr = allDayForDay(dStr).filter(e=>!cols.some(k=>propre(e, k) || estAvec(e, k)));
+            return <div key={'h'+dStr} onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }} title="Voir la journée" onDragOver={sur} onDrop={ev=>dropMois(ev, d)}
+              style={{cursor:'pointer',padding:'7px 6px',textAlign:'center',borderBottom:'2px solid var(--border2)',borderLeft:'1px solid var(--border)',background:auj?'var(--accent)':'var(--bg2)',color:auj?'#fff':'var(--text)'}}>
+              <div style={{fontWeight:800,textTransform:'capitalize',fontSize:13.5}}>{d.toLocaleDateString('fr-CA',{weekday:'long'})} <span style={{fontWeight:500,opacity:.85}}>{d.getDate()}</span></div>
+              {jr.map(e=><div key={'j'+e.id} onClick={ev=>{ ev.stopPropagation(); setEditEvent(e); }} title={e.title} style={{...agendaStyle(e),fontSize:10.5,padding:'1px 5px',borderRadius:4,marginTop:3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',textAlign:'left'}}>{e.title}</div>)}
+            </div>; })}
+          {cols.map(k=><React.Fragment key={k}>
+            <div style={{position:'sticky',left:0,zIndex:1,padding:'8px',borderTop:'1px solid var(--border)',fontWeight:800,fontSize:13.5,display:'flex',alignItems:'center',background:coulCol(k),color:texteSur(coulCol(k))}}>{nomCol(k)}</div>
+            {jours.map(d=>{ const dStr = localDateStr(d), auj = dStr===todayStr, L = trier([...allDayForDay(dStr), ...eventsForDay(dStr)].filter(e=>propre(e, k) || estAvec(e, k)));
+              return <div key={k+dStr} onDragOver={sur} onDrop={ev=>dropMois(ev, d)} onClick={()=>{ if(data) openNewJob(dStr, '07:00'); }} title={data ? 'Cliquer dans le vide pour créer une job' : ''}
+                style={{padding:5,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',minHeight:58,background:auj?'rgba(var(--accent-rgb),.06)':undefined,cursor:data?'copy':'default'}}>
+                {L.map(e=>carte(e, estAvec(e, k), k))}</div>; })}
+          </React.Fragment>)}
         </div></div>; })()
     :
     <div className="card" style={{padding:0,overflowX:'auto'}}>
