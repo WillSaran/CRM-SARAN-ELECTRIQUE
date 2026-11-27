@@ -83,11 +83,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .main{flex:1;min-width:0;padding:20px;box-sizing:border-box}
 /* v672 : agenda Mois — une seule barre de défilement (la page); l'en-tête se cache en descendant et revient dès qu'on remonte un peu */
 .topbar{transition:transform .2s ease}
-body.entete-cache .topbar{transform:translateY(-100%)}
+/* v685 : la barre du haut de la page reste toujours ; seule la barre d'outils de l'agenda se cache (revient au survol de la barre du mois) */
 .ag-barre{position:sticky;top:var(--topbar-h);z-index:30;background:var(--bg);padding:6px 0;transition:transform .2s ease,top .2s ease}
-body.entete-cache .ag-barre{transform:translateY(calc(-100% - var(--topbar-h) - 4px))}
+body.entete-cache .ag-barre{transform:translateY(calc(-100% - 4px));pointer-events:none}
 .mois-barre{top:calc(var(--topbar-h) + var(--ag-barre-h, 48px));transition:top .2s ease}
-body.entete-cache .mois-barre{top:0}   /* v130 : pleine largeur sur l'ordi, et le contenu ne déborde plus de la page */
+body.entete-cache .mois-barre{top:var(--topbar-h)}   /* v130 : pleine largeur sur l'ordi, et le contenu ne déborde plus de la page */
 @media(max-width:899px){.nav{position:fixed;top:0;bottom:0;left:0;width:min(250px,80vw);transform:translateX(-102%);transition:transform .2s ease;overflow-y:auto;-webkit-overflow-scrolling:touch;z-index:61;padding:12px 10px 40px;border-right:1px solid var(--border);box-shadow:4px 0 18px rgba(0,0,0,.35)}.nav.ouvert{transform:none}.nav-fond{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60}.nav-item{font-size:15px;padding:12px}}
 .dash-rangee{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0 14px;align-items:start}.dash-mur{column-width:330px;column-gap:14px}.dash-mur>*{break-inside:avoid;-webkit-column-break-inside:avoid;display:inline-block;width:100%;vertical-align:top}
 .dash-tuiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;margin-bottom:12px}
@@ -208,7 +208,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v684';
+const APP_VERSION = 'v685';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7090,9 +7090,8 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   // v674 : « Aujourd'hui » en vue Mois → la semaine d'aujourd'hui devient la première semaine affichée (juste sous la barre du mois)
   function semaineEnHaut(ds){ const c = moisRef.current && moisRef.current.querySelector('[data-jour="'+ds+'"]'); if(!c) return false;
     const sec = c.closest('[data-mois]'), mb = sec && sec.querySelector('.mois-barre'), cible = c.getBoundingClientRect().top + window.scrollY, monte = cible < window.scrollY;
-    const haut = (mb ? mb.offsetHeight : 0) + (monte ? hautEntetes() : 0) + 6;
+    const haut = (mb ? mb.offsetHeight : 0) + hautTopbar() + 6;   // v685
     window.scrollTo({top: Math.max(0, cible - haut), behavior:'smooth'});
-    if(!monte) document.body.classList.add('entete-cache'); else document.body.classList.remove('entete-cache');
     try{ c.animate([{boxShadow:'0 0 0 4px var(--accent)'},{boxShadow:'0 0 0 0 transparent'}],{duration:1400}); }catch(e){}
     setMoisVu(new Date(new Date(ds+'T12:00:00').getFullYear(), new Date(ds+'T12:00:00').getMonth(), 1)); return true; }
   // v343 : recherche dans tous les événements (The Crew, En attente, mon agenda) — 1 an en arrière, 1 an en avant
@@ -7154,12 +7153,17 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
           {agendaGroupeNom(k)}{!sansNombre && <> <span className="muted">{n}</span></>}</button>; })}
       {cachees.length>0 && <span style={{color:'var(--accent)',fontSize:12,cursor:'pointer'}} onClick={()=>{ setCachees([]); try{ localStorage.setItem('agenda_groupes_caches','[]'); }catch(e){} }}>Tout montrer</span>}
   </>;   // v673 : noms d'équipe aussi dans la barre de chaque mois
-  const hautEntetes = () => { const tb = document.querySelector('.topbar'), b = agBarreRef.current; return (tb ? tb.offsetHeight : 0) + (b ? b.offsetHeight : 0); };
+  const hautEntetes = () => { const tb = document.querySelector('.topbar'), b = agBarreRef.current; return (tb ? tb.offsetHeight : 0) + (b && !document.body.classList.contains('entete-cache') ? b.offsetHeight : 0); };   // v685 : barre d'outils comptée seulement si visible
+  const hautTopbar = () => { const tb = document.querySelector('.topbar'); return tb ? tb.offsetHeight : 0; };
+  // v685 : barre d'outils de l'agenda (vue Mois) — visible seulement en haut de la page ou quand la souris est sur la barre du mois / la barre d'outils
+  const survolBarreRef = useRef(false);
+  const montrerBarreAg = () => { survolBarreRef.current = true; document.body.classList.remove('entete-cache'); };
+  const cacherBarreAg = () => { survolBarreRef.current = false; setTimeout(()=>{ if(!survolBarreRef.current && window.scrollY >= 80 && document.querySelector('.ag-barre')) document.body.classList.add('entete-cache'); }, 250); };
   const hautPage = el => el.getBoundingClientRect().top + window.scrollY;
   function allerMois(m, doux){
     const sec = moisRef.current && moisRef.current.querySelector('[data-mois="'+cleMois(m)+'"]');
     if(sec){ const cible = hautPage(sec), monte = cible < window.scrollY;
-      window.scrollTo({top: Math.max(0, cible - (monte ? hautEntetes() : 0)), behavior: doux===false ? 'auto' : 'smooth'}); setMoisVu(new Date(m.getFullYear(), m.getMonth(), 1)); return; }
+      window.scrollTo({top: Math.max(0, cible - hautTopbar()), behavior: doux===false ? 'auto' : 'smooth'}); setMoisVu(new Date(m.getFullYear(), m.getMonth(), 1)); return; }
     centrerRef.current = true; setMoisExt({av:2, ap:4}); setAnchor(new Date(m.getFullYear(), m.getMonth(), Math.min(m.getDate(), 28), 12)); setMoisVu(new Date(m.getFullYear(), m.getMonth(), 1));
   }
   useEffect(()=>{ if(viewMode!=='mois'){ centrerRef.current = true; ancreVueRef.current = ''; setMoisExt(x=>x.av===2 && x.ap===4 ? x : {av:2, ap:4}); return; } },[viewMode]);
@@ -7179,9 +7183,9 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       // en-tête : caché en descendant ; v684 : ne revient plus en remontant — seulement en haut de la page ou en passant la souris sur la barre du mois
       if((dy>0) !== (acc>0)) acc = 0; acc += dy;
       if(y < 80) document.body.classList.remove('entete-cache');
-      else if(acc > 30) document.body.classList.add('entete-cache');
+      else if(!survolBarreRef.current) document.body.classList.add('entete-cache');   // v685 : cachée dès qu'on n'est plus en haut, sauf au survol
       const el = moisRef.current; if(!el) return; const {moisVu:mv, moisExt:ext} = etatDefilRef.current;
-      const lim = (document.body.classList.contains('entete-cache') ? 0 : hautEntetes()) + 70;
+      const lim = hautEntetes() + 70;
       let vu = null; for(const x of el.querySelectorAll('[data-mois]')){ if(x.getBoundingClientRect().top <= lim) vu = x; else break; }
       if(vu){ const [a,m] = vu.getAttribute('data-mois').split('-').map(Number); if(!mv || mv.getFullYear()!==a || mv.getMonth()!==m-1) setMoisVu(new Date(a, m-1, 1)); }
       if(ajoutEnCoursRef.current) return; const r = el.getBoundingClientRect();
@@ -7474,7 +7478,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
           {isDesktop && <button className="btn btn-sm" onClick={()=>window.dispatchEvent(new Event('crm-nav-toggle'))} title="Cacher ou montrer le menu des onglets à gauche pour agrandir l'agenda">⇔ Menu</button>}
         </div></div>
     </div>
-    {ongletAg!=='heures' && <div ref={agBarreRef} className={viewMode==='mois' && ongletAg==='agenda' ? 'ag-barre' : undefined} style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
+    {ongletAg!=='heures' && <div ref={agBarreRef} className={viewMode==='mois' && ongletAg==='agenda' ? 'ag-barre' : undefined} onMouseEnter={viewMode==='mois' ? montrerBarreAg : undefined} onMouseLeave={viewMode==='mois' ? cacherBarreAg : undefined} style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
       <button className="btn btn-sm" onClick={goPrev} onDragOver={ev=>survolFleche(ev, -1)} onDragLeave={()=>survolFleche(null)} title="Précédent (K ou ←) — glisse un événement ici pour reculer">←</button>
       <div style={{fontWeight:700,textTransform:'capitalize',minWidth:160}}>{rangeLabel()}</div>
       <button className="btn btn-sm" onClick={goNext} onDragOver={ev=>survolFleche(ev, 1)} onDragLeave={()=>survolFleche(null)} title="Suivant (J ou →) — glisse un événement ici pour avancer">→</button>
@@ -7561,7 +7565,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       {moisListe(anchor, moisExt).map(m=>{ const jm = joursDuMois(m);
         return <div key={cleMois(m)} data-mois={cleMois(m)}>
       {/* v671 : barre de séparation du mois (reste collée en haut tant qu'on est dans ce mois) + jours de la semaine */}
-      <div className="mois-barre" onMouseEnter={()=>document.body.classList.remove('entete-cache')} style={{position:'sticky',zIndex:5,background:'var(--bg2)',margin:'0 -8px 6px',padding:'8px 8px 4px',borderTop:'3px solid var(--accent)',borderBottom:'3px solid var(--accent)'}}>
+      <div className="mois-barre" onMouseEnter={montrerBarreAg} onMouseLeave={cacherBarreAg} style={{position:'sticky',zIndex:5,background:'var(--bg2)',margin:'0 -8px 6px',padding:'8px 8px 4px',borderTop:'3px solid var(--accent)',borderBottom:'3px solid var(--accent)'}}>
         <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:5}}>
           <div style={{fontWeight:800,fontSize:isDesktop?16:13,textTransform:'uppercase',letterSpacing:.5,marginRight:10}}>{m.toLocaleDateString('fr-CA',{month:'long',year:'numeric'})}</div>
           {groupesPresents.length>0 && pucesEquipes(true)}
