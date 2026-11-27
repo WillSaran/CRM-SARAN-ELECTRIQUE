@@ -208,7 +208,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v687';
+const APP_VERSION = 'v688';
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -7604,13 +7604,13 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         style={{cursor:isDesktop && !aide ? 'grab' : 'pointer',...agendaStyle(e),...(aide ? {opacity:.62,outline:'2px dashed '+(GCAL_COLOR_MAP[k]||'var(--muted)'),outlineOffset:-2} : {}),fontSize:12.5,lineHeight:1.25,padding:'5px 8px',borderRadius:6,marginBottom:5}}>
         <div style={{fontWeight:700,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',wordBreak:'break-word'}}>{pastilles(e)}{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>
         <div style={{opacity:.85,fontSize:11,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{heure(e)}{e.location ? ' · '+e.location.split(',')[0] : ''}</div></div>;
-      const trier = L => [...L].sort((a,b)=>String(a.start).localeCompare(String(b.start)));
+      const trier = L => [...L].sort((a,b)=>(b.allDay?1:0)-(a.allDay?1:0) || String(a.start).localeCompare(String(b.start)));   // v688 : « Journée » en premier
       return <div className="card" style={{padding:0,overflowX:'auto'}}>
         <div style={{display:'grid',gridTemplateColumns:'96px repeat('+Math.max(1,cols.length)+', minmax(160px,1fr))',minWidth:96+Math.max(1,cols.length)*160}}>
           <div style={{position:'sticky',left:0,background:'var(--bg2)',zIndex:2,borderBottom:'2px solid var(--border2)'}}></div>
           {cols.map(k=><div key={'h'+k} style={{padding:'7px 6px',fontWeight:800,fontSize:13,textAlign:'center',borderBottom:'2px solid var(--border2)',borderLeft:'1px solid var(--border)',
             background:k==='autres'?'var(--bg3)':GCAL_COLOR_MAP[k],color:k==='autres'?'var(--muted)':texteSur(GCAL_COLOR_MAP[k])}}>{k==='autres'?'Autres':equipeNom(k)}</div>)}
-          {jours.map(d=>{ const dStr = localDateStr(d), auj = dStr===todayStr, tous = eventsForDay(dStr), jr = allDayForDay(dStr);
+          {jours.map(d=>{ const dStr = localDateStr(d), auj = dStr===todayStr, jrTous = allDayForDay(dStr), tous = [...jrTous, ...eventsForDay(dStr)], dansCol = e => cols.some(k=>propre(e, k) || estAvec(e, k)), jr = jrTous.filter(e=>!dansCol(e));   // v688 : une job « toute la journée » d'un employé va dans sa colonne
             return <React.Fragment key={dStr}>
               <div onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }} title="Voir la journée" onDragOver={sur} onDrop={ev=>dropMois(ev, d)}
                 style={{position:'sticky',left:0,zIndex:1,cursor:'pointer',padding:'8px 8px',borderTop:'1px solid var(--border)',background:auj?'var(--accent)':'var(--bg2)',color:auj?'#fff':'var(--text)'}}>
