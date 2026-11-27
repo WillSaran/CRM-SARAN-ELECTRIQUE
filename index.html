@@ -210,7 +210,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v697';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
+const APP_VERSION = 'v698';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -8168,7 +8168,9 @@ function paiLirePaiements(rows){
 }
 // Nom affiché du client d'une facture : contracteur (code) ou nom écrit sur la facture, sinon le courriel.
 // v681 : nom écrit sur la facture (colonne Nom du registre), pas un courriel
-function facNomEcrit(f){ const n = String((f && f.nom)||'').trim(); return n && !n.includes('@') ? n : ''; }
+// v698 : un titre de travail dans la colonne Nom (« BORNE ÉLECTRIQUE », « AJOUT PANNEAU SECONDAIRE ») n'est pas un nom de client
+const FAC_TITRE_RE = /\b(borne|panneau|entr[ée]e|ajout|changement|remplacement|installation|r[ée]paration|chauffage|g[ée]n[ée]ratrice|branchement|filage|c[âa]blage|rough|finition|thermopompe|spa|piscine|prise|luminaires?|extra|ajustement)\b/i;
+function facNomEcrit(f){ const n = String((f && f.nom)||'').trim(); return n && !n.includes('@') && !(f.nomRep && FAC_TITRE_RE.test(n) && !paiMots(n).some(w=>paiMots(f.nomRep).includes(w))) ? n : ''; }
 // v681 : nom du client lu dans le bloc d'adresse du PDF (sous « Page 1 de 1 », au-dessus de « Tél : »), première ligne
 function facPdfNomClient(pages){ const pg = (pages||[])[0]||[], t = x => String(x.str||'').trim();
   const page = pg.find(x=>/^Page\b/i.test(t(x))), tel = pg.find(x=>/^T[ée]l\b/i.test(t(x)) && (!page || x.y < page.y));
@@ -8449,7 +8451,11 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees,
     const grp = {}; R.pers.forEach(p=>{ const membres = [p, ...(p.lies||[])], ids = [...new Set(membres.flatMap(idsDe))]; if(ids.length<2) return;
       const cle = 'g:'+ids.slice().sort()[0]; ids.forEach(i=>{ if(!grp[i]) grp[i] = cle; }); });
     const groupe = f => { for(const i of [persCle(f.client||''), String(f.client||'').trim().toLowerCase(), persCle(f.nom||'')]) if(i && grp[i]) return grp[i]; return null; };
-    return {parNom, parCourriel, conjoint, conjMots, payeur, groupe}; },[R]);
+    // v698 : tous les noms du Répertoire (particuliers, alias, contracteurs et leurs contacts) — pour reconnaître un vrai nom de client sur une facture
+    const noms = new Set(); const ajN = n => { const k = persCle(n||''); if(k) noms.add(k); };
+    R.pers.forEach(p=>[p.nom, ...(p.noms||[]), ...((p.fiche && p.fiche.alias)||[])].forEach(ajN));
+    R.contr.forEach(c=>{ ajN(c.nom); ajN(CLIENT_CODES[c.code]); (c.contacts||[]).forEach(k=>ajN(k.nom)); });
+    return {parNom, parCourriel, conjoint, conjMots, payeur, groupe, noms}; },[R]);
   // v406 : courriel inconnu du Répertoire → la job où la facture est inscrite (agenda) donne le client (ex. smainville8@… = Serge Mainville, facture #2684)
   const persDeJob = useMemo(()=>{ const m = {}; (R.pers||[]).forEach(p=>(p.srcJobs||[]).forEach(j=>{ if(j && j.id && !m[j.id]) m[j.id] = p; })); return m; },[R]);
   const parJob = useCallback(n => { const j = jobDeFac[n]; if(!j) return null; const p = persDeJob[j.id];
@@ -8548,16 +8554,26 @@ function PaiementsView({cfg, cfgRep, refreshKey, q, contacts, compact, envoyees,
       if(maj.length){ try{ await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:maj}}); }catch(e){ setErr('Vérification des PDF : '+apiErrMsg(e)); } }
       setVerif(v=>({fait:[...v.fait, ...fait], cours:false})); if(maj.length) setTick(t=>t+1); })(); },[id, data]);
   // v681 : colonne Nom vide (facture adressée à un courriel) → le nom écrit sur le PDF est inscrit au registre
+  // v698 : aussi quand la colonne Nom contient autre chose qu'un nom connu (ex. « BORNE ÉLECTRIQUE », titre du travail) :
+  //        le nom du bloc d'adresse du PDF remplace le titre ; un nom déjà au Répertoire, ou qui rejoint la fiche du courriel, n'est pas touché.
   const nomEssais = useRef(new Set());
   useEffect(()=>{ if(!id || !data) return;
     const F = data.factures, cols = F.__cols || {};
     if(!(cols.nom>=0)) return;
-    const cand = Object.values(F).filter(f=>f.pdf && !String(f.nom||'').trim() && String(f.client||'').includes('@') && !nomEssais.current.has(f.num)).slice(0, 15);
+    let verifies = {}; try{ verifies = JSON.parse(localStorage.getItem('crm.facNomVerif')||'{}')||{}; }catch(e){}
+    const memeNom = (a, b) => { const A = paiMots(a), B = new Set(paiMots(b)); return A.length>0 && A.some(w=>B.has(w)); };
+    const suspect = f => { const n = String(f.nom||'').trim(); if(!n) return true; if(verifies[f.num]===n) return false;
+      if(adr && adr.noms && adr.noms.has(persCle(n))) return false;
+      const r = nomDe ? nomDe(String(f.client||'').trim().toLowerCase(), f) : null; return !(r && memeNom(n, r.nom)); };
+    const cand = Object.values(F).filter(f=>f.pdf && String(f.client||'').includes('@') && !nomEssais.current.has(f.num) && suspect(f)).slice(0, 15);
     if(!cand.length) return; cand.forEach(f=>nomEssais.current.add(f.num));
     const L = i => String.fromCharCode(65+i);
     (async()=>{ const maj = [];
-      for(const f of cand){ try{ const nom = facPdfNomClient(await relevePdfPages(await factPdfTelecharger(f.pdf))); if(nom) maj.push({range:L(cols.nom)+f.row, values:[[nom]]}); }catch(e){} }
-      if(maj.length){ try{ await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:maj}}); setTick(t=>t+1); }catch(e){} } })(); },[id, data]);
+      for(const f of cand){ try{ const nom = facPdfNomClient(await relevePdfPages(await factPdfTelecharger(f.pdf))), avant = String(f.nom||'').trim();
+        if(nom && persCle(nom)!==persCle(avant)) maj.push({range:L(cols.nom)+f.row, values:[[nom]]});
+        verifies[f.num] = nom || avant; }catch(e){} }
+      try{ localStorage.setItem('crm.facNomVerif', JSON.stringify(verifies)); }catch(e){}
+      if(maj.length){ try{ await window.gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:id, resource:{valueInputOption:'RAW', data:maj}}); setTick(t=>t+1); }catch(e){} } })(); },[id, data, adr, nomDe]);
   useEffect(()=>{ if(!data || !data.onglet || !id) return;
     const A0 = paiementsAnalyser(facturesX, data.paiements, nomDe, separes, adr), pris = new Set(), lot = [];
     A0.attente.forEach(p=>{ if(essayes.current.has(p.row)) return; const o = A0.propositions[p.row]||[]; const surs = o.filter(x=>x.niveau==='sur');
