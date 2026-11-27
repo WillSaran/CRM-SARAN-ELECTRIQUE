@@ -210,7 +210,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v702';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
+const APP_VERSION = 'v703';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -17262,7 +17262,8 @@ function cvNomAdresse(a){ const s = String(a||'').split(',')[0].replace(/\s+/g,'
     .replace(/\s+(qc|québec|quebec)\b.*$/i,'').replace(/\s+[A-Z]\d[A-Z]\s?\d[A-Z]\d.*$/i,'').replace(/\s+(e|o|n|s|est|ouest|nord|sud)\.?$/i,'').trim();
   return rue ? m[1]+' '+rue.charAt(0).toUpperCase()+rue.slice(1) : ''; }
 function cvNomAdresseTitre(nom){ const m = String(nom||'').match(/(^|\s)(\d{1,5})\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’\-]+)/); return m ? m[2]+' '+cvTitleCase(m[3]) : ''; }
-function cvCleAdresseJob(nom){ return cvNorm(String(nom||'').replace(/\b(ste|sainte)[-\s.]+/ig,'sainte-').replace(/\bst[-\s.]+/ig,'saint-')); }
+function cvCleAdresseJob(nom){ return cvNorm(String(nom||'').replace(/^\s*(\d+)\s*[A-Za-z]\b/,'$1')   // v703 : « 38A Prince Arthur » = « 38 Prince-Arthur » (même bâtisse)
+.replace(/\b(ste|sainte)[-\s.]+/ig,'sainte-').replace(/\bst[-\s.]+/ig,'saint-')); }
 function cvParseEvent(e){
   const title = String(e.title||'').trim();
   const toks = title.replace(new RegExp(CV_NOJOB_RE.source,'ig'),' ').replace(/[()]/g,' ').split(/[\s\-–\/,+&_]+/).filter(Boolean);   // v702 : « PAY-FINITION_GRAND-BOULEVARD »
@@ -19027,7 +19028,10 @@ function ficheAppliquerJobs(jobs, F, regByPO){
     membres.forEach(j=>{ if(j===p) return; p.events.push(...j.events); if(!p.reg && j.reg) p.reg = j.reg;
       p.idsAnciens = [...new Set([...(p.idsAnciens||[]), j.id, ...(j.idsAnciens||[])])]; p.anciensNoms = [...new Set([...(p.anciensNoms||[]), j.name, ...(j.anciensNoms||[])])]; delete jobs[j.id]; });
     const pos = [...new Set(membres.map(j=>j.po).filter(Boolean))];
-    p.name = ficheNomJob(f); p.po = f.po; p.reg = (f.po && regByPO[f.po]) || p.reg; p.ficheJob = f.row;
+    p.name = ficheNomJob(f); p.po = f.po;
+    // v703 : contracteur (sauf CRS) — si tous les passages sont à la même adresse, le nom reste l'adresse (« 373Hickson » → « 373 Hickson »)
+    if(code!=='PART' && !CV_NOM_PAR_NOM.has(code)){ const lieux = membres.filter(j=>j.srcAdr==='lieu'); const cles = new Set(lieux.map(j=>cvCleAdresseJob(j.name)));
+      if(lieux.length && cles.size===1){ if(cvNorm(p.name)!==cvNorm(lieux[0].name)) p.anciensNoms = [...new Set([...(p.anciensNoms||[]), p.name])]; p.name = lieux[0].name; } } p.reg = (f.po && regByPO[f.po]) || p.reg; p.ficheJob = f.row;
     p.posLies = pos.filter(x=>x!==p.po);   // v244 : autres PO du même projet (ex. PO d'ajustement) — leurs factures comptent aussi
   });
 }
@@ -19100,7 +19104,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     const fj = jobFiche(code, src.cle, src.po, src.id, src.ficheRow);
     const key = fj ? 'F'+fj.row : src.po ? 'P'+src.po : src.id ? 'I'+src.id : 'N'+ficheNorm(src.nom || src.cle);
     const j = jobsMap[key] || (jobsMap[key] = nouvelleJob(code, key));
-    if(fj){ j.ficheJob = fj; j.nom = fj.code==='PART' ? (fj.nom || '') : fj.nom; j.po = fj.po || j.po; }
+    if(fj){ j.ficheJob = fj; j.nom = fj.code==='PART' ? (fj.nom || '') : (src.nomAdr || fj.nom); j.po = fj.po || j.po; }   // v703 : nom d'adresse du contracteur
     if(!j.nom && src.nom) j.nom = src.nom;
     if(!j.po && src.po) j.po = src.po;
     if(!j.adresse && src.adresse) j.adresse = src.adresse;
@@ -19140,7 +19144,7 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   const C = code => contr[code] || (contr[code] = {type:'contr', id:'C:'+code, code, nom:((F.clients.find(f=>f.code===code)||{}).nom) || CLIENT_CODES[code] || code, contact:CLIENT_CONTACT[code]||'',
     fiche:F.clients.find(f=>f.code===code)||null, jobs:{}, facturesSans:[], soum:[], contacts:[], achatsSans:[]});
   const codeDe = c => { c = String(c||'').toUpperCase(); if(c==='PY') c='PAY'; return CLIENT_CODES[c] ? c : ''; };
-  Object.values(clients||{}).forEach(c=>{ if(c.code==='PART') return; c.jobs.forEach(j=>{ const jj = ajouterJob(C(c.code).jobs, c.code, {cle:cvJobCle(c,j), nom:j.name, po:j.po, adresse:j.address, events:j.events, reg:j.reg, id:j.id, ficheRow:j.ficheJob});
+  Object.values(clients||{}).forEach(c=>{ if(c.code==='PART') return; c.jobs.forEach(j=>{ const jj = ajouterJob(C(c.code).jobs, c.code, {cle:cvJobCle(c,j), nom:j.name, po:j.po, adresse:j.address, events:j.events, reg:j.reg, id:j.id, ficheRow:j.ficheJob, nomAdr:(j.srcAdr==='lieu' && !CV_NOM_PAR_NOM.has(c.code)) ? j.name : ''});
     (j.anciensNoms||[]).forEach(n=>{ jj.cles.add(n); jj.cles.add(cvJobCle(c, {name:n, po:j.po})); }); }); });   // v701 : les anciennes destinations d'achats suivent
   (registry||[]).forEach(r=>{ const code = codeDe(r.code); if(!code) return;
     ajouterJob(C(code).jobs, code, {cle:cvJobCle({code}, {name:r.nom, po:r.po}), nom:cvTitleCase(r.nom||''), po:r.po, adresse:[r.adresse,r.ville].filter(Boolean).join(', '), reg:r}); });
