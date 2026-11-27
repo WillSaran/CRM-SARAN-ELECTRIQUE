@@ -85,7 +85,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .topbar{transition:transform .2s ease}
 /* v685 : la barre du haut de la page reste toujours ; seule la barre d'outils de l'agenda se cache (revient au survol de la barre du mois) */
 .ag-barre{position:sticky;top:var(--topbar-h);z-index:30;background:var(--bg);padding:6px 0;transition:transform .2s ease,top .2s ease}
-body.entete-cache .ag-barre{transform:translateY(calc(-100% - 4px));pointer-events:none}
+body.entete-cache .ag-barre{display:none}   /* v690 : barre d'outils de l'agenda cachée (toutes les vues) ; elle revient au survol / clic de la bande */
 .mois-barre{top:calc(var(--topbar-h) + var(--ag-barre-h, 48px));transition:top .2s ease}
 body.entete-cache .mois-barre{top:var(--topbar-h)}   /* v130 : pleine largeur sur l'ordi, et le contenu ne déborde plus de la page */
 @media(max-width:899px){.nav{position:fixed;top:0;bottom:0;left:0;width:min(250px,80vw);transform:translateX(-102%);transition:transform .2s ease;overflow-y:auto;-webkit-overflow-scrolling:touch;z-index:61;padding:12px 10px 40px;border-right:1px solid var(--border);box-shadow:4px 0 18px rgba(0,0,0,.35)}.nav.ouvert{transform:none}.nav-fond{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60}.nav-item{font-size:15px;padding:12px}}
@@ -210,7 +210,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v687';
+const APP_VERSION = 'v694';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -597,7 +597,7 @@ function layoutDayEvents(dayEvents){
 function agendaGroupe(e){ if(e.calendarId===EN_ATTENTE_CAL) return 'attente'; if(e.calendarId && e.calendarId!==CREW_CAL) return 'suivi'; return equipeDe(e); }
 function agendaGroupeNom(k){ return k==='attente' ? 'En attente' : k==='suivi' ? 'Mon agenda (Suivi)' : equipeNom(k); }
 function agendaGroupeCouleur(k){ return k==='attente' ? 'var(--muted)' : k==='suivi' ? ((CAL_COULEURS||{})[SUIVI_CAL_ID] || '#039be5') : equipeCouleur(k); }   // v682 : couleur de mon agenda Suivi dans Google
-const AGENDA_GROUPES_ORDRE = [...EQUIPES_ORDRE_AG(), 'autre', 'attente', 'suivi'];
+const AGENDA_GROUPES_ORDRE = [...EQUIPES_ORDRE_AG(), 'autre', 'suivi', 'attente'];   // v691 : En attente après mon agenda
 function EQUIPES_ORDRE_AG(){ return ['4','9','3','5','2']; }   // v535 : + Benjamin
 // Style d'un bloc : couleur pleine pour une équipe ; hachuré pour En attente ; gris pointillé pour une job pas attitrée.
 function agendaStyle(e){
@@ -7148,22 +7148,28 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   const [moisVu,setMoisVu]=useState(null); const ancreVueRef = useRef('');
   const cleMois = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
   const pucesEquipes = (sansNombre) => <>
-      {groupesPresents.map(k=>{ const on = !cachees.includes(k), n = events.filter(e=>agendaGroupe(e)===k || (CREW_COLORS[k] && nommeDans(e, k))).length;
-        return <button key={k} className="btn btn-sm" onClick={()=>basculerGroupe(k)} title={on?'Cacher':'Montrer'}
+      {groupesPresents.map(k=>{ const on = !cachees.includes(k), n = k==='attente' && attListe ? attListe.length : events.filter(e=>agendaGroupe(e)===k || (CREW_COLORS[k] && nommeDans(e, k))).length;   // v691 : En attente = nombre total de jobs en attente
+        return <button key={k} className="btn btn-sm" onClick={()=>{ if(k==='attente' && panneauFerme) basculerPanneau(); else basculerGroupe(k); }} title={on?'Cacher':'Montrer'}
           style={{display:'inline-flex',alignItems:'center',gap:5,opacity:on?1:.45,borderColor:on?agendaGroupeCouleur(k):undefined}}>
           <span style={{width:10,height:10,borderRadius:'50%',background:on && k!=='autre' && k!=='attente'?agendaGroupeCouleur(k):'transparent',border:'2px '+(k==='autre'||k==='attente'?'dashed ':'solid ')+agendaGroupeCouleur(k),display:'inline-block',boxSizing:'border-box'}}></span>
-          {agendaGroupeNom(k)}{!sansNombre && <> <span className="muted">{n}</span></>}</button>; })}
+          {agendaGroupeNom(k)}{(!sansNombre || k==='attente') && <> <span className="muted">{n}</span></>}</button>; })}
       {cachees.length>0 && <span style={{color:'var(--accent)',fontSize:12,cursor:'pointer'}} onClick={()=>{ setCachees([]); try{ localStorage.setItem('agenda_groupes_caches','[]'); }catch(e){} }}>Tout montrer</span>}
   </>;   // v673 : noms d'équipe aussi dans la barre de chaque mois
   const hautEntetes = () => { const tb = document.querySelector('.topbar'), b = agBarreRef.current; return (tb ? tb.offsetHeight : 0) + (b && !document.body.classList.contains('entete-cache') ? b.offsetHeight : 0); };   // v685 : barre d'outils comptée seulement si visible
   // v686 : Jour / Semaine / Mois en petit, dans la bande du mois (et la bande Jour/Semaine)
   const vueBoutons = () => <div style={{display:'inline-flex',border:'1px solid var(--border2)',borderRadius:8,overflow:'hidden',background:'var(--bg3)'}}>
     {[['jour','Jour'],['semaine','Semaine'],['mois','Mois']].map(([id,l],i)=><button key={id} onClick={()=>changerVue(id)} style={{border:'none',borderLeft:i?'1px solid var(--border2)':'none',padding:'4px 11px',fontSize:12.5,fontWeight:700,cursor:'pointer',background:viewMode===id?'var(--accent)':'transparent',color:viewMode===id?'#fff':'var(--text)'}}>{l}</button>)}</div>;
+  const clicBande = ev => { if(ev.target.closest && ev.target.closest('button,input,a')) return; epingleBarreRef.current = !epingleBarreRef.current;
+    if(epingleBarreRef.current) montrerBarreAg(); else { survolBarreRef.current = false; document.body.classList.add('entete-cache'); } };
+  const [voirMini,setVoirMini]=useState(false);   // v690 : petit calendrier dans un bouton à côté des onglets
   const hautTopbar = () => { const tb = document.querySelector('.topbar'); return tb ? tb.offsetHeight : 0; };
   // v685 : barre d'outils de l'agenda (vue Mois) — visible seulement en haut de la page ou quand la souris est sur la barre du mois / la barre d'outils
   const survolBarreRef = useRef(false);
-  const montrerBarreAg = () => { survolBarreRef.current = true; document.body.classList.remove('entete-cache'); };
-  const cacherBarreAg = () => { survolBarreRef.current = false; setTimeout(()=>{ if(!survolBarreRef.current && window.scrollY >= 80 && document.querySelector('.ag-barre')) document.body.classList.add('entete-cache'); }, 250); };
+  const epingleBarreRef = useRef(false);   // v690 : clic sur la bande = la barre d'outils reste ouverte (re-clic = la cacher)
+  const majHautBarre = () => requestAnimationFrame(()=>{ const b = agBarreRef.current; if(b) document.documentElement.style.setProperty('--ag-barre-h', b.offsetHeight+'px'); });
+  const montrerBarreAg = () => { survolBarreRef.current = true; document.body.classList.remove('entete-cache'); majHautBarre(); };
+  const survolReel = () => !!document.querySelector('.mois-barre:hover, .ag-barre:hover');
+  const cacherBarreAg = () => { survolBarreRef.current = false; setTimeout(()=>{ if(!survolReel() && !epingleBarreRef.current && document.querySelector('.ag-barre')) document.body.classList.add('entete-cache'); }, 250); };
   const hautPage = el => el.getBoundingClientRect().top + window.scrollY;
   function allerMois(m, doux){
     const sec = moisRef.current && moisRef.current.querySelector('[data-mois="'+cleMois(m)+'"]');
@@ -7177,18 +7183,20 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   // on se place sur le mois de l'ancre (en entrant dans la vue Mois ou après un saut)
   useLayoutEffect(()=>{ const el = moisRef.current; if(!el || viewMode!=='mois' || loading) return; if(ancreVueRef.current!==cleMois(anchor)) centrerRef.current = true; if(!centrerRef.current) return;
     const sec = el.querySelector('[data-mois="'+cleMois(anchor)+'"]'); if(!sec) return;
-    centrerRef.current = false; ancreVueRef.current = cleMois(anchor); window.scrollTo(0, Math.max(0, hautPage(sec) - hautTopbar())); if(window.scrollY >= 80 && !survolBarreRef.current) document.body.classList.add('entete-cache'); setMoisVu(new Date(anchor.getFullYear(), anchor.getMonth(), 1)); });
+    centrerRef.current = false; ancreVueRef.current = cleMois(anchor); window.scrollTo(0, Math.max(0, hautPage(sec) - hautTopbar())); setMoisVu(new Date(anchor.getFullYear(), anchor.getMonth(), 1)); });
   // mois ajoutés en haut : on garde la même vue (sinon tout saute)
   useLayoutEffect(()=>{ const h = ajoutHautRef.current; if(h==null) return; window.scrollBy(0, document.documentElement.scrollHeight - h); ajoutHautRef.current = null; },[moisExt.av]);
   useEffect(()=>{ ajoutEnCoursRef.current = false; },[moisExt.av, moisExt.ap]);
   const etatDefilRef = useRef({}); etatDefilRef.current = {moisVu, moisExt};
-  useEffect(()=>{ if(viewMode!=='mois' || ongletAg!=='agenda'){ document.body.classList.remove('entete-cache'); return; }
+  useEffect(()=>{ if(ongletAg!=='agenda'){ document.body.classList.remove('entete-cache'); return; }   // v690 : barre d'outils cachée par défaut, toutes les vues
+    epingleBarreRef.current = false; survolBarreRef.current = false; document.body.classList.add('entete-cache');
+    const t = [0, 400, 1200].map(ms=>setTimeout(()=>{ if(!epingleBarreRef.current && !survolReel()){ survolBarreRef.current = false; document.body.classList.add('entete-cache'); } }, ms));   // v691 : à l'arrivée, seulement la bande (un faux survol pendant le placement ne l'ouvre plus)
+    return ()=>{ t.forEach(clearTimeout); document.body.classList.remove('entete-cache'); }; },[ongletAg, viewMode]);
+  useEffect(()=>{ if(viewMode!=='mois' || ongletAg!=='agenda') return;
     let dernY = window.scrollY, acc = 0;
     const surDefil = () => { const y = window.scrollY, dy = y - dernY; dernY = y;
       // en-tête : caché en descendant ; v684 : ne revient plus en remontant — seulement en haut de la page ou en passant la souris sur la barre du mois
       if((dy>0) !== (acc>0)) acc = 0; acc += dy;
-      if(y < 80) document.body.classList.remove('entete-cache');
-      else if(!survolBarreRef.current) document.body.classList.add('entete-cache');   // v685 : cachée dès qu'on n'est plus en haut, sauf au survol
       const el = moisRef.current; if(!el) return; const {moisVu:mv, moisExt:ext} = etatDefilRef.current;
       const lim = hautEntetes() + 70;
       let vu = null; for(const x of el.querySelectorAll('[data-mois]')){ if(x.getBoundingClientRect().top <= lim) vu = x; else break; }
@@ -7198,8 +7206,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       else if(r.bottom < window.innerHeight + 700 && ext.ap < 36){ ajoutEnCoursRef.current = true; setMoisExt(x=>({...x, ap:x.ap+2})); }
     };
     window.addEventListener('scroll', surDefil, {passive:true});
-    const t0 = setTimeout(()=>{ const y = window.scrollY; if(y < 80) document.body.classList.remove('entete-cache'); else if(!survolBarreRef.current) document.body.classList.add('entete-cache'); }, 0);   // v686 : bon état dès l'ouverture
-    return ()=>{ clearTimeout(t0); window.removeEventListener('scroll', surDefil); document.body.classList.remove('entete-cache'); }; },[viewMode, ongletAg]);
+    return ()=>{ window.removeEventListener('scroll', surDefil); }; },[viewMode, ongletAg]);
   function rangeLabel(){
     if(viewMode==='jour') return anchor.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
     if(viewMode==='mois') return (moisVu || anchor).toLocaleDateString('fr-CA',{month:'long',year:'numeric'});
@@ -7236,7 +7243,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   const propre = (e, k) => couloirDe(e)===k && !cachees.includes(agendaGroupe(e));   // v532 : sa propre job (pas une job cachée)
   const estAvec = (e, k) => viewMode!=='mois' && k!=='autres' && !cachees.includes(k) && couloirDe(e)!==k && iniEquipe(k).some(x=>new RegExp('(^|\\s)'+x+'(\\s|$)').test(e.title||''));
   const couloirs = (()=>{ const t = evVisibles.filter(e=>!e.allDay); const l = EQUIPES_ORDRE.filter(k=>t.some(e=>propre(e, k) || estAvec(e, k)) || (viewMode==='jour' && CREW_COLORS[k] && !cachees.includes(k))); if(t.some(e=>propre(e, 'autres'))) l.push('autres'); return l; })();   // v529 : en vue Jour, colonnes ajoutées pour les gars sans job
-  const enCouloirs = parEquipe && viewMode!=='mois' && couloirs.length>1;
+  const enCouloirs = (parEquipe || viewMode==='jour') && viewMode!=='mois' && couloirs.length>1;   // v692 : la vue Jour est toujours divisée par employé (le bouton « Par équipe » n'existe plus)
   function placer(dayEvents){
     if(viewMode==='jour'){   // v515 : chaque équipe (ou la journée) divisée en parts égales de 7 h à 15 h 30, dans l'ordre des heures
       const etaler = (L, left, w, k) => { const t = [...L].sort((a,b)=>String(a.start).localeCompare(String(b.start))), part = 8.5/(t.length||1);
@@ -7470,26 +7477,14 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
   }
 
   return <div>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:10}}>
-      <div>
-        <h2 className="fh" style={{margin:'0 0 8px',fontSize:20}}>Agenda</h2>
-        <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>
-          {[['agenda','Agenda'],['commandes','Commandes de la semaine']].map(([k,l])=><button key={k} className={'btn btn-sm'+(ongletAg===k?' btn-p':'')} onClick={()=>choisirOnglet(k)}>{l}</button>)}
-        </div>
-      </div>
-      <div style={{display:'flex',gap:10,alignItems:'flex-start',marginLeft:'auto'}}>
-        {isDesktop && <MiniMois anchor={anchor} days={days} onPick={d=>setAnchor(d)}/>}
-        <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'stretch'}}>
-          {data && <button className="btn btn-p" onClick={()=>openNewJob(todayISO())}>+ Nouvelle job</button>}
-          {isDesktop && <button className="btn btn-sm" onClick={()=>window.dispatchEvent(new Event('crm-nav-toggle'))} title="Cacher ou montrer le menu des onglets à gauche pour agrandir l'agenda">⇔ Menu</button>}
-        </div></div>
-    </div>
-    {ongletAg!=='heures' && <div ref={agBarreRef} className={viewMode==='mois' && ongletAg==='agenda' ? 'ag-barre' : undefined} onMouseEnter={viewMode==='mois' ? montrerBarreAg : undefined} onMouseLeave={viewMode==='mois' ? cacherBarreAg : undefined} style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
-      <button className="btn btn-sm" onClick={goPrev} onDragOver={ev=>survolFleche(ev, -1)} onDragLeave={()=>survolFleche(null)} title="Précédent (K ou ←) — glisse un événement ici pour reculer">←</button>
-      <div style={{fontWeight:700,textTransform:'capitalize',minWidth:160}}>{rangeLabel()}</div>
-      <button className="btn btn-sm" onClick={goNext} onDragOver={ev=>survolFleche(ev, 1)} onDragLeave={()=>survolFleche(null)} title="Suivant (J ou →) — glisse un événement ici pour avancer">→</button>
-      <button className="btn btn-sm" onClick={goToday}>Aujourd'hui</button>
-      {ongletAg==='agenda' && <div style={{position:'relative',flex:'1 1 200px',maxWidth:340}}>
+    <div style={{display:'flex',alignItems:'center',flexWrap:'wrap',gap:8,marginBottom:10}}>   {/* v690 : en-tête de l'agenda sur une seule ligne */}
+      <h2 className="fh" style={{margin:'0 6px 0 0',fontSize:20}}>Agenda</h2>
+      {[['agenda','Agenda'],['commandes','Commandes de la semaine']].map(([k,l])=><button key={k} className={'btn btn-sm'+(ongletAg===k?' btn-p':'')} onClick={()=>choisirOnglet(k)}>{l}</button>)}
+      {isDesktop && <div style={{position:'relative'}}>
+        <button className={'btn btn-sm'+(voirMini?' btn-p':'')} onClick={()=>setVoirMini(v=>!v)} title="Petit calendrier pour sauter à une date">Calendrier {voirMini?'▴':'▾'}</button>
+        {voirMini && <div className="card" style={{position:'absolute',top:'100%',left:0,zIndex:70,marginTop:4,padding:8,boxShadow:'0 8px 24px rgba(0,0,0,.35)'}}><MiniMois anchor={anchor} days={days} onPick={d=>{ setAnchor(d); setVoirMini(false); }}/></div>}
+      </div>}
+      {ongletAg==='agenda' && <div style={{position:'relative',flex:'1 1 220px',maxWidth:340}}>   {/* v691 : recherche à côté de Calendrier */}
         <input ref={rechRef} value={rech} onChange={e=>setRech(e.target.value)} onKeyDown={e=>{ if(e.key==='Escape'){ setRech(''); e.target.blur(); } }}
           placeholder="Chercher un événement (nom, adresse, mot)… ( / )" style={{width:'100%',boxSizing:'border-box',padding:'6px 10px',fontSize:13}}/>
         {rechRes!==null && <div className="card" style={{position:'absolute',top:'100%',left:0,right:0,zIndex:50,marginTop:4,padding:4,maxHeight:'60vh',overflowY:'auto',boxShadow:'0 8px 24px rgba(0,0,0,.35)',minWidth:300}}>
@@ -7501,20 +7496,31 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
               <span style={{flex:1,minWidth:0}}><b>{e.title}</b>{e.location ? <span className="muted" style={{fontSize:11.5}}> · {e.location.split(',')[0]}</span> : null}{agendaGroupe(e)==='attente' ? <span className="muted" style={{fontSize:11.5}}> · en attente</span> : null}</span></div>; })}
         </div>}
       </div>}
-      <div style={{display:'inline-flex',flexDirection:'column',gap:4,width:300,maxWidth:'100%'}}>   {/* v535 : raccourcis de la vue choisie EN DESSOUS de Jour/Semaine/Mois, même largeur */}
-      <div style={{display:'flex',border:'1px solid var(--border2)',borderRadius:10,overflow:'hidden',background:'var(--bg3)'}}>
-        {[['jour','Jour'],['semaine','Semaine'],['mois','Mois']].map(([id,label],i)=>
-          <button key={id} onClick={()=>changerVue(id)} style={{flex:'1 1 0',border:'none',borderLeft:i?'1px solid var(--border2)':'none',padding:'7px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',
-            background:viewMode===id?'var(--accent)':'transparent',color:viewMode===id?'#fff':'var(--text)'}}>{label}</button>)}
+      <div style={{display:'flex',gap:6,alignItems:'center',marginLeft:'auto'}}>
+        {data && <button className="btn btn-p btn-sm" onClick={()=>openNewJob(todayISO())}>+ Nouvelle job</button>}
+        {isDesktop && <button className="btn btn-sm" onClick={()=>window.dispatchEvent(new Event('crm-nav-toggle'))} title="Cacher ou montrer le menu des onglets à gauche pour agrandir l'agenda">⇔ Menu</button>}
       </div>
+    </div>
+    {ongletAg!=='heures' && <div ref={agBarreRef} className={ongletAg==='agenda' ? 'ag-barre' : undefined} onMouseEnter={ongletAg==='agenda' ? montrerBarreAg : undefined} onMouseLeave={ongletAg==='agenda' ? cacherBarreAg : undefined} style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
+      <button className="btn btn-sm" onClick={goPrev} onDragOver={ev=>survolFleche(ev, -1)} onDragLeave={()=>survolFleche(null)} title="Précédent (K ou ←) — glisse un événement ici pour reculer">←</button>
+      <div style={{fontWeight:700,textTransform:'capitalize',minWidth:160}}>{rangeLabel()}</div>
+      <button className="btn btn-sm" onClick={goNext} onDragOver={ev=>survolFleche(ev, 1)} onDragLeave={()=>survolFleche(null)} title="Suivant (J ou →) — glisse un événement ici pour avancer">→</button>
+      <div style={{display:'inline-flex',flexDirection:'column',gap:4,width:300,maxWidth:'100%'}}>   {/* v535 : raccourcis de la vue choisie EN DESSOUS de Jour/Semaine/Mois, même largeur */}
+      {/* v687 : Jour / Semaine / Mois déplacés dans la bande (vueBoutons) */}
       {(()=>{ const pastille = (cle, actif, marque, onClick, titre, l1, l2) => <button key={cle} onClick={onClick} title={titre}
           style={{flex:'1 1 0',minWidth:0,display:'inline-flex',justifyContent:'center',alignItems:'baseline',gap:4,whiteSpace:'nowrap',border:'1px solid '+(marque?'var(--accent)':'var(--border2)'),borderRadius:7,padding:'3px 4px',fontSize:11.5,fontWeight:700,cursor:'pointer',lineHeight:1.15,fontVariantNumeric:'tabular-nums',
             background:actif?'rgba(var(--accent-rgb),.18)':'var(--bg3)',color:'var(--text)',boxShadow:actif?'inset 0 -2px 0 var(--accent)':'none'}}><span>{l1}</span>{l2 && <span style={{opacity:.75,fontWeight:500}}>{l2}</span>}</button>;
         const lundiDe = x => { const d = new Date(x); d.setHours(12,0,0,0); d.setDate(d.getDate()-((d.getDay()+6)%7)); return d; };
         const auj = new Date(), aujS = localDateStr(auj);
-        if(viewMode==='jour'){ const lun = lundiDe(anchor), sel = localDateStr(anchor);
-          return <div style={{display:'flex',gap:3,width:'100%'}}>{['Lun','Mar','Mer','Jeu','Ven'].map((j,i)=>{ const d = new Date(lun); d.setDate(lun.getDate()+i); const ds = localDateStr(d);
-            return pastille(j, sel===ds, ds===aujS, ()=>setAnchor(new Date(d)), d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'}), j, d.getDate()); })}</div>; }
+        if(viewMode==='jour'){ const lun = lundiDe(anchor), sel = localDateStr(anchor), lunS = localDateStr(lun), aujL0 = localDateStr(lundiDe(auj));
+          // v687 : les semaines du mois (S1, S2…) au-dessus, puis les jours de la semaine choisie
+          const m1 = new Date(anchor.getFullYear(), anchor.getMonth(), 1, 12), mFin = new Date(anchor.getFullYear(), anchor.getMonth()+1, 0, 12), sems = [];
+          for(let d = lundiDe(m1); d <= mFin; d = new Date(d.getFullYear(), d.getMonth(), d.getDate()+7, 12)) sems.push(d);
+          return <div style={{display:'flex',flexDirection:'column',gap:3,width:'100%'}}>
+            <div style={{display:'flex',gap:3,width:'100%'}}>{sems.map((d,i)=>{ const ds = localDateStr(d);
+              return pastille('s'+ds, lunS===ds, ds===aujL0, ()=>{ const x = new Date(d); if(localDateStr(lundiDe(auj))===ds) x.setDate(auj.getDate()-((auj.getDay()+6)%7)+((auj.getDay()+6)%7)); setAnchor(localDateStr(lundiDe(auj))===ds ? new Date(auj) : x); }, 'Semaine du '+d.toLocaleDateString('fr-CA',{day:'numeric',month:'long'}), 'S'+(i+1), d.getDate()+(d.getMonth()!==anchor.getMonth() ? '/'+(d.getMonth()+1) : '')); })}</div>
+            <div style={{display:'flex',gap:3,width:'100%'}}>{['Lun','Mar','Mer','Jeu','Ven'].map((j,i)=>{ const d = new Date(lun); d.setDate(lun.getDate()+i); const ds = localDateStr(d);
+            return pastille(j, sel===ds, ds===aujS, ()=>setAnchor(new Date(d)), d.toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'}), j, d.getDate()); })}</div></div>; }
         const dimDe = x => { const d = new Date(x); d.setHours(12,0,0,0); d.setDate(d.getDate()-d.getDay()); return d; };   // v577 : semaines du dimanche
         if(viewMode==='semaine'){ const m0 = new Date(anchor.getFullYear(), anchor.getMonth(), 1, 12); const fin = new Date(anchor.getFullYear(), anchor.getMonth()+1, 0, 12);
           const lst = []; for(let d = dimDe(m0); d <= fin; d = new Date(d.getFullYear(), d.getMonth(), d.getDate()+7, 12)) lst.push(d);
@@ -7531,16 +7537,14 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
               border:'1px solid '+(ds===aujS?'var(--accent)':'var(--border2)'),background:ds===aujS?'var(--accent)':'var(--bg3)',color:ds===aujS?'#fff':'var(--text)',opacity:fs?.5:1}}>{i+1}</button>; })}</div>; })()}
       </div>
       <div style={{display:'flex',gap:4,marginLeft:'auto',flexWrap:'wrap'}}>
-        {ongletAg==='agenda' && viewMode!=='mois' && <button className={'btn btn-sm'+(parEquipe?' btn-p':'')} onClick={basculerParEquipe} title="Diviser chaque jour en colonnes par équipe">Par équipe</button>}
-        {ongletAg==='agenda' && panneauFerme && <button className="btn btn-sm" onClick={basculerPanneau} title="Rouvrir le panneau des jobs En attente">⏳ En attente{attListe && attListe.length ? ' ('+attListe.length+')' : ''}</button>}
         {ongletAg==='agenda' && viewMode!=='jour' && <button className="btn btn-sm" onClick={basculerRepli} title="Replier ou afficher samedi et dimanche">{repli ? 'Sam.–dim. ▸' : '◂ Sam.–dim.'}</button>}
       </div>
     </div>}
     {ongletAg==='commandes' && (cd.loading ? <div className="card muted" style={{marginBottom:16,fontSize:13}}>Lecture des jobs et des commandes…</div>
       : <CvSemaine clients={cdClients} appels={cd.appels||{parNumero:{},parFacture:{},liste:[]}} ancre={anchor} commandes={commandes} onCommande={basculerCommande} manuels={manuelsAg} isDesktop={isDesktop}/>)}
-    {ongletAg==='agenda' && viewMode!=='mois' && <div style={{position:'sticky',top:'var(--topbar-h)',zIndex:6,background:'var(--bg2)',margin:'0 0 10px',padding:'8px',borderTop:'3px solid var(--accent)',borderBottom:'3px solid var(--accent)',display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>   {/* v686 : même bande que la vue Mois */}
+    {ongletAg==='agenda' && viewMode!=='mois' && <div className="mois-barre" onMouseEnter={montrerBarreAg} onMouseLeave={cacherBarreAg} onClick={clicBande} style={{cursor:'pointer',position:'sticky',zIndex:6,background:'var(--bg2)',margin:'0 0 10px',padding:'8px',borderTop:'3px solid var(--accent)',borderBottom:'3px solid var(--accent)',display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>   {/* v686 : même bande que la vue Mois */}
       <div style={{fontWeight:800,fontSize:isDesktop?16:13,textTransform:'uppercase',letterSpacing:.5,marginRight:10}}>{rangeLabel()}</div>
-      {groupesPresents.length>0 && pucesEquipes()}
+      {groupesPresents.length>0 && pucesEquipes(true)}   {/* v687 : sans nombre de jobs */}
       <div style={{marginLeft:'auto',display:'flex',gap:6,alignItems:'center'}}>{vueBoutons()}<button className="btn btn-sm" onClick={goToday} title="Revenir à aujourd'hui">Aujourd'hui</button></div>
     </div>}
     {err && <div className="card" style={{borderColor:'var(--danger)',color:'var(--danger)',marginBottom:12}}>{err}</div>}
@@ -7568,7 +7572,7 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
       {moisListe(anchor, moisExt).map(m=>{ const jm = joursDuMois(m);
         return <div key={cleMois(m)} data-mois={cleMois(m)}>
       {/* v671 : barre de séparation du mois (reste collée en haut tant qu'on est dans ce mois) + jours de la semaine */}
-      <div className="mois-barre" onMouseEnter={montrerBarreAg} onMouseLeave={cacherBarreAg} style={{position:'sticky',zIndex:5,background:'var(--bg2)',margin:'0 -8px 6px',padding:'8px 8px 4px',borderTop:'3px solid var(--accent)',borderBottom:'3px solid var(--accent)'}}>
+      <div className="mois-barre" onMouseEnter={montrerBarreAg} onMouseLeave={cacherBarreAg} onClick={clicBande} style={{cursor:'pointer',position:'sticky',zIndex:5,background:'var(--bg2)',margin:'0 -8px 6px',padding:'8px 8px 4px',borderTop:'3px solid var(--accent)',borderBottom:'3px solid var(--accent)'}}>
         <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center',marginBottom:5}}>
           <div style={{fontWeight:800,fontSize:isDesktop?16:13,textTransform:'uppercase',letterSpacing:.5,marginRight:10}}>{m.toLocaleDateString('fr-CA',{month:'long',year:'numeric'})}</div>
           {groupesPresents.length>0 && pucesEquipes(true)}
@@ -7594,6 +7598,36 @@ function AgendaView({cfg, data, toast, isDesktop, refreshKey, onChoisir}){   // 
         })}
       </div></div>; })}
     </div>
+    : viewMode==='semaine' ? (()=>{   // v687 : vue Semaine couchée — les jours en lignes (haut → bas), une colonne par employé
+      const jours = days.filter(d=>!ferme(d));
+      const cols = (()=>{ const l = EQUIPES_ORDRE.filter(k=>CREW_COLORS[k] && !cachees.includes(k)); if(evVisibles.some(e=>!e.allDay && propre(e, 'autres'))) l.push('autres'); return l; })();
+      const heure = e => e.allDay ? 'Journée' : new Date(e.start).toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'});
+      const carte = (e, aide, k) => <div key={e.id+(aide ? '-avec-'+k : '')} onClick={ev=>{ ev.stopPropagation(); setEditEvent(e); }}
+        draggable={isDesktop && !aide} onDragStart={ev=>{ ev.stopPropagation(); panneauDragRef.current = e; dragGrilleRef.current = true; ev.dataTransfer.effectAllowed = 'move'; try{ ev.dataTransfer.setData('text/plain', e.id); }catch(x){} }} onDragEnd={()=>{ panneauDragRef.current = null; }}
+        title={(aide ? 'Avec '+equipeNom(k)+' — ' : '')+e.title+(e.location ? '\n📍 '+e.location : '')}
+        style={{cursor:isDesktop && !aide ? 'grab' : 'pointer',...agendaStyle(e),...(aide ? {opacity:.62,outline:'2px dashed '+(GCAL_COLOR_MAP[k]||'var(--muted)'),outlineOffset:-2} : {}),fontSize:12.5,lineHeight:1.25,padding:'5px 8px',borderRadius:6,marginBottom:5}}>
+        <div style={{fontWeight:700,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',wordBreak:'break-word'}}>{pastilles(e)}{flechesDe(e)}{agendaGroupe(e)==='attente'?'⏳ ':''}{e.title}</div>
+        <div style={{opacity:.85,fontSize:11,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{heure(e)}{e.location ? ' · '+e.location.split(',')[0] : ''}</div></div>;
+      const trier = L => [...L].sort((a,b)=>(b.allDay?1:0)-(a.allDay?1:0) || String(a.start).localeCompare(String(b.start)));   // v688 : « Journée » en premier
+      // v693 : les jours en haut (colonnes), les employés couchés (une ligne par employé)
+      const coulCol = k => k==='autres' ? agendaGroupeCouleur('suivi') : GCAL_COLOR_MAP[k], nomCol = k => k==='autres' ? 'William' : equipeNom(k);
+      return <div className="card" style={{padding:0,overflowX:'auto'}}>
+        <div style={{display:'grid',gridTemplateColumns:'110px repeat('+jours.length+', minmax(150px,1fr))',minWidth:110+jours.length*150}}>
+          <div style={{position:'sticky',left:0,background:'var(--bg2)',zIndex:2,borderBottom:'2px solid var(--border2)'}}></div>
+          {jours.map(d=>{ const dStr = localDateStr(d), auj = dStr===todayStr, jr = allDayForDay(dStr).filter(e=>!cols.some(k=>propre(e, k) || estAvec(e, k)));
+            return <div key={'h'+dStr} onClick={()=>{ setViewMode('jour'); setAnchor(new Date(d)); }} title="Voir la journée" onDragOver={sur} onDrop={ev=>dropMois(ev, d)}
+              style={{cursor:'pointer',padding:'7px 6px',textAlign:'center',borderBottom:'2px solid var(--border2)',borderLeft:'1px solid var(--border)',background:auj?'var(--accent)':'var(--bg2)',color:auj?'#fff':'var(--text)'}}>
+              <div style={{fontWeight:800,textTransform:'capitalize',fontSize:13.5}}>{d.toLocaleDateString('fr-CA',{weekday:'long'})} <span style={{fontWeight:500,opacity:.85}}>{d.getDate()}</span></div>
+              {jr.map(e=><div key={'j'+e.id} onClick={ev=>{ ev.stopPropagation(); setEditEvent(e); }} title={e.title} style={{...agendaStyle(e),fontSize:10.5,padding:'1px 5px',borderRadius:4,marginTop:3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',textAlign:'left'}}>{e.title}</div>)}
+            </div>; })}
+          {cols.map(k=><React.Fragment key={k}>
+            <div style={{position:'sticky',left:0,zIndex:1,padding:'8px',borderTop:'1px solid var(--border)',fontWeight:800,fontSize:13.5,display:'flex',alignItems:'center',background:coulCol(k),color:texteSur(coulCol(k))}}>{nomCol(k)}</div>
+            {jours.map(d=>{ const dStr = localDateStr(d), auj = dStr===todayStr, L = trier([...allDayForDay(dStr), ...eventsForDay(dStr)].filter(e=>propre(e, k) || estAvec(e, k)));
+              return <div key={k+dStr} onDragOver={sur} onDrop={ev=>dropMois(ev, d)} onClick={()=>{ if(data) openNewJob(dStr, '07:00'); }} title={data ? 'Cliquer dans le vide pour créer une job' : ''}
+                style={{padding:5,borderTop:'1px solid var(--border)',borderLeft:'1px solid var(--border)',minHeight:58,background:auj?'rgba(var(--accent-rgb),.06)':undefined,cursor:data?'copy':'default'}}>
+                {L.map(e=>carte(e, estAvec(e, k), k))}</div>; })}
+          </React.Fragment>)}
+        </div></div>; })()
     :
     <div className="card" style={{padding:0,overflowX:'auto'}}>
       {/* Une SEULE grille pour l'en-tête, la rangée "toute la journée" et les heures,
