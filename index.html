@@ -210,7 +210,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v698';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
+const APP_VERSION = 'v699';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -17189,13 +17189,16 @@ function cvSansPiece(code, nom){ if(code!=='CRS') return nom;
 function cvParseEvent(e){
   const title = String(e.title||'').trim();
   const toks = title.replace(new RegExp(CV_NOJOB_RE.source,'ig'),' ').replace(/[()]/g,' ').split(/[\s\-–\/,+&]+/).filter(Boolean);
-  let code='', phase='', initials=[], nameParts=[], apresServ=false, servType='';
+  let code='', phase='', initials=[], nameParts=[], apresServ=false, servType='', wrap=false;
   toks.forEach(t=>{
     const T=t.toUpperCase();
     if(apresServ && !servType && (SERV_TYPES.includes(T) || (typeof EV_SERV!=='undefined' && EV_SERV.includes(T)))){ servType=T; return; }   // v321 : services de la fiche client aussi   // « SERV PRISE … » : PRISE n'est pas le nom
     apresServ = T==='SERV' || T==='SERVICE';
     if(!code && T==='PAYNE'){ code = 'PAY'; return; }                 // « Payne Edison » = PAY
     if(!code && CLIENT_CODES[T]){ code = (T==='PY'?'PAY':T); return; }
+    if(T==='WRAP'){ if(!phase) phase='RAPUP'; wrap=true; return; }   // v699 : « WRAP UP » / « WRAP-UP » = phase Wrap-up (pas dans le nom du projet)
+    if(wrap && T==='UP'){ wrap=false; return; } wrap=false;
+    if(T==='AP' || T==='OT') return;   // v699 : « + AP + OT » dans un titre = papiers à faire, pas le nom du projet
     const ph = PHASES.find(p=>p[0]===T); if(ph){ if(!phase) phase=ph[1]; return; }
     if(CREW_INITIALS[T] && t===T){ initials.push(T); return; }
     if(/^P[O0]?0?\d{4}$/i.test(T)) return;
