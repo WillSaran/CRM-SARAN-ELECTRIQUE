@@ -210,7 +210,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v699';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
+const APP_VERSION = 'v700';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2210,7 +2210,7 @@ function achPartiesDe(dest, achats, job){
 // v392 : partie automatique (affichage seulement, rien n'est écrit) — seulement quand c'est sûr :
 // 1) la référence de la commande dit ROUGH / FINITION / ENTRÉE ; sinon 2) le jour de l'achat ou le jour ouvrable suivant,
 // le projet a UNE seule de ces étapes à l'agenda ou sur un AS (nom du papier). Sinon : pas de partie.
-const ACH_PH = [[/\bROUGH\b/,'Rough'],[/\b(FINITION|FINALE)\b/,'Finition'],[/\bENTR[EÉ]E\b/,'Entrée']];
+const ACH_PH = [[/\bWRAP\s*-?\s*UP\b|\bRAPUP\b/,'Wrap-up'],[/\bROUGH\b/,'Rough'],[/\b(FINITION|FINALE)\b/,'Finition'],[/\bENTR[EÉ]E\b/,'Entrée']];
 function achPhaseTexte(t){ const u = String(t||'').toUpperCase(); const l = ACH_PH.filter(([re])=>re.test(u)).map(x=>x[1]); return l.length===1 ? l[0] : ''; }
 function achPartieAuto(a, job, appelsJob){
   const r = achPhaseTexte(a.ref); if(r) return r;
@@ -2218,7 +2218,7 @@ function achPartieAuto(a, job, appelsJob){
   const jr = k => { const x = new Date(d0+'T12:00:00'); x.setDate(x.getDate()+k); return cvDay(x.toISOString()); };
   const jours = [d0, jr(1)]; if(new Date(d0+'T12:00:00').getDay()===5) jours.push(jr(3));
   const ph = new Set();
-  ((job && job.events)||[]).forEach(e=>{ if(!e.attente && jours.includes(e.day)){ const p = {ROUGH:'Rough', FINITION:'Finition', 'ENTRÉE':'Entrée'}[e.phase] || achPhaseTexte(e.title||e.titre||''); if(p) ph.add(p); } });
+  ((job && job.events)||[]).forEach(e=>{ if(!e.attente && jours.includes(e.day)){ const p = {ROUGH:'Rough', FINITION:'Finition', 'ENTRÉE':'Entrée', RAPUP:'Wrap-up'}[e.phase] || achPhaseTexte(e.title||e.titre||''); if(p) ph.add(p); } });
   (appelsJob||[]).forEach(x=>{ if(jours.includes(x.jour)){ const p = achPhaseTexte(x.nom); if(p) ph.add(p); } });
   return ph.size===1 ? [...ph][0] : '';
 }
@@ -2432,52 +2432,106 @@ function RepChoixDest({R, refAchat, onChoix, cfg}){
     </div>}
   </div>;
 }
+// ══ v700 : associer une facture fournisseur — simple et rapide ══
+// 3 propositions max (un clic), Inventaire / camions, une ligne pour écrire, et « Chercher plus » (Répertoire, agenda du jour, agenda de la semaine).
+const achIcone = d => (CV_DESTS.includes(d) || d==='Éclairage Saran' || /^Employé/.test(d)) ? cvIconeDest(d) : '';
+function achJobParCle(clients, cle){ const n = cvNorm(cle); for(const c of Object.values(clients||{})) for(const j of c.jobs){ if(cvNorm(achatCle(c,j))===n) return {c, j}; } return null; }
+// libellé uniforme : particulier = Nom · adresse · type ; contracteur = CODE · nom (PO)
+function achLibelle(clients, cle){ const x = achJobParCle(clients, cle); if(!x) return cle;
+  const {c, j} = x; if(c.code!=='PART' && j.client!=='PART') return c.code+' · '+j.name+(j.po ? ' ('+j.po+')' : '');
+  return [achatNomClient(j), achatAdrCourte(j.address), cvTypeJob(j)].filter(Boolean).join(' · '); }
+// référence = la date de la facture (ex. « 27-11 » le 27 nov.) → Éclairage Saran
+function achRefEstDate(ref, date){ const d = String(date||'').slice(0,10); if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false; const jj = +d.slice(8,10), mm = +d.slice(5,7);
+  return (String(ref||'').match(/\b(\d{1,2})\s*[-\/.]\s*(\d{1,2})\b/g)||[]).some(t=>{ const m = t.match(/(\d{1,2})\s*[-\/.]\s*(\d{1,2})/); return (+m[1]===jj && +m[2]===mm) || (+m[1]===mm && +m[2]===jj); }); }
+// numéro de porte dans la référence (ex. « 696 ») = adresse d'une job à l'agenda autour de l'achat (± 10 jours)
+function achatParPorte(ref, date, clients){ const nums = (String(ref||'').match(/\b\d{2,5}\b/g)||[]); if(!nums.length) return [];
+  const d = String(date||'').slice(0,10), t0 = new Date(d+'T12:00:00').getTime(), res = [];
+  Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{ const adr = String(j.address||((j.events||[])[0]||{}).location||''), m = adr.match(/^\s*(\d{1,5})/); if(!m || !nums.includes(m[1])) return;
+    const proche = (j.events||[]).filter(e=>!e.attente && e.day).map(e=>Math.abs(new Date(e.day+'T12:00:00').getTime()-t0)/864e5).sort((a,b)=>a-b)[0];
+    if(proche!=null && proche<=10) res.push({cle:achatCle(c,j), n:m[1], proche}); }));
+  return res.sort((a,b)=>a.proche-b.proche).slice(0,3); }
 function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat, onChoix, R, cfg, articles}){
-  const [groupe,setGroupe]=useState('');
-  const [autre,setAutre]=useState(null);
-  const [emp,setEmp]=useState(false);
-  const today = cvDay(new Date(Date.now()-120*864e5).toISOString());
-  const groupes = Object.values(clients).filter(c=>c.jobs.some(j=>j.last>=today)).sort((a,b)=>(a.code==='PART')-(b.code==='PART')||a.code.localeCompare(b.code));
-  const g = groupes.find(c=>c.code===groupe);
-  const pill = (txt, on, extra) => <button key={txt} className="btn btn-sm" onClick={on} style={extra}>{txt}</button>;
+  const [txt,setTxt]=useState('');
+  const [plus,setPlus]=useState(false);
+  // propositions classées : PO/AP/OT → porte → date (Éclairage Saran) → proposition de La mémoire → nom dans la référence → agenda
+  const props = useMemo(()=>{ const L = [], vu = new Set(), add = (cle, pourquoi) => { const k = cvNorm(cle); if(!cle || vu.has(k)) return; vu.add(k); L.push({cle, pourquoi}); };
+    if(achRefEstDate(refAchat, date)) add('Éclairage Saran', 'référence = date de la facture');
+    achatParNumero(refAchat, clients).forEach(x=>add(x.cle, (x.quoi==='appel de service'?'AP':x.quoi==='facture'?'facture':x.quoi)+' '+x.n));
+    achatParPorte(refAchat, date, clients).forEach(x=>add(x.cle, 'porte '+x.n));
+    if(propose) add(propose, 'proposé');
+    (suggestions||[]).forEach(x=>add(x, 'nom dans la référence'));
+    if(autrePropose) add(autrePropose, 'proposé');
+    agendaAchat(date, clients, refAchat).map(x=>({...x, ind:achatIndices(articles, x.ev)})).sort((a,b)=>b.ind.sc-a.ind.sc || (b.mm-a.mm))
+      .forEach(x=>add(x.cle, 'agenda '+(x.mm?'le jour même':cvFmtDay(x.jour))+(x.phase?' · '+cvTitleCase(String(x.phase).toLowerCase()):'')+(x.crew?' · '+x.crew:'')));
+    return L.slice(0,3); },[clients, propose, autrePropose, suggestions, date, refAchat, articles]);
+  // ligne pour écrire : toutes les jobs de la dernière année
+  const tous = useMemo(()=>{ const lim = cvDay(new Date(Date.now()-365*864e5).toISOString()), l = [];
+    Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{ if(String(j.last||'')<lim) return; const cle = achatCle(c,j), lib = achLibelle(clients, cle);
+      l.push({cle, lib, last:j.last||'', cherche:cvNorm([lib, cle, j.address, j.po, c.code].join(' '))}); }));
+    return l.sort((a,b)=>String(b.last).localeCompare(String(a.last))); },[clients]);
+  const mots = txt.trim().length>=2 ? txt.split(/\s+/).map(cvNorm).filter(Boolean) : [];
+  const res = mots.length ? tous.filter(x=>mots.every(m=>x.cherche.includes(m))).slice(0,8) : [];
+  const gros = (p, i) => <button key={p.cle} className="btn" onClick={()=>onChoix(p.cle)} style={{display:'flex',flexDirection:'column',alignItems:'flex-start',gap:1,padding:'7px 12px',textAlign:'left',minWidth:0,maxWidth:'100%',
+    ...(i===0 ? {background:'var(--accent)',color:'#fff',border:'none'} : {borderColor:'var(--accent)',color:'var(--text)'})}}>
+    <span style={{fontWeight:800,fontSize:13.5}}>{achIcone(p.cle)}{achLibelle(clients, p.cle)}</span>
+    <span style={{fontSize:11,opacity:.8}}>{p.pourquoi}</span></button>;
+  const petit = (t, on) => <button key={t} className="btn btn-sm" onClick={on} style={{fontSize:12}}>{t}</button>;
   return <div style={{marginTop:6}}>
-    <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
-      {propose && pill('✓ '+propose, ()=>onChoix(propose), {background:'var(--accent)',color:'#fff',border:'none'})}
-      {[...(suggestions||[]), ...(autrePropose && autrePropose!==propose ? [autrePropose] : [])].filter((x,i,t)=>x!==propose && t.indexOf(x)===i).map(x=>pill('👤 '+x, ()=>onChoix(x), {borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}))}
-      {CV_DESTS.map(d=>pill(cvIconeDest(d)+d, ()=>onChoix(d)))}
-      {pill('✏️ Autre…', ()=>setAutre(autre===null?'':null))}
+    {props.length>0 && <div style={{display:'flex',flexWrap:'wrap',gap:6}}>{props.map(gros)}</div>}
+    <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:6,alignItems:'center'}}>
+      {petit('📦 Inventaire', ()=>onChoix('Entrepôt'))}
+      {CV_DESTS.filter(d=>d!=='Entrepôt').map(d=>petit(cvIconeDest(d)+d, ()=>onChoix(d)))}
+      {petit('🔎 Chercher plus…', ()=>setPlus(true))}
     </div>
-    {(R || cfg) && <RepChoixDest R={R} cfg={cfg} refAchat={refAchat} onChoix={onChoix}/>}
-    {(()=>{ const pn = achatParNumero(refAchat, clients); if(!pn.length) return null;
-      return <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,alignItems:'center'}}>
-        <span className="muted" style={{fontSize:11.5}}>🔢 Le numéro de la référence :</span>
-        {pn.map(x=><button key={x.cle+x.quoi+x.n} className="btn btn-sm" onClick={()=>onChoix(x.cle)} style={{borderColor:'var(--success)',fontWeight:700}} title={x.adr}>
-          {x.cle} <span className="muted" style={{fontSize:10.5,fontWeight:400}}> · c'est son {x.quoi} {x.n}{x.jour ? ' · '+cvFmtDay(x.jour) : ''}</span></button>)}
-      </div>; })()}
-    {(()=>{ const ag0 = agendaAchat(date, clients, refAchat).filter(x=>x.cle!==propose); if(!ag0.length) return null;
-      const ag = ag0.map(x=>({...x, ind:achatIndices(articles, x.ev)})).sort((a,b)=>b.ind.sc-a.ind.sc);
-      const meilleur = ag.length>1 && ag[0].ind.sc>0 && ag[0].ind.sc>ag[1].ind.sc ? ag[0].cle : (ag.length===1 && ag[0].ind.sc>0 ? ag[0].cle : '');   // v563 : un seul plus probable
-      return <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,alignItems:'center'}}>
-        <span className="muted" style={{fontSize:11.5}}>📅 À l'agenda :</span>
-        {ag.map(x=><button key={x.cle} className="btn btn-sm" onClick={()=>onChoix(x.cle)} title={(x.crew||'')+(x.ind.txt ? '\n💡 '+x.ind.txt : '')} style={x.cle===meilleur ? {borderColor:'var(--success)',color:'var(--text)',fontWeight:700,boxShadow:'0 0 0 1px var(--success) inset'} : (suggestions||[]).includes(x.cle)?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null}>
-          {x.cle===meilleur && '🎯 '}
-          {x.cle}{x.adr && <span style={{fontSize:11}}> · 📍 {x.adr}</span>}<span className="muted" style={{fontSize:10.5}}> · {x.mm?'même jour':cvFmtDay(x.jour)}{x.phase?' · '+x.phase:''}{x.crew?' · '+x.crew:''}</span>{x.ind.txt && <span style={{display:'block',fontSize:10.5,fontWeight:400,color:x.ind.sc>0?'var(--success)':'var(--muted)',textAlign:'left'}}>💡 {x.ind.txt}</span>}</button>)}
-      </div>; })()}
-    <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5}}>
-      {groupes.map(c=>pill(c.code==='PART'?'Particuliers':c.code, ()=>setGroupe(groupe===c.code?'':c.code), groupe===c.code?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null))}
-      {pill('💡 Éclairage Saran', ()=>onChoix('Éclairage Saran'))}
-      {pill('👷 Employé', ()=>setEmp(!emp), emp?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null)}
+    <div style={{position:'relative',marginTop:6}}>
+      <input value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter' && txt.trim()){ onChoix(res.length ? res[0].cle : txt.trim()); } }}
+        placeholder="Écrire un nom, une adresse, un PO…  (Entrée = choisir)" style={{width:'100%',boxSizing:'border-box',padding:'6px 10px',fontSize:13}}/>
+      {mots.length>0 && <div style={{display:'grid',gap:3,marginTop:4}}>
+        {res.map(x=><button key={x.cle} className="btn btn-sm" style={{textAlign:'left',justifyContent:'flex-start'}} onClick={()=>onChoix(x.cle)}><b>{x.lib}</b><span className="muted" style={{fontSize:11}}>&nbsp;· {cvFmtDay(x.last)}</span></button>)}
+        {!res.length && <button className="btn btn-sm" style={{textAlign:'left',justifyContent:'flex-start'}} onClick={()=>onChoix(txt.trim())}>Utiliser « {txt.trim()} » tel quel</button>}
+      </div>}
     </div>
-    {emp && <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,paddingLeft:8,borderLeft:'2px solid var(--accent)'}}>
-      {CV_EMPLOYES.map(n=>pill(n, ()=>onChoix('Employé — '+n)))}
-    </div>}
-    {g && g.code==='PART' && <CvChoixClientProjet jobs={g.jobs} onChoix={onChoix}/>}
-    {g && g.code!=='PART' && <CvListeJobs key={g.code} jobs={g.jobs.filter(j=>j.last>=today).map(j=>({cle:cvJobCle(g,j), po:j.po, label:j.name, info:(CV_STATUS[j.status]||[''])[0]+' · '+cvFmtDay(j.last)}))} onChoix={onChoix}/>}
-    {autre!==null && <div style={{display:'flex',gap:5,marginTop:5}}>
-      <input value={autre} onChange={e=>setAutre(e.target.value)} placeholder="Ex. : Outils, Bureau, Job Rejean Roy…" style={{flex:1}}/>
-      <button className="btn btn-sm btn-p" disabled={!autre.trim()} onClick={()=>onChoix(autre.trim())}>OK</button>
-    </div>}
+    {plus && <AchChercherPlus clients={clients} R={R} cfg={cfg} date={date} refAchat={refAchat} onChoix={v=>{ setPlus(false); onChoix(v); }} onFermer={()=>setPlus(false)}/>}
   </div>;
+}
+// v700 : « Chercher plus » — Répertoire, agenda du jour, agenda de la semaine
+function AchChercherPlus({clients, R, cfg, date, refAchat, onChoix, onFermer}){
+  const [ong,setOng]=useState('jour');
+  const [groupe,setGroupe]=useState('');
+  const [emp,setEmp]=useState(false);
+  const d0 = (()=>{ const d = String(date||'').slice(0,10); return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : cvDay(new Date().toISOString()); })();
+  const lun = (()=>{ const x = new Date(d0+'T12:00:00'); x.setDate(x.getDate()-((x.getDay()+6)%7)); return x; })();
+  const jours = ong==='jour' ? [d0] : [0,1,2,3,4,5,6].map(i=>{ const x = new Date(lun); x.setDate(lun.getDate()+i); return cvDay(x.toISOString()); });
+  const parJour = jours.map(dj=>{ const l = []; Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{ const ev = (j.events||[]).filter(e=>!e.attente && e.day===dj);
+    if(ev.length) l.push({cle:achatCle(c,j), phase:ev.map(e=>e.phase).filter(Boolean)[0]||'', crew:[...new Set(ev.flatMap(e=>e.crew||[]))].join(', ')}); }));
+    return {dj, l:l.sort((a,b)=>a.cle.localeCompare(b.cle,'fr'))}; }).filter(x=>x.l.length || ong==='jour');
+  const lim = cvDay(new Date(Date.now()-365*864e5).toISOString());
+  const groupes = Object.values(clients||{}).filter(c=>c.jobs.some(j=>String(j.last||'')>=lim)).sort((a,b)=>(a.code==='PART')-(b.code==='PART')||a.code.localeCompare(b.code));
+  const g = groupes.find(c=>c.code===groupe);
+  const ligne = x => <button key={x.cle} className="btn btn-sm" style={{textAlign:'left',justifyContent:'flex-start',width:'100%'}} onClick={()=>onChoix(x.cle)}>
+    <b>{achIcone(x.cle)}{achLibelle(clients, x.cle)}</b>{(x.phase || x.crew) && <span className="muted" style={{fontSize:11}}>&nbsp;· {[x.phase ? cvTitleCase(String(x.phase).toLowerCase()) : '', x.crew].filter(Boolean).join(' · ')}</span>}</button>;
+  return <div className="modal-bg" onMouseDown={e=>{ if(e.target===e.currentTarget) onFermer(); }}>
+    <div className="modal" style={{maxWidth:620}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:8}}>
+        <b className="fh" style={{fontSize:16}}>Associer la facture{refAchat ? <span className="muted" style={{fontWeight:400,fontSize:13}}> · réf. « {refAchat} »</span> : ''}</b>
+        <button className="btn btn-sm" onClick={onFermer}>✕</button></div>
+      <div style={{display:'flex',gap:5,marginBottom:10}}>
+        {[['jour','Agenda du '+cvFmtDay(d0)],['semaine','Agenda de la semaine'],['rep','Répertoire']].map(([k,l])=><button key={k} className={'btn btn-sm'+(ong===k?' btn-p':'')} onClick={()=>setOng(k)}>{l}</button>)}</div>
+      {ong!=='rep' ? <div style={{display:'grid',gap:8}}>
+          {parJour.map(x=><div key={x.dj}>{ong==='semaine' && <div className="muted" style={{fontSize:12,fontWeight:700,textTransform:'capitalize',margin:'2px 0 3px'}}>{new Date(x.dj+'T12:00:00').toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'})}</div>}
+            <div style={{display:'grid',gap:3}}>{x.l.length ? x.l.map(ligne) : <div className="muted" style={{fontSize:12.5}}>Rien à l'agenda ce jour-là.</div>}</div></div>)}
+          {!parJour.length && <div className="muted" style={{fontSize:12.5}}>Rien à l'agenda cette semaine-là.</div>}
+        </div>
+        : <div>
+          {(R || cfg) && <RepChoixDest R={R} cfg={cfg} refAchat={refAchat} onChoix={onChoix}/>}
+          <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:8}}>
+            {groupes.map(c=><button key={c.code} className="btn btn-sm" onClick={()=>setGroupe(groupe===c.code?'':c.code)} style={groupe===c.code?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null}>{c.code==='PART'?'Particuliers':c.code}</button>)}
+            <button className="btn btn-sm" onClick={()=>onChoix('Éclairage Saran')}>💡 Éclairage Saran</button>
+            <button className="btn btn-sm" onClick={()=>setEmp(!emp)} style={emp?{borderColor:'var(--accent)',color:'var(--accent)',fontWeight:700}:null}>👷 Employé</button></div>
+          {emp && <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:5,paddingLeft:8,borderLeft:'2px solid var(--accent)'}}>{CV_EMPLOYES.map(n=><button key={n} className="btn btn-sm" onClick={()=>onChoix('Employé — '+n)}>{n}</button>)}</div>}
+          {g && <div style={{display:'grid',gap:3,marginTop:8}}>{g.jobs.filter(j=>String(j.last||'')>=lim).sort((a,b)=>String(b.last).localeCompare(String(a.last))).map(j=>ligne({cle:achatCle(g,j), phase:'', crew:cvFmtDay(j.last)}))}</div>}
+        </div>}
+    </div></div>;
 }
 
 // Soumissions, relevés de compte et confirmations reçus des fournisseurs.
@@ -2523,7 +2577,10 @@ function FournisseursView({cfg, refreshKey, isDesktop}){
   const autoRecents = A.filter(a=>/^Auto/.test(a.statut||'') && a.job).sort((x,y)=>String(y.date||y.recue).localeCompare(String(x.date||x.recue)));
   const today = cvDay(new Date().toISOString());
   const [partieDe,setPartieDe]=useState(null);   // v387 : {a, job} — la destination a des parties : pour qui ?
-  const choisir = (a, job) => { if(!CV_DESTS.includes(job) && achPartiesDe(job, achats, null).length) setPartieDe({a, job}); else enregistrer(a, job); };
+  const choisir = (a, job) => { if(CV_DESTS.includes(job)) return enregistrer(a, job);
+    const x = achJobParCle(clients, job), auto = x ? achPartieAuto(a, x.j, null) : '';   // v700 : l'étape devinée par l'agenda (ex. Wrap-up) — le nom de la job ne change pas
+    if(auto) return enregistrer(a, job, auto);
+    if(achPartiesDe(job, achats, x ? x.j : null).length) setPartieDe({a, job}); else enregistrer(a, job); };
   const enregistrer = async (a, job, sous)=>{
     const avant = a.job; setPartieDe(null);
     setFait(f=>({...f, [a.row]:job})); setChanger(null); setDetail(null);
