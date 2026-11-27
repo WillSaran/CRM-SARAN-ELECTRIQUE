@@ -210,7 +210,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v701';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
+const APP_VERSION = 'v702';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -17259,13 +17259,13 @@ function cvNomAdresse(a){ const s = String(a||'').split(',')[0].replace(/\s+/g,'
   const m = s.match(/^(\d{1,5}[A-Za-z]?)\s*[-,]?\s+(.+)$/); if(!m) return '';
   let rue = m[2].replace(/^(rue|avenue|av|ave|boulevard|boul|bd|blvd|chemin|ch|mont[ée]e|mnt|mt[ée]e|rang|route|rte|place|pl|croissant|cr|impasse|imp|all[ée]e|terrasse|carr[ée]|c[ôo]te|promenade|prom)\.?\s+/i,'');
   rue = rue.replace(/^(de\s+la|de\s+l['’]|du|des|de|d['’])\s*/i,'').replace(/\s+(app\.?|apt\.?|unit[ée]|suite|#)\s*\S+$/i,'')
-    .replace(/\s+(qc|québec|quebec)\b.*$/i,'').replace(/\s+[A-Z]\d[A-Z]\s?\d[A-Z]\d.*$/i,'').trim();
+    .replace(/\s+(qc|québec|quebec)\b.*$/i,'').replace(/\s+[A-Z]\d[A-Z]\s?\d[A-Z]\d.*$/i,'').replace(/\s+(e|o|n|s|est|ouest|nord|sud)\.?$/i,'').trim();
   return rue ? m[1]+' '+rue.charAt(0).toUpperCase()+rue.slice(1) : ''; }
 function cvNomAdresseTitre(nom){ const m = String(nom||'').match(/(^|\s)(\d{1,5})\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’\-]+)/); return m ? m[2]+' '+cvTitleCase(m[3]) : ''; }
 function cvCleAdresseJob(nom){ return cvNorm(String(nom||'').replace(/\b(ste|sainte)[-\s.]+/ig,'sainte-').replace(/\bst[-\s.]+/ig,'saint-')); }
 function cvParseEvent(e){
   const title = String(e.title||'').trim();
-  const toks = title.replace(new RegExp(CV_NOJOB_RE.source,'ig'),' ').replace(/[()]/g,' ').split(/[\s\-–\/,+&]+/).filter(Boolean);
+  const toks = title.replace(new RegExp(CV_NOJOB_RE.source,'ig'),' ').replace(/[()]/g,' ').split(/[\s\-–\/,+&_]+/).filter(Boolean);   // v702 : « PAY-FINITION_GRAND-BOULEVARD »
   let code='', phase='', initials=[], nameParts=[], apresServ=false, servType='', wrap=false;
   toks.forEach(t=>{
     const T=t.toUpperCase();
@@ -17458,6 +17458,12 @@ function cvBuildClients(events, registry, factures){
       j.events.push(p);
     }
   });
+  // v702 : passage sans adresse ni numéro (« PAY FINITION GRAND BOULEVARD ») → le projet du même contracteur dont l'adresse contient ces mots (une seule possibilité)
+  const motsNom = n => cvNorm(String(n||'').replace(/[-_]/g,' ')) && String(n||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=4);
+  Object.keys(jobs).filter(k=>!k.includes('|@') && !jobs[k].po && jobs[k].client!=='PART' && !CV_NOM_PAR_NOM.has(jobs[k].client)).forEach(k=>{ const j = jobs[k], m = motsNom(j.name); if(!m || !m.length) return;
+    const cands = Object.keys(jobs).filter(x=>x.includes('|@') && jobs[x].client===j.client && m.every(w=>cvNorm(jobs[x].name).includes(w)));
+    if(cands.length!==1) return; const p = jobs[cands[0]];
+    p.events.push(...j.events); p.idsAnciens = [...new Set([...(p.idsAnciens||[]), j.id, ...(j.idsAnciens||[])])]; p.anciensNoms = [...new Set([...(p.anciensNoms||[]), j.name, ...(j.anciensNoms||[])])]; delete jobs[k]; });
   // v701 : un projet regroupé par adresse garde l'id de son plus vieux passage (archives, types, fiches déjà faites continuent de marcher)
   Object.keys(jobs).filter(k=>k.includes('|@')).forEach(k=>{ const j = jobs[k];
     const prem = j.events.slice().sort((a,b)=>a.day.localeCompare(b.day))[0];
