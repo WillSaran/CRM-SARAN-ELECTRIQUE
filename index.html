@@ -210,7 +210,7 @@ const navFocus = cible => NAV_FOCUS && NAV_FOCUS.cible===cible && Date.now()-(NA
 // Dossier partagé « 1-PAD SERVICE À TRAITER » : les appels / OT papier que les gars déposent, pas encore traités.
 const PAD_DOSSIER = '1CI-OuXIuiSKUksL7BUyGAN__tRPxbklB';
 const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4','https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'];
-const APP_VERSION = 'v700';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
+const APP_VERSION = 'v701';   // v694 : v693 + Thor (discussion agenda dans l'en-tête) réunis
 
 const ETAPES = ['Prospect','Contacté','Soumission envoyée','Gagné','Perdu'];
 const ETAPE_COLORS = {'Prospect':'#7d8590','Contacté':'#0ea5e9','Soumission envoyée':'#d29922','Gagné':'#3fb950','Perdu':'#f85149'};
@@ -2039,10 +2039,13 @@ function scoresAchat(ref, clients){
   if(!toks.length) return [];
   const ini = (String(ref||'').match(/\b([A-Za-zÀ-ÿ])\.?\s+[A-Za-zÀ-ÿ]{3,}/)||[])[1];
   const proche = (x, y) => { if(Math.abs(x.length-y.length)>1 || x.length<6) return false; let i=0, j=0, d=0; while(i<x.length && j<y.length){ if(x[i]===y[j]){ i++; j++; continue; } if(++d>1) return false; if(x.length>y.length) i++; else if(y.length>x.length) j++; else { i++; j++; } } return d + (x.length-i) + (y.length-j) <= 1; };   // une lettre de différence (Laroque / Larocque)
-  const res = {};
+  const res = {}, codes = achCodesRef(ref), portes = String(ref||'').match(/\b\d{1,5}\b/g)||[];
   Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{
+    if(!achCodeOk(codes, c)) return;   // v701
     const nt = n(j.name).split(/[^a-z0-9]+/).filter(Boolean); let sc = 0, fort = 0;
-    const na = n(j.address||'').split(/[^a-z0-9]+/).filter(m=>m.length>=4 && !/\d/.test(m) && !SUGG_STOP.has(m));   // v148 : rue / ville de la job
+    // v701 : une rue seule ne propose plus un particulier — il faut aussi son numéro de porte (ou son nom)
+    const porteOk = c.code!=='PART' || portes.includes((String(j.address||'').match(/^\s*(\d{1,5})/)||[])[1]);
+    const na = !porteOk ? [] : n(j.address||'').split(/[^a-z0-9]+/).filter(m=>m.length>=4 && !/\d/.test(m) && !SUGG_STOP.has(m));   // v148 : rue / ville de la job
     const note = (m, t) => m===t ? 3 : proche(m, t) ? 2 : (m.length>=5 && t.length>=5 && (m.startsWith(t) || t.startsWith(m))) ? 1 : 0;
     toks.forEach(t=>{ let p = 0;
       nt.forEach(m=>{ const q = note(m, t); if(q>p) p = q; });
@@ -2080,8 +2083,8 @@ const ACH_FAMILLES = [
 // v563 : un numéro dans la référence (« CRS 585 ») qui est l'OT, l'appel de service ou la facture d'une job à l'agenda
 function achatParNumero(ref, clients){
   const nums = (String(ref||'').match(/\b\d{3,5}\b/g)||[]).filter(n=>!/^(19|20)\d\d$/.test(n) || n.length!==4); if(!nums.length) return [];
-  const res = [], vu = new Set(), num = v => String(v||'').match(/\d{3,5}/g)||[];
-  Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>j.events.forEach(e=>{
+  const res = [], vu = new Set(), num = v => String(v||'').match(/\d{3,5}/g)||[], codes = achCodesRef(ref);
+  Object.values(clients||{}).forEach(c=>achCodeOk(codes, c) && c.jobs.forEach(j=>j.events.forEach(e=>{
     [['OT', e.ot], ['appel de service', e.as], ['facture', e.fac]].forEach(([quoi, v])=>{ num(v).forEach(n=>{ if(nums.includes(n)){ const cle = achatCle(c,j), k = cle+'|'+quoi+n;
       if(!vu.has(k)){ vu.add(k); res.push({cle, quoi, n, jour:e.day, adr:j.address||e.location||''}); } } }); });
   })));
@@ -2105,8 +2108,8 @@ function agendaAchat(date, clients, ref){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(d0)){ const x = new Date(date); if(isNaN(x)) return []; d0 = cvDay(new Date(x.getFullYear(), x.getMonth(), x.getDate(), 12).toISOString()); }
   const jour = k => { const x = new Date(d0+'T12:00:00'); x.setDate(x.getDate()+k); return cvDay(x.toISOString()); };
   const jours = [d0, jour(1)]; if(new Date(d0+'T12:00:00').getDay()===5) jours.push(jour(3));    // facture du vendredi → lundi aussi
-  const res = [];
-  Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{
+  const res = [], codes = achCodesRef(ref);
+  Object.values(clients||{}).forEach(c=>achCodeOk(codes, c) && c.jobs.forEach(j=>{
     const ev = j.events.filter(e=>!e.attente && jours.includes(e.day)).sort((a,b)=>a.day.localeCompare(b.day))[0];
     if(ev) res.push({ev, cle:achatCle(c,j), code:String(c.code||'').toUpperCase(), adr:j.address||ev.location||'', jour:ev.day, mm:ev.day===d0, phase:ev.phase||'', crew:(ev.crew||[]).join(' ')});
   }));
@@ -2171,7 +2174,8 @@ function cvDest(j){ return /^(inventaire|shop|atelier)$/i.test(String(j||'').tri
 const CV_DEST_REF = {'Entrepôt':'ENT'};   // référence écrite sur la commande au fournisseur
 function cvMateriel(job, achats){
   const part = job && job.client==='PART';   // v380-383 : « Nom — adresse » (adresse du projet + un mot du nom en commun)
-  const l = (achats||[]).filter(a=>a.job && !CV_DESTS.includes(a.job) && ((job.po && a.job.includes(job.po)) || cvNorm(a.job).endsWith(cvNorm(job.name)) || (part && achatSurProjet(a.job, job, [achatNomClient(job), cvNomClientJob(job), job.name]))));
+  const finit = (d, n) => { const D = cvNorm(d), N = cvNorm(n); return N && D.endsWith(N) && (part || D.startsWith(cvNorm(job.client))); };   // v701 : « ASC 12 Vézina » ≠ « 112 Vézina » d'un autre
+  const l = (achats||[]).filter(a=>a.job && !CV_DESTS.includes(a.job) && ((job.po && a.job.includes(job.po)) || [job.name, ...(job.anciensNoms||[])].some(n=>finit(a.job, n)) || (part && achatSurProjet(a.job, job, [achatNomClient(job), cvNomClientJob(job), job.name]))));
   // v408 : facture de fournisseur + son crédit (même fournisseur, même montant en négatif) = annulées → on ne les montre pas
   const pris = new Set();
   l.filter(a=>a.st < -0.005).sort((x,y)=>String(x.date||x.recue).localeCompare(String(y.date||y.recue))).forEach(c=>{
@@ -2435,7 +2439,10 @@ function RepChoixDest({R, refAchat, onChoix, cfg}){
 // ══ v700 : associer une facture fournisseur — simple et rapide ══
 // 3 propositions max (un clic), Inventaire / camions, une ligne pour écrire, et « Chercher plus » (Répertoire, agenda du jour, agenda de la semaine).
 const achIcone = d => (CV_DESTS.includes(d) || d==='Éclairage Saran' || /^Employé/.test(d)) ? cvIconeDest(d) : '';
-function achJobParCle(clients, cle){ const n = cvNorm(cle); for(const c of Object.values(clients||{})) for(const j of c.jobs){ if(cvNorm(achatCle(c,j))===n) return {c, j}; } return null; }
+function achJobParCle(clients, cle){ const n = cvNorm(cle); for(const c of Object.values(clients||{})) for(const j of c.jobs){ if(cvNorm(achatCle(c,j))===n || (j.anciensNoms||[]).some(x=>cvNorm(cvJobCle(c, {name:x, po:j.po}))===n)) return {c, j}; } return null; }
+// v701 : code de contracteur dans la référence (« ASC 590 Colibris ») → seulement les projets de ce contracteur, jamais un particulier
+function achCodesRef(ref){ const s = new Set(); String(ref||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').split(/[^A-Z0-9]+/).forEach(t=>{ if(t==='PAYNE' || t==='PY') s.add('PAY'); else if(CLIENT_CODES[t]) s.add(t); }); return s; }
+function achCodeOk(codes, c){ return !codes.size || codes.has(String((c && c.code)||'').toUpperCase()); }
 // libellé uniforme : particulier = Nom · adresse · type ; contracteur = CODE · nom (PO)
 function achLibelle(clients, cle){ const x = achJobParCle(clients, cle); if(!x) return cle;
   const {c, j} = x; if(c.code!=='PART' && j.client!=='PART') return c.code+' · '+j.name+(j.po ? ' ('+j.po+')' : '');
@@ -2445,8 +2452,8 @@ function achRefEstDate(ref, date){ const d = String(date||'').slice(0,10); if(!/
   return (String(ref||'').match(/\b(\d{1,2})\s*[-\/.]\s*(\d{1,2})\b/g)||[]).some(t=>{ const m = t.match(/(\d{1,2})\s*[-\/.]\s*(\d{1,2})/); return (+m[1]===jj && +m[2]===mm) || (+m[1]===mm && +m[2]===jj); }); }
 // numéro de porte dans la référence (ex. « 696 ») = adresse d'une job à l'agenda autour de l'achat (± 10 jours)
 function achatParPorte(ref, date, clients){ const nums = (String(ref||'').match(/\b\d{2,5}\b/g)||[]); if(!nums.length) return [];
-  const d = String(date||'').slice(0,10), t0 = new Date(d+'T12:00:00').getTime(), res = [];
-  Object.values(clients||{}).forEach(c=>c.jobs.forEach(j=>{ const adr = String(j.address||((j.events||[])[0]||{}).location||''), m = adr.match(/^\s*(\d{1,5})/); if(!m || !nums.includes(m[1])) return;
+  const d = String(date||'').slice(0,10), t0 = new Date(d+'T12:00:00').getTime(), res = [], codes = achCodesRef(ref);
+  Object.values(clients||{}).forEach(c=>achCodeOk(codes, c) && c.jobs.forEach(j=>{ const adr = String(j.address||((j.events||[])[0]||{}).location||''), m = adr.match(/^\s*(\d{1,5})/); if(!m || !nums.includes(m[1])) return;
     const proche = (j.events||[]).filter(e=>!e.attente && e.day).map(e=>Math.abs(new Date(e.day+'T12:00:00').getTime()-t0)/864e5).sort((a,b)=>a-b)[0];
     if(proche!=null && proche<=10) res.push({cle:achatCle(c,j), n:m[1], proche}); }));
   return res.sort((a,b)=>a.proche-b.proche).slice(0,3); }
@@ -2454,7 +2461,9 @@ function CvChoixJob({clients, propose, autrePropose, suggestions, date, refAchat
   const [txt,setTxt]=useState('');
   const [plus,setPlus]=useState(false);
   // propositions classées : PO/AP/OT → porte → date (Éclairage Saran) → proposition de La mémoire → nom dans la référence → agenda
-  const props = useMemo(()=>{ const L = [], vu = new Set(), add = (cle, pourquoi) => { const k = cvNorm(cle); if(!cle || vu.has(k)) return; vu.add(k); L.push({cle, pourquoi}); };
+  const props = useMemo(()=>{ const L = [], vu = new Set(), codes = achCodesRef(refAchat), add = (cle, pourquoi) => { const k = cvNorm(cle); if(!cle || vu.has(k)) return;
+      if(codes.size){ const x = achJobParCle(clients, cle); if(x && !achCodeOk(codes, x.c)) return; }   // v701 : code de contracteur = ses projets seulement
+      vu.add(k); L.push({cle, pourquoi}); };
     if(achRefEstDate(refAchat, date)) add('Éclairage Saran', 'référence = date de la facture');
     achatParNumero(refAchat, clients).forEach(x=>add(x.cle, (x.quoi==='appel de service'?'AP':x.quoi==='facture'?'facture':x.quoi)+' '+x.n));
     achatParPorte(refAchat, date, clients).forEach(x=>add(x.cle, 'porte '+x.n));
@@ -17243,6 +17252,17 @@ function cvNomFamille(code, nom){ if(code!=='CRS') return nom; const m = String(
 // v407 : chez CRS (Cuisines Rive-Sud), tout est cuisine ou salle de bain — « La Jeunesse Cuisine » = « La Jeunesse »
 function cvSansPiece(code, nom){ if(code!=='CRS') return nom;
   const t = String(nom||'').replace(/\b(cuisines?|salles?\s+de\s+bains?|salle\s*de\s*bain|sdb)\b/ig,' ').replace(/\s+/g,' ').trim(); return t || nom; }
+// v701 : projets de contracteur (sauf CRS) nommés par l'adresse — « ASC 12Vézina RAPUP MAISON NEUVE » au 12 rue Vézina → « 12 Vézina ».
+// CRS garde le nom du client (« CRS Hébert ») : c'est le nom de projet qu'ils utilisent.
+const CV_NOM_PAR_NOM = new Set(['CRS']);
+function cvNomAdresse(a){ const s = String(a||'').split(',')[0].replace(/\s+/g,' ').trim();
+  const m = s.match(/^(\d{1,5}[A-Za-z]?)\s*[-,]?\s+(.+)$/); if(!m) return '';
+  let rue = m[2].replace(/^(rue|avenue|av|ave|boulevard|boul|bd|blvd|chemin|ch|mont[ée]e|mnt|mt[ée]e|rang|route|rte|place|pl|croissant|cr|impasse|imp|all[ée]e|terrasse|carr[ée]|c[ôo]te|promenade|prom)\.?\s+/i,'');
+  rue = rue.replace(/^(de\s+la|de\s+l['’]|du|des|de|d['’])\s*/i,'').replace(/\s+(app\.?|apt\.?|unit[ée]|suite|#)\s*\S+$/i,'')
+    .replace(/\s+(qc|québec|quebec)\b.*$/i,'').replace(/\s+[A-Z]\d[A-Z]\s?\d[A-Z]\d.*$/i,'').trim();
+  return rue ? m[1]+' '+rue.charAt(0).toUpperCase()+rue.slice(1) : ''; }
+function cvNomAdresseTitre(nom){ const m = String(nom||'').match(/(^|\s)(\d{1,5})\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’\-]+)/); return m ? m[2]+' '+cvTitleCase(m[3]) : ''; }
+function cvCleAdresseJob(nom){ return cvNorm(String(nom||'').replace(/\b(ste|sainte)[-\s.]+/ig,'sainte-').replace(/\bst[-\s.]+/ig,'saint-')); }
 function cvParseEvent(e){
   const title = String(e.title||'').trim();
   const toks = title.replace(new RegExp(CV_NOJOB_RE.source,'ig'),' ').replace(/[()]/g,' ').split(/[\s\-–\/,+&]+/).filter(Boolean);
@@ -17414,9 +17434,18 @@ function cvBuildClients(events, registry, factures){
           po = (byLoc||cands[0]).po;
         }
       }
-      const id = po ? p.code+'|'+po : p.code+'|'+(p.key || cvNorm(p.location) || p.title);
+      const idAncien = po ? p.code+'|'+po : p.code+'|'+(p.key || cvNorm(p.location) || p.title);
       const reg = po ? regByPO[po] : null;
-      const j = getJob(id, {client:p.code, po, name: cvNomFamille(p.code, reg ? cvSansPiece(p.code, reg.nom) : (p.name || p.location || p.title)), reg});
+      const nomAncien = cvNomFamille(p.code, reg ? cvSansPiece(p.code, reg.nom) : (p.name || p.location || p.title));
+      // v701 : sauf CRS, le projet d'un contracteur = son adresse (lieu de l'événement, sinon le numéro + la rue écrits dans le titre)
+      let nomAdr = '', srcAdr = '';
+      if(!CV_NOM_PAR_NOM.has(p.code)){ nomAdr = cvNomAdresse(reg && reg.adresse) || cvNomAdresse(p.location); srcAdr = nomAdr ? 'lieu' : '';
+        if(!nomAdr){ nomAdr = cvNomAdresseTitre(p.name); if(nomAdr) srcAdr = 'titre'; } }
+      const id = po || !nomAdr ? idAncien : p.code+'|@'+cvCleAdresseJob(nomAdr);
+      const j = getJob(id, {client:p.code, po, name: nomAdr || nomAncien, reg, idsAnciens:[], anciensNoms:[], srcAdr});
+      if(nomAdr && srcAdr==='lieu' && j.srcAdr!=='lieu'){ j.name = nomAdr; j.srcAdr = 'lieu'; }
+      if(!j.idsAnciens.includes(idAncien)) j.idsAnciens.push(idAncien);
+      if(nomAncien && nomAncien!==j.name && !j.anciensNoms.includes(nomAncien)) j.anciensNoms.push(nomAncien);
       j.events.push(p);
     } else {
       if(raw.calendarId !== CREW_CAL && raw.calendarId !== EN_ATTENTE_CAL) return; // particuliers : calendrier de l'équipe + En Attente
@@ -17429,6 +17458,11 @@ function cvBuildClients(events, registry, factures){
       j.events.push(p);
     }
   });
+  // v701 : un projet regroupé par adresse garde l'id de son plus vieux passage (archives, types, fiches déjà faites continuent de marcher)
+  Object.keys(jobs).filter(k=>k.includes('|@')).forEach(k=>{ const j = jobs[k];
+    const prem = j.events.slice().sort((a,b)=>a.day.localeCompare(b.day))[0];
+    const vieux = prem && (j.client+'|'+(prem.key || cvNorm(prem.location) || prem.title));
+    if(vieux && !jobs[vieux]){ delete jobs[k]; j.id = vieux; jobs[vieux] = j; } });
   ficheAppliquerJobs(jobs, registry.__fiches, regByPO);   // v151 : jobs regroupées / renommées dans le Répertoire
   // v242 : particulier sans no de job — une facture inscrite sur un passage termine la job ; un passage plus tard = un nouveau projet
   // (ex. éclairage en août facturé, puis un autre éclairage le 26 octobre). La première job garde son id (cochés, types, archives).
@@ -18976,14 +19010,16 @@ function ficheJobRetiree(F, code, ids, noms){
 }
 // Regroupe dans cvBuildClients les jobs que tu as regroupées / renommées (fiches « Job »).
 function ficheAppliquerJobs(jobs, F, regByPO){
-  Object.values(jobs).forEach(j=>{ if(ficheJobRetiree(F, j.client, [j.id], [j.name])) delete jobs[j.id]; });
+  Object.values(jobs).forEach(j=>{ if(ficheJobRetiree(F, j.client, [j.id, ...(j.idsAnciens||[])], [j.name, ...(j.anciensNoms||[])])) delete jobs[j.id]; });
   ((F && F.jobs)||[]).forEach(f=>{
     const code = f.code || 'PART';
-    let membres = f.ids.size ? Object.values(jobs).filter(j=>j.client===code && (f.ids.has(j.id) || (f.po && j.po===f.po))) : [];
-    if(!membres.length) membres = Object.values(jobs).filter(j=>j.client===code && (f.aliasN.has(ficheNorm(cvJobCle({code}, j))) || f.aliasN.has(ficheNorm(j.name)) || (f.po && j.po===f.po)));
+    let membres = f.ids.size ? Object.values(jobs).filter(j=>j.client===code && (f.ids.has(j.id) || (j.idsAnciens||[]).some(x=>f.ids.has(x)) || (f.po && j.po===f.po))) : [];
+    const aliasOk = (j, n) => f.aliasN.has(ficheNorm(cvJobCle({code}, {name:n, po:j.po}))) || f.aliasN.has(ficheNorm(n));   // v701 : anciens noms aussi
+    if(!membres.length) membres = Object.values(jobs).filter(j=>j.client===code && ([j.name, ...(j.anciensNoms||[])].some(n=>aliasOk(j, n)) || (f.po && j.po===f.po)));
     if(!membres.length) return;
     const p = membres.find(j=>f.po && j.po===f.po) || membres.find(j=>j.po) || membres[0];
-    membres.forEach(j=>{ if(j===p) return; p.events.push(...j.events); if(!p.reg && j.reg) p.reg = j.reg; delete jobs[j.id]; });
+    membres.forEach(j=>{ if(j===p) return; p.events.push(...j.events); if(!p.reg && j.reg) p.reg = j.reg;
+      p.idsAnciens = [...new Set([...(p.idsAnciens||[]), j.id, ...(j.idsAnciens||[])])]; p.anciensNoms = [...new Set([...(p.anciensNoms||[]), j.name, ...(j.anciensNoms||[])])]; delete jobs[j.id]; });
     const pos = [...new Set(membres.map(j=>j.po).filter(Boolean))];
     p.name = ficheNomJob(f); p.po = f.po; p.reg = (f.po && regByPO[f.po]) || p.reg; p.ficheJob = f.row;
     p.posLies = pos.filter(x=>x!==p.po);   // v244 : autres PO du même projet (ex. PO d'ajustement) — leurs factures comptent aussi
@@ -19051,11 +19087,11 @@ function repContrDeNom(n, F){
 function repConstruire({clients, registry, factures, achats, soumissions, F, contacts, gcmeq, contactsAuto}){
   F = F || {clients:[], jobs:[], fourn:[], masques:[]}; F.retirees = F.retirees || [];
   const today = cvDay(new Date().toISOString());
-  const jobFiche = (code, cle, po, id) => F.jobs.find(f=>(f.code||'PART')===code && ((f.po && po && f.po===po) || (id && f.ids.has(id)) || ((!id || !f.ids.size) && f.aliasN.has(ficheNorm(cle)))));
+  const jobFiche = (code, cle, po, id, row) => F.jobs.find(f=>(f.code||'PART')===code && ((row && f.row===row) || (f.po && po && f.po===po) || (id && f.ids.has(id)) || ((!id || !f.ids.size) && f.aliasN.has(ficheNorm(cle)))));
   // ---- Jobs (communes aux contracteurs et aux particuliers) ----
   const nouvelleJob = (code, key) => ({key, code, nom:'', po:'', adresse:'', cles:new Set(), ids:new Set(), events:[], factures:[], achats:[], reg:null, ficheJob:null, first:'', last:''});
   const ajouterJob = (jobsMap, code, src) => {        // src : {cle, nom, po, adresse, events, reg}
-    const fj = jobFiche(code, src.cle, src.po, src.id);
+    const fj = jobFiche(code, src.cle, src.po, src.id, src.ficheRow);
     const key = fj ? 'F'+fj.row : src.po ? 'P'+src.po : src.id ? 'I'+src.id : 'N'+ficheNorm(src.nom || src.cle);
     const j = jobsMap[key] || (jobsMap[key] = nouvelleJob(code, key));
     if(fj){ j.ficheJob = fj; j.nom = fj.code==='PART' ? (fj.nom || '') : fj.nom; j.po = fj.po || j.po; }
@@ -19098,7 +19134,8 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
   const C = code => contr[code] || (contr[code] = {type:'contr', id:'C:'+code, code, nom:((F.clients.find(f=>f.code===code)||{}).nom) || CLIENT_CODES[code] || code, contact:CLIENT_CONTACT[code]||'',
     fiche:F.clients.find(f=>f.code===code)||null, jobs:{}, facturesSans:[], soum:[], contacts:[], achatsSans:[]});
   const codeDe = c => { c = String(c||'').toUpperCase(); if(c==='PY') c='PAY'; return CLIENT_CODES[c] ? c : ''; };
-  Object.values(clients||{}).forEach(c=>{ if(c.code==='PART') return; c.jobs.forEach(j=>ajouterJob(C(c.code).jobs, c.code, {cle:cvJobCle(c,j), nom:j.name, po:j.po, adresse:j.address, events:j.events, reg:j.reg, id:j.id})); });
+  Object.values(clients||{}).forEach(c=>{ if(c.code==='PART') return; c.jobs.forEach(j=>{ const jj = ajouterJob(C(c.code).jobs, c.code, {cle:cvJobCle(c,j), nom:j.name, po:j.po, adresse:j.address, events:j.events, reg:j.reg, id:j.id, ficheRow:j.ficheJob});
+    (j.anciensNoms||[]).forEach(n=>{ jj.cles.add(n); jj.cles.add(cvJobCle(c, {name:n, po:j.po})); }); }); });   // v701 : les anciennes destinations d'achats suivent
   (registry||[]).forEach(r=>{ const code = codeDe(r.code); if(!code) return;
     ajouterJob(C(code).jobs, code, {cle:cvJobCle({code}, {name:r.nom, po:r.po}), nom:cvTitleCase(r.nom||''), po:r.po, adresse:[r.adresse,r.ville].filter(Boolean).join(', '), reg:r}); });
   // ---- Personnes : union de noms et de courriels ----
@@ -19364,6 +19401,9 @@ function repConstruire({clients, registry, factures, achats, soumissions, F, con
     (p.fiche.pasLies||[]).forEach(n=>{ const q = parNom[persCle(n)]; if(!q || q===p) return;
       p.lies = p.lies.filter(x=>x!==q); q.lies = q.lies.filter(x=>x!==p); delete p.liensDe[q.id]; delete q.liensDe[p.id]; });
   });
+  // v701 : pas de fiche pour le propriétaire d'un projet de contracteur ; s'il devient client, sa fiche montre les projets de contracteur à son adresse
+  const contrParAdr = {}; Object.values(contr).forEach(c=>(c.listeJobs||[]).forEach(j=>{ const k = repCleAdresse(j.adresse) || repCleAdresse(j.nom); if(k) (contrParAdr[k] = contrParAdr[k] || []).push({code:c.code, nom:j.label || j.nom, last:j.last||''}); }));
+  pers.forEach(p=>{ const ks = [...new Set([p.adresse, ...(p.adresses||[])].map(repCleAdresse).filter(Boolean))]; p.projetsContr = ks.flatMap(k=>contrParAdr[k]||[]); });
   return {contr:Object.values(contr).sort((a,b)=>String(b.last).localeCompare(String(a.last))), pers};
 }
 // Possibles doublons : même nom de famille et prénom pareil / initiale / une lettre de différence
@@ -21301,6 +21341,7 @@ function RepFicheClient({c, busy, ecrire, R, onLie, nbAV, onSuivi, onContr, onOu
               </span>)}
         </div>
       </div>
+      {pers && (c.projetsContr||[]).length>0 && <div className="muted" style={{fontSize:12.5,marginTop:8}}>Aussi à cette adresse : {c.projetsContr.map((x,i)=><span key={i}>{i ? ' · ' : ''}<b>{x.code}</b> {x.nom}{x.last ? ' ('+cvFmtDay(x.last)+' '+x.last.slice(0,4)+')' : ''}</span>)}</div>}
       {pers && evOuvert && <EvenementClient c={c} adresse={adrToutes[0]||''} tel={telsTous[0]||''} courriel={courrielsTous[0]||''} onFermer={()=>setEvOuvert(false)}/>}
       {onAller && (()=>{ const q = pers ? c.nom : c.code;   // v202 : sections de ce client, déjà filtrées ; v273 : affichées ici, sous la fiche
         const filtres = {factures: pers ? {vue:'toutes', q:c.nom} : {vue:'toutes', code:c.code}, paiements:{q}, projets: pers ? {jobIds:(c.srcJobs||[]).map(j=>j.id)} : {code:c.code}, soumissions:{q:c.nom}, photos:{courriels:courrielsTous},
